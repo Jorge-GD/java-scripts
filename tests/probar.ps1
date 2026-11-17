@@ -1101,5 +1101,95 @@ $Pruebas['latido: con los falsos rapidos y el intervalo por defecto no sale ning
   Igual 'ninguna linea del latido' 0 (Lineas-Latido $r.Salida).Count
 }
 
+# ============================ SFTP COMO REGLA FIJA ============================
+# Si el batch migrado maneja ficheros, tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la
+# referencia y tambien sin ella. El interruptor ExigirSftp (por defecto true) lo apaga: entonces solo se exige lo que la referencia tiene.
+$SinAdaptadorSftp = 'no hay adaptador SFTP*'
+$SinYmlSftp = 'application.yml no tiene configuracion sftp*'
+
+# Los hallazgos de ficheros del repo que dicen eso (patron -like sobre el detalle).
+function Hallazgos-Sftp([string]$Repo, [string]$Patron) {
+  return @(Hallazgos $Repo | Where-Object { $_.Cat -eq 'ficheros' -and $_.Sev -eq 'error' -and $_.Detalle -like $Patron })
+}
+
+# Una referencia que no sabe nada de SFTP: ni carpeta sftp ni configuracion sftp.
+$ConfigSinSftp = "batch:`n  nombre: ejemplo`n"
+function Escenario-Referencia-Sin-Sftp([string]$Nombre) {
+  return (Escenario-Con-Plantilla $Nombre (Limpia-Mas @{ 'src/main/resources/application.yml' = $ConfigSinSftp }))
+}
+
+$Pruebas['sftp fijo: migrado con ficheros y sin carpeta sftp, con una referencia sin SFTP, tiene el error y no dice que la plantilla lo tenga'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-ref-sin'
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $a = Hallazgos-Sftp $e.Repo $SinAdaptadorSftp
+  Igual 'un error de adaptador SFTP' 1 $a.Count
+  Comprueba 'no dice que la plantilla lo tenga' ($a.Count -eq 1 -and $a[0].Detalle -notmatch 'plantilla') (Cola $r.Salida)
+  Comprueba 'dice donde va' ($a.Count -eq 1 -and $a[0].Detalle -match 'infrastructure/adapters/output/sftp')
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'y un error de configuracion sftp' 1 $y.Count
+  Comprueba 'que tampoco habla de la plantilla' ($y.Count -eq 1 -and $y[0].Detalle -notmatch 'plantilla')
+}
+
+$Pruebas['sftp fijo: con una referencia que si lo tiene, el texto sigue diciendolo'] = {
+  $e = Nuevo-Escenario 'sftp-ref-con'
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $a = Hallazgos-Sftp $e.Repo $SinAdaptadorSftp
+  Comprueba 'el adaptador: la plantilla lo tiene en su carpeta' ($a.Count -eq 1 -and $a[0].Detalle -match 'la plantilla lo tiene en infrastructure/adapters/output/sftp')
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Comprueba 'la configuracion: la plantilla si' ($y.Count -eq 1 -and $y[0].Detalle -match '\(la plantilla si\)')
+}
+
+$Pruebas['sftp fijo: sin -Plantilla tambien salta'] = {
+  $e = Nuevo-Escenario 'sftp-sin-plantilla'
+  $r = Rescate @('-Repo', $e.Repo, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'un error de adaptador SFTP' 1 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  Igual 'y uno de configuracion sftp' 1 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+}
+
+$Pruebas['sftp fijo: con ExigirSftp en false y una referencia sin SFTP no salta nada, como antes'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-apagado'
+  Pon-Config $e @{ ExigirSftp = $false }
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ni adaptador SFTP' 0 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  Igual 'ni configuracion sftp' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+  Igual 'solo queda el acceso directo a ficheros' 1 (Cuenta (Hallazgos $e.Repo) 'ficheros')
+}
+
+$Pruebas['sftp fijo: con ExigirSftp en false y una referencia que si lo tiene, salta como antes'] = {
+  $e = Nuevo-Escenario 'sftp-apagado-ref-con'
+  Pon-Config $e @{ ExigirSftp = $false }
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres hallazgos de ficheros de siempre' 3 (Cuenta (Hallazgos $e.Repo) 'ficheros')
+}
+
+$Pruebas['sftp fijo: un migrado que no usa ficheros no tiene nada que exigir'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-sin-ficheros'
+  Remove-Item -LiteralPath (Get-Ruta $e.Repo 'src/main/java/com/acme/life/application/usecases/LeerFichero.java') -Force
+  [void](GitEn $e.Repo @('add', '-u'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'sin ficheros'))
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ningun hallazgo de ficheros' 0 (Cuenta (Hallazgos $e.Repo) 'ficheros')
+}
+
+$Pruebas['sftp fijo: application.yml sin sftp es un error con una referencia sin SFTP, y con el interruptor apagado no'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-yml'
+  # el migrado trae su adaptador SFTP: solo falta la configuracion
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/output/sftp/FicheroSftp.java' "package com.acme.life.infrastructure.adapters.output.sftp;`n`n/** Adaptador SFTP. */`npublic class FicheroSftp {`n}`n"
+  [void](GitEn $e.Repo @('add', '--', 'src/main/java/com/acme/life/infrastructure/adapters/output/sftp/FicheroSftp.java'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'adaptador sftp'))
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  Igual 'con el adaptador no salta el del adaptador' 0 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  Igual 'pero si el de la configuracion' 1 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+  Pon-Config $e @{ ExigirSftp = $false }
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  Igual 'apagado el interruptor, nada' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

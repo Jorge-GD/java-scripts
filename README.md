@@ -59,6 +59,8 @@ Un lote solo se guarda (commit local, nunca push) si pasa todas las puertas:
 
 Si no las pasa, el script reintenta con el error y, si sigue mal, deshace el lote entero.
 
+Si el batch maneja ficheros, el paso `ficheros` exige siempre un adaptador SFTP y su bloque `sftp` en `application.yml`, tenga o no SFTP la plantilla. Para exigir solo lo que la plantilla tiene, pon `"ExigirSftp": false` en `.rescate/config.json`.
+
 Mientras espera a Copilot o a Maven escribe una línea cada minuto (`... sigue: Copilot (paso estructura, lote 1, intento 1) (lleva 2 min 0 s)`; `SegundosLatido` en `.rescate/config.json`, 0 la apaga): si deja de salir, se ha colgado.
 
 ### Uso
