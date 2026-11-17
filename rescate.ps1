@@ -154,6 +154,9 @@ $Cfg += @{
   PalabrasConfigAntigua = @('inventory')
   # API antigua: se marca solo si la plantilla ya no la usa
   ApiAntigua            = @('JobBuilderFactory', 'StepBuilderFactory')
+  # Una clave de application*.yml|properties es un secreto si su ultimo trozo ACABA en una de estas
+  # palabras (sin distinguir mayusculas). Lista vacia = no se busca. Idea de SonarJava S2068.
+  PalabrasSecreto       = @('password', 'passwd', 'pwd', 'passphrase', 'secret', 'token', 'clave', 'contrasena', 'apikey', 'api-key', 'private-key')
   JavaxAntiguo          = '^javax\.(annotation|persistence|validation|servlet|inject|batch|transaction|ws\.rs|jms|mail|xml\.bind)\.'
   ExtTexto              = @('.java', '.yml', '.yaml', '.properties', '.xml', '.sh', '.bat', '.cmd', '.json', '.conf', '.cfg', '.ini')
   # Como se reconoce un job en el ORIGINAL (grupo 1 = nombre del job)
@@ -249,11 +252,16 @@ function Get-Hechos([string]$Raiz) {
     $tests.Add([pscustomobject]@{ RelRaiz = Get-Rel $Raiz $f.FullName; Texto = [System.IO.File]::ReadAllText($f.FullName); Imports = @(Get-Imports $f.FullName) })
   }
   $yml = ''
+  $ymls = New-Object System.Collections.Generic.List[object]
   $res = Join-Ruta $Raiz 'src/main/resources'
   if (Test-Path -LiteralPath $res) {
-    foreach ($f in @(Get-ChildItem -LiteralPath $res -File | Where-Object { $_.Name -match '^application.*\.(ya?ml|properties)$' })) { $yml += [System.IO.File]::ReadAllText($f.FullName) + "`n" }
+    foreach ($f in @(Get-ChildItem -LiteralPath $res -File | Where-Object { $_.Name -match '^application.*\.(ya?ml|properties)$' })) {
+      $t = [System.IO.File]::ReadAllText($f.FullName)
+      $yml += $t + "`n"
+      $ymls.Add([pscustomobject]@{ Rel = Get-Rel $Raiz $f.FullName; Nombre = $f.Name; Texto = $t })
+    }
   }
-  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml }
+  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray() }
 }
 
 function Get-Norm([string]$Fqn, [string]$BasePkg) {
@@ -298,6 +306,35 @@ function Get-UsoFicheros($Hechos) {
       if ($imp.Fqn -match $Cfg.FicheroImport) { $fqn = $imp.Fqn }
       elseif ($imp.Fqn -eq 'java.io.*' -and $f.Texto -match $Cfg.FicheroToken) { $fqn = 'java.io.File' }
       if ($fqn) { $out.Add([pscustomobject]@{ RelRaiz = $f.RelRaiz; Dir = $dir; Linea = $imp.Linea; Fqn = $fqn; Clave = ($dir + '|' + (Get-Paquete $fqn)) }) }
+    }
+  }
+  return $out.ToArray()
+}
+
+# Secretos escritos en claro en application*.yml|properties: claves cuyo ultimo trozo acaba en una
+# palabra de PalabrasSecreto y cuyo valor es un literal o una variable con valor por defecto.
+# Error en application.(yml|yaml|properties); aviso en los de un perfil. El valor no se guarda.
+function Get-SecretosEnClaro($Hechos) {
+  $out = New-Object System.Collections.Generic.List[object]
+  $palabras = @($Cfg.PalabrasSecreto | Where-Object { $_ } | ForEach-Object { [regex]::Escape([string]$_) })
+  if ($palabras.Count -eq 0) { return @() }
+  $rxClave = '(?i)(' + ($palabras -join '|') + ')$'
+  foreach ($y in $Hechos.YmlFicheros) {
+    $props = ($y.Nombre -match '\.properties$')
+    if ($props) { $sep = '[=:]'; $coment = '^\s*[#!]' } else { $sep = ':'; $coment = '^\s*#' }
+    $rxLinea = '^\s*(?:-\s+)?["'']?([^\s:="'']+)["'']?\s*' + $sep + '\s*(.*)$'
+    if ($y.Nombre -match '^application\.(ya?ml|properties)$') { $sev = 'error' } else { $sev = 'aviso' }
+    $n = 0
+    foreach ($l in @($y.Texto -split "`r?`n")) {
+      $n++
+      if ($l -match $coment -or -not ($l -match $rxLinea)) { continue }
+      $clave = $Matches[1]; $v = $Matches[2].Trim()
+      if ($clave.Split('.')[-1] -notmatch $rxClave) { continue }
+      if ($v -match '^(["''])(.*?)\1(\s|$)') { $v = $Matches[2] }
+      elseif (-not $props) { $v = ($v -replace '(^|\s+)#.*$', '').Trim() }
+      $literal = ($v -ne '' -and $v -notmatch '\$\{')
+      $conDefecto = ($v -match '^\$\{[^:}]*:([^}]*)\}$' -and $Matches[1].Trim() -ne '')
+      if ($literal -or $conDefecto) { $out.Add([pscustomobject]@{ Rel = $y.Rel; Sev = $sev; Linea = $n; Clave = $clave }) }
     }
   }
   return $out.ToArray()
@@ -693,6 +730,9 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
     }
   }
   if ($restos.Count -gt 0) { Add-Hallazgo 'config' 'aviso' '' 0 ('siguen en el repo ficheros/carpetas de inventory: ' + (($restos.Keys | Sort-Object) -join ', ') + ' (decide tu si se borran)') }
+  foreach ($s in @(Get-SecretosEnClaro $h)) {
+    Add-Hallazgo 'config' $s.Sev $s.Rel $s.Linea ("secreto escrito en claro ('" + $s.Clave + "'): tiene que entrar por una variable de entorno, sin valor por defecto")
+  }
   $todo = (@($h.Ficheros | ForEach-Object { $_.Texto }) -join "`n")
   if ($cal -and $cal.UsaConfigProps -and ($todo -notmatch '@ConfigurationProperties')) {
     Add-Hallazgo 'config' 'error' '' 0 'no hay ninguna clase @ConfigurationProperties (la plantilla centraliza ahi la configuracion)'
@@ -826,7 +866,7 @@ $TextoPaso = @{
   estructura = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover y actualizar package e imports: no cambies logica. Mueve tambien sus tests al paquete equivalente.'
   hexagonal  = 'Elimina las dependencias prohibidas listadas. El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports). Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
   ficheros   = 'Sustituye el acceso directo a ficheros locales por puertos de ficheros, igual que la PLANTILLA: puerto para listar y leer, puerto para el ciclo de vida del fichero, un adaptador SFTP y otro local, y seleccion por propiedad de configuracion. Usa la misma libreria SFTP que la PLANTILLA. No dejes rutas fijas en el codigo.'
-  config     = 'Elimina las referencias a la configuracion antigua (inventory). Toda la configuracion debe entrar por una clase @ConfigurationProperties validada al arranque y por application.yml leyendo variables de entorno, igual que la PLANTILLA. Los secretos se quedan como variables de entorno: no escribas ninguno.'
+  config     = 'Elimina las referencias a la configuracion antigua (inventory). Toda la configuracion debe entrar por una clase @ConfigurationProperties validada al arranque y por application.yml leyendo variables de entorno, igual que la PLANTILLA. Ningun secreto (contrasena, token, clave) puede quedar escrito en application.yml o application.properties, ni como valor por defecto: se leen de una variable de entorno (`${NOMBRE}`). No escribas el valor en ningun otro fichero del repo; si un test lo necesita, usa un valor inventado en src/test/resources.'
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
   e2e        = 'Crea un test de integracion para el job listado, copiando el patron de los tests de integracion de la PLANTILLA. El test lanza el job real de principio a fin con los adaptadores locales (sftp desactivado), base de datos en memoria y los servicios externos simulados; comprueba que termina en COMPLETED y que la salida es la esperada. Usa los datos de src/test/resources/e2e/<nombre-del-job>/ si existen; si no, crea alli datos sinteticos minimos (nunca datos reales). La salida esperada se deduce de la logica del ORIGINAL, no de ejecutar el codigo nuevo. El test debe contener el nombre del job. Si el test falla porque el codigo migrado no hace lo mismo que el original, corrige el codigo, no el test.'
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'

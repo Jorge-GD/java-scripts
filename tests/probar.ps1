@@ -407,6 +407,31 @@ function Maven-Del-Prompt($E) {
   return ([regex]::Match((Lee $E.Wt '.rescate/prompt.md'), '(?m)^- Ejecuta: (.+?) -q -B')).Groups[1].Value
 }
 
+# Repo de juguete con estos ficheros de src/main/resources (nombre -> texto) ya en un commit.
+function Escenario-Con-Recursos([string]$Nombre, $Ficheros) {
+  $e = Nuevo-Escenario $Nombre
+  foreach ($f in $Ficheros.Keys) {
+    Escribe $e.Repo ('src/main/resources/' + $f) $Ficheros[$f]
+    [void](GitEn $e.Repo @('add', '--', ('src/main/resources/' + $f)))
+  }
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'recursos'))
+  return $e
+}
+
+# Diagnostica el repo y devuelve lo que ha salido por consola y los hallazgos de secretos en claro.
+function Diagnostica-Secretos($E) {
+  $r = Rescate @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-SinBuild')
+  $h = @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'config' -and $_.Detalle -like 'secreto escrito en claro*' })
+  return [pscustomobject]@{ R = $r; H = $h }
+}
+
+# Todo lo que han escrito el script y la consola en una carpeta .rescate de este repo o worktree.
+function Lo-Que-Sale([string]$Raiz, [string]$Consola) {
+  $t = $Consola
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $Raiz '.rescate') -Recurse -File)) { $t += "`n" + [System.IO.File]::ReadAllText($f.FullName) }
+  return $t
+}
+
 # Plan de tres ficheros: dos con hallazgos en 'estructura' y un tercero (Cliente) que no.
 $PlanTres = @'
 # Plan del paso 'estructura'
@@ -746,6 +771,119 @@ $Pruebas['prompt: con mvnw en la raiz del repo el prompt dice ./mvnw'] = {
   [void](GitEn $e.Repo @('commit', '-q', '-m', 'mvnw'))
   Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1') }))
   Igual 'dentro del repo: ./mvnw' $esperado (Maven-Del-Prompt $e)
+}
+
+$DetalleSecreto = "secreto escrito en claro ('{0}'): tiene que entrar por una variable de entorno, sin valor por defecto"
+
+$Pruebas['config: un secreto escrito en claro en application.properties es un error y su valor no sale'] = {
+  $e = Escenario-Con-Recursos 'secreto-properties' @{ 'application.properties' = @'
+# conexion de la base de datos
+spring.application.name=life
+spring.datasource.url=jdbc:h2:mem:life
+spring.datasource.password=acme2015
+spring.mail.password=${MAIL_PASSWORD}
+'@ }
+  $d = Diagnostica-Secretos $e
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Igual 'un hallazgo' 1 $d.H.Count
+  Igual 'es un error' 'error' $d.H[0].Sev
+  Igual 'del fichero' 'src/main/resources/application.properties' $d.H[0].Fichero
+  Igual 'en su linea' 4 $d.H[0].Linea
+  Igual 'con su detalle' ($DetalleSecreto -f 'spring.datasource.password') $d.H[0].Detalle
+  Comprueba 'el valor no sale ni en la consola, ni en hallazgos.json, ni en el informe' (-not (Lo-Que-Sale $e.Repo $d.R.Salida).Contains('acme2015'))
+}
+
+$Pruebas['config: en application.yml, con comillas y comentario es un error; con variable, no'] = {
+  $e = Escenario-Con-Recursos 'secreto-yml' @{ 'application.yml' = @'
+spring:
+  datasource:
+    username: life
+    password: "acme2015"   # clave de pruebas
+sftp:
+  password: ${SFTP_PASSWORD:}
+mail:
+  password: ${DB_PASSWORD}   # sale del entorno
+'@ }
+  $d = Diagnostica-Secretos $e
+  Igual 'un hallazgo' 1 $d.H.Count
+  Igual 'es un error' 'error' $d.H[0].Sev
+  Igual 'del fichero' 'src/main/resources/application.yml' $d.H[0].Fichero
+  Igual 'en su linea' 4 $d.H[0].Linea
+  Igual 'con su detalle' ($DetalleSecreto -f 'password') $d.H[0].Detalle
+  Comprueba 'el valor no sale' (-not (Lo-Que-Sale $e.Repo $d.R.Salida).Contains('acme2015'))
+}
+
+$Pruebas['config: una variable con valor por defecto es un error'] = {
+  $e = Escenario-Con-Recursos 'secreto-defecto' @{ 'application.yml' = @'
+spring:
+  datasource:
+    password: ${DB_PASSWORD:acme2015}
+'@ }
+  $d = Diagnostica-Secretos $e
+  Igual 'un hallazgo' 1 $d.H.Count
+  Igual 'es un error' 'error' $d.H[0].Sev
+  Igual 'en su linea' 3 $d.H[0].Linea
+  Comprueba 'el valor por defecto no sale' (-not (Lo-Que-Sale $e.Repo $d.R.Salida).Contains('acme2015'))
+}
+
+$Pruebas['config: en un fichero con perfil es un aviso'] = {
+  $e = Escenario-Con-Recursos 'secreto-perfil' @{
+    'application-local.yml'      = "spring:`n  datasource:`n    password: acme2015`n"
+    'application-pro.properties' = "spring.datasource.password=acme2015`n"
+  }
+  $d = Diagnostica-Secretos $e
+  Igual 'dos hallazgos' 2 $d.H.Count
+  Igual 'ninguno es un error' 0 @($d.H | Where-Object { $_.Sev -eq 'error' }).Count
+  Igual 'ficheros' 'src/main/resources/application-local.yml src/main/resources/application-pro.properties' (@($d.H | ForEach-Object { $_.Fichero } | Sort-Object) -join ' ')
+  Comprueba 'el valor no sale' (-not (Lo-Que-Sale $e.Repo $d.R.Salida).Contains('acme2015'))
+}
+
+$Pruebas['config: cuenta por el final de la clave'] = {
+  $e = Escenario-Con-Recursos 'secreto-claves' @{ 'application.yml' = @'
+oauth:
+  token-uri: https://auth.example.invalid/token
+  password-file: /run/x
+  clientSecret: abc
+  api-key: abc
+'@ }
+  $d = Diagnostica-Secretos $e
+  Igual 'dos hallazgos' 2 $d.H.Count
+  Igual 'lineas' '4 5' (@($d.H | ForEach-Object { $_.Linea } | Sort-Object) -join ' ')
+  Igual 'claves' ('api-key clientSecret') (@($d.H | ForEach-Object { [regex]::Match($_.Detalle, "\('([^']+)'\)").Groups[1].Value } | Sort-Object) -join ' ')
+  Igual 'son errores' 2 @($d.H | Where-Object { $_.Sev -eq 'error' }).Count
+}
+
+$Pruebas['config: una linea comentada no cuenta'] = {
+  $e = Escenario-Con-Recursos 'secreto-comentado' @{
+    'application.yml'        = "spring:`n  datasource:`n    # password: acme2015`n    username: life`n"
+    'application.properties' = "#spring.datasource.password=acme2015`n! spring.mail.password=acme2015`n    # sftp.password=acme2015`n"
+  }
+  $d = Diagnostica-Secretos $e
+  Igual 'ningun hallazgo' 0 $d.H.Count
+}
+
+$Pruebas['config: PalabrasSecreto se cambia en .rescate/config.json'] = {
+  $e = Escenario-Con-Recursos 'secreto-palabras' @{ 'application.properties' = "spring.datasource.password=acme2015`nsftp.pin=4321`n" }
+  $cfg = [pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); PalabrasSecreto = @() }
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
+  Igual 'con la lista vacia no hay hallazgos' 0 (Diagnostica-Secretos $e).H.Count
+  $cfg.PalabrasSecreto = @('pin')
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
+  $d = Diagnostica-Secretos $e
+  Igual 'con otra lista solo cuenta la suya' 1 $d.H.Count
+  Igual 'es la clave pin' ($DetalleSecreto -f 'sftp.pin') $d.H[0].Detalle
+  Igual 'en su linea' 2 $d.H[0].Linea
+}
+
+$Pruebas['config: el prompt lleva el texto nuevo y no el valor del secreto'] = {
+  $e = Escenario-Con-Recursos 'secreto-prompt' @{ 'application.properties' = "spring.datasource.password=acme2015`n" }
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'config', '-SinPlan', '-Lote', '20', '-MaxLotes', '1', '-Auto', '-Si', '-MaxIntentos', '1')
+  $p = Lee $e.Wt '.rescate/prompt.md'
+  $texto = 'Ningun secreto (contrasena, token, clave) puede quedar escrito en application.yml o application.properties, ni como valor por defecto: se leen de una variable de entorno (`${NOMBRE}`). No escribas el valor en ningun otro fichero del repo; si un test lo necesita, usa un valor inventado en src/test/resources.'
+  Comprueba 'lleva el texto nuevo del paso' $p.Contains($texto)
+  Comprueba 'ya no dice que los secretos se quedan como variables' (-not $p.Contains('no escribas ninguno'))
+  Comprueba 'lleva el hallazgo, con su fichero y su linea' $p.Contains("- src/main/resources/application.properties:1 - " + ($DetalleSecreto -f 'spring.datasource.password'))
+  Comprueba 'el valor no sale ni en el prompt, ni en la consola, ni en lo que deja el script' (-not ((Lo-Que-Sale $e.Wt $r.Salida) + $p).Contains('acme2015'))
 }
 
 # ================================ LANZADOR ================================
