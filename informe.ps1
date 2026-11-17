@@ -63,8 +63,6 @@ function Split-Plantilla([string]$Texto) {
 }
 
 # Pone cada {{X}} (escapado) y cada {{{X}}} (tal cual) con su valor. Una sola pasada: un valor no se vuelve a expandir.
-# No se usa un bloque de script como delegado de Regex: son miles de conversiones por pagina, sospechosas de las caidas
-# intermitentes de pwsh 7.4 (SIGSEGV) que se vieron en los bancos.
 $RxHueco = New-Object System.Text.RegularExpressions.Regex('\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}')
 function Expand-Plantilla([string]$Texto, $Valores) {
   $sb = New-Object System.Text.StringBuilder
