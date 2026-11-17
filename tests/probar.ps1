@@ -22,72 +22,11 @@ $aqui = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Script) { $Script = Join-Path (Split-Path -Parent $aqui) 'rescate.ps1' }
 $Script = (Resolve-Path -LiteralPath $Script).Path
 $falsos = Join-Path $aqui 'falsos'
-# El mismo PowerShell que ejecuta estas pruebas. Si pwsh esta instalado como
-# herramienta de dotnet, el proceso se llama 'dotnet': entonces se busca en el PATH.
-$ps = (Get-Process -Id $PID).Path
-if ([System.IO.Path]::GetFileNameWithoutExtension($ps) -notmatch '^(pwsh|powershell)') {
-  $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
-  if (-not $cmd) { $cmd = Get-Command powershell -ErrorAction SilentlyContinue }
-  if (-not $cmd) { throw 'No encuentro pwsh ni powershell en el PATH.' }
-  $ps = $cmd.Source
-}
-if (-not $Dir) { $Dir = Join-Path ([System.IO.Path]::GetTempPath()) ('rescate-pruebas-' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8)) }
-[void](New-Item -ItemType Directory -Path $Dir -Force)
-$Dir = (Resolve-Path -LiteralPath $Dir).Path
-$script:Pasan = 0
-$script:Fallan = 0
+. (Join-Path $aqui 'comun-banco.ps1')
 
 # ============================== UTILIDADES ==============================
-function Get-Ruta([string]$Raiz, [string]$Rel) {
-  $p = $Raiz
-  foreach ($s in $Rel.Split('/')) { if ($s) { $p = Join-Path $p $s } }
-  return $p
-}
-
-function Escribe([string]$Raiz, [string]$Rel, [string]$Texto) {
-  $ruta = Get-Ruta $Raiz $Rel
-  $d = Split-Path $ruta -Parent
-  if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
-  [System.IO.File]::WriteAllText($ruta, $Texto)
-}
-
-function Lee([string]$Raiz, [string]$Rel) { return [System.IO.File]::ReadAllText((Get-Ruta $Raiz $Rel)) }
-
-function GitEn([string]$D, [string[]]$A) {
-  $ErrorActionPreference = 'Continue'
-  $o = & git -C $D @A 2>&1 | ForEach-Object { "$_" }
-  if ($LASTEXITCODE -ne 0) { throw ('git ' + ($A -join ' ') + ' ha fallado en ' + $D + ': ' + (@($o) -join ' ')) }
-  return (@($o) -join "`n")
-}
-
-# Lanza rescate.ps1 en otro proceso. Devuelve su codigo de salida y lo que escribe.
-function Rescate([string[]]$A, [string]$Guion = '') {
-  $ErrorActionPreference = 'Continue'
-  $env:RESCATE_FALSO = $Guion
-  $pre = @('-NoProfile')
-  if ($env:OS -eq 'Windows_NT') { $pre += @('-ExecutionPolicy', 'Bypass') }
-  # la linea vacia por la entrada evita que un Read-Host inesperado lo deje colgado
-  $o = '' | & $ps @pre -File $Script @A 2>&1 | ForEach-Object { "$_" }
-  $c = $LASTEXITCODE
-  $env:RESCATE_FALSO = ''
-  return [pscustomobject]@{ Codigo = $c; Salida = (@($o) -join "`n") }
-}
-
-function Comprueba([string]$Que, [bool]$Ok, [string]$Detalle = '') {
-  if ($Ok) {
-    $script:Pasan++
-    Write-Host "  ok    $Que" -ForegroundColor Green
-  }
-  else {
-    $script:Fallan++
-    Write-Host "  FALLA $Que" -ForegroundColor Red
-    if ($Detalle) { Write-Host "        $Detalle" }
-  }
-}
-
-function Igual([string]$Que, $Esperado, $Real) {
-  Comprueba $Que ("$Esperado" -ceq "$Real") "esperaba '$Esperado' y hay '$Real'"
-}
+# Lanza rescate.ps1 en otro proceso (Lanzar esta en comun-banco.ps1).
+function Rescate([string[]]$A, [string]$Guion = '') { return Lanzar $Script $A $Guion }
 
 function Hallazgos([string]$Repo) {
   $p = Get-Ruta $Repo '.rescate/hallazgos.json'
@@ -107,8 +46,6 @@ function Reglas($H) {
     } | Sort-Object)
   return ($r -join ' ')
 }
-
-function Cola([string]$Texto) { return ((@($Texto -split "`n") | Select-Object -Last 12) -join ' / ') }
 
 # ============================ REPOS DE JUGUETE ============================
 $Pom = @'
@@ -424,16 +361,7 @@ function Nuevo-Escenario([string]$Nombre) {
   $repo = Join-Path $raiz 'batch-life'
   Nueva-Plantilla $pl
   Nuevo-Repo $repo
-  foreach ($d in @($pl, $repo)) {
-    [void](GitEn $d @('init', '-q'))
-    [void](GitEn $d @('symbolic-ref', 'HEAD', 'refs/heads/main'))
-    [void](GitEn $d @('config', 'user.name', 'Pruebas'))
-    [void](GitEn $d @('config', 'user.email', 'pruebas@example.invalid'))
-    [void](GitEn $d @('config', 'commit.gpgsign', 'false'))
-    [void](GitEn $d @('config', 'core.autocrlf', 'false'))
-    [void](GitEn $d @('add', '-A'))
-    [void](GitEn $d @('commit', '-q', '-m', 'inicial'))
-  }
+  foreach ($d in @($pl, $repo)) { Inicia-Repo $d }
   # ajustes del repo: Maven y Copilot de mentira (despues del commit: .rescate no se versiona)
   $cfg = [pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1') }
   Escribe $repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
@@ -613,20 +541,4 @@ $Pruebas['sinworktree: -SinWorktree arregla en la misma carpeta, como antes'] = 
 }
 
 # ================================ LANZADOR ================================
-Write-Host ('Script: ' + $Script)
-Write-Host ('Carpeta de pruebas: ' + $Dir)
-foreach ($nombre in $Pruebas.Keys) {
-  if ($Solo -and $nombre -notlike ('*' + $Solo + '*')) { continue }
-  Write-Host ''
-  Write-Host $nombre
-  try { & $Pruebas[$nombre] }
-  catch { Comprueba 'la prueba termina sin excepcion' $false ($_.Exception.Message) }
-}
-Write-Host ''
-if ($script:Fallan -eq 0) { Write-Host "TODO BIEN: $($script:Pasan) comprobaciones." -ForegroundColor Green }
-else { Write-Host "FALLAN $($script:Fallan) de $($script:Pasan + $script:Fallan) comprobaciones." -ForegroundColor Red }
-if (-not $Conservar) {
-  try { Remove-Item -LiteralPath $Dir -Recurse -Force } catch { Write-Host ('No pude borrar ' + $Dir + ': ' + $_.Exception.Message) }
-}
-if ($script:Fallan -gt 0) { exit 1 }
-exit 0
+Invoke-Banco $Pruebas $Script

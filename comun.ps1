@@ -1,8 +1,9 @@
 <#
 comun.ps1 - Lo que comparten rescate.ps1 y migracion.ps1. No se ejecuta solo:
 cada script lo carga con '. (Join-Path $PSScriptRoot 'comun.ps1')'. Solo ASCII.
-Las funciones usan variables del script que las carga: $Cfg, $Si, $Worktree y
-$OrigenRoot (la carpeta del usuario). Cada script las define antes de llamarlas.
+Las funciones usan variables del script que las carga: $Cfg, $Si, $Worktree,
+$OrigenRoot (la carpeta del usuario) y $RepoRoot (la carpeta donde se trabaja:
+el worktree de rescate). Cada script las define antes de llamarlas.
 Los flags de Copilot y la ruta de Maven se ajustan aqui o en .rescate/config.json.
 #>
 
@@ -95,6 +96,13 @@ function Get-Huella([string]$Dir) {
   $fs = @(Get-ChildItem -LiteralPath $Dir -Recurse -File)
   $max = ($fs | Measure-Object -Property LastWriteTimeUtc -Maximum).Maximum
   return "$($fs.Count)|$max"
+}
+
+# Deshace en $RepoRoot (la carpeta de trabajo) todo lo hecho desde el commit $Check.
+function Undo-Lote([string]$Rama, [string]$Check) {
+  [void](Invoke-Git $RepoRoot @('checkout', '-q', '-f', $Rama))
+  [void](Invoke-Git $RepoRoot @('reset', '-q', '--hard', $Check))
+  [void](Invoke-Git $RepoRoot @('clean', '-fdq'))
 }
 
 function Get-Rama([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', '--abbrev-ref', 'HEAD')).Salida -join '').Trim() }

@@ -948,12 +948,6 @@ function Get-Guardas {
   return [pscustomobject]@{ Tests = $tests.Count; Desactivados = $des; Aserciones = $ase; Plantilla = (Get-Huella $PlantillaRoot); Legacy = (Get-Huella $LegacyRoot) }
 }
 
-function Undo-Lote([string]$Rama, [string]$Check) {
-  [void](Invoke-Git $RepoRoot @('checkout', '-q', '-f', $Rama))
-  [void](Invoke-Git $RepoRoot @('reset', '-q', '--hard', $Check))
-  [void](Invoke-Git $RepoRoot @('clean', '-fdq'))
-}
-
 # ================================ PLAN ================================
 function Get-RutaPlan([string]$PasoId) { return (Join-Path $Work "plan-$PasoId.md") }
 
