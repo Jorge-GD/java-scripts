@@ -1,0 +1,42 @@
+{
+  "L1": [
+    { "tipo": "regla", "desde": 151, "hasta": 154, "nota": "R002 importe maximo" },
+    { "tipo": "regla", "desde": 155, "hasta": 158, "nota": "R004 iban no valido" },
+    { "tipo": "regla", "desde": 131, "hasta": 133, "nota": "la remesa no cuadra: lanza excepcion" },
+    { "tipo": "tabla-lee", "desde": 33, "hasta": 34, "nota": "RECIBOS pendientes" },
+    { "tipo": "tabla-escribe", "desde": 90, "hasta": 91, "nota": "RECIBOS pasan a enviado" },
+    { "tipo": "tabla-escribe", "desde": 95, "hasta": 96, "nota": "REMESAS alta" },
+    { "tipo": "tabla-lee", "desde": 139, "hasta": 139, "nota": "REMESAS ultimo numero" },
+    { "tipo": "tabla-escribe", "desde": 184, "hasta": 184, "nota": "RECIBOS pasan a rechazado" },
+    { "tipo": "tabla-escribe", "desde": 185, "hasta": 187, "nota": "RECIBOS_RECHAZADOS" },
+    { "tipo": "salida-fichero", "desde": 74, "hasta": 75, "nota": "fichero de la remesa" },
+    { "tipo": "salida-fichero", "desde": 111, "hasta": 113, "nota": "copia de la remesa a enviados" },
+    { "tipo": "entrada-fichero", "desde": 120, "hasta": 120, "nota": "lee la remesa para comprobarla" }
+  ],
+  "L2": [
+    { "tipo": "regla", "desde": 73, "hasta": 79, "nota": "R010" },
+    { "tipo": "regla", "desde": 108, "hasta": 111, "nota": "R001" },
+    { "tipo": "regla", "desde": 113, "hasta": 116, "nota": "R002" },
+    { "tipo": "regla", "desde": 118, "hasta": 125, "nota": "R003" },
+    { "tipo": "regla", "desde": 127, "hasta": 130, "nota": "R004" },
+    { "tipo": "regla", "desde": 150, "hasta": 154, "nota": "R008a duplicado en el fichero" },
+    { "tipo": "regla", "desde": 155, "hasta": 164, "nota": "R008b ya cargado" },
+    { "tipo": "regla", "desde": 172, "hasta": 178, "nota": "R005a fecha mal formada" },
+    { "tipo": "regla", "desde": 179, "hasta": 181, "nota": "R005b anterior al fichero" },
+    { "tipo": "regla", "desde": 182, "hasta": 185, "nota": "R005c mas de 45 dias" },
+    { "tipo": "regla", "desde": 186, "hasta": 188, "nota": "R005d fin de semana" },
+    { "tipo": "regla", "desde": 191, "hasta": 197, "nota": "R006a mandato inexistente" },
+    { "tipo": "regla", "desde": 198, "hasta": 204, "nota": "R006b mandato revocado" },
+    { "tipo": "regla", "desde": 205, "hasta": 207, "nota": "R006c otro IBAN" },
+    { "tipo": "regla", "desde": 210, "hasta": 216, "nota": "R007a poliza inexistente" },
+    { "tipo": "regla", "desde": 217, "hasta": 223, "nota": "R007b poliza no activa" },
+    { "tipo": "regla", "desde": 279, "hasta": 285, "nota": "R009 tope de rechazos" },
+    { "tipo": "tabla-lee", "desde": 157, "hasta": 157, "nota": "RECIBOS (existe ya)" },
+    { "tipo": "tabla-lee", "desde": 194, "hasta": 194, "nota": "MANDATOS" },
+    { "tipo": "tabla-lee", "desde": 213, "hasta": 213, "nota": "POLIZAS" },
+    { "tipo": "tabla-escribe", "desde": 253, "hasta": 260, "nota": "RECIBOS (alta)" },
+    { "tipo": "tabla-escribe", "desde": 269, "hasta": 273, "nota": "RECIBOS_RECHAZADOS" },
+    { "tipo": "salida-fichero", "desde": 94, "hasta": 96, "nota": "fichero de errores: resumen por fichero" },
+    { "tipo": "salida-fichero", "desde": 276, "hasta": 277, "nota": "fichero de errores: una linea por rechazo" }
+  ]
+}

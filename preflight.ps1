@@ -6,8 +6,9 @@ Necesita comun.ps1, tareas.ps1 y las carpetas tareas\, preflight\ y tests\ junto
 
 USO (todo es opcional)
   .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
+  .\preflight.ps1 -Modelos gpt-6-luna,claude-haiku-5.5 -Esfuerzos medium,max   # examen de modelos (bloque 9)
   .\preflight.ps1 -Solo 1,3        # solo esos bloques
-  .\preflight.ps1 -SinCopilot      # salta los bloques 4, 5 y 8 (los que llaman al modelo)
+  .\preflight.ps1 -SinCopilot      # salta los bloques 4, 5, 8 y 9 (los que llaman al modelo)
   .\preflight.ps1 -SinMaven        # salta el 6 y el diagnostico del 7
 Una ruta de -Legacy, -Migrado o -Plantilla que no es una carpeta se dice al instante (sin repetirla) y sale con 1.
 
@@ -22,6 +23,10 @@ BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
                   diagnostico de rescate.ps1 (solo numeros y palabras fijas)
   8 clases reales 5 clases del original por tamano: la ficha de cada una
+  9 examen        con cada modelo de -Modelos y cada esfuerzo de -Esfuerzos (medium,max por defecto): la ficha de
+                  una clase corta y de una larga, y arreglar un Maven de juguete y ponerle Javadoc. Cuenta
+                  creditos y segundos, y recomienda uno. Una sola pasada por combinacion: es orientativo.
+                  Los ids son los que ensena /model dentro de Copilot.
 
 RESULTADO preflight-resultado.txt junto al script. Por consola, al final, dice donde esta y si lo copio
 al portapapeles (solo en Windows y si puede); esas dos lineas no van al fichero.
@@ -37,7 +42,9 @@ param(
   [string]$Legacy = '',        # carpeta del batch original
   [string]$Migrado = '',       # carpeta del batch migrado
   [string]$Plantilla = '',     # batch de referencia
-  [string]$Modelo = '',        # id del modelo de Copilot; sin esto, el que tenga Copilot
+  [string]$Modelo = '',        # id del modelo de Copilot; sin esto, el primero de -Modelos o el que tenga Copilot
+  [string[]]$Modelos = @(),    # modelos del examen (bloque 9): gpt-6-luna,claude-haiku-5.5 (con -File llega como un solo texto)
+  [string[]]$Esfuerzos = @(),  # esfuerzos del examen; por defecto medium,max
   [string[]]$Solo = @(),       # numeros de bloque: 1,3 (con -File llega como un solo texto "1,3")
   [switch]$SinCopilot,
   [switch]$SinMaven
@@ -78,6 +85,7 @@ $script:Fallos = @()
 $script:NoEscribe = $false
 $script:SinModelo = $false
 $script:SegundosIntentos = @()
+$script:MavenBien = $null   # el primer paso del bloque 6: $true, $false o $null si no se midio
 try {
   . (Join-Path $PSScriptRoot 'comun.ps1')
   . (Join-Path $PSScriptRoot 'tareas.ps1')
@@ -291,6 +299,16 @@ function Get-MavenElegido {
   return [pscustomobject]@{ Exe = ''; Origen = 'ninguno' }
 }
 
+# Si Copilot conoce esa bandera, sin llamar a ningun modelo: si, no o no se pudo probar.
+function Get-EstadoBandera([string[]]$A) {
+  try {
+    $r = Invoke-Proceso $Cfg.CopilotExe ($A + '--version') $PSScriptRoot 60
+    if (-not $r.Agotado) { return (Get-SiNo ($r.Texto -notmatch 'unexpected argument')) }
+  }
+  catch { }
+  return 'no se pudo probar'
+}
+
 function Get-Segundos([double]$S) { return ([int][math]::Floor($S)) }
 
 function New-Carpeta([string]$Ruta) {
@@ -325,6 +343,17 @@ function Get-ErrorMaven([string]$Texto) {
 function Add-PasoMaven([string]$Nombre, [bool]$Ok, [int]$Segundos, [string]$Error) {
   Add-Linea ("${Nombre}: " + (Get-SiNo $Ok) + " | $Segundos s")
   if (-not $Ok) { Add-Linea ('error: ' + $Error) }
+}
+
+# El Maven para trabajar en la carpeta $Dir: el elegido; un mvnw funciona desde su carpeta y se lleva con su .mvn.
+function Get-MvnProyecto($Elegido, [string]$Dir) {
+  if ($Elegido.Origen -ne 'envoltorio') { return $Elegido.Exe }
+  $origen = Split-Path $Elegido.Exe -Parent
+  foreach ($f in @('mvnw', 'mvnw.cmd', '.mvn')) {
+    $de = Join-Path $origen $f
+    if (Test-Path -LiteralPath $de) { Copy-Item -LiteralPath $de -Destination (Join-Path $Dir $f) -Recurse -Force }
+  }
+  return (Get-Mvn $Dir)
 }
 
 # Los numeros de un repo: ficheros .java de codigo, lineas, los que pasan de LineasPorTarea, el mas largo, modulos.
@@ -461,6 +490,335 @@ function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cu
   Save-Resultado
 }
 
+# ============================ EXAMEN DE MODELOS (bloque 9) ============================
+# Las pruebas de preflight\examen\ con cada modelo y cada esfuerzo, una detras de otra (el tiempo de una llamada tiene que
+# poderse comparar con el de las demas): L1 y L2 son la ficha de una clase corta y la de una larga (troceada como la trocea el
+# sistema); E1 y E2 son arreglar dos errores de compilacion y poner Javadoc, en un proyecto Maven de juguete.
+
+# Los esfuerzos que se prueban, del mas alto al mas bajo, si el modelo no admite el pedido.
+function Get-EsfuerzosMenores([string]$Esfuerzo) {
+  if ($Esfuerzo -ceq 'max') { return @('xhigh', 'high') }
+  if ($Esfuerzo -ceq 'xhigh') { return @('high') }
+  return @()
+}
+
+# Los trozos en que el sistema parte la clase larga del examen (Get-TareasFichas, segun LineasPorTarea).
+function Get-TrozosExamen {
+  $fichero = Get-Item -LiteralPath (Join-Ruta $PSScriptRoot 'preflight/examen/GestorRecibos.java')
+  $legacyAntes = $script:LegacyRoot
+  $datosAntes = $script:Datos
+  $script:LegacyRoot = $fichero.DirectoryName
+  $script:Datos = New-Carpeta (Join-Path $Tmp 'examen-datos')
+  try { $tareas = @(Get-TareasFichas @($fichero) $false) }
+  finally { $script:LegacyRoot = $legacyAntes; $script:Datos = $datosAntes }
+  return @($tareas | ForEach-Object { [pscustomobject]@{ Desde = [int]$_.entradas.desde; Hasta = [int]$_.entradas.hasta } })
+}
+
+# Los trozos, las llamadas y los minutos (2 por llamada) de todo el examen, y si las pruebas E tienen Maven.
+function Get-PlanExamen {
+  $plan = [pscustomobject]@{ Trozos = @(Get-TrozosExamen); ConMaven = $false; Llamadas = 0; Minutos = 1 }
+  $plan.ConMaven = (-not $SinMaven -and $script:Fallos -notcontains 6 -and $script:MavenBien -ne $false -and (Get-MavenElegido).Origen -ne 'ninguno')
+  $por = 1 + $plan.Trozos.Count
+  if ($plan.ConMaven) { $por += 2 }
+  $plan.Llamadas = $ModelosN.Count * $EsfuerzosN.Count * $por
+  $plan.Minutos = [math]::Max(1, 2 * $plan.Llamadas)
+  return $plan
+}
+
+function Format-Creditos($C) {
+  if ($null -eq $C) { return 'desconocido' }
+  return ([double]$C).ToString('0.000', [System.Globalization.CultureInfo]::InvariantCulture).Replace('.', ',')
+}
+
+# Una combinacion cumple si sus dos lecturas valen, acierta al menos el 90 % de la clave, el 90 % de sus citas se prueban y
+# pasan todos los arreglos que se intentaron.
+function Test-Cumple($C) {
+  if (-not $C.LecturaValida -or $C.ClaveTotal -le 0 -or $C.Datos -le 0) { return $false }
+  if (($C.Clave * 10) -lt ($C.ClaveTotal * 9) -or ($C.Citas * 10) -lt ($C.Datos * 9)) { return $false }
+  return ($C.Arreglos -eq $C.Intentados)
+}
+
+# Las lineas de la recomendacion: entre las que cumplen, la de menos creditos (la de menos segundos si falta el dato o
+# empatan); si ninguna cumple, la mejor por arreglos que pasan y despues por clave. Sin IA.
+function Get-Recomendacion($Combos) {
+  $todas = @($Combos)
+  if ($todas.Count -eq 0) { return @('recomendado: sin datos') }
+  $cumplen = @($todas | Where-Object { Test-Cumple $_ })
+  if ($cumplen.Count -eq 0) {
+    $m = $todas[0]
+    foreach ($c in $todas) { if ($c.Arreglos -gt $m.Arreglos -or ($c.Arreglos -eq $m.Arreglos -and $c.Clave -gt $m.Clave)) { $m = $c } }
+    $arreglos = 'sin maven'
+    if ($m.Intentados -gt 0) { $arreglos = "$($m.Arreglos) de $($m.Intentados)" }
+    return @('recomendado: ninguno cumple', "la mejor: $($m.Modelo) con esfuerzo $($m.Esfuerzo) (clave $($m.Clave) de $($m.ClaveTotal), arreglos $arreglos)", 'todo con uno: no')
+  }
+  $elegida = $cumplen[0]
+  $sinDato = (@($cumplen | Where-Object { $null -eq $_.Creditos }).Count -gt 0)
+  if ($cumplen.Count -eq 1) {
+    $dato = 'sin dato de creditos'
+    if ($null -ne $elegida.Creditos) { $dato = (Format-Creditos $elegida.Creditos) + ' creditos' }
+    $motivo = "cumple y es la unica que cumple ($dato)"
+  }
+  elseif ($sinDato) {
+    foreach ($c in $cumplen) { if ($c.Segundos -lt $elegida.Segundos) { $elegida = $c } }
+    $motivo = 'cumple y es la mas rapida (sin dato de creditos)'
+  }
+  else {
+    $menor = ($cumplen | ForEach-Object { [math]::Round([double]$_.Creditos, 3) } | Measure-Object -Minimum).Minimum
+    $empatan = @($cumplen | Where-Object { [math]::Round([double]$_.Creditos, 3) -eq $menor })
+    if ($empatan.Count -gt 1) {
+      $elegida = $empatan[0]
+      foreach ($c in $empatan) { if ($c.Segundos -lt $elegida.Segundos) { $elegida = $c } }
+      $motivo = 'cumple y es la mas rapida (empatan en creditos: ' + (Format-Creditos $menor) + ')'
+    }
+    else {
+      $elegida = $empatan[0]
+      $siguiente = ($cumplen | ForEach-Object { [math]::Round([double]$_.Creditos, 3) } | Where-Object { $_ -ne $menor } | Measure-Object -Minimum).Minimum
+      $motivo = 'cumple y es la mas barata (' + (Format-Creditos $menor) + ' creditos; la siguiente, ' + (Format-Creditos $siguiente) + ')'
+    }
+  }
+  $todoUno = 'si'
+  if ($elegida.Intentados -eq 0) { $todoUno = 'sin dato de arreglos' }
+  return @("recomendado: $($elegida.Modelo) con esfuerzo $($elegida.Esfuerzo)", "motivo: $motivo", "todo con uno: $todoUno")
+}
+
+# La suma de un campo de Read-Uso en varias llamadas; $null si falta en alguna (una suma a medias engana).
+function Get-SumaUso($Usos, [string]$Campo) {
+  $suma = [double]0
+  $n = 0
+  foreach ($u in @($Usos)) {
+    if ($null -eq $u.$Campo) { return $null }
+    $suma += [double]$u.$Campo
+    $n++
+  }
+  if ($n -eq 0) { return $null }
+  return $suma
+}
+
+# Reparte los datos de la ficha entre las condiciones de la clave: un dato vale para una sola condicion (Kuhn).
+function Test-Emparejar([int]$I, $Candidatos, [bool[]]$Vistos, [int[]]$DeDato) {
+  foreach ($j in $Candidatos[$I]) {
+    if ($Vistos[$j]) { continue }
+    $Vistos[$j] = $true
+    if ($DeDato[$j] -lt 0 -or (Test-Emparejar $DeDato[$j] $Candidatos $Vistos $DeDato)) { $DeDato[$j] = $I; return $true }
+  }
+  return $false
+}
+
+# De las condiciones de la clave (tipo, desde, hasta), cuantas trae la ficha: un dato con la cita probada, del mismo tipo
+# (regla y error valen lo mismo) y con la linea entre desde-CitaCerca y hasta+CitaCerca.
+function Get-ClaveEncontrada($Datos, $Clave) {
+  $buenos = @($Datos | Where-Object { $_.probado })
+  $cerca = [int]$Cfg.CitaCerca
+  $condiciones = @($Clave)
+  $candidatos = New-Object 'object[]' $condiciones.Count
+  for ($i = 0; $i -lt $condiciones.Count; $i++) {
+    $c = $condiciones[$i]
+    $tipo = $c.tipo -replace '^error$', 'regla'
+    $lista = @()
+    for ($j = 0; $j -lt $buenos.Count; $j++) {
+      $t = $buenos[$j].tipo -replace '^error$', 'regla'
+      if ($t -ceq $tipo -and $buenos[$j].linea -ge ($c.desde - $cerca) -and $buenos[$j].linea -le ($c.hasta + $cerca)) { $lista += $j }
+    }
+    $candidatos[$i] = @($lista)
+  }
+  $deDato = New-Object 'int[]' $buenos.Count
+  for ($j = 0; $j -lt $deDato.Count; $j++) { $deDato[$j] = -1 }
+  $hallados = 0
+  for ($i = 0; $i -lt $condiciones.Count; $i++) {
+    $vistos = New-Object 'bool[]' $buenos.Count
+    if (Test-Emparejar $i $candidatos $vistos $deDato) { $hallados++ }
+  }
+  return $hallados
+}
+
+# Cadenas, caracteres y comentarios de Java, de izquierda a derecha en una sola pasada: solo los comentarios se tratan.
+$script:PatronJava = '"""[\s\S]*?"""|"(?:\\.|[^"\\\r\n])*"|''(?:\\.|[^''\\\r\n])*''|/\*[\s\S]*?\*/|//[^\r\n]*'
+
+# El codigo de un .java sin comentarios ni espacios: lo que tiene que quedar igual al poner Javadoc.
+function Get-CodigoJava([string]$Texto) {
+  $sin = [regex]::Replace($Texto, $script:PatronJava, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) if ($m.Value.StartsWith('/')) { '' } else { $m.Value } })
+  return ([regex]::Replace($sin, '\s+', ''))
+}
+
+# El codigo de los .java de src/main de una carpeta, cada uno con su ruta.
+function Get-CodigoMain([string]$Dir) {
+  $partes = @()
+  foreach ($f in @(Get-Ficheros $Dir '*.java')) {
+    $rel = Get-Rel $Dir $f.FullName
+    if ($rel -like 'src/main/*') { $partes += ($rel + '|' + (Get-CodigoJava ([System.IO.File]::ReadAllText($f.FullName)))) }
+  }
+  return ((@($partes | Sort-Object)) -join "`n")
+}
+
+# Si cada tipo y cada metodo o constructor publico de un .java lleva su comentario /** ... */ justo encima (salvo anotaciones).
+function Test-Javadoc([string]$Texto) {
+  $lineas = @($Texto -split "`r?`n")
+  # el mismo texto con cadenas y comentarios en blanco, para no confundir un 'public' que no es una declaracion
+  $blanco = [System.Text.RegularExpressions.MatchEvaluator]{ param($m) [regex]::Replace($m.Value, '[^\r\n]', ' ') }
+  $limpio = @([regex]::Replace($Texto, $script:PatronJava, $blanco) -split "`r?`n")
+  for ($i = 0; $i -lt $limpio.Count; $i++) {
+    $l = $limpio[$i].Trim()
+    if ($l -notmatch '^public\s') { continue }
+    $esTipo = ($l -match '^public\s+(?:[\w<>\[\],.?@\s]+\s)?(?:class|interface|enum|record)\s+\w')
+    $esMetodo = ($l -match '^public\s+[^=;(]*\w\s*\(')
+    if (-not ($esTipo -or $esMetodo)) { continue }
+    $j = $i - 1
+    while ($j -ge 0 -and ($lineas[$j].Trim() -eq '' -or $lineas[$j].Trim().StartsWith('@'))) { $j-- }
+    if ($j -lt 0 -or -not $lineas[$j].Trim().EndsWith('*/')) { return $false }
+    while ($j -ge 0 -and $lineas[$j] -notmatch '/\*') { $j-- }
+    if ($j -lt 0 -or $lineas[$j] -notmatch '/\*\*') { return $false }
+  }
+  return $true
+}
+
+function Test-JavadocMain([string]$Dir) {
+  foreach ($f in @(Get-Ficheros $Dir '*.java')) {
+    if ((Get-Rel $Dir $f.FullName) -like 'src/main/*' -and -not (Test-Javadoc ([System.IO.File]::ReadAllText($f.FullName)))) { return $false }
+  }
+  return $true
+}
+
+# Ruta relativa -> huella de cada fichero de una carpeta (sin .git, target ni .rescate): lo que cambia entre antes y despues.
+function Get-Arbol([string]$Dir) {
+  $arbol = @{}
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { foreach ($f in @(Get-Ficheros $Dir '*')) { $arbol[(Get-Rel $Dir $f.FullName)] = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($f.FullName))) } }
+  finally { $sha.Dispose() }
+  return $arbol
+}
+
+# Una lectura (la ficha de una tarea) con ese modelo y esfuerzo, y su gasto. Invoke-Ronda usa $ModeloElegido y el esfuerzo de lectura.
+function Invoke-Lectura($Tarea, [string]$Dir, [string]$Modelo, [string]$Esfuerzo, [bool]$ConUso) {
+  $archivo = Join-Path $Tmp ('uso-' + $Tarea.id + '-' + $Esfuerzo + '.json')
+  $modeloAntes = $script:ModeloElegido
+  $esfuerzoAntes = $Cfg.EsfuerzoLectura
+  $argsAntes = @($Cfg.CopilotArgs)
+  $script:ModeloElegido = $Modelo
+  $Cfg.EsfuerzoLectura = $Esfuerzo
+  if ($ConUso) { $Cfg.CopilotArgs = $argsAntes + "--usage-output-file=$archivo" }
+  try { $o = @(Invoke-Ronda @($Tarea) $Dir $Dir)[0] }
+  finally { $script:ModeloElegido = $modeloAntes; $Cfg.EsfuerzoLectura = $esfuerzoAntes; $Cfg.CopilotArgs = $argsAntes }
+  return [pscustomobject]@{ Res = $o; Uso = (Read-Uso $archivo) }
+}
+
+# Por que no pasa un arreglo ('' si pasa): una palabra del vocabulario cerrado. $Antes es el arbol antes de llamar a Copilot.
+function Get-MotivoArreglo([string]$Prueba, $Llamada, [string]$Dir, $Antes, [string]$Mvn) {
+  if ($Llamada.Agotado) { return 'tiempo' }
+  if ($Llamada.Codigo -ne 0) { return 'fallo de copilot' }
+  $despues = Get-Arbol $Dir
+  $cambios = @(@($Antes.Keys) + @($despues.Keys) | Select-Object -Unique | Where-Object { $Antes[$_] -cne $despues[$_] })
+  if ($cambios.Count -eq 0) { return 'sin cambios' }
+  if (@($cambios | Where-Object { $_ -like 'src/test/*' }).Count -gt 0) { return 'toco tests' }
+  if (@($cambios | Where-Object { $_ -notlike 'src/main/*' }).Count -gt 0) { return 'toco fuera de src/main' }
+  $r = Invoke-Proceso $Mvn @('-B', '-q', 'test') $Dir 1500
+  if ($r.Agotado) { return 'tiempo' }
+  if ($r.Codigo -ne 0) {
+    if ($r.Texto -match 'COMPILATION ERROR|Compilation failure|cannot find symbol') { return 'no compila' }
+    return 'test falla'
+  }
+  if ($Prueba -eq 'E2') {
+    if ((Get-CodigoMain $Dir) -cne (Get-CodigoMain (Join-Ruta $PSScriptRoot 'preflight/examen/e2'))) { return 'cambio codigo' }
+    if (-not (Test-JavadocMain $Dir)) { return 'sin javadoc' }
+  }
+  return ''
+}
+
+# Un arreglo (E1 o E2): copia el proyecto, pide el arreglo con ese modelo y esfuerzo y dice si pasa.
+function Invoke-Arreglo([int]$K, [string]$Prueba, [string]$Modelo, [string]$Esfuerzo, [bool]$ConUso) {
+  $carpeta = $Prueba.ToLowerInvariant()
+  $dir = Join-Path $Tmp "examen-$K-$carpeta"
+  [void](New-Carpeta $dir)
+  foreach ($h in @(Get-ChildItem -LiteralPath (Join-Ruta $PSScriptRoot "preflight/examen/$carpeta") -Force)) { Copy-Item -LiteralPath $h.FullName -Destination $dir -Recurse }
+  $mvn = Get-MvnProyecto (Get-MavenElegido) $dir
+  $antes = Get-Arbol $dir
+  $prompt = [System.IO.File]::ReadAllText((Join-Ruta $PSScriptRoot "preflight/examen/arreglo-$carpeta.md"), $Utf8) -replace "`r`n", "`n"
+  $archivo = Join-Path $Tmp "uso-pf-exa-$K-$Prueba.json"
+  $argsAntes = @($Cfg.CopilotArgs)
+  if ($ConUso) { $Cfg.CopilotArgs = $argsAntes + "--usage-output-file=$archivo" }
+  try { $c = @(Invoke-Llamadas @([pscustomobject]@{ Id = "pf-exa-$K-$Prueba"; Dir = $dir; Modelo = $Modelo; Esfuerzo = $Esfuerzo; Prompt = $prompt }))[0] }
+  finally { $Cfg.CopilotArgs = $argsAntes }
+  $motivo = Get-MotivoArreglo $Prueba $c $dir $antes $mvn
+  return [pscustomobject]@{ Pasa = ($motivo -eq ''); Motivo = $motivo; Segundos = $c.Segundos; Uso = (Read-Uso $archivo) }
+}
+
+# Una prueba de lectura ya hecha, en una linea: json, citas, clave, segundos y creditos. Devuelve sus cuentas.
+function Add-LineaLectura([string]$Nombre, $Hechas, $Clave) {
+  $res = @($Hechas | ForEach-Object { $_.Res })
+  $datos = @()
+  foreach ($o in $res) { if ($o.Estado -eq 'ok') { $datos += @($o.Ficha.datos) } }
+  $mal = @($res | Where-Object { $_.Estado -ne 'ok' })
+  $citas = @($datos | Where-Object { $_.probado }).Count
+  $seg = 0
+  foreach ($o in $res) { $seg += [int]$o.Segundos }
+  $r = [pscustomobject]@{ Valida = ($mal.Count -eq 0); Citas = $citas; Datos = $datos.Count; Clave = (Get-ClaveEncontrada $datos $Clave); ClaveTotal = @($Clave).Count; Segundos = $seg; Usos = @($Hechas | ForEach-Object { $_.Uso }) }
+  Add-Linea ("${Nombre}: json " + (Get-SiNo $r.Valida) + " | citas $citas de $($datos.Count) | clave $($r.Clave) de $($r.ClaveTotal) | $seg s | creditos " + (Format-Creditos (Get-SumaUso $r.Usos 'Creditos')))
+  if ($mal.Count -gt 0) { Add-Linea ('motivo: ' + (Get-Seguro (Get-MotivoCorto $mal[0].Motivo))) }
+  return $r
+}
+
+# Una combinacion de modelo y esfuerzo entera. Escribe sus lineas y devuelve sus cuentas (SinModelo si Copilot no contesta
+# ni con los esfuerzos mas bajos). $Vista es el id ya filtrado, para escribirlo.
+function Invoke-Combinacion([int]$K, [string]$Modelo, [string]$Vista, [string]$Esfuerzo, [bool]$ConUso, $Claves, $Plan) {
+  $dir = New-Carpeta (Join-Path $Tmp "examen-$K")
+  foreach ($f in @('GeneradorRemesa.java', 'GestorRecibos.java')) { Copy-Item -LiteralPath (Join-Ruta $PSScriptRoot "preflight/examen/$f") -Destination (Join-Path $dir $f) }
+  $c = [pscustomobject]@{ Modelo = $Vista; Esfuerzo = $Esfuerzo; SinModelo = $false; LecturaValida = $false; Clave = 0; ClaveTotal = 0; Citas = 0; Datos = 0; Arreglos = 0; Intentados = 0; Creditos = $null; Segundos = 0; Usos = @() }
+  $t1 = New-Tarea "pf-exa-$K-L1" 'examen-L1' 'GeneradorRemesa.java' 1 (Get-Lineas (Join-Path $dir 'GeneradorRemesa.java'))
+  # L1 hace de sonda: si Copilot sale con error sin escribir su ficha, se prueba un esfuerzo mas bajo
+  $rechazo = ''
+  $sinSalida = $true
+  foreach ($e in (@($Esfuerzo) + @(Get-EsfuerzosMenores $Esfuerzo))) {
+    $c.Esfuerzo = $e
+    $h1 = Invoke-Lectura $t1 $dir $Modelo $e $ConUso
+    $sinSalida = ($h1.Res.Estado -eq 'fallo' -and -not (Test-Path -LiteralPath (Join-Ruta $dir ".rescate/tareas/$($t1.id).json")))
+    if (-not $sinSalida) { break }
+    if (-not $rechazo) { $rechazo = $h1.Res.Linea }
+  }
+  if ($sinSalida) {
+    Add-Linea ('sin modelo: ' + (Get-Seguro $h1.Res.Linea))
+    $c.SinModelo = $true
+    return $c
+  }
+  if ($c.Esfuerzo -ne $Esfuerzo) {
+    Add-Linea ('esfuerzo usado: ' + $c.Esfuerzo + " ($Esfuerzo no admitido)")
+    Add-Linea ('motivo del esfuerzo: ' + (Get-Seguro $rechazo))
+  }
+  $l1 = Add-LineaLectura 'L1' @($h1) $Claves.L1
+  $hechas = @()
+  $n = 0
+  foreach ($trozo in $Plan.Trozos) {
+    $n++
+    $hechas += , (Invoke-Lectura (New-Tarea "pf-exa-$K-L2-$n" 'examen-L2' 'GestorRecibos.java' $trozo.Desde $trozo.Hasta) $dir $Modelo $c.Esfuerzo $ConUso)
+  }
+  $l2 = Add-LineaLectura 'L2' $hechas $Claves.L2
+  $c.LecturaValida = ($l1.Valida -and $l2.Valida)
+  $c.Clave = $l1.Clave + $l2.Clave
+  $c.ClaveTotal = $l1.ClaveTotal + $l2.ClaveTotal
+  $c.Citas = $l1.Citas + $l2.Citas
+  $c.Datos = $l1.Datos + $l2.Datos
+  $c.Segundos = $l1.Segundos + $l2.Segundos
+  $c.Usos = @($l1.Usos) + @($l2.Usos)
+  foreach ($prueba in @('E1', 'E2')) {
+    if (-not $Plan.ConMaven) { Add-Linea "${prueba}: sin maven"; continue }
+    $a = Invoke-Arreglo $K $prueba $Modelo $c.Esfuerzo $ConUso
+    $dicho = 'si'
+    if (-not $a.Pasa) { $dicho = 'no (' + $a.Motivo + ')' }
+    Add-Linea ("${prueba}: pasa $dicho | $($a.Segundos) s | creditos " + (Format-Creditos $a.Uso.Creditos))
+    $c.Intentados++
+    if ($a.Pasa) { $c.Arreglos++ }
+    $c.Usos += $a.Uso
+    $c.Segundos += [int]$a.Segundos
+  }
+  $c.Creditos = Get-SumaUso $c.Usos 'Creditos'
+  $entrada = Get-SumaUso $c.Usos 'TokensEntrada'
+  $salida = Get-SumaUso $c.Usos 'TokensSalida'
+  $tokens = 'tokens desconocido'
+  if ($null -ne $entrada -and $null -ne $salida) { $tokens = "tokens entrada $([long]$entrada) salida $([long]$salida)" }
+  $arreglos = 'sin maven'
+  if ($c.Intentados -gt 0) { $arreglos = "$($c.Arreglos) de $($c.Intentados)" }
+  Add-Linea ("total: clave $($c.Clave) de $($c.ClaveTotal) | arreglos $arreglos | $($c.Segundos) s | creditos " + (Format-Creditos $c.Creditos) + " | $tokens")
+  return $c
+}
+
 # ============================ RUTAS DE ENTRADA ============================
 # Una ruta mal escrita se dice al instante y no se lanza nada. Sin repetir la ruta: puede llevar nombres.
 $noExisten = @()
@@ -486,10 +844,22 @@ $SoloN = @()
 foreach ($s in @($Solo)) {
   foreach ($p in ("$s" -split '[,;\s]+')) { if ($p -match '^\d+$') { $SoloN += [int]$p } }
 }
+# -Modelos y -Esfuerzos: ids separados por comas, sin repetir y en el orden que se dan
+function Get-Lista($Valores) {
+  $lista = @()
+  foreach ($v in @($Valores)) {
+    foreach ($p in ("$v" -split '[,;\s]+')) { if ($p -match '^[A-Za-z0-9][A-Za-z0-9._\-]*$' -and $lista -notcontains $p) { $lista += $p } }
+  }
+  return $lista
+}
+$ModelosN = @(Get-Lista $Modelos)
+$EsfuerzosN = @(Get-Lista $Esfuerzos)
+if ($EsfuerzosN.Count -eq 0) { $EsfuerzosN = @('medium', 'max') }
 $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('preflight-' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void](New-Item -ItemType Directory -Path $Tmp -Force)
 $Registros = New-Carpeta (Join-Path $Tmp 'registros')
 $ModeloElegido = $Modelo
+if (-not $ModeloElegido -and $ModelosN.Count -gt 0) { $ModeloElegido = $ModelosN[0] }
 $LegacyRoot = ''
 
 # ajustes.json pisa $Cfg. Read-CfgFile sale con 1 si el JSON no vale: se mira antes.
@@ -597,16 +967,9 @@ try {
       '--no-custom-instructions' = @('--no-custom-instructions')
       '--available-tools'        = @('--available-tools=view')
       '--max-ai-credits'         = @('--max-ai-credits=1')
+      '--usage-output-file'      = @('--usage-output-file=' + (Join-Path $Tmp 'uso-sonda.json'))
     }
-    foreach ($k in $sondas.Keys) {
-      $v = 'no se pudo probar'
-      try {
-        $r = Invoke-Proceso $Cfg.CopilotExe (@($sondas[$k]) + '--version') $PSScriptRoot 60
-        if (-not $r.Agotado) { $v = Get-SiNo ($r.Texto -notmatch 'unexpected argument') }
-      }
-      catch { }
-      Add-Linea "bandera ${k}: $v"
-    }
+    foreach ($k in $sondas.Keys) { Add-Linea ("bandera ${k}: " + (Get-EstadoBandera @($sondas[$k]))) }
     $ids = @()
     try {
       $r = Invoke-Proceso $Cfg.CopilotExe @('--help') $PSScriptRoot 60
@@ -621,7 +984,7 @@ try {
   # ----------------------------------- 4 -----------------------------------
   Invoke-Bloque 4 'aptitud' 20 {
     if ($SinCopilot) { Add-Linea 'saltado: -SinCopilot'; return }
-    if ($Modelo) { Add-Linea ('modelo: ' + (Get-Seguro $Modelo)) } else { Add-Linea 'modelo: el de Copilot' }
+    if ($ModeloElegido) { Add-Linea ('modelo: ' + (Get-Seguro $ModeloElegido)) } else { Add-Linea 'modelo: el de Copilot' }
     $dir = New-Carpeta (Join-Path $Tmp 'aptitud')
     Copy-Item -LiteralPath (Join-Ruta $PSScriptRoot 'tareas/aptitud/ValidadorImporte.java') -Destination (Join-Path $dir 'ValidadorImporte.java')
     $n = Get-Lineas (Join-Path $dir 'ValidadorImporte.java')
@@ -687,20 +1050,12 @@ try {
     if ($elegido.Origen -eq 'ninguno') { Add-Linea 'saltado: no hay Maven (ni en los ajustes, ni mvn en el PATH, ni mvnw en -Migrado)'; return }
     $dir = Join-Path $Tmp 'juguete'
     Copy-Item -LiteralPath (Join-Path (Join-Path $PSScriptRoot 'preflight') 'juguete') -Destination $dir -Recurse
-    $mvn = $elegido.Exe
-    if ($elegido.Origen -eq 'envoltorio') {
-      # el mvnw funciona desde su carpeta: se lleva al juguete con su .mvn
-      $origen = Split-Path $elegido.Exe -Parent
-      foreach ($f in @('mvnw', 'mvnw.cmd', '.mvn')) {
-        $de = Join-Path $origen $f
-        if (Test-Path -LiteralPath $de) { Copy-Item -LiteralPath $de -Destination (Join-Path $dir $f) -Recurse -Force }
-      }
-      $mvn = Get-Mvn $dir
-    }
+    $mvn = Get-MvnProyecto $elegido $dir
     $jacoco = 'org.jacoco:jacoco-maven-plugin:0.8.16'
     $rewrite = 'org.openrewrite.maven:rewrite-maven-plugin:6.46.1'
     $r = Invoke-Proceso $mvn @('-B', 'test') $dir 1500
-    Add-PasoMaven 'compila y pasa el test' (-not $r.Agotado -and $r.Codigo -eq 0) $r.Segundos (Get-ErrorMaven $r.Texto)
+    $script:MavenBien = (-not $r.Agotado -and $r.Codigo -eq 0)
+    Add-PasoMaven 'compila y pasa el test' $script:MavenBien $r.Segundos (Get-ErrorMaven $r.Texto)
     $r = Invoke-Proceso $mvn @('-B', "${jacoco}:prepare-agent", 'test', "${jacoco}:report") $dir 1500
     $bien = (-not $r.Agotado -and $r.Codigo -eq 0 -and (Test-Path -LiteralPath (Join-Ruta $dir 'target/site/jacoco/jacoco.csv')))
     Add-PasoMaven 'jacoco' $bien $r.Segundos (Get-ErrorMaven $r.Texto)
@@ -810,6 +1165,40 @@ try {
     }
     Add-Linea ('original sin cambios: ' + (Get-SiNo ((Get-Huella $raiz) -ceq $antes)))
   } $true
+
+  # ----------------------------------- 9 -----------------------------------
+  # El plan se hace antes: la cabecera del bloque dice cuantos minutos puede durar
+  $plan = [pscustomobject]@{ Trozos = @(); ConMaven = $false; Llamadas = 0; Minutos = 1 }
+  if (($SoloN.Count -eq 0 -or $SoloN -contains 9) -and $ModelosN.Count -gt 0 -and -not $SinCopilot) {
+    try { $plan = Get-PlanExamen } catch { }
+  }
+  Invoke-Bloque 9 'examen de modelos' $plan.Minutos {
+    if ($ModelosN.Count -eq 0) { Add-Linea 'sin -Modelos'; return }
+    if ($SinCopilot) { Add-Linea 'saltado: -SinCopilot'; return }
+    if ($plan.Trozos.Count -eq 0) { throw 'no se pudo preparar el examen' }
+    $bandera = Get-EstadoBandera @('--usage-output-file=' + (Join-Path $Tmp 'uso-sonda.json'))
+    Add-Linea "bandera de uso: $bandera"
+    Write-Host "$($plan.Llamadas) llamadas, hasta $($plan.Minutos) min"
+    $claves = Read-Json (Join-Ruta $PSScriptRoot 'preflight/examen/claves.json')
+    $combos = @()
+    $campos = New-Object System.Collections.Generic.List[string]
+    $k = 0
+    foreach ($m in $ModelosN) {
+      foreach ($e in $EsfuerzosN) {
+        $k++
+        $vista = Get-Seguro $m
+        Add-Linea "modelo $vista | esfuerzo $e"
+        $c = Invoke-Combinacion $k $m $vista $e ($bandera -eq 'si') $claves $plan
+        Save-Resultado
+        # un modelo que no existe se salta entero: sus otros esfuerzos no se prueban
+        if ($c.SinModelo) { break }
+        $combos += $c
+        foreach ($u in $c.Usos) { foreach ($campo in $u.Campos) { if ($campo -match '^[A-Za-z]{1,40}$' -and -not $campos.Contains($campo) -and $campos.Count -lt 30) { $campos.Add($campo) } } }
+      }
+    }
+    if ($campos.Count -gt 0) { Add-Linea ('campos de uso: ' + ($campos -join ', ')) } else { Add-Linea 'campos de uso: ninguno' }
+    foreach ($l in (Get-Recomendacion $combos)) { Add-Linea $l }
+  }
 }
 finally {
   # ---------------------------------- fin ----------------------------------
