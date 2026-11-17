@@ -1466,5 +1466,23 @@ $Pruebas['55 paginas: la portada pone en lo que te toca una tarea atascada, una 
   Comprueba 'y en la pagina del job sale aparte, como regla sin caso de prueba, sin comprobar' ((Articulo $o 'informeJob') -match '(?s)sin caso de prueba.*Sin comprobar' -and (Articulo $o 'informeJob').Contains($x.sinCaso[0].texto))
 }
 
+# ================================ RELANZAR: FECHA DE CREADO ================================
+$Pruebas['56 relanzar: creado sigue siendo el texto ISO de la primera vez y la portada da cuando empezo y cuanto lleva'] = {
+  $e = Nuevo-Escenario 'relanza-fecha' @('Clase1')
+  $rx = '"creado":\s*"([^"]*)"'
+  $r = Migra $e (Basicos $e)
+  Igual 'primer lanzamiento sale con 0' 0 $r.Codigo
+  $creado = [regex]::Match((Lee $e.Out 'datos/estado.json'), $rx).Groups[1].Value
+  Comprueba 'la primera vez creado es un texto ISO' ($creado -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$') $creado
+  $r = Migra $e (Basicos $e)
+  Igual 'relanzado sale con 0' 0 $r.Codigo
+  $de = [regex]::Match((Lee $e.Out 'datos/estado.json'), $rx).Groups[1].Value
+  Igual 'tras relanzar creado es el mismo texto, en el fichero' $creado $de
+  $i = Pagina $e.Out 'index.html'
+  $esperada = [datetime]::ParseExact($creado, 's', [System.Globalization.CultureInfo]::InvariantCulture).ToString('dd-MM-yyyy HH:mm', [System.Globalization.CultureInfo]::InvariantCulture)
+  Igual 'Empezo lleva la fecha de creado' $esperada ([regex]::Match($i, '<dt>Empez[^<]*</dt><dd>([^<]*)</dd>').Groups[1].Value)
+  Comprueba 'Lleva da una duracion' ([regex]::Match($i, '<dt>Lleva</dt><dd>([^<]*)</dd>').Groups[1].Value -match '^\d+ (min|h \d+ min)$') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

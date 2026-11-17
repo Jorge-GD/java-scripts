@@ -347,7 +347,8 @@ $Estado = [ordered]@{
   worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
   fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; parada = $null
 }
-if ($previo -and $previo.creado) { $Estado['creado'] = [string]$previo.creado }
+# En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
+if ($previo -and $previo.creado) { $Estado['creado'] = if ($previo.creado -is [datetime]) { $previo.creado.ToString('s') } else { [string]$previo.creado } }
 try {
   foreach ($d in @((Join-Path $Datos 'tareas'), (Join-Path $Datos 'fichas'))) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
   Save-Estado
