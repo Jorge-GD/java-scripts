@@ -6,7 +6,7 @@ Necesita comun.ps1, tareas.ps1 y las carpetas tareas\, preflight\ y tests\ junto
 
 USO (todo es opcional)
   .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
-  .\preflight.ps1 -Modelos gpt-6-luna,claude-haiku-5.5 -Esfuerzos medium,max   # examen de modelos (bloque 9)
+  .\preflight.ps1 -Modelos claude-haiku-5.5,gpt-6-luna,mai-code-2-flash        # examen de modelos (bloque 9)
   .\preflight.ps1 -Solo 1,3        # solo esos bloques
   .\preflight.ps1 -SinCopilot      # salta los bloques 4, 5, 8 y 9 (los que llaman al modelo)
   .\preflight.ps1 -SinMaven        # salta el 6 y el diagnostico del 7
@@ -23,7 +23,7 @@ BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
                   diagnostico de rescate.ps1 (solo numeros y palabras fijas)
   8 clases reales 5 clases del original por tamano: la ficha de cada una
-  9 examen        con cada modelo de -Modelos y cada esfuerzo de -Esfuerzos (medium,max por defecto): la ficha de
+  9 examen        con cada modelo de -Modelos y cada esfuerzo de -Esfuerzos (medium por defecto): la ficha de
                   una clase corta y de una larga, y arreglar un Maven de juguete y ponerle Javadoc. Cuenta
                   creditos y segundos, y recomienda uno. Una sola pasada por combinacion: es orientativo.
                   Los ids son los que ensena /model dentro de Copilot.
@@ -43,8 +43,8 @@ param(
   [string]$Migrado = '',       # carpeta del batch migrado
   [string]$Plantilla = '',     # batch de referencia
   [string]$Modelo = '',        # id del modelo de Copilot; sin esto, el primero de -Modelos o el que tenga Copilot
-  [string[]]$Modelos = @(),    # modelos del examen (bloque 9): gpt-6-luna,claude-haiku-5.5 (con -File llega como un solo texto)
-  [string[]]$Esfuerzos = @(),  # esfuerzos del examen; por defecto medium,max
+  [string[]]$Modelos = @(),    # modelos del examen (bloque 9): claude-haiku-5.5,gpt-6-luna,mai-code-2-flash (con -File llega como un solo texto)
+  [string[]]$Esfuerzos = @(),  # esfuerzos del examen; por defecto solo medium (se puede pedir medium,max)
   [string[]]$Solo = @(),       # numeros de bloque: 1,3 (con -File llega como un solo texto "1,3")
   [switch]$SinCopilot,
   [switch]$SinMaven
@@ -854,7 +854,7 @@ function Get-Lista($Valores) {
 }
 $ModelosN = @(Get-Lista $Modelos)
 $EsfuerzosN = @(Get-Lista $Esfuerzos)
-if ($EsfuerzosN.Count -eq 0) { $EsfuerzosN = @('medium', 'max') }
+if ($EsfuerzosN.Count -eq 0) { $EsfuerzosN = @('medium') }
 $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('preflight-' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8))
 [void](New-Item -ItemType Directory -Path $Tmp -Force)
 $Registros = New-Carpeta (Join-Path $Tmp 'registros')

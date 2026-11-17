@@ -1198,21 +1198,21 @@ $Pruebas['29 bloque 9 sin Maven: solo L1 y L2, sin maven en E y todo con uno: si
   try {
     Pon-Claves $ClavesPeque
     $d = @{ RESCATE_EXAMEN_DATOS = $DatosPeque }
-    # a) -SinMaven, con los esfuerzos por defecto (medium y max)
+    # a) -SinMaven, con el esfuerzo por defecto (solo medium)
     $a = Pf-Examen $e "$MA,$MB" '' '' $d @('-SinMaven')
     Igual 'a) sale con 0' 0 $a.Codigo
     $ll = @(Llamadas $e.Llamadas)
-    Igual 'a) 2 modelos x 2 esfuerzos por defecto x (L1 + 1 trozo de L2) = 8 llamadas' 8 $ll.Count
+    Igual 'a) 2 modelos x 1 esfuerzo por defecto x (L1 + 1 trozo de L2) = 4 llamadas' 4 $ll.Count
     Igual 'a) ninguna es de E1 ni de E2' 0 @($ll | Where-Object { $_.clave -match ':E[12]$' }).Count
     $b = Examen-De $a
-    Comprueba 'a) los esfuerzos por defecto son medium y max' (@($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo (medium|max)$' }).Count -eq 4 -and @($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo max$' }).Count -eq 2)
+    Comprueba 'a) el esfuerzo por defecto es solo medium' (@($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo medium$' }).Count -eq 2 -and @($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo ' }).Count -eq 2) (@($b | Where-Object { $_ -match '^modelo ' }) -join ' / ')
     $x = @(Combinacion-De $a $MA 'medium')
     Igual 'a) E1: sin maven' 'E1: sin maven' (Linea-Con $x 'E1: ')
     Igual 'a) E2: sin maven' 'E2: sin maven' (Linea-Con $x 'E2: ')
     Comprueba 'a) el total no cuenta arreglos' ((Linea-Con $x 'total: ') -match '^total: clave 6 de 6 \| arreglos sin maven \| \d+ s \| creditos 2,000 \| tokens entrada 2000 salida 200$') (Linea-Con $x 'total: ')
     Comprueba 'a) se recomienda igual' ((Linea-Con $b 'recomendado: ') -match '^recomendado: \S+ con esfuerzo \w+$') (Linea-Con $b 'recomendado: ')
     Igual 'a) todo con uno: sin dato de arreglos' 'todo con uno: sin dato de arreglos' (Linea-Con $b 'todo con uno: ')
-    Comprueba 'a) la consola cuenta 8 llamadas (sin las de E)' ($a.Salida -match '(?m)^8 llamadas, hasta 16 min\s*$') (Cola $a.Salida)
+    Comprueba 'a) la consola cuenta 4 llamadas (sin las de E)' ($a.Salida -match '(?m)^4 llamadas, hasta 8 min\s*$') (Cola $a.Salida)
     # b) el bloque 6 falla (no hay Maven donde dicen los ajustes): el 9 tampoco se arriesga con E
     Pon-Ajustes $e @{ MvnExe = (Join-Path $Dir 'no-existe-zorba/mvn.ps1') }
     $c = Pf $e (Todos $e @('-Solo', '6,9', '-Modelos', $MA, '-Esfuerzos', 'medium')) '' $d

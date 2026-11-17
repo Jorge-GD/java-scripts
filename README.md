@@ -8,19 +8,19 @@ Scripts sueltos para trabajar con proyectos Java.
 
 ```powershell
 .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
-.\preflight.ps1 -Modelos <id>,<id> -Esfuerzos medium,max
+.\preflight.ps1 -Modelos claude-haiku-5.5,gpt-6-luna,mai-code-2-flash
 ```
 
 Todo es opcional. `-Solo 1,3` hace solo esos bloques, `-SinCopilot` salta los que llaman al modelo (4, 5, 8 y 9) y `-SinMaven` salta Maven (6 y el diagnóstico del 7). Cada bloque avisa por consola de lo que puede tardar. El bloque 2 lanza los dos bancos de pruebas (hasta 30 min). Si una ruta de `-Legacy`, `-Migrado` o `-Plantilla` no es una carpeta, lo dice al instante y no hace nada más. Para Maven usa el de `ajustes.json` (`MvnExe`), si no el `mvn` del PATH y si no el `mvnw` de `-Migrado`; el resultado dice cuál (`maven usado`).
 
 Deja `preflight-resultado.txt` junto al script (git lo ignora), lo reescribe al acabar cada bloque, lo enseña al final y lo copia al portapapeles si puede. **Ese fichero es lo que se pega en el chat.** No lleva rutas, usuario, equipo, dominio, correos, IP, URL internas ni nombres de tus repos, de sus clases o de sus ficheros: de tus repos solo salen números y el principio de un mensaje nuestro. Aun así, léelo antes de pegarlo.
 
-**Examen de modelos (bloque 9).** Sin `-Modelos` no hace nada. Con `-Modelos <id>,<id>` pasa cuatro pruebas con cada modelo y cada esfuerzo de `-Esfuerzos` (por defecto `medium,max`), una detrás de otra para que los tiempos se puedan comparar:
+**Examen de modelos (bloque 9).** Sin `-Modelos` no hace nada. Con `-Modelos <id>,<id>` pasa cuatro pruebas con cada modelo y cada esfuerzo de `-Esfuerzos` (por defecto solo `medium`; con `-Esfuerzos medium,max` prueba también el máximo), una detrás de otra para que los tiempos se puedan comparar:
 
 - **L1 y L2:** la ficha de una clase de unas 200 líneas y la de otra de casi 300 (troceada como la trocea el sistema, una llamada por trozo). Mide si la ficha vale, cuántas citas se prueban y cuántas de las condiciones esperadas (`preflight\examen\claves.json`) trae.
 - **E1 y E2:** arreglar dos errores de compilación y poner Javadoc, en dos proyectos Maven de juguete. Pasan si Maven pasa los tests, no se toca nada fuera de `src\main` y, en E2, el código queda igual y todo lo público lleva Javadoc. Necesitan Maven: con `-SinMaven` o si el bloque 6 falla salen como `sin maven` y no cuentan.
 
-Al final suma créditos (`--usage-output-file`, si tu Copilot lo conoce), segundos y tokens de cada combinación y **recomienda una** con una regla fija: entre las que leen bien y arreglan todo, la de menos créditos. Cuenta de antemano cuántas llamadas son y cuánto puede tardar (2 min por llamada, como tope). Es **una sola pasada por combinación**: orientativo, no una estadística. Los ids de `-Modelos` son los que enseña `/model` dentro de Copilot; si no pasas `-Modelo`, los bloques 4, 5 y 8 usan el primero de la lista. Si un esfuerzo no lo admite el modelo, baja de `max` a `xhigh` y a `high` y lo dice; un modelo que no existe sale como `sin modelo`.
+Al final suma créditos (`--usage-output-file`, si tu Copilot lo conoce), segundos y tokens de cada combinación y **recomienda una** con una regla fija: entre las que leen bien y arreglan todo, la de menos créditos. Cuenta de antemano cuántas llamadas son y cuánto puede tardar (2 min por llamada; con esfuerzo `max` una sola llamada puede llegar a 10 min). Es **una sola pasada por combinación**: orientativo, no una estadística. Los ids de `-Modelos` son los que enseña `/model` dentro de Copilot; si no pasas `-Modelo`, los bloques 4, 5 y 8 usan el primero de la lista. Si un esfuerzo no lo admite el modelo, baja de `max` a `xhigh` y a `high` y lo dice; un modelo que no existe sale como `sin modelo`.
 
 El diagnóstico del bloque 7 usa `rescate.ps1` en modo diagnóstico sobre `-Migrado`: deja allí su carpeta `.rescate`, que git ignora.
 
