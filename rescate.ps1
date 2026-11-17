@@ -6,15 +6,29 @@ Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
 COMO FUNCIONA
   1. DIAGNOSTICO (sin IA, no toca codigo). Compara el repo con una PLANTILLA
      (un repo ya migrado y aprobado) y lista hallazgos por paso, en este orden:
-       build -> estructura -> hexagonal -> ficheros -> config -> paridad -> e2e -> tests
+       build -> estructura -> hexagonal -> ficheros -> config -> paridad -> e2e -> tests -> calidad
      La plantilla manda: lo que la plantilla hace se considera permitido.
      paridad = estan todos los jobs del batch original (necesita -Modo pre).
      e2e     = cada job tiene un test que lo lanza entero y acaba en COMPLETED.
-  2. FIX (con Copilot CLI). Arregla UN paso en lotes pequenos. Tras cada lote
-     es el script (no la IA) quien decide si vale:
+     calidad = Javadoc en los tipos y metodos publicos y buenas practicas de
+               Java 21 (sin @Autowired en campos, sin System.out, sin catch
+               vacios...). El Javadoc se exige aunque la plantilla no lo tenga.
+  2. WORKTREE. El arreglo no se hace en tu carpeta. El script crea al lado un
+     worktree de git (<repo>-rescate) con una rama rescate/... y trabaja ahi.
+     Tu carpeta y tu rama no se tocan. Si tienes cambios sin commit, se copian
+     al worktree en un commit 'foto'. Mientras ese worktree exista, todos los
+     modos trabajan en el (para mirar tu carpeta original: -SinWorktree).
+  3. PLAN (con Copilot CLI, solo lectura). Antes de arreglar un paso, la IA lee
+     TODOS los ficheros con hallazgos y la plantilla, y escribe
+     .rescate/plan-<paso>.md: que se hara con cada fichero y que piezas comunes
+     (puertos, adaptadores) van a compartir. Lo lees y lo corriges antes de seguir.
+  4. FIX (con Copilot CLI). Arregla UN paso en lotes pequenos, siguiendo el plan.
+     Tras cada lote se repite el diagnostico entero y es el script (no la IA)
+     quien decide si vale:
        - compila
        - bajan los hallazgos del paso
        - no empeoran los pasos anteriores
+       - el codigo nuevo no anade hallazgos de calidad (Javadoc incluido)
        - no se han borrado ni desactivado tests
        - no se ha tocado la plantilla ni el repo original
      Si vale -> commit. Si no -> reintento con el error y, si sigue mal, se
@@ -28,7 +42,13 @@ USO
   # 1) Diagnostico (seguro, no cambia codigo)
   .\rescate.ps1 -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
 
-  # 2) Arreglar el siguiente paso pendiente, lote a lote, con pausa para revisar
+  # 2) Plan del siguiente paso pendiente (no cambia codigo). Crea el worktree
+  #    C:\ruta\batch-life-rescate y escribe alli .rescate\plan-<paso>.md
+  .\rescate.ps1 -Modo plan -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado `
+                -Legacy C:\ruta\life-java8 -Modelo <id-del-modelo>
+
+  # 3) Arreglar el siguiente paso pendiente, lote a lote, con pausa para revisar.
+  #    Si el paso aun no tiene plan, lo hace primero y te deja leerlo.
   .\rescate.ps1 -Modo fix -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado `
                 -Legacy C:\ruta\life-java8 -Modelo <id-del-modelo>
 
@@ -37,6 +57,13 @@ USO
 
   # Con modelo de reserva: si el principal se atasca con un fichero, prueba el otro
   .\rescate.ps1 -Modo fix ... -Todo -Modelo <principal> -ModeloB <reserva>
+
+  # Modelo y esfuerzo. Cada llamada es 'copilot -p' con --model y --effort.
+  # -Modelo es el id que ensena /model dentro de Copilot. El esfuerzo va en dos
+  # mandos: la revision previa (pensar) y los lotes (escribir). Niveles: low,
+  # medium, high, xhigh, max; no todos los modelos admiten todos. Sin estos
+  # parametros se usa lo que tengas configurado en Copilot.
+  .\rescate.ps1 -Modo fix ... -Modelo <id-del-modelo> -EsfuerzoPlan high -Esfuerzo medium
 
   # Si un lote falla: se deshace, se reintenta fichero a fichero, luego con el
   # modelo de reserva y, si tampoco, se apunta en .rescate/atascados.md y sigue.
@@ -47,33 +74,48 @@ USO
   # Deshacer el ultimo lote
   .\rescate.ps1 -Modo deshacer -Repo C:\ruta\batch-life
 
+  # 4) Al acabar. Los cambios estan en la rama rescate/... (el script te dice
+  #    el nombre). Revisalos y traelos a tu rama, o sube la rama y abre un PR:
+  git -C C:\ruta\batch-life diff --stat <tu-rama>...<rama-rescate>
+  git -C C:\ruta\batch-life merge <rama-rescate>
+  git -C C:\ruta\batch-life worktree remove C:\ruta\batch-life-rescate
+
   Si PowerShell bloquea el script:
   powershell -ExecutionPolicy Bypass -File .\rescate.ps1 -Repo ...
 
 SI HAY QUE REPARAR ESTE SCRIPT
   Lo normal es tocar solo el bloque CONFIGURACION (flags de Copilot, comandos
   de Maven, reglas). No quites las puertas de Invoke-Fix: son lo que evita que
-  la IA estropee el repo.
+  la IA estropee el repo. Antes de darlo por bueno, pasa tests\probar.ps1.
 
 LIMITES
   Proyectos Maven de un solo modulo. Las comprobaciones son por imports y
-  texto: avisan de lo evidente, no sustituyen la revision de una persona.
+  texto: avisan de lo evidente, no sustituyen la revision de una persona ni
+  a Sonar. En calidad solo se miran los tipos de primer nivel y sus metodos.
+  El worktree no trae los ficheros que git ignora (config local, .env): el
+  script los lista al crearlo, por si el build o los tests los necesitan.
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('diagnostico', 'pre', 'fix', 'deshacer')][string]$Modo = 'diagnostico',
+  [ValidateSet('diagnostico', 'pre', 'plan', 'fix', 'deshacer')][string]$Modo = 'diagnostico',
   [string]$Repo = '.',
   [string]$Plantilla = '',
   [string]$Legacy = '',
-  [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests')][string]$Paso = '',
+  [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')][string]$Paso = '',
   [string]$Modelo = '',
   [string]$ModeloB = '',     # modelo de reserva: se prueba cuando el principal se atasca con un fichero
+  # Esfuerzo de razonamiento de Copilot (--effort). Vacio = el que tenga Copilot.
+  [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$Esfuerzo = '',      # en los lotes de arreglo
+  [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$EsfuerzoPlan = '',  # en la revision previa y en el modo pre (vacio = el de -Esfuerzo)
+  [string]$Worktree = '',    # carpeta del worktree de rescate (por defecto <repo>-rescate, al lado del repo)
   [int]$Lote = 5,           # ficheros por llamada a Copilot (pequeno = mas fiable)
   [int]$Saltar = 0,         # salta los N primeros ficheros pendientes del paso
-  [int]$MaxIntentos = 2,    # intentos por lote antes de deshacerlo
+  [int]$MaxIntentos = 3,    # intentos por lote antes de deshacerlo
   [int]$MaxLotes = 200,
   [switch]$SinBuild,        # diagnostico rapido: no ejecuta Maven
   [switch]$SinTests,        # no ejecuta tests (solo compila)
+  [switch]$SinWorktree,     # trabaja en la carpeta de -Repo, sin worktree (fix crea ahi la rama rescate/)
+  [switch]$SinPlan,         # fix: no hace ni usa la revision previa (plan) del paso
   [switch]$Auto,            # no para entre lotes
   [switch]$Todo,            # fix: encadena todos los pasos sin parar (implica -Auto)
   [switch]$Si,              # responde "si" a las confirmaciones
@@ -84,7 +126,7 @@ $ErrorActionPreference = 'Stop'
 
 # ============================ CONFIGURACION ============================
 $Cfg = @{
-  Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests')
+  Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')
   Capas  = @('domain', 'application', 'infrastructure')   # si no hay plantilla
   # Reglas de dependencias. En = carpeta (relativa al paquete base).
   # No = regex sobre el import; {base} es el paquete base del proyecto.
@@ -121,8 +163,21 @@ $Cfg = @{
   # Como se reconoce un test que lanza un job de verdad
   LanzaJob              = 'launchJob\s*\(|JobLauncherTestUtils|[jJ]obLauncher\s*\.\s*run\s*\(|[jJ]obOperator\s*\.\s*start\s*\(|SpringApplication\s*\.\s*run\s*\('
   PasosDeUnoEnUno       = @('paridad', 'e2e')   # un job por llamada a Copilot
+  # Pasos en los que la IA revisa antes todos los ficheros y escribe un plan
+  PasosConPlan          = @('estructura', 'hexagonal', 'ficheros', 'config')
+  # Calidad. Reglas que cuentan como error (el fix las arregla y las exige en
+  # el codigo nuevo). El resto de reglas se queda en aviso. Para apagar una,
+  # quitala de aqui. Reglas: javadoc-tipo, javadoc-metodo, inyeccion-campo,
+  # salida-consola, catch-vacio, envoltorio-new, instanceof-cast,
+  # fecha-antigua, coleccion-antigua.
+  CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new')
+  # Reglas que se exigen aunque la plantilla tampoco las cumpla
+  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo')
+  # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
+  MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # lotes deshechos seguidos antes de parar (no gastar llamadas en balde)
   # Maven
+  MvnExe                = ''    # vacio = mvnw del repo o, si no hay, mvn del PATH
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
   MvnTests              = @('-q', '-B', 'test')
   # Copilot CLI. Si tu version no conoce algun flag, quitalo de aqui.
@@ -357,6 +412,128 @@ function Get-Pom([string]$Raiz) {
   return [pscustomobject]@{ Valido = $true; Parent = $par; Java = @($java | Select-Object -Unique); Deps = $deps }
 }
 
+# ============================== CALIDAD ==============================
+# Comprobaciones por texto. Las de Javadoc siguen el criterio de Checkstyle
+# (MissingJavadocType y MissingJavadocMethod: solo lo publico, @Override
+# exento), con dos diferencias a proposito: no se pide Javadoc en
+# constructores ni en getters y setters. No sustituyen a Sonar.
+$RxLexico = New-Object System.Text.RegularExpressions.Regex ('/\*.*?\*/|//[^\n]*|"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|''(?:\\.|[^''\\\n])*''', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+$RxTipo = '^\s*((?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*)(class|interface|enum|record|@interface)\s+(\w+)'
+$RxMetodoPublico = '^\s*public(?>\s+)(?>(?:(?:static|final|abstract|synchronized|default|native|strictfp)\s+)*)(?!(?:class|interface|enum|record)\b)(?:<[^>]+>\s*)?(?:[\w\.\[\]<>,\?&\s]+?\s+)?(\w+)\s*\('
+$RxMetodoInterfaz = '^(?>\s*)(?>(?:(?:public|abstract|default|static)\s+)*)(?!(?:private|protected|class|interface|enum|record|return|throw|new|if|for|while|switch|else|case)\b)(?:<[^>]+>\s*)?[\w\.\[\]<>,\?&\s]+?\s+(\w+)\s*\('
+$RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inject)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s+(?:(?:private|protected|public|transient|volatile)\s+)*[\w\.\[\]<>,\?\s]+?\s+(\w+)\s*;'
+$RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
+$RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
+$RxEnvoltorio = New-Object System.Text.RegularExpressions.Regex '\bnew\s+(Integer|Long|Double|Float|Short|Byte|Boolean|Character)\s*\('
+$RxInstanceof = New-Object System.Text.RegularExpressions.Regex 'instanceof\s+([\w\.]+)\s*\)\s*\{?\s*(?:final\s+)?\1\s+\w+\s*=\s*\(\s*\1\s*\)'
+$RxColeccion = New-Object System.Text.RegularExpressions.Regex '\b(StringBuffer|Vector|Hashtable)\b'
+$RxFechaAntigua = '^java\.(util\.(Date|Calendar|GregorianCalendar)|text\.SimpleDateFormat)$'
+
+# Codigo sin comentarios ni literales, con los mismos saltos de linea.
+# Donde acaba un Javadoc deja /*JD*/ y donde habia otro comentario, /*C*/.
+function Get-Limpio([string]$Texto) {
+  return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
+      param($m)
+      $v = $m.Value
+      $nl = "`n" * ($v.Split("`n").Count - 1)
+      if ($v.StartsWith('/**') -and $v.Length -gt 4) { return $nl + '/*JD*/' }
+      if ($v.StartsWith('/')) { return $nl + '/*C*/' }
+      if ($v.StartsWith('"')) { return $nl + '""' }
+      return "''"
+    })
+}
+
+# Que hay pegado encima de la declaracion de la linea $I: 'doc' (un Javadoc),
+# 'override' (@Override sin Javadoc) o '' (nada). Entre el Javadoc y la
+# declaracion solo puede haber anotaciones y lineas en blanco.
+function Get-Encima([string[]]$Cod, [bool[]]$Jd, [int]$I) {
+  if ($Jd[$I]) { return 'doc' }
+  $ov = $false
+  for ($k = $I - 1; $k -ge 0; $k--) {
+    $t = $Cod[$k].Trim()
+    if ($Jd[$k]) {
+      if (-not $t -or $t.StartsWith('@')) { return 'doc' }
+      break
+    }
+    if (-not $t) { continue }
+    if ($t.StartsWith('@')) {
+      if ($t -cmatch '^@Override\b') { $ov = $true }
+      continue
+    }
+    if ($t -cmatch '[;{}]$') { break }
+  }
+  if ($ov) { return 'override' }
+  return ''
+}
+
+function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Detalle) {
+  [void]$Lista.Add([pscustomobject]@{ RelRaiz = $Rel; Linea = $Linea; Regla = $Regla; Detalle = $Detalle })
+}
+
+function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, $Indice).Split("`n").Count }
+
+# Faltas de calidad del codigo de src/main (sin decidir aun si son error o aviso).
+function Get-Calidad($Hechos) {
+  $out = New-Object System.Collections.Generic.List[object]
+  foreach ($f in $Hechos.Ficheros) {
+    $marcado = Get-Limpio $f.Texto
+    $limpio = $marcado.Replace('/*JD*/', '').Replace('/*C*/', '')
+    $lin = $marcado.Split("`n")
+    $n = $lin.Count
+    $cod = New-Object string[] $n
+    $jd = New-Object bool[] $n
+    for ($i = 0; $i -lt $n; $i++) {
+      $jd[$i] = $lin[$i].Contains('/*JD*/')
+      $cod[$i] = $lin[$i].Replace('/*JD*/', '').Replace('/*C*/', '')
+    }
+    # Javadoc en los tipos publicos de primer nivel y en sus metodos publicos
+    $prof = 0; $tipo = ''; $nombre = ''; $publico = $false
+    for ($i = 0; $i -lt $n; $i++) {
+      $l = $cod[$i]
+      if ($prof -eq 0 -and $l -cmatch $RxTipo) {
+        $mods = $Matches[1]; $tipo = $Matches[2]; $nombre = $Matches[3]
+        $publico = ($mods -cmatch '\bpublic\b')
+        if ($publico -and (Get-Encima $cod $jd $i) -ne 'doc') { Add-Cal $out $f.RelRaiz ($i + 1) 'javadoc-tipo' "$tipo publico '$nombre' sin Javadoc" }
+      }
+      elseif ($prof -eq 1 -and $publico -and $tipo -ne '@interface') {
+        $met = ''
+        if ($tipo -eq 'interface') { if ($l -cmatch $RxMetodoInterfaz) { $met = $Matches[1] } }
+        elseif ($l -cmatch $RxMetodoPublico) { $met = $Matches[1] }
+        if ($met -and $met -cne $nombre -and ($tipo -eq 'interface' -or $met -cnotmatch $Cfg.MetodosSinJavadoc)) {
+          if ((Get-Encima $cod $jd $i) -eq '') { Add-Cal $out $f.RelRaiz ($i + 1) 'javadoc-metodo' "metodo publico '$met' sin Javadoc" }
+        }
+      }
+      $prof += ($l.Split('{').Count - $l.Split('}').Count)
+    }
+    # Practicas que se ven en el texto
+    foreach ($m in $script:RxInyeccion.Matches($limpio)) {
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final")
+    }
+    foreach ($m in $script:RxConsola.Matches($limpio)) {
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'salida-consola' 'System.out, System.err o printStackTrace: usa el logger'
+    }
+    foreach ($m in $script:RxCatchVacio.Matches($marcado)) {
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $marcado $m.Index) 'catch-vacio' 'catch vacio: registra la excepcion o explica en un comentario por que se ignora'
+    }
+    foreach ($m in $script:RxEnvoltorio.Matches($limpio)) {
+      $cls = $m.Groups[1].Value
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'envoltorio-new' ('new ' + $cls + '(...) esta marcado para eliminarse: usa ' + $cls + '.valueOf(...) o autoboxing')
+    }
+    foreach ($m in $script:RxInstanceof.Matches($limpio)) {
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'instanceof-cast' "instanceof seguido de cast: en Java 21 se escribe 'x instanceof Tipo t'"
+    }
+    $viejas = @($f.Imports | Where-Object { $_.Fqn -cmatch $RxFechaAntigua })
+    if ($viejas.Count -gt 0) {
+      Add-Cal $out $f.RelRaiz $viejas[0].Linea 'fecha-antigua' ('usa java.time en vez de ' + ((@($viejas | ForEach-Object { $_.Fqn })) -join ', ') + ' (con un test delante: puede cambiar el formato o la zona)')
+    }
+    $mc = $script:RxColeccion.Match($limpio)
+    if ($mc.Success) {
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $mc.Index) 'coleccion-antigua' ($mc.Value + ': usa StringBuilder, ArrayList o HashMap si no hace falta sincronizar')
+    }
+  }
+  return $out.ToArray()
+}
+
 # Lo que se aprende de la plantilla.
 function Get-Calibracion([string]$Raiz) {
   $h = Get-Hechos $Raiz
@@ -383,9 +560,12 @@ function Get-Calibracion([string]$Raiz) {
     $rel = Get-Rel $Raiz $f.FullName
     if (-not $rel.StartsWith('src/')) { $extra += $rel }
   }
+  $calReglas = @{}
+  foreach ($q in @(Get-Calidad $h)) { $calReglas[$q.Regla] = $true }
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object)
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
+    Calidad = $calReglas
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
     YmlSftp = ($h.Yml -match 'sftp'); Pom = (Get-Pom $Raiz); Extra = $extra
@@ -398,6 +578,7 @@ function Add-Hallazgo([string]$Cat, [string]$Sev, [string]$Fichero, [int]$Linea,
 }
 
 function Get-Mvn {
+  if ($Cfg.MvnExe) { return $Cfg.MvnExe }
   if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $w = Join-Path $RepoRoot 'mvnw.cmd' } else { $w = Join-Path $RepoRoot 'mvnw' }
   if (Test-Path -LiteralPath $w) { return $w }
   return 'mvn'
@@ -614,6 +795,16 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   # ---------- tests ----------
   if ($h.Tests.Count -eq 0) { Add-Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests' }
 
+  # ---------- calidad (Javadoc y buenas practicas de Java 21) ----------
+  foreach ($q in @(Get-Calidad $h)) {
+    $sev = 'aviso'; $nota = ''
+    if ($Cfg.CalidadErrores -contains $q.Regla) {
+      if ($cal -and $cal.Calidad.ContainsKey($q.Regla) -and ($Cfg.CalidadSiempre -notcontains $q.Regla)) { $nota = ' (se queda en aviso: la plantilla tambien lo hace)' }
+      else { $sev = 'error' }
+    }
+    Add-Hallazgo 'calidad' $sev $q.RelRaiz $q.Linea ('[' + $q.Regla + '] ' + $q.Detalle + $nota)
+  }
+
   return $script:H.ToArray()
 }
 
@@ -697,7 +888,21 @@ $TextoPaso = @{
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
   e2e        = 'Crea un test de integracion para el job listado, copiando el patron de los tests de integracion de la PLANTILLA. El test lanza el job real de principio a fin con los adaptadores locales (sftp desactivado), base de datos en memoria y los servicios externos simulados; comprueba que termina en COMPLETED y que la salida es la esperada. Usa los datos de src/test/resources/e2e/<nombre-del-job>/ si existen; si no, crea alli datos sinteticos minimos (nunca datos reales). La salida esperada se deduce de la logica del ORIGINAL, no de ejecutar el codigo nuevo. El test debe contener el nombre del job. Si el test falla porque el codigo migrado no hace lo mismo que el original, corrige el codigo, no el test.'
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
+  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. No toques nada mas de esos ficheros.'
 }
+
+# Lo que se le pide al codigo que la IA escribe en cualquier paso.
+$TextoCalidad = @(
+  'Vale para el codigo NUEVO de este lote y para los metodos que modifiques. No es permiso para refactorizar lo demas.',
+  '- Javadoc, en el idioma de los comentarios de la PLANTILLA. Cada clase, interfaz, record o enum publico que crees lleva un Javadoc que dice que es y que papel tiene en su capa (puerto, adaptador, caso de uso...). Cada metodo publico que crees, y todos los de una interfaz, llevan Javadoc: que hace, @param, @return y @throws cuando existan. No hace falta en metodos con @Override, getters, setters ni constructores. Un Javadoc que solo repite el nombre no vale.',
+  '- Inyeccion por constructor con campos private final. Nada de @Autowired ni @Inject en campos.',
+  '- Para datos inmutables nuevos (valores, DTO, propiedades de configuracion) usa record si la PLANTILLA tambien los usa.',
+  '- Usa el logger de la PLANTILLA. Nunca System.out, System.err ni printStackTrace. Ningun catch vacio: se trata, se relanza con una excepcion propia que lleve la causa, o se explica en un comentario por que se ignora.',
+  '- try-with-resources para todo lo que se cierra. Optional solo como valor de retorno. Colecciones inmutables (List.of, Stream.toList) cuando no se modifican.',
+  '- Sintaxis de Java 21 solo donde simplifica codigo que ya estas escribiendo: switch con flechas, instanceof con patron, bloques de texto. var solo si el tipo se ve en la misma linea.',
+  '- Fechas nuevas con java.time. No conviertas en este lote las fechas que ya existen: puede cambiar el comportamiento.',
+  'Despues del lote el script vuelve a contar los hallazgos de calidad (Javadoc, inyeccion en campos, System.out, catch vacios). Si tu codigo anade alguno, el lote no pasa.'
+)
 
 function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
   $mvn = Get-Mvn
@@ -717,6 +922,19 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
     $l.Add('  Referencia de comportamiento: el resultado debe hacer exactamente lo mismo.')
   }
   $l.Add('')
+  $l.Add('## Antes de tocar nada')
+  $l.Add('1. Lee enteros los ficheros del lote y busca quien los usa: imports, inyeccion, configuracion y tests.')
+  $l.Add('2. Lee en la PLANTILLA las clases equivalentes y copia su paquete, sus nombres y su estilo.')
+  $l.Add('3. Si en este repo ya existe un puerto, un adaptador o una clase de configuracion que sirve, reutilizalo. No crees otro parecido.')
+  $l.Add('')
+  $rutaPlan = Get-RutaPlan $PasoId
+  if (-not $SinPlan -and (Test-Path -LiteralPath $rutaPlan)) {
+    $l.Add('## Plan aprobado de este paso (siguelo)')
+    $l.Add('Si una pieza comun del plan ya existe en el repo, reutilizala. Si aun no existe y este lote la necesita, creala como dice el plan. Si un fichero del lote no esta en el plan, aplica el mismo criterio que con los demas.')
+    $l.Add('')
+    foreach ($linea in ([System.IO.File]::ReadAllText($rutaPlan).Trim() -split "`r?`n")) { $l.Add('> ' + $linea) }
+    $l.Add('')
+  }
   $l.Add('## Que hay que hacer')
   $l.Add($TextoPaso[$PasoId])
   $l.Add('')
@@ -737,6 +955,9 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
   $l.Add('6. No hagas mejoras ni refactors que este lote no pide.')
   $l.Add('7. Si un hallazgo no se puede resolver sin romper estas reglas, dejalo como esta y explicalo al final.')
   $l.Add('')
+  $l.Add('## Calidad del codigo que escribas (Java 21)')
+  foreach ($x in $TextoCalidad) { $l.Add($x) }
+  $l.Add('')
   $l.Add('## Al terminar')
   $l.Add("- Ejecuta: $mvn " + ($Cfg.MvnCompilar -join ' ') + '  y corrige hasta que compile.')
   $l.Add('- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
@@ -749,15 +970,31 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
   return ($l -join "`n")
 }
 
-function Invoke-Copilot([string]$Log, [string]$Mod = '') {
+# Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
+# esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
+# llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
+function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '') {
   $a = @('-p', 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.') + $Cfg.CopilotArgs
   if (-not $Mod) { $Mod = $Modelo }
   if ($Mod) { $a += "--model=$Mod" }
+  if (-not $Esf) { $Esf = $Esfuerzo }
+  if ($Esf) { $a += "--effort=$Esf" }
   if ($SinInstrucciones) { $a += '--no-custom-instructions' }
   foreach ($d in @($PlantillaRoot, $LegacyRoot)) { if ($d) { $a += "--add-dir=$d" } }
   $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot
   [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
   return $r
+}
+
+# Para pantalla: con que modelo y que esfuerzo se va a llamar a Copilot.
+function Get-TextoModelo {
+  $m = $Modelo; $e = $Esfuerzo; $p = $EsfuerzoPlan
+  if (-not $m) { $m = 'el que tenga Copilot' }
+  if (-not $e) { $e = 'el que tenga Copilot' }
+  if (-not $p) { $p = $e }
+  $t = "Copilot (copilot -p): modelo $m | esfuerzo en los lotes: $e | en la revision previa: $p"
+  if ($ModeloB) { $t += " | modelo de reserva: $ModeloB" }
+  return $t
 }
 
 # Huella de una carpeta de solo lectura, para detectar si alguien la toca.
@@ -789,6 +1026,236 @@ function Undo-Lote([string]$Rama, [string]$Check) {
   [void](Invoke-Git $RepoRoot @('checkout', '-q', '-f', $Rama))
   [void](Invoke-Git $RepoRoot @('reset', '-q', '--hard', $Check))
   [void](Invoke-Git $RepoRoot @('clean', '-fdq'))
+}
+
+function Get-Rama([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', '--abbrev-ref', 'HEAD')).Salida -join '').Trim() }
+
+function Get-Head([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', 'HEAD')).Salida -join '').Trim() }
+
+# ================================ PLAN ================================
+function Get-RutaPlan([string]$PasoId) { return (Join-Path $Work "plan-$PasoId.md") }
+
+# Ficheros con hallazgos que el plan no nombra (se busca el nombre de la clase).
+function Get-SinPlan([string]$Ruta, $Fichs) {
+  if (-not (Test-Path -LiteralPath $Ruta)) { return @($Fichs) }
+  $t = [System.IO.File]::ReadAllText($Ruta)
+  return @($Fichs | Where-Object { $t -notmatch ('(?<![\w])' + [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($_.Split('/')[-1])) + '(?![\w])') })
+}
+
+# Revision previa de un paso: la IA lee todos los ficheros con hallazgos y la
+# plantilla, y escribe el plan. No debe tocar codigo; si lo toca, se deshace.
+# Devuelve 'nuevo', 'existente' o '' (no hay plan).
+function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
+  $ruta = Get-RutaPlan $PasoId
+  $pend = @($Hall | Where-Object { $_.Cat -eq $PasoId -and $_.Sev -eq 'error' })
+  if ($pend.Count -eq 0) { return '' }
+  $fichs = @($pend | ForEach-Object { $_.Fichero } | Where-Object { $_ } | Select-Object -Unique)
+  $viejo = ''
+  if (Test-Path -LiteralPath $ruta) {
+    if (-not $Forzar) {
+      $falta = @(Get-SinPlan $ruta $fichs)
+      if ($falta.Count -eq 0) { Info "Plan del paso '$PasoId': $ruta (ya existia)"; return 'existente' }
+      Info "El plan que habia no nombra $($falta.Count) fichero(s) con hallazgos: lo rehago."
+    }
+    $viejo = [System.IO.File]::ReadAllText($ruta)
+    Remove-Item -LiteralPath $ruta -Force
+  }
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea: revision previa del paso '$PasoId' (SOLO LECTURA)")
+  $l.Add('')
+  $l.Add('Vas a preparar el plan de un paso de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.')
+  $l.Add("No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/plan-$PasoId.md en el repositorio actual.")
+  $l.Add('')
+  $l.Add('## Referencias (SOLO LECTURA)')
+  if ($PlantillaRoot) {
+    $l.Add("- PLANTILLA: $PlantillaRoot")
+    $l.Add('  Repo ya migrado y aprobado. Es la fuente de verdad para paquetes, nombres de puertos y adaptadores, configuracion y tests.')
+  }
+  if ($LegacyRoot) {
+    $l.Add("- ORIGINAL JAVA 8: $LegacyRoot")
+    $l.Add('  Referencia de comportamiento.')
+  }
+  $l.Add('')
+  $l.Add('## Lo que se hara despues en este paso (ahora NO lo hagas)')
+  $l.Add($TextoPaso[$PasoId])
+  $l.Add('')
+  $l.Add('## Hallazgos del paso (todos)')
+  foreach ($x in $pend) {
+    $donde = $x.Fichero
+    if ($x.Linea -gt 0) { $donde += ':' + $x.Linea }
+    if (-not $donde) { $donde = '(repo)' }
+    $l.Add("- $donde - $($x.Detalle)")
+  }
+  $l.Add('')
+  $l.Add('## Que tienes que revisar')
+  $l.Add('1. Lee entero cada fichero de la lista. Busca quien lo usa: imports, inyeccion, configuracion y tests.')
+  $l.Add('2. Lee en la PLANTILLA las clases equivalentes: en que paquete estan, como se llaman y que puertos y adaptadores usan.')
+  $l.Add('3. Decide que se hara con cada fichero. Las decisiones tienen que ser coherentes entre si: si varios ficheros necesitan lo mismo (un puerto, un adaptador, una clase de configuracion), se crea UNA sola pieza comun y todos la usan.')
+  $l.Add('4. Si algo no se puede resolver sin cambiar el comportamiento, no lo fuerces: apuntalo en Dudas.')
+  $l.Add('')
+  $l.Add("## Formato de .rescate/plan-$PasoId.md")
+  $l.Add("Empieza con la linea: # Plan del paso '$PasoId'")
+  $l.Add('Despues, estas cuatro secciones, con estos titulos:')
+  $l.Add('- "## Piezas comunes": una linea por cada pieza nueva que van a compartir varios ficheros, con su nombre completo (paquete incluido), que es (puerto, adaptador, configuracion...) y para que sirve. Si no hace falta ninguna, escribe "ninguna".')
+  $l.Add('- "## Ficheros": una linea por cada fichero de la lista de hallazgos, asi:')
+  $l.Add('  - `ruta/del/Fichero.java` -> que se hace | destino: paquete o clase de destino, o "-" | riesgo: bajo, medio o alto, y por que')
+  $l.Add('- "## Orden": en que orden conviene hacerlos y por que (primero lo que otros necesitan).')
+  $l.Add('- "## Dudas": lo que deberia decidir una persona. Si no hay, escribe "ninguna".')
+  $l.Add('')
+  $l.Add('No escribas contrasenas, hosts ni datos reales. No inventes: si no has podido leer un fichero, dilo en Dudas.')
+  [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+
+  $antes = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
+  $check = Get-Head $RepoRoot
+  $rama = Get-Rama $RepoRoot
+  $hp = Get-Huella $PlantillaRoot; $h0 = Get-Huella $LegacyRoot
+  Info "Revision previa del paso '$PasoId': Copilot lee $($fichs.Count) fichero(s) y la plantilla..."
+  [void](Invoke-Copilot (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan)
+  if ((Get-Huella $PlantillaRoot) -ne $hp -or (Get-Huella $LegacyRoot) -ne $h0) {
+    Fallo 'ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL durante la revision. Restauralos antes de seguir.'
+    exit 4
+  }
+  $despues = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
+  if ($despues -ne $antes -or (Get-Head $RepoRoot) -ne $check) {
+    if (-not $antes) {
+      Undo-Lote $rama $check
+      Aviso 'La revision era de solo lectura y Copilot ha tocado codigo: lo he deshecho.'
+    }
+    else { Aviso 'Ojo: Copilot ha tocado ficheros durante la revision (era de solo lectura). Mira git status.' }
+  }
+  if (-not (Test-Path -LiteralPath $ruta)) {
+    if ($viejo) {
+      [System.IO.File]::WriteAllText($ruta, $viejo)
+      Aviso "Copilot no ha escrito el plan (ver .rescate/plan-$PasoId.log). Me quedo con el que habia."
+      return 'existente'
+    }
+    Aviso "Copilot no ha escrito el plan (ver .rescate/plan-$PasoId.log). Sigo sin plan."
+    return ''
+  }
+  $falta = @(Get-SinPlan $ruta $fichs)
+  if ($falta.Count -gt 0) { Aviso ('El plan no nombra: ' + (($falta | Select-Object -First 8) -join ', ')) }
+  Bien "Plan escrito: $ruta"
+  return 'nuevo'
+}
+
+# ============================== WORKTREE ==============================
+# .rescate y target se ignoran solo en local (no toca .gitignore).
+# info/exclude lo comparten el repo y todos sus worktrees.
+function Set-Excluidos([string]$Dir) {
+  $exc = ((Invoke-Git $Dir @('rev-parse', '--git-path', 'info/exclude')).Salida -join '').Trim()
+  if (-not $exc) { return }
+  if (-not [System.IO.Path]::IsPathRooted($exc)) { $exc = Join-Path $Dir $exc }
+  $dirExc = Split-Path $exc -Parent
+  if (-not (Test-Path -LiteralPath $dirExc)) { [void](New-Item -ItemType Directory -Path $dirExc) }
+  $ya = ''
+  if (Test-Path -LiteralPath $exc) { $ya = [System.IO.File]::ReadAllText($exc) }
+  if ($ya -notmatch '(?m)^\.rescate/') { [System.IO.File]::AppendAllText($exc, "`n.rescate/`ntarget/`n") }
+}
+
+# Ajustes propios de un repo: su .rescate/config.json pisa las claves de $Cfg.
+function Read-Config([string]$Raiz) {
+  $ruta = Join-Path (Join-Path $Raiz '.rescate') 'config.json'
+  if (-not (Test-Path -LiteralPath $ruta)) { return }
+  try {
+    $o = [System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json
+    foreach ($pr in $o.PSObject.Properties) {
+      if ($Cfg.ContainsKey($pr.Name)) { $Cfg[$pr.Name] = $pr.Value } else { Aviso "config.json: clave desconocida '$($pr.Name)'" }
+    }
+  }
+  catch { Fallo ("No puedo leer $ruta" + ': ' + $_.Exception.Message); exit 1 }
+}
+
+function Get-DirRescate {
+  if ($Worktree) { return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Worktree).TrimEnd('\', '/') }
+  return ($OrigenRoot + '-rescate')
+}
+
+# Es $Dir un worktree de ESTE repo en una rama rescate/?
+# (la rama es de este repo si aqui apunta al mismo commit que alli)
+function Test-WorktreeRescate([string]$Dir) {
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir '.git'))) { return $false }
+  $rama = Get-Rama $Dir
+  if (-not $rama.StartsWith('rescate/')) { return $false }
+  $alli = Get-Head $Dir
+  $aqui = ((Invoke-Git $OrigenRoot @('rev-parse', '--verify', '-q', "refs/heads/$rama")).Salida -join '').Trim()
+  return [bool]($alli -and ($alli -eq $aqui))
+}
+
+# Copia al worktree lo que hay sin commit en la carpeta original, sin tocarla,
+# y lo guarda en un commit 'foto'. Devuelve '' o el motivo del fallo.
+function Copy-Sucio([string]$Dir, [bool]$HaySeguidos) {
+  if ($HaySeguidos) {
+    # stash create hace un commit con el estado actual y no cambia nada
+    $w = (@((Invoke-Git $OrigenRoot @('stash', 'create')).Salida | Where-Object { $_ -match '^[0-9a-f]{40,64}$' } | Select-Object -Last 1) -join '')
+    if (-not $w) { return 'git stash create no ha devuelto nada' }
+    $r = Invoke-Git $Dir @('read-tree', '--reset', '-u', $w)
+    if ($r.Codigo -ne 0) { return ('git read-tree: ' + ($r.Salida -join ' ')) }
+  }
+  foreach ($rel in @((Invoke-Git $OrigenRoot @('-c', 'core.quotepath=off', 'ls-files', '--others', '--exclude-standard')).Salida | Where-Object { $_ })) {
+    $de = Join-Ruta $OrigenRoot $rel
+    if (-not (Test-Path -LiteralPath $de -PathType Leaf)) { return "no encuentro el fichero sin seguimiento '$rel'" }
+    $a = Join-Ruta $Dir $rel
+    $carpeta = Split-Path $a -Parent
+    if (-not (Test-Path -LiteralPath $carpeta)) { [void](New-Item -ItemType Directory -Path $carpeta -Force) }
+    Copy-Item -LiteralPath $de -Destination $a -Force
+  }
+  [void](Invoke-Git $Dir @('add', '-A'))
+  $r = Invoke-Git $Dir (@('commit', '-q', '-m', 'rescate: foto del estado antes de empezar') + $Cfg.CommitArgs)
+  if ($r.Codigo -ne 0) { return ('git commit: ' + ($r.Salida -join ' ')) }
+  return ''
+}
+
+# Lo que git ignora (configuracion local, .env...) no viaja al worktree.
+function Show-Ignorados {
+  $ign = @((Invoke-Git $OrigenRoot @('-c', 'core.quotepath=off', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')).Salida | Where-Object { $_ } | Where-Object {
+      $p = $_.TrimEnd('/')
+      $enIgnorada = @($p.Split('/') | Where-Object { $Cfg.DirsIgnorados -contains $_ }).Count -gt 0
+      (-not $enIgnorada) -and ($p -notmatch '\.(class|log|iml)$') })
+  if ($ign.Count -eq 0) { return }
+  Aviso 'Ojo: git ignora estos ficheros de tu carpeta y por eso NO estan en el worktree.'
+  Aviso 'Si el build o los tests los necesitan, copialos a mano:'
+  $ign | Select-Object -First 12 | ForEach-Object { Info "  $_" }
+}
+
+# Crea el worktree de rescate al lado del repo. La carpeta original no se toca.
+function New-WorktreeRescate([string]$Dir) {
+  $rama = Get-Rama $OrigenRoot
+  if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
+  if (Test-Path -LiteralPath $Dir) { Fallo "La carpeta '$Dir' ya existe y no es un worktree de rescate de este repo. Borrala o elige otra con -Worktree."; exit 1 }
+  $nueva = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
+  $sucio = @((Invoke-Git $OrigenRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
+  Info "El rescate trabaja en una carpeta aparte (worktree de git): $Dir"
+  Info "Rama nueva: '$nueva'. Tu carpeta y tu rama '$rama' no se tocan."
+  if ($sucio.Count -gt 0) {
+    Aviso "Tienes $($sucio.Count) cambios sin commit. Se copian al worktree en un commit 'foto':"
+    $sucio | Select-Object -First 15 | ForEach-Object { Info "  $_" }
+  }
+  if (-not (Confirmar 'Seguir?')) { exit 0 }
+  $r = Invoke-Git $OrigenRoot @('worktree', 'add', '-q', '-b', $nueva, $Dir, 'HEAD')
+  if ($r.Codigo -ne 0) { Fallo ('No pude crear el worktree: ' + ($r.Salida -join ' ')); exit 1 }
+  if ($sucio.Count -gt 0) {
+    $haySeguidos = (@($sucio | Where-Object { $_ -notmatch '^\?\?' }).Count -gt 0)
+    $motivo = Copy-Sucio $Dir $haySeguidos
+    if ($motivo) {
+      # un worktree sin tus cambios daria un diagnostico falso: mejor no dejarlo
+      [void](Invoke-Git $OrigenRoot @('worktree', 'remove', '--force', $Dir))
+      [void](Invoke-Git $OrigenRoot @('branch', '-D', $nueva))
+      Fallo "No pude copiar al worktree tus cambios sin commit ($motivo). He borrado el worktree."
+      Fallo 'Haz commit de tus cambios y vuelve a lanzar.'
+      exit 3
+    }
+  }
+  # lo ya hecho en .rescate (contrato del pre, ajustes, planes) viaja al worktree
+  $de = Join-Path $OrigenRoot '.rescate'
+  if (Test-Path -LiteralPath $de) {
+    $a = Join-Path $Dir '.rescate'
+    if (-not (Test-Path -LiteralPath $a)) { [void](New-Item -ItemType Directory -Path $a) }
+    foreach ($f in @(Get-ChildItem -LiteralPath $de -File | Where-Object { $_.Name -match '^(contrato\.json|config\.json|plan-.+\.md)$' })) {
+      Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $a $f.Name) -Force
+    }
+  }
+  Show-Ignorados
+  Bien "Worktree creado: $Dir"
 }
 
 # ================================= PRE =================================
@@ -826,7 +1293,7 @@ function Invoke-Pre {
       )
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
       Info 'Copilot leyendo el original...'
-      [void](Invoke-Copilot (Join-Path $Work 'pre.log'))
+      [void](Invoke-Copilot (Join-Path $Work 'pre.log') '' $EsfuerzoPlan)
       if ((Get-Huella $LegacyRoot) -ne $h0 -or (Get-Huella $PlantillaRoot) -ne $hp) { Fallo 'ALTO: se ha modificado el ORIGINAL o la PLANTILLA durante el pre. Restauralos antes de seguir.'; exit 4 }
       $despues = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
       if ($despues -ne $antes) { Aviso 'Ojo: Copilot ha tocado ficheros de este repo durante el pre (solo debia escribir en .rescate). Mira git status.' }
@@ -876,7 +1343,8 @@ function Invoke-Fix {
   if (-not $PlantillaRoot) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
   # --- rama de rescate y foto del estado actual: nada se pierde ---
-  $rama = ((Invoke-Git $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD')).Salida -join '').Trim()
+  # Con worktree ya estamos en su rama rescate/. Solo con -SinWorktree se crea aqui.
+  $rama = Get-Rama $RepoRoot
   if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
   if (-not $rama.StartsWith('rescate/')) {
     $nueva = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
@@ -918,6 +1386,15 @@ function Invoke-Fix {
   Info ''
   Info "=== Paso '$paso' en lotes de $loteEf ==="
 
+  # --- revision previa: un plan para todo el paso, antes del primer lote ---
+  if (-not $SinPlan -and ($Cfg.PasosConPlan -contains $paso)) {
+    $plan = Invoke-Plan $paso $hall $false
+    if ($plan -eq 'nuevo' -and -not $Auto) {
+      $resp = Read-Host 'Lee el plan (puedes corregirlo). [Enter] seguir con los lotes | n = parar aqui'
+      if ($resp -eq 'n') { $script:Parar = $true; return }
+    }
+  }
+
   $planB = @{}
   for ($n = 1; $n -le $MaxLotes; $n++) {
     $pend = @($hall | Where-Object { $_.Cat -eq $paso -and $_.Sev -eq 'error' })
@@ -933,6 +1410,10 @@ function Invoke-Fix {
     $loteH = @($pend | Where-Object { $sel -contains $_.Fichero })
     $antes = @{}
     foreach ($c in $Cfg.Orden) { $antes[$c] = Get-Cuenta $hall $c }
+    $antes['calidad'] = Get-Cuenta $hall 'calidad'
+    # faltas de calidad que ya habia (por clase, para reconocerlas si se mueve)
+    $calAntes = @{}
+    foreach ($x in @($hall | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' })) { $calAntes[($x.Fichero.Split('/')[-1] + '|' + $x.Detalle)] = $true }
     $antesCompila = $script:Build.Compila
     $check = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
     Info ''
@@ -960,7 +1441,7 @@ function Invoke-Fix {
       $head = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
       if ($head -ne $check) { [void](Invoke-Git $RepoRoot @('reset', '-q', '--mixed', $check)) }   # si hizo commit, lo deshago y conservo los cambios
 
-      $cambios = @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
+      $cambios = @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ })
       if ($cambios.Count -eq 0) {
         $problemas = @('No has cambiado ningun fichero.')
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
@@ -989,13 +1470,20 @@ function Invoke-Fix {
       }
       $ft = Get-Cuenta $hall2 'tests'
       if ($conTests -and $paso -ne 'tests' -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
+      # el codigo nuevo sale ya con Javadoc y sin malas practicas: la cuenta de calidad no sube
+      $calNuevos = @()
+      $qc = Get-Cuenta $hall2 'calidad'
+      if ($paso -ne 'calidad' -and $qc -gt $antes['calidad']) {
+        $problemas += "Tu codigo anade hallazgos de calidad ($($antes['calidad']) -> $qc). Lo que escribas lleva Javadoc y sigue las reglas de calidad."
+        $calNuevos = @($hall2 | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' -and -not $calAntes.ContainsKey(($_.Fichero.Split('/')[-1] + '|' + $_.Detalle)) } | Select-Object -First 20)
+      }
 
       if ($problemas.Count -eq 0) { $ok = $true; break }
       $problemas | ForEach-Object { Aviso "  NO PASA: $_" }
-      $detalle = @($hall2 | Where-Object { $_.Sev -eq 'error' -and (
-            ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
-            ($_.Cat -eq 'tests' -and $conTests) -or
-            ($_.Cat -eq $paso -and $sel -contains $_.Fichero)) } | Select-Object -First 20 | ForEach-Object {
+      $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
+                ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
+                ($_.Cat -eq 'tests' -and $conTests) -or
+                ($_.Cat -eq $paso -and $sel -contains $_.Fichero)) } | Select-Object -First 20) + $calNuevos) | ForEach-Object {
           $donde = $_.Fichero
           if ($_.Linea -gt 0) { $donde += ':' + $_.Linea }
           "  - $donde - $($_.Detalle)" })
@@ -1051,36 +1539,31 @@ function Invoke-Fix {
 }
 
 # ================================= MAIN =================================
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fallo "No encuentro 'git' en el PATH."; exit 1 }
 $RepoRoot = Resolve-Dir $Repo
 $PlantillaRoot = Resolve-Dir $Plantilla
 $LegacyRoot = Resolve-Dir $Legacy
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot '.git'))) { Fallo "No es la raiz de un repo git: $RepoRoot"; exit 1 }
 if ($PlantillaRoot -and ($PlantillaRoot -eq $RepoRoot)) { Aviso 'Repo y plantilla son la misma carpeta: todo saldra permitido.' }
 
-$Work = Join-Path $RepoRoot '.rescate'
-if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
-# .rescate y target se ignoran solo en local (no toca .gitignore)
-$exc = ((Invoke-Git $RepoRoot @('rev-parse', '--git-path', 'info/exclude')).Salida -join '').Trim()
-if ($exc) {
-  if (-not [System.IO.Path]::IsPathRooted($exc)) { $exc = Join-Path $RepoRoot $exc }
-  $dirExc = Split-Path $exc -Parent
-  if (-not (Test-Path -LiteralPath $dirExc)) { [void](New-Item -ItemType Directory -Path $dirExc) }
-  $ya = ''
-  if (Test-Path -LiteralPath $exc) { $ya = [System.IO.File]::ReadAllText($exc) }
-  if ($ya -notmatch '(?m)^\.rescate/') { [System.IO.File]::AppendAllText($exc, "`n.rescate/`ntarget/`n") }
+# Carpeta de trabajo. $OrigenRoot es la carpeta que has pasado en -Repo.
+# Si ya hay worktree de rescate, se trabaja en el; fix y plan lo crean si falta.
+$OrigenRoot = $RepoRoot
+Set-Excluidos $OrigenRoot
+Read-Config $OrigenRoot    # antes del worktree: CommitArgs vale tambien para el commit 'foto'
+if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
+  $dirWt = Get-DirRescate
+  if (-not (Test-WorktreeRescate $dirWt) -and ($Modo -eq 'fix' -or $Modo -eq 'plan')) { New-WorktreeRescate $dirWt }
+  if (Test-WorktreeRescate $dirWt) {
+    $RepoRoot = $dirWt
+    Info "Carpeta de trabajo: $RepoRoot (worktree de rescate, rama '$(Get-Rama $RepoRoot)')"
+    if ($Modo -eq 'diagnostico' -or $Modo -eq 'pre') { Info 'Para mirar tu carpeta original en vez del worktree: -SinWorktree' }
+    Read-Config $RepoRoot
+  }
 }
 
-# Ajustes propios de este repo: .rescate/config.json pisa las claves de $Cfg
-$cfgRepo = Join-Path $Work 'config.json'
-if (Test-Path -LiteralPath $cfgRepo) {
-  try {
-    $o = [System.IO.File]::ReadAllText($cfgRepo) | ConvertFrom-Json
-    foreach ($pr in $o.PSObject.Properties) {
-      if ($Cfg.ContainsKey($pr.Name)) { $Cfg[$pr.Name] = $pr.Value } else { Aviso "config.json: clave desconocida '$($pr.Name)'" }
-    }
-  }
-  catch { Fallo ('No puedo leer .rescate/config.json: ' + $_.Exception.Message); exit 1 }
-}
+$Work = Join-Path $RepoRoot '.rescate'
+if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
 
 $script:Atascados = @{}   # paso -> ficheros que la IA no ha sabido arreglar
 $script:Fallos = 0        # lotes deshechos seguidos
@@ -1103,8 +1586,27 @@ switch ($Modo) {
     if ($sig) { Info "Siguiente paso recomendado: $sig  ->  -Modo fix -Paso $sig" } else { Bien 'Sin errores.' }
   }
   'pre' { Invoke-Pre }
+  'plan' {
+    if (-not (Get-Command $Cfg.CopilotExe -ErrorAction SilentlyContinue)) { Fallo "No encuentro '$($Cfg.CopilotExe)' en el PATH."; exit 1 }
+    Info (Get-TextoModelo)
+    if ($SinBuild) { Info 'Diagnostico sin Maven...' } else { Info 'Diagnostico (compilando)...' }
+    $hall = @(Invoke-Diagnostico (-not $SinBuild) $false)
+    Write-Informe $hall
+    Show-Resumen $hall
+    # sin -Paso: el primer paso con errores de los que llevan plan
+    $p = $Paso
+    if (-not $p) { $p = (@($Cfg.Orden | Where-Object { ($Cfg.PasosConPlan -contains $_) -and ((Get-Cuenta $hall $_) -gt 0) } | Select-Object -First 1) -join '') }
+    if (-not $p) { Bien ('No hay errores en los pasos que llevan plan (' + ($Cfg.PasosConPlan -join ', ') + ').') }
+    elseif ($Cfg.PasosConPlan -notcontains $p) { Aviso "El paso '$p' no lleva plan: se arregla hallazgo a hallazgo." }
+    elseif ((Get-Cuenta $hall $p) -eq 0) { Bien "El paso '$p' no tiene errores: no hay nada que planificar." }
+    else {
+      $plan = Invoke-Plan $p $hall $true
+      if ($plan) { Info "Leelo y corrigelo si hace falta. Despues: -Modo fix -Paso $p" }
+    }
+  }
   'fix' {
     if ($Todo) { $Auto = [switch]$true }
+    Info (Get-TextoModelo)
     $script:Parar = $false
     $script:Siguiente = ''
     $previo = ''
@@ -1113,6 +1615,21 @@ switch ($Modo) {
       if (-not $Todo -or $Paso -or $script:Parar -or -not $script:Siguiente) { break }
       if ($script:Siguiente -eq $previo) { Aviso "El paso '$previo' no avanza: paro aqui."; break }
       $previo = $script:Siguiente
+    }
+    $ramaFin = Get-Rama $RepoRoot
+    if ($ramaFin.StartsWith('rescate/')) {
+      Info ''
+      Info "Los cambios estan en la rama '$ramaFin', en commits locales. El script no hace push."
+      if ($RepoRoot -ne $OrigenRoot) {
+        $ro = Get-Rama $OrigenRoot
+        Info "Tu carpeta '$OrigenRoot' sigue como estaba. Desde ella:"
+        Info "  ver que ha cambiado:  git diff --stat ${ro}...$ramaFin"
+        Info "  traerlo a tu rama:    git merge $ramaFin      (o sube la rama y abre un PR)"
+        Info "  borrar el worktree:   git worktree remove `"$RepoRoot`"      (la rama se conserva)"
+        if (@((Invoke-Git $OrigenRoot @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -gt 0) {
+          Info '  Ojo: si tenias cambios sin commit al crear el worktree, ya van dentro de esa rama (commit foto). Guardalos o descartalos antes del merge.'
+        }
+      }
     }
     if ($script:Atascados.Count -gt 0) {
       Fallo ''

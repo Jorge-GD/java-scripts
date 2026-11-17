@@ -1,11 +1,108 @@
 # java-scripts
 
-Colección de scripts y utilidades sueltas en Java.
+Scripts sueltos para trabajar con proyectos Java.
 
-## Uso
+## rescate.ps1
 
-Con Java 11 o superior, un fichero se ejecuta directamente:
+Primeros auxilios para un batch Java migrado a medias (Java 8 → Java 21, arquitectura hexagonal, SFTP y configuración externa).
+Es un script de PowerShell (Windows PowerShell 5.1 o PowerShell 7). Necesita `git`, Maven y, para arreglar, GitHub Copilot CLI.
 
-```bash
-java NombreDelScript.java
+Compara tu repo con una **plantilla** (un repo ya migrado y aprobado) y trabaja en cuatro fases:
+
+| Fase | Usa IA | Qué hace |
+|---|---|---|
+| Diagnóstico | no | Cuenta los hallazgos por paso: `build`, `estructura`, `hexagonal`, `ficheros`, `config`, `paridad`, `e2e`, `tests`, `calidad`. No toca código. |
+| Worktree | no | Crea al lado una carpeta `<repo>-rescate` con una rama `rescate/...`. Tu carpeta y tu rama no se tocan. |
+| Plan | sí, solo lectura | Antes de arreglar un paso, Copilot lee **todos** los ficheros con hallazgos y la plantilla, y escribe `.rescate/plan-<paso>.md`. Tú lo lees y lo corriges. |
+| Arreglo | sí | Arregla un paso en lotes pequeños siguiendo el plan. Tras cada lote se repite el diagnóstico entero y el script decide si el lote vale. |
+
+Un lote solo se guarda (commit local, nunca push) si pasa todas las puertas:
+
+- compila;
+- bajan los hallazgos del paso;
+- no empeoran los pasos anteriores;
+- el código nuevo no añade hallazgos de calidad (el Javadoc incluido);
+- no se han borrado ni desactivado tests;
+- no se ha tocado la plantilla ni el repo original.
+
+Si no las pasa, el script reintenta con el error y, si sigue mal, deshace el lote entero.
+
+### Uso
+
+```powershell
+# 1) Diagnostico: seguro, no cambia nada
+.\rescate.ps1 -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
+
+# 2) Plan del siguiente paso pendiente: crea el worktree y escribe el plan
+.\rescate.ps1 -Modo plan -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
+
+# 3) Arreglar el siguiente paso, lote a lote, con pausa para revisar
+.\rescate.ps1 -Modo fix -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
+
+# 4) Al acabar: revisar y traer los cambios a tu rama
+git -C C:\ruta\batch-life diff --stat <tu-rama>...<rama-rescate>
+git -C C:\ruta\batch-life merge <rama-rescate>
+git -C C:\ruta\batch-life worktree remove C:\ruta\batch-life-rescate
 ```
+
+El resto de opciones (elegir paso, tamaño del lote, deshacer, modelo de reserva) está en la cabecera del script.
+
+### Modelo y esfuerzo
+
+Cada llamada a la IA es `copilot -p` con `--model` y `--effort`
+([referencia de Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)). Los eliges tú:
+
+| Parámetro | Para qué | Si no lo pasas |
+|---|---|---|
+| `-Modelo <id>` | Modelo de todas las llamadas. El id es el que enseña `/model` dentro de Copilot. | El que tenga Copilot. |
+| `-EsfuerzoPlan <nivel>` | Esfuerzo de la revisión previa (pensar). | El de `-Esfuerzo`. |
+| `-Esfuerzo <nivel>` | Esfuerzo de los lotes de arreglo (escribir). | El que tenga Copilot. |
+| `-ModeloB <id>` | Modelo de reserva cuando el principal se atasca con un fichero. | No hay reserva. |
+
+Niveles: `low`, `medium`, `high`, `xhigh`, `max`. No todos los modelos admiten todos.
+
+```powershell
+.\rescate.ps1 -Modo fix -Repo ... -Plantilla ... -Modelo <id-del-modelo> -EsfuerzoPlan high -Esfuerzo medium
+```
+
+### El paso `calidad`
+
+Comprueba, por texto, el código de `src/main`:
+
+| Regla | Cuenta como | Qué mira |
+|---|---|---|
+| `javadoc-tipo`, `javadoc-metodo` | error | Javadoc en clases, interfaces, records y enums públicos y en sus métodos públicos. Exentos: `@Override`, constructores, getters, setters, `main`, `equals`, `hashCode`, `toString`. |
+| `inyeccion-campo` | error | `@Autowired` o `@Inject` en un campo. |
+| `salida-consola` | error | `System.out`, `System.err`, `printStackTrace`. |
+| `catch-vacio` | error | `catch` sin nada dentro (un comentario que lo explique vale). |
+| `envoltorio-new` | error | `new Integer(...)` y similares. |
+| `instanceof-cast`, `fecha-antigua`, `coleccion-antigua` | aviso | Sintaxis y API antiguas. No se arreglan solas: pueden cambiar el comportamiento. |
+
+El Javadoc se exige aunque la plantilla no lo tenga. Las demás reglas bajan a aviso si la plantilla también las incumple.
+Para apagar una regla, quítala de `CalidadErrores` en `.rescate/config.json`.
+
+### Quién ya lo hizo
+
+Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 2026):
+
+| Herramienta | Qué hace | Aquí |
+|---|---|---|
+| Checkstyle: [MissingJavadocType](https://checkstyle.org/checks/javadoc/missingjavadoctype.html) y [MissingJavadocMethod](https://checkstyle.org/checks/javadoc/missingjavadocmethod.html) | Exige Javadoc en lo público. | **Adaptado**: mismo criterio, escrito por texto para que el script no necesite instalar nada. |
+| OpenRewrite: [UpgradeToJava21](https://docs.openrewrite.org/recipes/java/migrate/upgradetojava21) y [SpringBatch4To5Migration](https://docs.openrewrite.org/recipes/java/spring/batch/springbatch4to5migration) | Recetas que hacen solas la parte mecánica de la migración. | Recomendado **antes** de este script: lo mecánico lo hace mejor una receta que una IA. |
+| [ArchUnit](https://www.archunit.org/userguide/html/000_Index.html) (`onionArchitecture()`) | Tests que vigilan las capas. | Recomendado **después**, para que la arquitectura no se vuelva a romper. |
+| Sonar | Análisis de calidad completo. | Este script no lo sustituye. |
+
+### Pruebas
+
+`tests\probar.ps1` comprueba el script con repos de juguete, un Maven de mentira y un Copilot de mentira. Solo necesita `git`.
+
+```powershell
+.\tests\probar.ps1                 # todas
+.\tests\probar.ps1 -Solo calidad   # solo las que llevan "calidad" en el nombre
+```
+
+### Límites
+
+- Proyectos Maven de un solo módulo.
+- Las comprobaciones son por imports y texto: avisan de lo evidente. No sustituyen la revisión de una persona.
+- El worktree no trae los ficheros que git ignora (configuración local, `.env`). El script los lista al crearlo.
