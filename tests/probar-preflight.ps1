@@ -279,8 +279,8 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   Comprueba '1: GB libres' ((Valor-De $r 'GB libres') -match '^\d+(\.\d+)?$') (Valor-De $r 'GB libres')
 
   # 2 bancos y 10 los otros dos bancos siguen igual
-  Comprueba '2: probar.ps1 pasa sus 75 comprobaciones (N de M en S s)' ((Valor-De $r 'probar') -match '^75 de 75 en \d+ s$') (Valor-De $r 'probar')
-  Comprueba '2: probar-migracion.ps1 pasa sus 232 comprobaciones' ((Valor-De $r 'probar-migracion') -match '^232 de 232 en \d+ s$') (Valor-De $r 'probar-migracion')
+  Comprueba '2: probar.ps1 pasa todas sus comprobaciones (N de N en S s, 75 o mas)' ((Valor-De $r 'probar') -match '^(\d+) de \1 en \d+ s$' -and [int]$Matches[1] -ge 75) (Valor-De $r 'probar')
+  Comprueba '2: probar-migracion.ps1 pasa todas sus comprobaciones (232 o mas)' ((Valor-De $r 'probar-migracion') -match '^(\d+) de \1 en \d+ s$' -and [int]$Matches[1] -ge 232) (Valor-De $r 'probar-migracion')
   Igual '2: fallan' 'ninguna' (Valor-De $r 'fallan')
 
   # 3 copilot

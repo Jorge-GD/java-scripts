@@ -430,9 +430,9 @@ $Pruebas['11 trozos: un fichero largo se trocea y las fichas se juntan'] = {
   Comprueba 'cada prompt lleva su rango' (@($p | Where-Object { $_ -match '(?m)^LINEAS: 1-6\r?$' }).Count -eq 1 -and @($p | Where-Object { $_ -match '(?m)^LINEAS: 7-11\r?$' }).Count -eq 1)
 }
 
-$Pruebas['14 el banco del motor sigue en 75 de 75'] = {
+$Pruebas['14 el banco del motor sigue pasando entero'] = {
   $r = Lanzar (Join-Path $aqui 'probar.ps1') @('-Dir', (Join-Path $Dir 'motor'))
-  Comprueba 'probar.ps1 pasa sus 75 comprobaciones' ($r.Codigo -eq 0 -and $r.Salida -match 'TODO BIEN: 75 comprobaciones') (Cola $r.Salida)
+  Comprueba 'probar.ps1 pasa todas sus comprobaciones (75 o mas)' ($r.Codigo -eq 0 -and $r.Salida -match 'TODO BIEN: (\d+) comprobaciones' -and [int]$Matches[1] -ge 75) (Cola $r.Salida)
 }
 
 # ============================ BIBLIOTECA Y LANZADOR ============================
