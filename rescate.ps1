@@ -1008,7 +1008,8 @@ function Get-SinPlan([string]$Ruta, $Fichs) {
 
 # Del plan, lo que toca a un lote: su primera linea, '## Piezas comunes' entera y, de
 # '## Ficheros', las lineas que nombran un fichero del lote. Sin '## Ficheros' (formato que
-# no conozco) devuelve el plan entero. Los titulos, sin distinguir mayusculas y con espacios de mas.
+# no conozco) devuelve el plan entero. Los titulos, sin distinguir mayusculas y con espacios de mas,
+# sin '*' y sin ':' ni '.' al final; en el prompt se citan tal como los escribio el plan.
 function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
   $todo = @($Plan.Trim() -split "`r?`n")
   $rx = @($Fichs | ForEach-Object { Get-RxClase $_ })
@@ -1016,7 +1017,7 @@ function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
   $sec = ''; $posF = -1; $suyas = 0
   foreach ($x in $todo) {
     $titulo = ($x -match '^\s*##\s')
-    if ($titulo) { $sec = (($x -replace '^\s*##\s+', '') -replace '\s+', ' ').Trim() }
+    if ($titulo) { $sec = ((($x -replace '^\s*##\s+', '') -replace '\*', '' -replace '\s+', ' ').Trim()) -replace '\s*[:.]+$', '' }
     if ($sec -eq '') { if ($sal.Count -eq 0) { $sal.Add($x); $sal.Add('') } }
     elseif ($sec -eq 'Piezas comunes') { $sal.Add($x) }
     elseif ($sec -eq 'Ficheros') {

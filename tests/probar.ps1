@@ -741,6 +741,32 @@ DUDAS-MARCA: ninguna
   Igual 'el plan va citado tal cual' ($plan.Trim() -replace "`r", '') (Citado $p)
 }
 
+# Lo que tiene que citar el prompt de un lote cuyo plan lleva estos titulos: las piezas comunes y
+# solo la linea de su fichero, con los titulos tal como los escribio el plan.
+function Comprueba-Parte-Del-Plan([string]$P, [string]$TituloPiezas, [string]$TituloFicheros) {
+  $c = Citado $P
+  $suya = Clase-Del-Lote $P
+  Comprueba 'el lote es de un fichero de los dos con hallazgos' (@('Suelta', 'PolizaService') -contains $suya) "clase del lote: '$suya'"
+  Comprueba 'cita el titulo de las piezas comunes como lo escribio el plan' $c.Contains($TituloPiezas)
+  Comprueba 'cita las piezas comunes' $c.Contains('PIEZA-COMUN-MARCA')
+  Comprueba 'cita el titulo de los ficheros como lo escribio el plan' $c.Contains($TituloFicheros)
+  Comprueba 'cita la linea de su fichero' ($c -match ('(?m)^- `[^`]*' + $suya + '\.java` -> '))
+  foreach ($otra in @(@('Suelta', 'PolizaService', 'Cliente') | Where-Object { $_ -ne $suya })) {
+    Comprueba "no cita la linea de $otra" ($c -notmatch ('(?<![\w])' + $otra + '(?![\w])'))
+  }
+  Comprueba 'no cita ## Orden ni ## Dudas' (-not $P.Contains('ORDEN-MARCA') -and -not $P.Contains('DUDAS-MARCA'))
+}
+
+$Pruebas['prompt: un plan con titulos con dos puntos o en mayusculas lleva solo su parte'] = {
+  $plan = $PlanTres.Replace('## Piezas comunes', '## Piezas comunes:').Replace('## Ficheros', '## FICHEROS')
+  Comprueba-Parte-Del-Plan (Prompt-Con-Plan 'prompt-titulos-puntos' $plan) '## Piezas comunes:' '## FICHEROS'
+}
+
+$Pruebas['prompt: un plan con titulos en negrita lleva solo su parte'] = {
+  $plan = $PlanTres.Replace('## Piezas comunes', '## **Piezas comunes**').Replace('## Ficheros', '## **Ficheros**')
+  Comprueba-Parte-Del-Plan (Prompt-Con-Plan 'prompt-titulos-negrita' $plan) '## **Piezas comunes**' '## **Ficheros**'
+}
+
 $Pruebas['prompt: Maven fuera del repo va con su ruta, y entre comillas si tiene espacios'] = {
   $e = Nuevo-Escenario 'maven-fuera'
   $mvn = Join-Path $falsos 'mvn.ps1'
