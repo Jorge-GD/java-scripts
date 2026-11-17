@@ -1,0 +1,101 @@
+<header class="cab-port">
+  <h1>La pasada sobre <code>{{BATCH}}</code></h1>
+  {{{ESTADO}}}
+  <dl class="ficha">
+    <div><dt>Migrado</dt><dd>{{MIGRADO}}</dd></div>
+    <div><dt>Original</dt><dd>{{ORIGINAL}}</dd></div>
+    <div><dt>Referencia</dt><dd>{{PLANTILLA}}</dd></div>
+    <div><dt>Modelo</dt><dd>{{MODELO}}</dd></div>
+    <div><dt>Empezó</dt><dd>{{EMPEZO}}</dd></div>
+    <div><dt>Lleva</dt><dd>{{LLEVA}}</dd></div>
+  </dl>
+  <p class="meta">{{{ETIQUETA}}}</p>
+  <div class="cifras">
+    <p><b>{{HECHAS}}</b>tareas hechas</p>
+    <p class="cif-mal"><b>{{ATASCADAS}}</b>atascadas</p>
+    <p><b>{{PENDIENTES}}</b>pendientes</p>
+  </div>
+  {{{PARADA}}}
+  <p class="gran-enlace"><a class="boton" href="1-batch-original.html">Qué hace el batch<svg aria-hidden="true"><use href="#a-der"/></svg></a></p>
+</header>
+
+<section class="panel" id="lo-que-te-toca" aria-labelledby="t-toca">
+  <h2 id="t-toca">Lo que te toca</h2>
+  {{{TOCA}}}
+</section>
+
+<section class="panel" aria-labelledby="t-fases">
+  <h2 id="t-fases">Qué ha hecho el script</h2>
+  <p>{{{ETIQUETA_FASES}}}</p>
+  <ol class="fases">
+{{{FASES}}}
+  </ol>
+</section>
+
+<section class="panel" aria-labelledby="t-ficheros">
+  <h2 id="t-ficheros">Qué es cada fichero</h2>
+  <ul class="ficheros">
+{{{FICHEROS}}}
+  </ul>
+</section>
+<!--TROZO titulo-index-->Informe de migración {{BATCH}}<!--FIN-->
+<!--TROZO modelo-defecto-->el que Copilot tenga por defecto<!--FIN-->
+<!--TROZO estado-hecha--><div class="estado estado-ok"><p>La lectura del original ha terminado.</p></div><!--FIN-->
+<!--TROZO estado-curso--><div class="estado"><p>La pasada no ha terminado: va por la fase {{FASE}}.</p></div><!--FIN-->
+<!--TROZO estado-parada--><div class="estado estado-parada"><p>La pasada se ha parado en la fase {{FASE}}: {{MOTIVO}}.</p></div><!--FIN-->
+<!--TROZO parada--><div class="parada-info">
+  <h2>Por qué se ha parado</h2>
+  <p><code>{{MOTIVO}}</code> {{DETALLE}}</p>
+  <p>El registro está en <code>{{REGISTRO}}</code>.</p>
+  <p>Pega este texto en Copilot para que te diga qué hacer. Después vuelve a lanzar el mismo comando y sigue donde se quedó.</p>
+  <pre class="cmd">{{AYUDA}}</pre>
+</div><!--FIN-->
+<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda y ninguna regla sin caso de prueba.</p><!--FIN-->
+<!--TROZO toca-grupo--><div class="grupo">
+  <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
+  <p>{{TEXTO}}</p>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+</div><!--FIN-->
+<!--TROZO toca-item-->    <li>{{{CABECERA}}}<span class="motivo">{{TEXTO}}</span></li><!--FIN-->
+<!--TROZO toca-atascadas-titulo-->Tareas atascadas ({{N}})<!--FIN-->
+<!--TROZO toca-atascadas-texto-->La IA lo intentó dos veces y la comprobación no dio por buena su respuesta. Los jobs y las clases afectados salen con los datos que sí hay.<!--FIN-->
+<!--TROZO toca-sinficha-titulo-->Clases sin ficha ({{N}})<!--FIN-->
+<!--TROZO toca-sinficha-texto-->Estos jobs usan clases que no se han podido leer. Lo que cuentan puede estar incompleto.<!--FIN-->
+<!--TROZO toca-dudas-titulo-->Dudas de las fichas de job ({{N}})<!--FIN-->
+<!--TROZO toca-dudas-texto-->Lo que la IA dice que no se puede saber con lo que leyó.<!--FIN-->
+<!--TROZO toca-sincaso-titulo-->Reglas sin caso de prueba ({{N}})<!--FIN-->
+<!--TROZO toca-sincaso-texto-->Reglas del código que ningún caso de prueba en pre cubre. Hay que escribirles un caso a mano.<!--FIN-->
+<!--TROZO cab-tarea--><code>{{ID}}</code> {{DONDE}}<!--FIN-->
+<!--TROZO cab-job--><code>{{JOB}}</code> <!--FIN-->
+<!--TROZO fase-linea-->  <li><span class="fase-n">{{NOMBRE}}</span><span class="fase-e" data-e="{{ESTADO}}">{{{ESTADO_TEXTO}}}</span><span class="fase-c">{{{CUENTA}}}</span></li><!--FIN-->
+<!--TROZO fase-fichas-clase-->Lectura de las clases<!--FIN-->
+<!--TROZO fase-mapa-->Mapa de jobs, pasos y variables<!--FIN-->
+<!--TROZO fase-fichas-job-->Redacción de cada job<!--FIN-->
+<!--TROZO fase-resumen-->Resumen y glosario<!--FIN-->
+<!--TROZO fase-pruebas-pre-->Guion de prueba en pre<!--FIN-->
+<!--TROZO estado-fase-hecha-->Hecha<!--FIN-->
+<!--TROZO estado-fase-curso-->Por aquí va<!--FIN-->
+<!--TROZO estado-fase-espera-->Sin empezar<!--FIN-->
+<!--TROZO cuenta-tareas-->hechas: {{HECHAS}}, atascadas: {{ATASCADAS}}, pendientes: {{PENDIENTES}}<!--FIN-->
+<!--TROZO cuenta-jobs-->jobs: {{JOBS}}, clases sin job: {{SINJOB}}<!--FIN-->
+<!--TROZO cuenta-ninguna-->sin tareas<!--FIN-->
+<!--TROZO duracion-->{{H}} h {{M}} min<!--FIN-->
+<!--TROZO duracion-corta-->{{M}} min<!--FIN-->
+<!--TROZO sin-valor-->sin dato<!--FIN-->
+<!--TROZO fichero-linea-->    <li><svg aria-hidden="true"><use href="#{{ICONO}}"/></svg><p>{{{NOMBRE}}}</p><p>{{{QUE}}}</p></li><!--FIN-->
+<!--TROZO nombre-enlace--><a href="{{RUTA}}"><code>{{TEXTO}}</code></a><!--FIN-->
+<!--TROZO nombre-codigo--><code>{{TEXTO}}</code><!--FIN-->
+<!--TROZO f-index-->Esta portada.<!--FIN-->
+<!--TROZO f-original-->Qué hace el batch original, para negocio.<!--FIN-->
+<!--TROZO f-datos-->Los datos de los que salen estas páginas.<!--FIN-->
+<!--TROZO f-estado-->En qué fase va la pasada, el modelo y, si se paró, por qué.<!--FIN-->
+<!--TROZO f-mapa-->Los jobs del original, sus pasos y las clases de cada uno.<!--FIN-->
+<!--TROZO f-resumen-->El resumen del batch, el orden de los jobs y el glosario.<!--FIN-->
+<!--TROZO f-variables-->Las variables de configuración del migrado y su valor por defecto.<!--FIN-->
+<!--TROZO f-jobs-->Una ficha por job: pasos, lo que necesita, lo que produce, reglas y fallos.<!--FIN-->
+<!--TROZO f-pruebas-->Un guion de prueba en pre por job.<!--FIN-->
+<!--TROZO f-fichas-->Una ficha por clase del original, con cada dato y la cita de donde sale.<!--FIN-->
+<!--TROZO f-tareas-->Cada tarea que se le pidió a la IA, con su estado y su motivo si se atascó.<!--FIN-->
+<!--TROZO f-registros-->Lo que contestó la IA en cada tarea. Para mirar si algo falla.<!--FIN-->

@@ -1,0 +1,203 @@
+<header class="cab-orig">
+  <h1>Qué hace el batch <code>{{BATCH}}</code></h1>
+  <p class="meta">{{{ETIQUETA}}}<span class="muted">Leído del código del original <code>{{ORIGINAL}}</code>. En cada job, las pruebas de lo que se cuenta están plegadas.</span></p>
+</header>
+
+<section class="bloque" aria-labelledby="t-resumen">
+  <h2 id="t-resumen">En resumen</h2>
+  {{{RESUMEN}}}
+</section>
+
+<section class="bloque" aria-labelledby="t-recorrido">
+  <h2 id="t-recorrido">El recorrido</h2>
+  {{{RECORRIDO}}}
+</section>
+
+<section class="bloque" aria-labelledby="t-jobs">
+  <h2 id="t-jobs">Cada job, por dentro</h2>
+  <p class="nota">De izquierda a derecha: lo que necesita, lo que hace y lo que deja.</p>
+  <ul class="claves">
+    <li><svg aria-hidden="true"><use href="#f-fichero"/></svg>Fichero</li>
+    <li><svg aria-hidden="true"><use href="#f-tabla"/></svg>Tabla de la base de datos</li>
+    <li><svg aria-hidden="true"><use href="#f-carpeta"/></svg>Carpeta</li>
+    <li><svg aria-hidden="true"><use href="#f-sftp"/></svg>Servidor SFTP</li>
+    <li><svg aria-hidden="true"><use href="#f-param"/></svg>Parámetro</li>
+    <li><svg aria-hidden="true"><use href="#f-correo"/></svg>Aviso o sistema externo</li>
+    <li><span class="mini-paso" aria-hidden="true">1</span>Paso</li>
+    <li><span class="mini-regla" aria-hidden="true"></span>Regla</li>
+    <li><svg aria-hidden="true"><use href="#a-falla"/></svg>Si algo falla</li>
+  </ul>
+  {{{JOBS}}}
+</section>
+
+<section class="bloque" aria-labelledby="t-glosario">
+  <h2 id="t-glosario">Palabras que se usan</h2>
+  {{{GLOSARIO}}}
+</section>
+<!--TROZO resumen--><p class="lede">{{TEXTO}}</p><p class="meta">{{{ETIQUETA}}}</p><!--FIN-->
+<!--TROZO recorrido--><ol class="recorrido">
+{{{PARADAS}}}
+</ol><!--FIN-->
+<!--TROZO parada-->  <li class="parada">
+    <span class="p-nodo" aria-hidden="true">{{N}}</span>
+    <div class="p-cuerpo">
+      <h3><a href="#job-{{ID}}">{{TITULO}}</a></h3>
+      <p><code>{{JOB}}</code></p>
+      <p class="p-motivo">{{MOTIVO}}</p>
+    </div>
+  </li><!--FIN-->
+<!--TROZO job--><article class="job" id="job-{{ID}}">
+  <header class="job-cab">
+    <span class="job-n" aria-hidden="true">{{N}}</span>
+    <div>
+      <h3>{{TITULO}}</h3>
+      <code>{{JOB}}</code>
+    </div>
+    {{{ETIQUETA}}}
+  </header>
+  {{{AVISO}}}
+  <p class="job-para">{{PARAQUE}}</p>
+  <p class="job-cifras">{{{CIFRAS}}}</p>
+  <div class="flujo">
+    <section class="zona">
+      <h4>Qué necesita</h4>
+      {{{NECESITA}}}
+    </section>
+    <span class="flecha" aria-hidden="true"><svg><use href="#a-der"/></svg></span>
+    <section class="zona zona-pasos">
+      <h4>Pasos</h4>
+      {{{PASOS}}}
+    </section>
+    <span class="flecha" aria-hidden="true"><svg><use href="#a-der"/></svg></span>
+    <section class="zona">
+      <h4>Qué produce</h4>
+      {{{PRODUCE}}}
+    </section>
+  </div>
+  {{{DUDAS}}}
+  {{{DONDE}}}
+  {{{OTROS}}}
+  <section class="pre" id="pre-{{ID}}">
+    <h4>Cómo probarlo en pre</h4>
+    {{{PRE}}}
+  </section>
+</article><!--FIN-->
+<!--TROZO job-pendiente--><article class="job" id="job-{{ID}}">
+  <header class="job-cab">
+    <span class="job-n" aria-hidden="true">{{N}}</span>
+    <div>
+      <h3>{{JOB}}</h3>
+    </div>
+  </header>
+  {{{SINDATOS}}}
+</article><!--FIN-->
+<!--TROZO titulo-original-->Qué hace el batch {{BATCH}}<!--FIN-->
+<!--TROZO job-aviso--><p class="aviso">No se ha podido redactar este job: la IA no pasó la comprobación. Abajo salen los datos tal como los leyó el script.</p><!--FIN-->
+<!--TROZO job-cifras-->{{{ETIQUETA}}} <span>{{PASOS}} pasos, {{CITADOS}} datos que citan los pasos y {{OTROS}} más leídos en el código.</span><!--FIN-->
+<!--TROZO nodos--><ul class="nodos">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO nodo-->  <li class="nodo nodo-{{CLASE}}"><svg aria-hidden="true"><use href="#{{ICONO}}"/></svg><span class="nodo-t"><span>{{TEXTO}}</span>{{{MARCA}}}<span class="nodo-n">{{{TIPO}}}</span></span></li><!--FIN-->
+<!--TROZO nodo-vacio--><p class="nodo nodo-vacio">Los pasos no citan nada aquí.</p><!--FIN-->
+<!--TROZO pasos--><ol class="pasos">
+{{{ITEMS}}}
+</ol><!--FIN-->
+<!--TROZO paso-sin--><p class="nodo nodo-vacio">Sin pasos: la redacción de este job no se ha podido hacer.</p><!--FIN-->
+<!--TROZO paso-->  <li class="paso">
+    <span class="paso-n" aria-hidden="true">{{N}}</span>
+    <div>
+      <p class="paso-t">{{TITULO}}{{{MARCA}}}</p>
+      <p class="paso-x">{{TEXTO}}</p>
+      {{{REGLAS}}}
+      {{{FALLOS}}}
+    </div>
+  </li><!--FIN-->
+<!--TROZO reglas--><ul class="reglas">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO regla-->  <li>{{TEXTO}}{{{MARCA}}}</li><!--FIN-->
+<!--TROZO fallos--><ul class="fallos">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO fallo-->  <li><svg aria-hidden="true"><use href="#a-falla"/></svg><span>{{TEXTO}}{{{MARCA}}}</span></li><!--FIN-->
+<!--TROZO dudas--><div class="job-sec dudas">
+  <h4>Dudas</h4>
+  <p>{{{ETIQUETA}}}</p>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+</div><!--FIN-->
+<!--TROZO duda-->    <li>{{TEXTO}}</li><!--FIN-->
+<!--TROZO donde--><details>
+  <summary>Dónde lo dice el código ({{N}} pruebas)</summary>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+</details><!--FIN-->
+<!--TROZO otros--><details{{{ABIERTO}}}>
+  <summary>Otros datos leídos en el código ({{N}})</summary>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+</details><!--FIN-->
+<!--TROZO abierto--> open<!--FIN-->
+<!--TROZO prueba-->    <li><span class="otros-t">{{{TIPO}}}</span>{{TEXTO}}{{{MARCA}}}<code class="donde">{{DONDE}}</code><span class="cita">{{CITA}}</span></li><!--FIN-->
+<!--TROZO pre-sin-datos--><p class="sin-datos">{{{ETIQUETA}}}<span>Todavía no hay datos: la fase pruebas-pre no ha terminado.</span></p><!--FIN-->
+<!--TROZO pre-contenido--><h5>Antes de lanzarlo</h5>
+{{{PREPARAR}}}
+{{{VARIABLES}}}
+<h5>Casos que hay que probar ({{N}})</h5>
+{{{CASOS}}}
+<h5>Qué mirar al acabar</h5>
+{{{COMPROBAR}}}
+{{{SINCASO}}}<!--FIN-->
+<!--TROZO pre-lista--><ul class="pre-l">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO pre-vacia--><p class="muted">Nada que añadir.</p><!--FIN-->
+<!--TROZO pre-item-->  <li>{{TEXTO}}{{{MARCA}}}</li><!--FIN-->
+<!--TROZO vars--><div class="vars">
+  <p>Variables de configuración del batch {{{ETIQUETA}}}</p>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+</div><!--FIN-->
+<!--TROZO var-->    <li><code>{{NOMBRE}}</code> {{{VALOR}}}</li><!--FIN-->
+<!--TROZO var-defecto-->con valor por defecto <code>{{VALOR}}</code><!--FIN-->
+<!--TROZO var-sin-defecto-->sin valor por defecto<!--FIN-->
+<!--TROZO casos--><ol class="casos">
+{{{ITEMS}}}
+</ol><!--FIN-->
+<!--TROZO caso-->  <li class="caso">
+    <p class="caso-t">{{TITULO}}{{{MARCA}}}</p>
+    <dl class="caso-d">
+      <div><dt>Qué metes</dt><dd>{{ENTRADA}}</dd></div>
+      <div><dt>Qué tiene que pasar</dt><dd>{{ESPERADO}}</dd></div>
+    </dl>
+  </li><!--FIN-->
+<!--TROZO caso-vacio-->  <li class="caso">
+    <p class="caso-t">{{TITULO}}{{{MARCA}}}</p>
+    <p class="caso-x">La IA no ha detallado qué se mete ni qué tiene que pasar. La regla sale tal como la leyó el script.</p>
+  </li><!--FIN-->
+<!--TROZO sincaso--><div class="job-sec sincaso">
+  <h5>Reglas sin caso de prueba</h5>
+  <p>{{{ETIQUETA}}}</p>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+</div><!--FIN-->
+<!--TROZO glosario--><dl class="glosario">
+{{{ITEMS}}}
+</dl><!--FIN-->
+<!--TROZO termino-->  <div><dt>{{TERMINO}}</dt><dd>{{DEFINICION}}</dd></div><!--FIN-->
+<!--TROZO glosario-vacio--><p class="muted">Esta pasada no ha dejado palabras que explicar.</p><!--FIN-->
+<!--TROZO tipo-entrada-fichero-->Fichero de entrada<!--FIN-->
+<!--TROZO tipo-salida-fichero-->Fichero de salida<!--FIN-->
+<!--TROZO tipo-sftp-->Servidor SFTP<!--FIN-->
+<!--TROZO tipo-tabla-lee-->Tabla que lee<!--FIN-->
+<!--TROZO tipo-tabla-escribe-->Tabla que escribe<!--FIN-->
+<!--TROZO tipo-parametro-->Parámetro<!--FIN-->
+<!--TROZO tipo-config-->Configuración<!--FIN-->
+<!--TROZO tipo-regla-->Regla<!--FIN-->
+<!--TROZO tipo-error-->Si falla<!--FIN-->
+<!--TROZO tipo-externo-->Sistema externo<!--FIN-->

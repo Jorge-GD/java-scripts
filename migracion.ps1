@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1 y la carpeta tareas\ junto a este script.
+Necesita comun.ps1, tareas.ps1, informe.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo a negocio)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -29,6 +29,9 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
     pruebas-pre una tarea por job con reglas o errores (sin leer codigo): el guion de prueba en pre,
                 datos\pruebas\<job>.json; los jobs sin reglas ni errores lo llevan montado por el script
     lectura-hecha
+  Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
+  que te toca) y 1-batch-original.html (que hace el batch, job a job), con informe.ps1 y las plantillas de
+  informe\. Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
   las tareas hechas y sigue donde se quedo. Las atascadas tampoco se repiten (salvo
@@ -63,6 +66,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
 . (Join-Path $PSScriptRoot 'tareas.ps1')
+. (Join-Path $PSScriptRoot 'informe.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -109,11 +113,19 @@ function Save-Estado {
   Write-Json (Join-Path $Datos 'estado.json') $Estado
 }
 
+# Las dos paginas del informe (index.html y 1-batch-original.html) con lo que haya hasta ahora. Si no se pueden montar,
+# se avisa y la pasada sigue: son una vista de los datos, no parte del trabajo.
+function Save-Informes {
+  try { Write-Informes -Salida $Salida }
+  catch { Aviso ('No he podido escribir las paginas del informe: ' + $_.Exception.Message) }
+}
+
 # Para el trabajo y lo deja en estado.json con un texto de ayuda para pegar en Copilot.
 function Set-Parada([string]$Motivo, [string]$Detalle, [string]$Registro) {
   $ayuda = "Estoy ejecutando migracion.ps1 (migracion desatendida de un batch Java con GitHub Copilot CLI) y se ha parado. Motivo: $Motivo. Detalle: $Detalle. El registro esta en: $Registro. Dime que ha pasado y que tengo que hacer para arreglarlo. Despues vuelvo a lanzar el mismo comando y sigue donde se quedo."
   $Estado['parada'] = [ordered]@{ motivo = $Motivo; detalle = $Detalle; registro = $Registro; ayuda = $ayuda }
   Save-Estado
+  Save-Informes
   if ($Motivo -eq 'tope-de-tiempo') { Aviso "Parada ($Motivo): $Detalle" } else { Fallo "Parada ($Motivo): $Detalle" }
 }
 
@@ -360,11 +372,12 @@ try {
     }
     Invoke-Fase $tareas
     Save-Fase $fase $tareas
+    Save-Informes
     Info (Get-LineaFase $fase $tareas)
     $quedan = @($tareas | Where-Object { $_.estado -eq 'pendiente' }).Count
     if ($script:Parada -or $quedan -gt 0) { break }
   }
-  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado }
+  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado; Save-Informes }
 
   Info ''
   if (-not $script:Parada -and $quedan -gt 0) { Info "Limite de -Limite $Limite alcanzado: quedan $quedan tareas pendientes. Relanza el mismo comando sin -Limite para seguir." }
