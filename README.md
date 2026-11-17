@@ -47,6 +47,10 @@ git -C C:\ruta\batch-life worktree remove C:\ruta\batch-life-rescate
 
 El resto de opciones (elegir paso, tamaño del lote, deshacer, modelo de reserva) está en la cabecera del script.
 
+### Guía con IA
+
+Si es tu primera vez, deja que una IA te acompañe. [GUIA-IA.md](GUIA-IA.md) es un prompt que le dice cómo guiarte paso a paso: comprobar el entorno, leer el diagnóstico, revisar el plan y el primer lote, y qué hacer si algo falla.
+
 ### Modelo y esfuerzo
 
 Cada llamada a la IA es `copilot -p` con `--model` y `--effort`
