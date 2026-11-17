@@ -463,9 +463,9 @@ $Pruebas['15 biblioteca: tareas.ps1 se carga sola, nombra sus variables y sirve 
   foreach ($f in @('Test-Aptitud', 'Invoke-Llamadas', 'Invoke-Ronda', 'Get-Lanzador', 'Get-TareasFichas', 'Test-Ficha', 'Read-Json', 'Write-Json', 'Get-Hash8', 'Stop-Arranque', 'Set-Despierto')) {
     Comprueba "$f esta en tareas.ps1 y no en migracion.ps1" (($deTareas -contains $f) -and ($deMigra -cnotcontains $f))
   }
-  $todas = @($deTareas) + @($deMigra) + @(Funciones-De (Join-Path $raiz 'comun.ps1'))
+  $todas = @($deTareas) + @($deMigra) + @(Funciones-De (Join-Path $raiz 'comun.ps1')) + @(Funciones-De (Join-Path $raiz 'informe.ps1'))
   $dup = @($todas | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
-  Comprueba 'ninguna funcion esta definida dos veces entre comun, tareas y migracion' ($dup.Count -eq 0) ($dup -join ', ')
+  Comprueba 'ninguna funcion esta definida dos veces entre comun, tareas, migracion e informe' ($dup.Count -eq 0) ($dup -join ', ')
   $e = Nuevo-Escenario 'biblioteca' @('Clase1')
   $codigo = @'
 $Cfg.CopilotExe = '{{COPILOT}}'
@@ -961,8 +961,8 @@ $Pruebas['37 reanudar: cortar tras el mapa no repite llamadas; cinco jobs, nunca
   $r = Migra $e (Basicos $e)
   Igual 'relanzado sale con 0' 0 $r.Codigo
   $ll = Llamadas $e.Wt
-  Igual 'doce llamadas en total (8 clases, 1 definicion, 2 jobs, 1 resumen)' 12 $ll.Count
-  Igual 'ninguna tarea se repitio' 12 @($ll | Select-Object -ExpandProperty id -Unique).Count
+  Igual 'catorce llamadas en total (8 clases, 1 definicion, 2 jobs, 1 resumen, 2 pruebas)' 14 $ll.Count
+  Igual 'ninguna tarea se repitio' 14 @($ll | Select-Object -ExpandProperty id -Unique).Count
   Igual 'la fase acaba' 'lectura-hecha' (Estado $e).fase
   # cinco jobs con el falso lento
   $e = Nuevo-Escenario 'cinco' @('Clase1')
@@ -1002,10 +1002,10 @@ $Pruebas['38 guardas en los tipos nuevos: lo que ensucia el worktree se deshace 
   Igual 'las fichas de job siguen hechas' 'hecha hecha' ((Job-De $e 'cargaJob').redaccion + ' ' + (Job-De $e 'informeJob').redaccion)
 }
 
-$Pruebas['39 fases: fichas-clase, mapa, fichas-job, resumen y lectura-hecha; con una clase atascada se hacen igual'] = {
+$Pruebas['39 fases: fichas-clase, mapa, fichas-job, resumen, pruebas-pre y lectura-hecha; con una clase atascada se hacen igual'] = {
   $e = Escenario-Dos 'fases'
   $g = 'json-roto:^Auxiliar1$'
-  $esperadas = @(@('2', 'fichas-clase'), @('6', 'mapa'), @('1', 'fichas-job'), @('2', 'resumen'), @('', 'lectura-hecha'))
+  $esperadas = @(@('2', 'fichas-clase'), @('6', 'mapa'), @('1', 'fichas-job'), @('2', 'resumen'), @('1', 'pruebas-pre'), @('', 'lectura-hecha'))
   foreach ($x in $esperadas) {
     $a = Basicos $e
     if ($x[0]) { $a += @('-Limite', $x[0]) }
@@ -1020,7 +1020,7 @@ $Pruebas['39 fases: fichas-clase, mapa, fichas-job, resumen y lectura-hecha; con
   Comprueba 'cargaJob dice que Auxiliar1 no tiene ficha' (@($j.sinFicha) -contains 'Auxiliar1') ($j | ConvertTo-Json -Compress -Depth 4)
   $cl = @((Del-Job (Mapa $e) 'cargaJob').clases | Where-Object { $_.clase -eq 'Auxiliar1' })[0]
   Comprueba 'y el mapa la marca sin ficha' ($null -ne $cl -and $cl.tieneFicha -eq $false)
-  Igual 'las llamadas: 8 clases (+1 reintento), 1 definicion, 2 jobs, 1 resumen' 13 (Llamadas $e.Wt).Count
+  Igual 'las llamadas: 8 clases (+1 reintento), 1 definicion, 2 jobs, 1 resumen, 2 pruebas' 15 (Llamadas $e.Wt).Count
 }
 
 $Pruebas['40 definicion de un fichero demasiado largo: sin tarea, el job sale sin pasos y con su duda'] = {
@@ -1035,6 +1035,435 @@ $Pruebas['40 definicion de un fichero demasiado largo: sin tarea, el job sale si
   $j = Del-Job (Mapa $e) 'largoJob'
   Comprueba 'el job sale sin pasos, con la duda que dice por que' ($null -ne $j -and @($j.pasos).Count -eq 0 -and @($j.dudas).Count -eq 1 -and "$($j.dudas[0])" -match 'pasan? de 900 lineas') "$($j.dudas -join ' / ')"
   Igual 'y con las clases a las que llega desde el fichero' 'JobsConfig' (@($j.clases | ForEach-Object { $_.clase }) -join ' ')
+}
+
+$Pruebas['41 mapa: las clases de los pasos de los otros jobs no entran ni se atraviesan; una clase de paso de dos jobs entra en los dos'] = {
+  $e = Nuevo-Escenario 'ajenas' @()
+  $usa = @('CargaTasklet', 'InformeTasklet', 'CompartidoTasklet', 'ListenerJob')
+  Escribe-Original $e @{
+    JobsConfig = (Jobs-Config @('cargaJob:cargaStep,compartidoStep', 'informeJob:informeStep,compartidoStep') $usa)
+    CargaTasklet = (Clase-Con 'CargaTasklet' @('LectorPropio'))
+    LectorPropio = (Clase-Con 'LectorPropio')
+    InformeTasklet = (Clase-Con 'InformeTasklet' @('EscritorPropio'))
+    EscritorPropio = (Clase-Con 'EscritorPropio')
+    CompartidoTasklet = (Clase-Con 'CompartidoTasklet')
+    ListenerJob = (Clase-Con 'ListenerJob')
+  }
+  $r = Migra $e ((Basicos $e) + @('-Limite', '8'))
+  Igual 'sale con 0' 0 $r.Codigo
+  $m = Mapa $e
+  Comprueba 'hay mapa.json con los dos jobs' ($null -ne $m -and @($m.jobs).Count -eq 2) (Cola $r.Salida)
+  if ($null -eq $m -or @($m.jobs).Count -ne 2) { return }
+  $a = Del-Job $m 'cargaJob'
+  $b = Del-Job $m 'informeJob'
+  Igual 'cargaJob: sus pasos' 'cargaStep: CargaTasklet; compartidoStep: CompartidoTasklet' ((@($a.pasos | ForEach-Object { $_.paso + ': ' + (@($_.clases) -join ' ') })) -join '; ')
+  Igual 'cargaJob: su paso, el compartido, su colaborador, el listener y el fichero que lo define; ni el paso ni el colaborador del otro' 'CargaTasklet CompartidoTasklet JobsConfig LectorPropio ListenerJob' ((@($a.clases | ForEach-Object { $_.clase } | Sort-Object)) -join ' ')
+  Igual 'informeJob: lo mismo, con lo suyo' 'CompartidoTasklet EscritorPropio InformeTasklet JobsConfig ListenerJob' ((@($b.clases | ForEach-Object { $_.clase } | Sort-Object)) -join ' ')
+  Igual 'el fichero que define el job sigue siendo semilla (definicion) y por el llega el listener (referencia)' 'definicion referencia' ((@($a.clases | Where-Object { $_.clase -in @('ListenerJob', 'JobsConfig') } | Sort-Object clase | ForEach-Object { $_.por })) -join ' ')
+  Igual 'sinJob: todas las clases cuelgan de algun job' 0 @($m.sinJob).Count
+}
+
+$Pruebas['42 lenguaje de negocio: solo valen los nombres sencillos; el compuesto o el .java se rechaza, tambien en el orden y el glosario del resumen'] = {
+  $codigo = @'
+$Fuentes = @('Recibo', 'Estado', 'IBAN', 'GestorRecibos', 'SFTPClient', 'ParserCsv') | ForEach-Object { [pscustomobject]@{ BaseName = $_ } }
+function Prueba([string]$Texto) {
+  $m = Test-LenguajeNegocio ([ordered]@{ titulo = $Texto })
+  if ($m) { return ('MAL ' + $m) }
+  return 'BIEN'
+}
+'T1=' + (Prueba 'Recibo con importe minimo')
+'T2=' + (Prueba 'Estado del envio')
+'T3=' + (Prueba 'El IBAN tiene que ser valido')
+'T4=' + (Prueba 'Carga con GestorRecibos')
+'T5=' + (Prueba 'Mira Recibo.java')
+'T6=' + (Prueba 'Lo envia SFTPClient')
+'T7=' + (Prueba 'Lo lee ParserCsv')
+'T8=' + (Prueba 'Mira Inventada.java')
+'T9=' + (Prueba 'Los gestores de recibos y el estado')
+function Resumen([string]$Orden, [string]$Termino, [string]$Definicion) {
+  $dir = Join-Path '{{DIR}}' ('r' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  $o = [ordered]@{ resumen = 'El batch hace cosas.'; orden = @([ordered]@{ job = 'cargaJob'; motivo = $Orden }); glosario = @([ordered]@{ termino = $Termino; definicion = $Definicion }) }
+  [System.IO.File]::WriteAllText((Join-Path $dir '.rescate/tareas/resumen.json'), (ConvertTo-Json -InputObject $o -Depth 5))
+  $t = [pscustomobject]@{ id = 'resumen'; entradas = [pscustomobject]@{ jobs = @('cargaJob') } }
+  $r = Test-Resumen $t $dir
+  if ($r.Ok) { return 'BIEN' }
+  return ('MAL ' + $r.Motivo)
+}
+'R1=' + (Resumen 'Va primero.' 'remesa' 'Un grupo de recibos.')
+'R2=' + (Resumen 'Va primero.' 'recibo' 'El Recibo es un cobro y el Estado dice como va.')
+'R3=' + (Resumen 'Lo hace GestorRecibos.' 'remesa' 'Un grupo de recibos.')
+'R4=' + (Resumen 'Va primero.' 'ParserCsv' 'Un grupo de recibos.')
+'R5=' + (Resumen 'Va primero.' 'remesa' 'Lo prepara SFTPClient.')
+'FIN'
+'@
+  $codigo = $codigo.Replace('{{DIR}}', (Join-Path $Dir 'lenguaje'))
+  $r = En-Biblioteca 'lenguaje' $codigo
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^([TR]\d)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  foreach ($k in @('T1', 'T2', 'T3', 'T9', 'R1', 'R2')) { Igual "$k vale" 'BIEN' $v[$k] }
+  Comprueba 'el titulo con un nombre compuesto no vale y el motivo lo nombra' ($v['T4'] -match '^MAL' -and $v['T4'] -match 'titulo' -and $v['T4'] -match 'GestorRecibos') $v['T4']
+  Comprueba 'un nombre sencillo seguido de .java no vale' ($v['T5'] -match '^MAL' -and $v['T5'] -match 'Recibo\.java') $v['T5']
+  Comprueba 'SFTPClient (mayusculas seguidas) es compuesto' ($v['T6'] -match '^MAL' -and $v['T6'] -match 'SFTPClient') $v['T6']
+  Comprueba 'ParserCsv es compuesto' ($v['T7'] -match '^MAL') $v['T7']
+  Comprueba 'cualquier fichero .java sobra, sea o no del original' ($v['T8'] -match '^MAL' -and $v['T8'] -match 'Inventada\.java') $v['T8']
+  Comprueba 'un compuesto en orden[].motivo invalida el resumen y el motivo dice el campo' ($v['R3'] -match '^MAL' -and $v['R3'] -match 'orden\[0\]\.motivo' -and $v['R3'] -match 'GestorRecibos') $v['R3']
+  Comprueba 'un compuesto en el termino del glosario, igual' ($v['R4'] -match '^MAL' -and $v['R4'] -match 'glosario\[0\]\.termino') $v['R4']
+  Comprueba 'un compuesto en la definicion del glosario, igual' ($v['R5'] -match '^MAL' -and $v['R5'] -match 'glosario\[0\]\.definicion' -and $v['R5'] -match 'SFTPClient') $v['R5']
+}
+
+# ============================== NEGOCIO: PRUEBA EN PRE Y PAGINAS ==============================
+function Pruebas-De($E, [string]$Job) { return (Lee-Json (Get-Ruta $E.Out ('datos/pruebas/' + $Job + '.json'))) }
+
+# Una pagina del informe (UTF-8) de la carpeta de salida de un escenario, o de una copia (con $Salida).
+function Pagina([string]$Salida, [string]$Nombre) {
+  $r = Get-Ruta $Salida $Nombre
+  if (-not (Test-Path -LiteralPath $r)) { return '' }
+  return [System.IO.File]::ReadAllText($r, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# La seccion de un job (un <article id="job-<job>">) de la pagina del batch original.
+function Articulo([string]$Html, [string]$Job) {
+  $m = [regex]::Match($Html, '(?s)<article[^>]*id="job-' + [regex]::Escape($Job) + '".*?</article>')
+  return $m.Value
+}
+
+# Los ficheros de la corrida de un escenario, en otra carpeta, para tocar los datos sin afectar a los demas tests.
+function Copia-Salida($E, [string]$Nombre) {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $raiz -Force)
+  $dest = Join-Path $raiz 'migracion-batch'
+  Copy-Item -LiteralPath $E.Out -Destination $dest -Recurse
+  return $dest
+}
+
+# Llama a Write-Informes sobre una carpeta de salida, cargando comun.ps1, tareas.ps1 e informe.ps1 como migracion.ps1.
+function Genera-Informes([string]$Salida) {
+  $raiz = Split-Path -Parent $Script
+  $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n. '" + (Join-Path $raiz 'informe.ps1') + "'`n"
+  Escribe (Join-Path $Dir 'biblioteca') 'informes.ps1' ($cab + "Write-Informes -Salida '" + $Salida + "'`n'INFORMES-OK'`n")
+  return (Lanzar (Join-Path (Join-Path $Dir 'biblioteca') 'informes.ps1') @())
+}
+
+function Hash-De([string]$Ruta) { return (Get-FileHash -LiteralPath $Ruta -Algorithm SHA256).Hash }
+
+function Guarda-Json([string]$Ruta, $Objeto) { [System.IO.File]::WriteAllText($Ruta, (ConvertTo-Json -InputObject $Objeto -Depth 8)) }
+
+# Las refs de regla y error que lleva un prompt de prueba-pre (lineas "clase-xxxxxxxx#n [regla] texto"), en orden.
+function Refs-A-Cubrir([string]$Prompt) {
+  return @([regex]::Matches($Prompt, '(?m)^(clase-[0-9a-f]{8}#\d+) \[(?:regla|error)\] ') | ForEach-Object { $_.Groups[1].Value })
+}
+
+$Pruebas['43 prueba-pre: el prompt lleva los pasos, los hechos que citan y las variables, sin leer codigo; sale datos/pruebas/<job>.json con redaccion hecha'] = {
+  $e = Escenario-Dos 'pre-vars'
+  Escribe $e.Migrado 'src/main/resources/application.yml' "batch:`n  ruta: `${RUTA_ENTRADA:/entrada}`n  clave: `${CLAVE_BANCO}`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'recursos'))
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'cargaJob' })
+  Igual 'hay una tarea prueba-pre para cargaJob' 1 $t.Count
+  if ($t.Count -ne 1) { return }
+  Igual 'hecha en un intento' 'hecha 1' "$($t[0].estado) $($t[0].intentos)"
+  $p = Prompt-De $e $t[0]
+  $j = Job-De $e 'cargaJob'
+  $citados = @($j.pasos | ForEach-Object { $_.refs } | Select-Object -Unique)
+  $todos = @(@($j.necesita) + @($j.produce) + @($j.conexiones) + @($j.reglas) + @($j.siFalla) | ForEach-Object { $_.ref })
+  $otros = @($todos | Where-Object { $citados -notcontains $_ })
+  Comprueba 'la ficha del job cita algo y hay hechos que no cita (la prueba distingue)' ($citados.Count -gt 0 -and $otros.Count -gt 0) "$($citados.Count) citados, $($otros.Count) otros"
+  $faltan = @($citados | Where-Object { $p -notmatch ('(?m)^' + [regex]::Escape($_) + ' \[') })
+  Comprueba 'el prompt lleva cada hecho que citan los pasos, con su referencia y su tipo' ($faltan.Count -eq 0) ($faltan -join ' ')
+  $sobran = @($otros | Where-Object { $p -match ('(?m)^' + [regex]::Escape($_) + ' \[') })
+  Comprueba 'y ninguno de los que no citan' ($sobran.Count -eq 0) ($sobran -join ' ')
+  Comprueba 'lleva el titulo y el texto de los pasos' ($p.Contains('Primer paso') -and $p.Contains('Hace lo primero.') -and $p.Contains('Segundo paso'))
+  Comprueba 'lleva los nombres de las variables' ($p.Contains('RUTA_ENTRADA') -and $p.Contains('CLAVE_BANCO'))
+  Comprueba 'no manda leer ningun fichero ni nombra el original' ($p -notmatch '(?m)^LEER:' -and -not $p.Contains($e.Legacy))
+  Comprueba 'no lleva nombres de clase (ni como cabecera de los datos)' ($p -notmatch '(?m)^### ' -and $p -notmatch 'CargaReader')
+  $ll = Llamadas-De (Llamadas $e.Wt) $t[0].id
+  Igual 'una llamada' 1 $ll.Count
+  Comprueba 'sin --add-dir y con esfuerzo high' ($ll.Count -eq 1 -and $ll[0].flags -notmatch '--add-dir' -and $ll[0].flags -match '--effort=high' -and $ll[0].flags -match '--no-custom-instructions') (($ll | ForEach-Object { $_.flags }) -join ' | ')
+  $x = Pruebas-De $e 'cargaJob'
+  Comprueba 'existe datos/pruebas/cargaJob.json' ($null -ne $x) (Cola $r.Salida)
+  if ($null -eq $x) { return }
+  Igual 'job' 'cargaJob' $x.job
+  Igual 'redaccion' 'hecha' $x.redaccion
+  Comprueba 'preparar y comprobar con texto y referencias' (@($x.preparar).Count -ge 1 -and @($x.comprobar).Count -ge 1 -and @(@($x.preparar) + @($x.comprobar) | Where-Object { $_.texto -and @($_.refs).Count -ge 1 }).Count -eq (@($x.preparar).Count + @($x.comprobar).Count)) ($x | ConvertTo-Json -Compress -Depth 5)
+  Comprueba 'cada caso con titulo, entrada, esperado y referencias' (@($x.casos).Count -ge 1 -and @($x.casos | Where-Object { $_.titulo -and $_.entrada -and $_.esperado -and @($_.refs).Count -ge 1 }).Count -eq @($x.casos).Count) ($x.casos | ConvertTo-Json -Compress -Depth 4)
+  $aCubrir = @(Refs-A-Cubrir $p)
+  $cubiertas = @($x.casos | ForEach-Object { $_.refs })
+  Comprueba 'cada regla y error del prompt sale en las refs de algun caso' ($aCubrir.Count -ge 1 -and @($aCubrir | Where-Object { $cubiertas -notcontains $_ }).Count -eq 0) ($aCubrir -join ' ')
+  Igual 'sinCaso vacio' 0 @($x.sinCaso).Count
+  Comprueba 'el otro job tambien tiene su guion' ($null -ne (Pruebas-De $e 'informeJob'))
+}
+
+$Pruebas['44 prueba-pre: una referencia que no existe se reintenta con el motivo; dos veces, atascada y guion minimo sin IA'] = {
+  $c = Corrida-Dos 'prueba-ref-mala:^prueba-pre:informeJob$'
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $t = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'informeJob' })
+  if ($t.Count -ne 1) { Comprueba 'hay una tarea prueba-pre para informeJob' $false (Cola $c.R.Salida); return }
+  Igual 'atascada tras dos intentos' 'atascada 2' "$($t[0].estado) $($t[0].intentos)"
+  Comprueba 'el motivo nombra la referencia que no existe' ($t[0].motivo -match 'clase-00000000#9') $t[0].motivo
+  $ll = Llamadas-De (Llamadas $e.Wt) $t[0].id
+  Comprueba 'el reintento lleva la correccion, con esa referencia, y esfuerzo high' ($ll.Count -eq 2 -and $ll[1].correccion -eq 'True' -and $ll[0].correccion -eq 'False' -and $ll[1].flags -match '--effort=high' -and (Prompt-De $e $t[0]) -match '(?s)## CORRECCI.*clase-00000000#9') (($ll | ForEach-Object { $_.correccion }) -join ' ')
+  $x = Pruebas-De $e 'informeJob'
+  Comprueba 'existe datos/pruebas/informeJob.json' ($null -ne $x)
+  if ($null -eq $x) { return }
+  Igual 'redaccion' 'atascada' $x.redaccion
+  $reglas = @((Job-De $e 'informeJob').reglas | ForEach-Object { $_.texto })
+  Comprueba 'guion minimo: un caso por regla, con la regla como titulo y entrada y esperado vacios' (@($x.casos).Count -ge 1 -and @($x.casos | Where-Object { $reglas -contains $_.titulo -and "$($_.entrada)" -eq '' -and "$($_.esperado)" -eq '' -and @($_.refs).Count -eq 1 }).Count -eq @($x.casos).Count) ($x.casos | ConvertTo-Json -Compress -Depth 4)
+  Igual 'sin llamadas de mas: solo las dos de la tarea' 2 (Llamadas-De (Llamadas $e.Wt) 'prueba-informeJob').Count
+  Igual 'el otro job queda hecho' 'hecha' (Pruebas-De $e 'cargaJob').redaccion
+}
+
+$Pruebas['45 prueba-pre: una regla sin caso se pide en el reintento; si sigue faltando, sinCaso la trae y la tarea vale'] = {
+  $c = Corrida-Dos 'json-roto:^ficha-job:cargaJob$;prueba-falta-una-vez:^prueba-pre:cargaJob$;prueba-falta-siempre:^prueba-pre:informeJob$'
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  Igual 'cargaJob: su ficha esta atascada' 'atascada' (Job-De $e 'cargaJob').redaccion
+  $t = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'cargaJob' })[0]
+  Igual 'cargaJob: hecha en el segundo intento' 'hecha 2' "$($t.estado) $($t.intentos)"
+  $p = Prompt-De $e $t
+  $aCubrir = @(Refs-A-Cubrir $p)
+  Comprueba 'sin ficha de job, el prompt lleva todas las reglas del job (tambien las de clases que ningun paso cita)' (@((Job-De $e 'cargaJob').reglas | Where-Object { $aCubrir -notcontains $_.ref }).Count -eq 0 -and $aCubrir.Count -ge 5) "$($aCubrir.Count)"
+  $falta = $aCubrir[$aCubrir.Count - 1]
+  Comprueba 'el reintento lleva el identificador de la regla que faltaba' ($p -match ('(?s)## CORRECCI.*' + [regex]::Escape($falta))) $falta
+  $x = Pruebas-De $e 'cargaJob'
+  Igual 'cargaJob: redaccion hecha y sinCaso vacio' 'hecha 0' "$($x.redaccion) $(@($x.sinCaso).Count)"
+  Comprueba 'cargaJob: ahora la regla que faltaba sale en un caso' (@($x.casos | ForEach-Object { $_.refs }) -contains $falta)
+  # siempre falta: la tarea vale y sinCaso la trae
+  $t = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'informeJob' })[0]
+  Igual 'informeJob: hecha tras dos intentos, no atascada' 'hecha 2' "$($t.estado) $($t.intentos)"
+  $falta = (@(Refs-A-Cubrir (Prompt-De $e $t)))[-1]
+  $x = Pruebas-De $e 'informeJob'
+  Igual 'informeJob: redaccion hecha' 'hecha' $x.redaccion
+  Igual 'informeJob: sinCaso trae una regla' 1 @($x.sinCaso).Count
+  Comprueba 'con su referencia, su tipo y su texto, y la regla no sale en ningun caso' ($x.sinCaso[0].ref -eq $falta -and $x.sinCaso[0].tipo -eq 'regla' -and $x.sinCaso[0].texto -and @($x.casos | ForEach-Object { $_.refs }) -notcontains $falta) ($x.sinCaso | ConvertTo-Json -Compress)
+  Igual 'el texto de sinCaso es el de la regla del job' (@((Job-De $e 'informeJob').reglas | Where-Object { $_.ref -eq $falta })[0]).texto $x.sinCaso[0].texto
+}
+
+$Pruebas['46 prueba-pre: un nombre de clase en un texto no pasa; mas de 40 casos tampoco'] = {
+  $c = Corrida-Dos 'prueba-clase-en-texto:^prueba-pre:cargaJob$;prueba-de-mas:^prueba-pre:informeJob$'
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $t = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'cargaJob' })[0]
+  Igual 'cargaJob: hecha en el segundo intento' 'hecha 2' "$($t.estado) $($t.intentos)"
+  $p = Prompt-De $e $t
+  Comprueba 'la correccion nombra la clase y el campo' ($p -match '(?s)## CORRECCI.*CargaReader' -and $p -match '(?s)## CORRECCI.*casos\[0\]\.titulo') ((($p -split "`n") | Select-Object -Last 6) -join ' / ')
+  Comprueba 'el guion final ya no la lleva' ((Get-Content -LiteralPath (Get-Ruta $e.Out 'datos/pruebas/cargaJob.json') -Raw) -notmatch 'CargaReader')
+  $t = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'informeJob' })[0]
+  Igual 'informeJob: 41 casos, atascada tras dos intentos' 'atascada 2' "$($t.estado) $($t.intentos)"
+  Comprueba 'el motivo habla de los 40 casos' ($t.motivo -match '40') $t.motivo
+}
+
+$Pruebas['47 prueba-pre: un job sin reglas ni errores no llama al modelo y deja el guion minimo con lo que necesita y produce'] = {
+  $e = Escenario-Dos 'pre-sin-reglas'
+  Escribe-Original $e @{ InformeWriter = "package com.acme.old;`n`npublic class InformeWriter {`n    private int a = 1;`n    private int b = 2;`n}`n" }
+  $r = Migra $e (Basicos $e) 'tipos-variados:^InformeWriter$;sin-datos:^JobsConfig$'
+  Igual 'sale con 0' 0 $r.Codigo
+  $j = Job-De $e 'informeJob'
+  Comprueba 'informeJob: la ficha cita un fichero de entrada y uno de salida y ninguna regla ni error' ($null -ne $j -and @($j.necesita).Count -eq 1 -and @($j.produce).Count -eq 1 -and @($j.reglas).Count -eq 0 -and @($j.siFalla).Count -eq 0) (Cola $r.Salida)
+  Igual 'ninguna llamada de prueba-pre para informeJob' 0 (Llamadas-De (Llamadas $e.Wt) 'prueba-informeJob').Count
+  Igual 'ni tarea' 0 @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'informeJob' }).Count
+  $x = Pruebas-De $e 'informeJob'
+  Comprueba 'existe datos/pruebas/informeJob.json' ($null -ne $x)
+  if ($null -eq $x) { return }
+  Igual 'redaccion' 'hecha' $x.redaccion
+  Igual 'sin casos' 0 @($x.casos).Count
+  Igual 'sinCaso vacio' 0 @($x.sinCaso).Count
+  Comprueba 'preparar sale de lo que necesita (con su referencia)' (@($x.preparar).Count -eq 1 -and @($x.preparar)[0].texto -eq @($j.necesita)[0].texto -and @(@($x.preparar)[0].refs)[0] -eq @($j.necesita)[0].ref) ($x.preparar | ConvertTo-Json -Compress -Depth 4)
+  Comprueba 'comprobar sale de lo que produce (con su referencia)' (@($x.comprobar).Count -eq 1 -and @($x.comprobar)[0].texto -eq @($j.produce)[0].texto -and @(@($x.comprobar)[0].refs)[0] -eq @($j.produce)[0].ref) ($x.comprobar | ConvertTo-Json -Compress -Depth 4)
+  Igual 'cargaJob, que si tiene reglas, si llama al modelo' 1 (Llamadas-De (Llamadas $e.Wt) 'prueba-cargaJob').Count
+}
+
+$Pruebas['48 prueba-pre: la fase va despues del resumen; relanzar no repite las tareas hechas'] = {
+  $e = Escenario-Dos 'pre-reanuda'
+  $r = Migra $e ((Basicos $e) + @('-Limite', '12'))
+  Igual 'cortado tras el resumen sale con 0' 0 $r.Codigo
+  Igual 'la fase es pruebas-pre' 'pruebas-pre' (Estado $e).fase
+  Igual 'todavia ninguna llamada de prueba-pre' 0 (Llamadas-De (Llamadas $e.Wt) 'prueba-').Count
+  Comprueba 'ni datos/pruebas' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/pruebas')) -or @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/pruebas') -File).Count -eq 0)
+  $r = Migra $e (Basicos $e)
+  Igual 'relanzado sale con 0' 0 $r.Codigo
+  Igual 'la fase acaba' 'lectura-hecha' (Estado $e).fase
+  Igual 'dos llamadas de prueba-pre, una por job' 2 (Llamadas-De (Llamadas $e.Wt) 'prueba-').Count
+  Igual 'catorce en total (8 clases, 1 definicion, 2 jobs, 1 resumen, 2 pruebas)' 14 (Llamadas $e.Wt).Count
+  $r = Migra $e (Basicos $e)
+  Igual 'otra vez: sale con 0' 0 $r.Codigo
+  Igual 'no hay ninguna llamada nueva' 14 (Llamadas $e.Wt).Count
+  Igual 'cada tarea se llamo una sola vez' 14 @((Llamadas $e.Wt) | Select-Object -ExpandProperty id -Unique).Count
+  Igual 'las dos pruebas hechas' 2 @(Tareas $e 'prueba-pre' | Where-Object { $_.estado -eq 'hecha' }).Count
+}
+
+$Pruebas['49 paginas: con todos los datos salen index.html y 1-batch-original.html; cada job con su seccion, su dibujo y su guion de prueba en pre con todos sus casos'] = {
+  $c = Corrida-Dos $GuionBase
+  $e = $c.E
+  $i = Pagina $e.Out 'index.html'
+  $o = Pagina $e.Out '1-batch-original.html'
+  Comprueba 'existen index.html y 1-batch-original.html' ($i -and $o) (Cola $c.R.Salida)
+  if (-not ($i -and $o)) { return }
+  foreach ($h in @($i, $o)) {
+    Igual 'un solo h1' 1 ([regex]::Matches($h, '<h1[ >]').Count)
+    Comprueba 'lang="es" y charset utf-8' ($h -match '<html lang="es"' -and $h -match '<meta charset="utf-8">')
+  }
+  $bytes = [System.IO.File]::ReadAllBytes((Get-Ruta $e.Out 'index.html'))
+  Comprueba 'UTF-8 sin BOM' (-not ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB))
+  Comprueba 'la portada enlaza a la pagina del batch original' ($i -match 'href="1-batch-original\.html"')
+  Comprueba 'la pagina del batch original enlaza a la portada' ($o -match 'href="index\.html"')
+  $r = Lee-Json (Get-Ruta $e.Out 'datos/resumen.json')
+  Comprueba 'el resumen sale' ($o.Contains([System.Net.WebUtility]::HtmlEncode($r.resumen)) -or $o.Contains($r.resumen)) $r.resumen
+  $orden = @($r.orden | ForEach-Object { $_.job })
+  foreach ($job in $orden) {
+    $a = Articulo $o $job
+    Comprueba "$job : tiene su seccion" ($a.Length -gt 0)
+    if (-not $a) { continue }
+    $f = Job-De $e $job
+    $x = Pruebas-De $e $job
+    Comprueba "$job : lleva su titulo" ($a.Contains($f.titulo))
+    Comprueba "$job : lleva el dibujo del flujo" ($a -match 'class="flujo"')
+    Igual "$job : un paso dibujado por cada paso de la ficha" @($f.pasos).Count ([regex]::Matches($a, 'class="paso"').Count)
+    Comprueba "$job : lleva el bloque de como probarlo en pre" ($a -match ('id="pre-' + $job + '"'))
+    Igual "$job : todos sus casos" @($x.casos).Count ([regex]::Matches($a, 'class="caso"').Count)
+    Comprueba "$job : cada caso con lo que se mete y lo que tiene que pasar" (@($x.casos | Where-Object { $a.Contains($_.titulo) -and $a.Contains($_.entrada) -and $a.Contains($_.esperado) }).Count -eq @($x.casos).Count)
+    Comprueba "$job : lleva antes de lanzarlo y que mirar al acabar" (@($x.preparar | Where-Object { $a.Contains($_.texto) }).Count -eq @($x.preparar).Count -and @($x.comprobar | Where-Object { $a.Contains($_.texto) }).Count -eq @($x.comprobar).Count)
+    Comprueba "$job : las pruebas van plegadas" ($a -match '(?s)<details[^>]*>\s*<summary>[^<]*d.nde lo dice el c.digo')
+  }
+  Comprueba 'los jobs salen en el orden del resumen' ($o.IndexOf('id="job-' + $orden[0] + '"') -lt $o.IndexOf('id="job-' + $orden[1] + '"'))
+  Comprueba 'el glosario sale' ($o -match 'Palabras que se usan' -and $o.Contains('remesa'))
+}
+
+$Pruebas['50 paginas: todo texto de los datos sale escapado (un script es texto, no codigo)'] = {
+  $c = Corrida-Dos $GuionBase
+  $s = Copia-Salida $c.E 'escapa'
+  $mal = '<script>alert(1)</script>'
+  $d = Join-Path $s 'datos'
+  $j = Lee-Json (Join-Path $d 'jobs/cargaJob.json')
+  $j.titulo = $mal
+  $j.pasos[0].texto = 'Mira <b>esto</b> y ' + $mal
+  $j.reglas[0].texto = 'Importe "A" & ''B'' <i>x</i>'
+  $j.dudas = @($mal)
+  Guarda-Json (Join-Path $d 'jobs/cargaJob.json') $j
+  $x = Lee-Json (Join-Path $d 'pruebas/cargaJob.json')
+  $x.casos[0].titulo = $mal
+  $x.casos[0].entrada = 'a & b "c"'
+  Guarda-Json (Join-Path $d 'pruebas/cargaJob.json') $x
+  $r = Lee-Json (Join-Path $d 'resumen.json')
+  $r.glosario[0].definicion = '<img src=x onerror=alert(1)>'
+  Guarda-Json (Join-Path $d 'resumen.json') $r
+  Guarda-Json (Join-Path $d 'variables.json') @([ordered]@{ variable = 'X_Y'; porDefecto = 'a&b "c"'; fichero = 'src/main/resources/application.yml'; linea = 1 })
+  $st = Lee-Json (Join-Path $d 'estado.json')
+  $st.modelo = $mal
+  Guarda-Json (Join-Path $d 'estado.json') $st
+  $g = Genera-Informes $s
+  Igual 'Write-Informes sale con 0' 0 $g.Codigo
+  Comprueba 'dice INFORMES-OK' ($g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $o = Pagina $s '1-batch-original.html'
+  $i = Pagina $s 'index.html'
+  Comprueba 'hay paginas' ($o -and $i) (Cola $g.Salida)
+  foreach ($h in @($o, $i)) { Comprueba 'ninguna etiqueta <script en la pagina' ($h -notmatch '(?i)<script') }
+  Comprueba 'el script de un titulo sale como texto' ($o.Contains('&lt;script&gt;alert(1)&lt;/script&gt;'))
+  Comprueba 'el modelo con un script sale escapado en la portada' ($i.Contains('&lt;script&gt;alert(1)&lt;/script&gt;'))
+  Comprueba '& y comillas salen escapados' ($o.Contains('Importe &quot;A&quot; &amp; &#39;B&#39; &lt;i&gt;x&lt;/i&gt;') -and $o.Contains('a &amp; b &quot;c&quot;'))
+  Comprueba 'una etiqueta img de un dato sale como texto' ($o -notmatch '(?i)<img' -and $o.Contains('&lt;img src=x onerror=alert(1)&gt;'))
+  Comprueba 'un valor por defecto con & y comillas, igual' ($o.Contains('a&amp;b &quot;c&quot;'))
+  Comprueba 'una duda con un script, igual' (-not ($o -match '(?i)<script') -and $o.Contains('&lt;script&gt;'))
+}
+
+$Pruebas['51 paginas: sin nada externo (ni http, ni script, ni import) y sus enlaces llevan a sitios que existen'] = {
+  $c = Corrida-Dos $GuionBase
+  foreach ($n in @('index.html', '1-batch-original.html')) {
+    $h = Pagina $c.E.Out $n
+    Comprueba "$n : existe" ($h.Length -gt 0)
+    Comprueba "$n : ni http:// ni https://" ($h -notmatch 'https?://')
+    Comprueba "$n : ni <script ni @import ni <link ni <img ni <iframe" ($h -notmatch '(?i)<script|@import|<link|<img|<iframe')
+    Comprueba "$n : ningun src ni href que no sea del propio informe" (@([regex]::Matches($h, '(?i)\b(?:src|href)\s*=\s*"(?!#)([^"]*)"') | Where-Object { -not (Test-Path -LiteralPath (Get-Ruta $c.E.Out $_.Groups[1].Value)) }).Count -eq 0) (@([regex]::Matches($h, '(?i)\b(?:src|href)\s*=\s*"(?!#)([^"]*)"') | ForEach-Object { $_.Groups[1].Value }) -join ' ')
+    Comprueba "$n : sin url() externas" ($h -notmatch '(?i)url\(\s*[''"]?(https?:|//)')
+    $dentro = @([regex]::Matches($h, '(?i)href="#([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $h -notmatch ('id="' + [regex]::Escape($_) + '"') })
+    Comprueba "$n : los enlaces #ancla llevan a un id que existe" ($dentro.Count -eq 0) ($dentro -join ' ')
+  }
+}
+
+$Pruebas['52 paginas: a medias se generan y dicen que fase falta; tambien al parar'] = {
+  $e = Escenario-Dos 'pre-medias'
+  $r = Migra $e ((Basicos $e) + @('-Limite', '8'))
+  Igual 'solo con las fichas de clase: sale con 0' 0 $r.Codigo
+  $o = Pagina $e.Out '1-batch-original.html'
+  $i = Pagina $e.Out 'index.html'
+  Comprueba 'las dos paginas existen' ($o -and $i) (Cola $r.Salida)
+  Comprueba 'el batch original dice que la fase mapa no ha terminado' ($o -match 'la fase mapa no ha terminado') 
+  Comprueba 'la portada dice en que fase va' ($i -match 'mapa')
+  $r = Migra $e ((Basicos $e) + @('-Limite', '1'))
+  Igual 'con el mapa hecho: sale con 0' 0 $r.Codigo
+  $o = Pagina $e.Out '1-batch-original.html'
+  Comprueba 'cada job del mapa sale con su seccion' ((Articulo $o 'cargaJob') -and (Articulo $o 'informeJob'))
+  Comprueba 'y dicen que la fase fichas-job no ha terminado' ((Articulo $o 'cargaJob') -match 'la fase fichas-job no ha terminado')
+  Comprueba 'el recorrido tambien' ($o -match 'la fase resumen no ha terminado')
+  # al parar: la portada trae el motivo y el texto para pegar
+  $f = Nuevo-Escenario 'pre-parada' @('Clase1', 'Clase2', 'Clase3', 'Clase4', 'Clase5', 'Clase6', 'Clase7')
+  $r = Migra $f (Basicos $f) 'falla-siempre:^Clase'
+  Igual 'la parada sale con 2' 2 $r.Codigo
+  $s = Estado $f
+  $i = Pagina $f.Out 'index.html'
+  Comprueba 'la portada existe y dice el motivo de la parada' ($i -match 'copilot-no-responde') (Cola $r.Salida)
+  Comprueba 'lleva el texto de ayuda listo para pegar' ($i.Contains([System.Net.WebUtility]::HtmlEncode($s.parada.ayuda).Replace('&#39;', '&#39;')) -or $i -match 'Estoy ejecutando migracion\.ps1')
+}
+
+$Pruebas['53 paginas: dos llamadas seguidas dejan los mismos bytes'] = {
+  $c = Corrida-Dos $GuionBase
+  $s = Copia-Salida $c.E 'idempotente'
+  $g = Genera-Informes $s
+  Igual 'la primera sale con 0' 0 $g.Codigo
+  $a = Hash-De (Join-Path $s 'index.html')
+  $b = Hash-De (Join-Path $s '1-batch-original.html')
+  $g = Genera-Informes $s
+  Igual 'la segunda sale con 0' 0 $g.Codigo
+  Igual 'index.html igual' $a (Hash-De (Join-Path $s 'index.html'))
+  Igual '1-batch-original.html igual' $b (Hash-De (Join-Path $s '1-batch-original.html'))
+  Comprueba 'y es lo mismo que dejo migracion.ps1' ((Hash-De (Join-Path $c.E.Out '1-batch-original.html')) -eq $b)
+  Comprueba 'no deja ficheros temporales' (@(Get-ChildItem -LiteralPath $s -File | Where-Object { $_.Name -notmatch '\.html$' }).Count -eq 0)
+}
+
+$Pruebas['54 paginas: etiquetas Medido, Leido por la IA con prueba y Sin comprobar donde toca'] = {
+  $c = Corrida-Dos 'json-roto:^ficha-job:informeJob$;json-roto:^Auxiliar1$'
+  $e = $c.E
+  $o = Pagina $e.Out '1-batch-original.html'
+  $i = Pagina $e.Out 'index.html'
+  $a = Articulo $o 'cargaJob'
+  $b = Articulo $o 'informeJob'
+  Comprueba 'hay las dos secciones' ($a -and $b) (Cola $c.R.Salida)
+  if (-not ($a -and $b)) { return }
+  $cabA = [regex]::Match($a, '(?s)<header class="job-cab".*?</header>').Value
+  $cabB = [regex]::Match($b, '(?s)<header class="job-cab".*?</header>').Value
+  Comprueba 'cargaJob (redaccion hecha): su cabecera dice Leido por la IA, con prueba' ($cabA -match 'Le.do por la IA, con prueba' -and $cabA -notmatch 'Sin comprobar')
+  Comprueba 'informeJob (redaccion atascada): su cabecera dice Sin comprobar' ($cabB -match 'Sin comprobar' -and $cabB -notmatch 'Le.do por la IA')
+  Comprueba 'un hecho con su cita sale como leido por la IA con prueba (el job de redaccion atascada tambien)' ([regex]::Matches($b, 'Le.do por la IA, con prueba').Count -ge 1)
+  Comprueba 'el job atascado dice que no se ha podido redactar' ($b -match 'No se ha podido redactar')
+  Comprueba 'las cifras que cuenta el script salen como Medido (portada)' ($i -match 'Medido')
+  Comprueba 'las dudas salen como Sin comprobar' ($a -match '(?s)Dudas.*Sin comprobar' -or $b -match '(?s)Dudas.*Sin comprobar')
+}
+
+$Pruebas['55 paginas: la portada pone en lo que te toca una tarea atascada, una clase sin ficha, una duda y una regla sin caso'] = {
+  $c = Corrida-Dos 'json-roto:^ficha-job:informeJob$;json-roto:^Auxiliar1$'
+  $e = $c.E
+  $i = Pagina $e.Out 'index.html'
+  $toca = [regex]::Match($i, '(?s)<section[^>]*id="lo-que-te-toca".*?</section>').Value
+  Comprueba 'la portada tiene la seccion lo que te toca' ($toca.Length -gt 0) (Cola $c.R.Salida)
+  if (-not $toca) { return }
+  $t = @(Tareas $e 'ficha-job' | Where-Object { $_.entradas.job -eq 'informeJob' })[0]
+  Comprueba 'la tarea atascada de la ficha de job, con su motivo' ($toca.Contains($t.id) -and $toca.Contains([System.Net.WebUtility]::HtmlEncode($t.motivo.Substring(0, 30)))) $t.motivo
+  $a = @(Tareas $e | Where-Object { $_.estado -eq 'atascada' })[0]
+  Comprueba 'la ficha de clase atascada' ($a -and $toca.Contains('Auxiliar1.java')) ($a.entradas.fichero)
+  Comprueba 'la clase sin ficha de cargaJob' ($toca -match 'cargaJob' -and $toca -match 'Auxiliar1')
+  Comprueba 'una duda de una ficha de job (la de informeJob, que no se pudo redactar)' ($toca.Contains('No se ha podido redactar este job'))
+  # una regla sin caso de prueba
+  $d = Corrida-Dos 'prueba-falta-siempre:^prueba-pre:informeJob$'
+  $x = Pruebas-De $d.E 'informeJob'
+  $toca = [regex]::Match((Pagina $d.E.Out 'index.html'), '(?s)<section[^>]*id="lo-que-te-toca".*?</section>').Value
+  Comprueba 'una regla sin caso de prueba (sinCaso)' ($x.sinCaso.Count -eq 1 -and $toca.Contains($x.sinCaso[0].texto)) ($x.sinCaso | ConvertTo-Json -Compress)
+  $o = Pagina $d.E.Out '1-batch-original.html'
+  Comprueba 'y en la pagina del job sale aparte, como regla sin caso de prueba, sin comprobar' ((Articulo $o 'informeJob') -match '(?s)sin caso de prueba.*Sin comprobar' -and (Articulo $o 'informeJob').Contains($x.sinCaso[0].texto))
 }
 
 # ================================ LANZADOR ================================

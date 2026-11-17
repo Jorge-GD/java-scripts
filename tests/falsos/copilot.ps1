@@ -56,6 +56,14 @@
 #   job-ref-mala       ficha-job con todas las referencias inventadas
 #   job-clase-en-texto ficha-job con el nombre de una clase en el titulo (solo en el primer intento)
 #   resumen-sin-job    resumen cuyo orden no nombra el ultimo job
+# La prueba en pre (TIPO: prueba-pre; la clave de los regex es prueba-pre:<job>) escribe un caso por cada tres
+# hechos regla o error del prompt, mas un elemento en preparar y otro en comprobar:
+#   (vacio)                  guion correcto: todos los hechos regla y error salen en algun caso
+#   prueba-ref-mala          el primer caso lleva una referencia que no existe (siempre)
+#   prueba-falta-una-vez     deja sin caso el ultimo hecho regla o error, solo en el primer intento
+#   prueba-falta-siempre     deja sin caso el ultimo hecho regla o error, en todos los intentos
+#   prueba-clase-en-texto    el titulo del primer caso nombra la clase CargaReader (solo en el primer intento)
+#   prueba-de-mas            41 casos (siempre)
 # Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
 # (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
 # Con la variable RESCATE_LLAMADAS (una carpeta) deja ademas una copia de ese fichero alli:
@@ -254,6 +262,7 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   $job = ([regex]::Match($prompt, '(?m)^JOB: (.+?)\s*$')).Groups[1].Value
   $clase = [System.IO.Path]::GetFileNameWithoutExtension($leer)
   if ($tipo -eq 'ficha-job') { $clase = $job }
+  if ($tipo -eq 'prueba-pre') { $clase = $job }
   if ($tipo -eq 'resumen') { $clase = '' }
   if ($tipo -ne 'ficha-clase') { $clase = $tipo + ':' + $clase }
   $guion = ''
@@ -325,6 +334,25 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
     if ($guion -eq 'job-clase-en-texto' -and -not $correccion) { $titulo = "Carga con $primera" }
     $pasos = @([ordered]@{ titulo = 'Primer paso'; texto = 'Hace lo primero.'; refs = @($r1) }, [ordered]@{ titulo = 'Segundo paso'; texto = 'Hace lo segundo.'; refs = @($r2) })
     $json = ConvertTo-Json -InputObject ([ordered]@{ job = $job; titulo = $titulo; paraQue = "Sirve para probar $job."; pasos = $pasos; dudas = @() }) -Depth 8
+  }
+  elseif ($tipo -eq 'prueba-pre') {
+    $hechos = @([regex]::Matches($prompt, '(?m)^(clase-[0-9a-f]{8}#\d+) \[([\w\-]+)\] ') | ForEach-Object { [pscustomobject]@{ ref = $_.Groups[1].Value; tipo = $_.Groups[2].Value } })
+    $cubrir = @($hechos | Where-Object { $_.tipo -eq 'regla' -or $_.tipo -eq 'error' } | ForEach-Object { $_.ref })
+    if ($guion -eq 'prueba-falta-siempre' -or ($guion -eq 'prueba-falta-una-vez' -and -not $correccion)) { $cubrir = @($cubrir | Select-Object -First ($cubrir.Count - 1)) }
+    $casos = @()
+    for ($n = 0; $n -lt $cubrir.Count; $n += 3) {
+      $k = $casos.Count + 1
+      $casos += [ordered]@{ titulo = "Caso $k de $job"; entrada = "Lo que se mete en el caso $k."; esperado = "Lo que tiene que pasar en el caso $k."; refs = @($cubrir[$n..([Math]::Min($n + 2, $cubrir.Count - 1))]) }
+    }
+    if ($guion -eq 'prueba-de-mas') { $casos = @(1..41 | ForEach-Object { [ordered]@{ titulo = "Caso $_"; entrada = 'Algo.'; esperado = 'Otra cosa.'; refs = @($hechos[0].ref) } }) }
+    if ($guion -eq 'prueba-ref-mala' -and $casos.Count -gt 0) { $casos[0].refs = @($casos[0].refs) + 'clase-00000000#9' }
+    if ($guion -eq 'prueba-clase-en-texto' -and -not $correccion -and $casos.Count -gt 0) { $casos[0].titulo = 'Carga con CargaReader' }
+    $json = ConvertTo-Json -InputObject ([ordered]@{
+        job = $job
+        preparar = @([ordered]@{ texto = 'Deja listo lo que el job necesita.'; refs = @($hechos[0].ref) })
+        casos = $casos
+        comprobar = @([ordered]@{ texto = 'Mira lo que el job deja al acabar.'; refs = @($hechos[$hechos.Count - 1].ref) })
+      }) -Depth 8
   }
   elseif ($tipo -eq 'resumen') {
     $orden = @([regex]::Matches($prompt, '(?m)^JOB: (.+?)\s*$') | ForEach-Object { [ordered]@{ job = $_.Groups[1].Value; motivo = ('Va en su sitio: ' + $_.Groups[1].Value + '.') } })

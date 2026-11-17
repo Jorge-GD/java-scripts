@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1 y la carpeta tareas\ junto a este script.
+Necesita comun.ps1, tareas.ps1, informe.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo a negocio)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -17,7 +17,7 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
   cada ronda el worktree tiene que estar limpio y el original y la referencia sin
   cambios. Una salida invalida se repite una vez, con el motivo y esfuerzo alto;
   si falla otra vez la tarea queda atascada y se sigue.
-  Despues de las clases, cuatro fases mas (datos\estado.json lleva la fase en que va; cada
+  Despues de las clases, cinco fases mas (datos\estado.json lleva la fase en que va; cada
   tarea hecha se salta al relanzar, y una fase se hace aunque la anterior tenga atascadas):
     mapa        jobs del original (contrato de rescate.ps1 -Modo pre -SinIA, o el que ya haya en
                 .rescate\contrato.json), sus pasos (una tarea de definicion por fichero que
@@ -26,7 +26,12 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
     fichas-job  una redaccion por job, sin leer codigo, con las listas que monta el script
                 con los datos de las fichas de clase: datos\jobs\<job>.json
     resumen     una tarea con todos los jobs: datos\resumen.json
+    pruebas-pre una tarea por job con reglas o errores (sin leer codigo): el guion de prueba en pre,
+                datos\pruebas\<job>.json; los jobs sin reglas ni errores lo llevan montado por el script
     lectura-hecha
+  Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
+  que te toca) y 1-batch-original.html (que hace el batch, job a job), con informe.ps1 y las plantillas de
+  informe\. Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
   las tareas hechas y sigue donde se quedo. Las atascadas tampoco se repiten (salvo
@@ -61,6 +66,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
 . (Join-Path $PSScriptRoot 'tareas.ps1')
+. (Join-Path $PSScriptRoot 'informe.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -107,11 +113,19 @@ function Save-Estado {
   Write-Json (Join-Path $Datos 'estado.json') $Estado
 }
 
+# Las dos paginas del informe (index.html y 1-batch-original.html) con lo que haya hasta ahora. Si no se pueden montar,
+# se avisa y la pasada sigue: son una vista de los datos, no parte del trabajo.
+function Save-Informes {
+  try { Write-Informes -Salida $Salida }
+  catch { Aviso ('No he podido escribir las paginas del informe: ' + $_.Exception.Message) }
+}
+
 # Para el trabajo y lo deja en estado.json con un texto de ayuda para pegar en Copilot.
 function Set-Parada([string]$Motivo, [string]$Detalle, [string]$Registro) {
   $ayuda = "Estoy ejecutando migracion.ps1 (migracion desatendida de un batch Java con GitHub Copilot CLI) y se ha parado. Motivo: $Motivo. Detalle: $Detalle. El registro esta en: $Registro. Dime que ha pasado y que tengo que hacer para arreglarlo. Despues vuelvo a lanzar el mismo comando y sigue donde se quedo."
   $Estado['parada'] = [ordered]@{ motivo = $Motivo; detalle = $Detalle; registro = $Registro; ayuda = $ayuda }
   Save-Estado
+  Save-Informes
   if ($Motivo -eq 'tope-de-tiempo') { Aviso "Parada ($Motivo): $Detalle" } else { Fallo "Parada ($Motivo): $Detalle" }
 }
 
@@ -204,6 +218,7 @@ function Get-TareasFase([string]$Fase, [bool]$Conservar) {
     'mapa' { Write-Json (Join-Path $Datos 'variables.json') @(Get-Variables); return @(Get-TareasDefinicion @(Get-JobsContrato) $Conservar) }
     'fichas-job' { return @(Get-TareasJob (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'resumen' { return @(Get-TareasResumen (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
+    'pruebas-pre' { return @(Get-TareasPrueba (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
   }
 }
 
@@ -215,6 +230,7 @@ function Save-Fase([string]$Fase, $Tareas) {
     'mapa' { if ($pendientes -eq 0) { Write-Json (Join-Path $Datos 'mapa.json') (Get-Mapa @(Get-JobsContrato) $Tareas $batch) } }
     'fichas-job' { Save-Jobs (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'resumen' { if (@($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count -gt 0) { Write-Json (Join-Path $Datos 'resumen.json') $Tareas[0].resultado } }
+    'pruebas-pre' { Save-Pruebas (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
   }
 }
 
@@ -240,6 +256,12 @@ function Get-LineaFase([string]$Fase, $Tareas) {
       if ($n.hecha -gt 0) { return 'Resumen: hecho' }
       if ($n.atascada -gt 0) { return 'Resumen: atascado' }
       return 'Resumen: pendiente'
+    }
+    'pruebas-pre' {
+      if (@($Tareas).Count -eq 0) { return 'Pruebas en pre: ningun job con reglas ni errores que probar con IA' }
+      $l = "Pruebas en pre: $($n.hecha) hechas, $($n.atascada) atascadas"
+      if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
+      return $l
     }
   }
 }
@@ -336,7 +358,7 @@ try {
   $script:Iniciadas = @{}
   $todas = @()
   $quedan = 0
-  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen')) {
+  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')) {
     $Estado['fase'] = $fase
     Save-Estado
     $tareas = @(Get-TareasFase $fase $conservar)
@@ -350,11 +372,12 @@ try {
     }
     Invoke-Fase $tareas
     Save-Fase $fase $tareas
+    Save-Informes
     Info (Get-LineaFase $fase $tareas)
     $quedan = @($tareas | Where-Object { $_.estado -eq 'pendiente' }).Count
     if ($script:Parada -or $quedan -gt 0) { break }
   }
-  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado }
+  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado; Save-Informes }
 
   Info ''
   if (-not $script:Parada -and $quedan -gt 0) { Info "Limite de -Limite $Limite alcanzado: quedan $quedan tareas pendientes. Relanza el mismo comando sin -Limite para seguir." }
