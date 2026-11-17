@@ -3,7 +3,7 @@ migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
 Necesita comun.ps1, tareas.ps1 y la carpeta tareas\ junto a este script.
 
-QUE HACE (esta version: solo la primera parte, la lectura de clases)
+QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo a negocio)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
   dos preguntas (modelo y que hacer al acabar el informe) y te vas. Cada llamada
   a Copilot CLI es una tarea cerrada y pequena; el script la comprueba. El
@@ -17,6 +17,16 @@ QUE HACE (esta version: solo la primera parte, la lectura de clases)
   cada ronda el worktree tiene que estar limpio y el original y la referencia sin
   cambios. Una salida invalida se repite una vez, con el motivo y esfuerzo alto;
   si falla otra vez la tarea queda atascada y se sigue.
+  Despues de las clases, cuatro fases mas (datos\estado.json lleva la fase en que va; cada
+  tarea hecha se salta al relanzar, y una fase se hace aunque la anterior tenga atascadas):
+    mapa        jobs del original (contrato de rescate.ps1 -Modo pre -SinIA, o el que ya haya en
+                .rescate\contrato.json), sus pasos (una tarea de definicion por fichero que
+                define jobs) y sus clases, que calcula el script: datos\mapa.json; y las
+                variables de application*.yml/.properties del migrado: datos\variables.json
+    fichas-job  una redaccion por job, sin leer codigo, con las listas que monta el script
+                con los datos de las fichas de clase: datos\jobs\<job>.json
+    resumen     una tarea con todos los jobs: datos\resumen.json
+    lectura-hecha
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
   las tareas hechas y sigue donde se quedo. Las atascadas tampoco se repiten (salvo
@@ -118,6 +128,122 @@ function Select-Modelo {
   return ''
 }
 
+# ================================= FASES =================================
+# Una fase: rondas de hasta Paralelo llamadas hasta que no quedan tareas pendientes, hay una parada o se llega
+# al -Limite (que cuenta tareas de todas las fases). Tras cada ronda: worktree limpio y original y referencia
+# sin cambios. Los contadores son del script ($script:Parada, Racha, Rondas e Iniciadas): las fases los comparten.
+function Invoke-Fase($Tareas) {
+  while (-not $script:Parada) {
+    $pend = @($Tareas | Where-Object { $_.estado -eq 'pendiente' })
+    if ($pend.Count -eq 0) { break }
+    if ($MaxHoras -gt 0 -and $script:Rondas -gt 0 -and $reloj.Elapsed.TotalHours -ge $MaxHoras) {
+      Set-Parada 'tope-de-tiempo' "Se ha llegado al tope de -MaxHoras $MaxHoras. Relanza el mismo comando para seguir." $Registros
+      $script:Parada = $true
+      break
+    }
+    $lote = @($pend | Select-Object -First ([int]$Cfg.Paralelo))
+    if ($Limite -gt 0) {
+      # -Limite cuenta tareas, no llamadas: una que se reintenta sigue siendo la misma
+      $dentro = @()
+      foreach ($x in $lote) {
+        if ($script:Iniciadas.ContainsKey($x.id) -or $script:Iniciadas.Count -lt $Limite) { $script:Iniciadas[$x.id] = $true; $dentro += $x }
+      }
+      $lote = $dentro
+      if ($lote.Count -eq 0) { break }
+    }
+    $head = Get-Head $RepoRoot
+    $rondaRama = Get-Rama $RepoRoot
+    Info ('Ronda: ' + $lote.Count + ' llamadas a la vez (quedan ' + $pend.Count + ' tareas)...')
+    $res = @(Invoke-Ronda $lote $RepoRoot $LegacyRoot)
+    $script:Rondas++
+
+    # comprobacion tras la ronda: worktree limpio y original y referencia sin cambios
+    $sucio = @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
+    if ($sucio.Count -gt 0) { Undo-Lote $rondaRama $head }
+    if ((Get-Huella $LegacyRoot) -ne $H0.Legacy -or (Get-Huella $PlantillaRoot) -ne $H0.Plantilla) {
+      Set-Parada 'guardas' 'Ha cambiado el original o la referencia durante una lectura. Esa carpeta no se deshace desde aqui: mira con git status y git diff, y vuelve a lanzar.' $res[0].Registro
+      $script:Parada = $true
+      break
+    }
+    foreach ($o in $res) {
+      if ($o.Estado -in @('fallo', 'tiempo')) { $script:Racha++ } else { $script:Racha = 0 }
+      if ($sucio.Count -gt 0 -and $o.Estado -in @('ok', 'invalida')) {
+        $o.Estado = 'invalida'
+        $o.Motivo = 'La lectura toco ficheros del repositorio (' + (($sucio | Select-Object -First 3) -join '; ') + '). Lee sin cambiar nada: solo escribes el fichero de salida.'
+      }
+      $t = $o.Tarea
+      $t.intentos++
+      $t.motivo = $o.Motivo
+      $t.ultimoEstado = $o.Estado
+      if ($o.Estado -eq 'ok') { $t.estado = 'hecha'; $t.resultado = $o.Ficha }
+      elseif ($t.intentos -ge [int]$Cfg.Intentos) {
+        $t.estado = 'atascada'
+        $donde = $t.entradas.fichero
+        if (-not $donde) { $donde = $t.id }
+        Aviso "Atascada: ${donde}: $($o.Motivo)"
+      }
+      Save-Tarea $t
+    }
+    if ($script:Racha -ge [int]$Cfg.FallosSeguidos) {
+      # el fallo es de Copilot, no de las tareas: vuelven a empezar al relanzar
+      foreach ($o in $res) {
+        if ($o.Estado -in @('fallo', 'tiempo')) { $o.Tarea.estado = 'pendiente'; $o.Tarea.intentos = 0; Save-Tarea $o.Tarea }
+      }
+      $ultimo = @($res | Where-Object { $_.Estado -in @('fallo', 'tiempo') } | Select-Object -Last 1)[0]
+      Set-Parada 'copilot-no-responde' "$($script:Racha) llamadas seguidas han fallado (sesion, cuota o red). Ultimo error: $($ultimo.Motivo)" $ultimo.Registro
+      $script:Parada = $true
+      break
+    }
+  }
+}
+
+# Las tareas de una fase. Al entrar en el mapa se escriben las variables del migrado.
+function Get-TareasFase([string]$Fase, [bool]$Conservar) {
+  switch ($Fase) {
+    'fichas-clase' { return @(Get-TareasFichas $Fuentes $Conservar) }
+    'mapa' { Write-Json (Join-Path $Datos 'variables.json') @(Get-Variables); return @(Get-TareasDefinicion @(Get-JobsContrato) $Conservar) }
+    'fichas-job' { return @(Get-TareasJob (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
+    'resumen' { return @(Get-TareasResumen (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
+  }
+}
+
+# Lo que sale de una fase en datos\ (el mapa, solo cuando no queda ninguna tarea de definicion pendiente).
+function Save-Fase([string]$Fase, $Tareas) {
+  $pendientes = @($Tareas | Where-Object { $_.estado -eq 'pendiente' }).Count
+  switch ($Fase) {
+    'fichas-clase' { Save-Fichas $Tareas }
+    'mapa' { if ($pendientes -eq 0) { Write-Json (Join-Path $Datos 'mapa.json') (Get-Mapa @(Get-JobsContrato) $Tareas $batch) } }
+    'fichas-job' { Save-Jobs (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
+    'resumen' { if (@($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count -gt 0) { Write-Json (Join-Path $Datos 'resumen.json') $Tareas[0].resultado } }
+  }
+}
+
+# La linea de consola de una fase.
+function Get-LineaFase([string]$Fase, $Tareas) {
+  $n = @{}
+  foreach ($e in @('hecha', 'atascada', 'pendiente')) { $n[$e] = @($Tareas | Where-Object { $_.estado -eq $e }).Count }
+  switch ($Fase) {
+    'fichas-clase' { return "Lectura de clases: $($n.hecha) hechas, $($n.atascada) atascadas, $($n.pendiente) pendientes de $(@($Tareas).Count) tareas." }
+    'mapa' {
+      if ($n.pendiente -gt 0) { return "Mapa: $($n.pendiente) tareas de definicion pendientes." }
+      $m = Read-Json (Join-Path $Datos 'mapa.json')
+      $sin = @($m.sinJob).Count
+      return "Mapa: $(@($m.jobs).Count) jobs, $($Fuentes.Count - $sin) clases con job, $sin sin job"
+    }
+    'fichas-job' {
+      $l = "Fichas de job: $($n.hecha) hechas, $($n.atascada) atascadas"
+      if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
+      return $l
+    }
+    'resumen' {
+      if (@($Tareas).Count -eq 0) { return 'Resumen: ningun job redactado, nada que resumir' }
+      if ($n.hecha -gt 0) { return 'Resumen: hecho' }
+      if ($n.atascada -gt 0) { return 'Resumen: atascado' }
+      return 'Resumen: pendiente'
+    }
+  }
+}
+
 # ================================= MAIN =================================
 $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original (Java 8).' }
@@ -202,88 +328,39 @@ $Estado = [ordered]@{
 if ($previo -and $previo.creado) { $Estado['creado'] = [string]$previo.creado }
 try {
   foreach ($d in @((Join-Path $Datos 'tareas'), (Join-Path $Datos 'fichas'))) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
-  $Tareas = @(Get-TareasFichas $Fuentes $conservar)
   Save-Estado
-  $hechas0 = @($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count
-  $ficheros = @($Tareas | Group-Object { $_.ficha }).Count
-  Info "Tareas de lectura: $($Tareas.Count) (fichas de clase de $ficheros ficheros del original; $hechas0 ya hechas)."
-  $atascadas0 = @($Tareas | Where-Object { $_.estado -eq 'atascada' }).Count
-  if ($atascadas0 -gt 0) { Aviso "$atascadas0 tareas atascadas de un lanzamiento anterior se conservan sin repetir. Para volver a intentarlas: -Reintentar (o cambia de modelo)." }
-
-  # Lectura: fichas de clase, en rondas de hasta Paralelo llamadas
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
-  $racha = 0
-  $parada = $false
-  $iniciadas = @{}
-  while ($true) {
-    $pend = @($Tareas | Where-Object { $_.estado -eq 'pendiente' })
-    if ($pend.Count -eq 0) { break }
-    $lote = @($pend | Select-Object -First ([int]$Cfg.Paralelo))
-    if ($Limite -gt 0) {
-      # -Limite cuenta tareas, no llamadas: una que se reintenta sigue siendo la misma
-      $dentro = @()
-      foreach ($x in $lote) {
-        if ($iniciadas.ContainsKey($x.id) -or $iniciadas.Count -lt $Limite) { $iniciadas[$x.id] = $true; $dentro += $x }
-      }
-      $lote = $dentro
-      if ($lote.Count -eq 0) { break }
+  $script:Parada = $false
+  $script:Racha = 0
+  $script:Rondas = 0
+  $script:Iniciadas = @{}
+  $todas = @()
+  $quedan = 0
+  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen')) {
+    $Estado['fase'] = $fase
+    Save-Estado
+    $tareas = @(Get-TareasFase $fase $conservar)
+    $todas += $tareas
+    if ($fase -eq 'fichas-clase') {
+      $hechas0 = @($tareas | Where-Object { $_.estado -eq 'hecha' }).Count
+      $ficheros = @($tareas | Group-Object { $_.ficha }).Count
+      Info "Tareas de lectura: $($tareas.Count) (fichas de clase de $ficheros ficheros del original; $hechas0 ya hechas)."
+      $atascadas0 = @($tareas | Where-Object { $_.estado -eq 'atascada' }).Count
+      if ($atascadas0 -gt 0) { Aviso "$atascadas0 tareas atascadas de un lanzamiento anterior se conservan sin repetir. Para volver a intentarlas: -Reintentar (o cambia de modelo)." }
     }
-    $head = Get-Head $RepoRoot
-    $rondaRama = Get-Rama $RepoRoot
-    Info ('Ronda: ' + $lote.Count + ' llamadas a la vez (quedan ' + $pend.Count + ' tareas)...')
-    $res = @(Invoke-Ronda $lote $RepoRoot $LegacyRoot)
-
-    # comprobacion tras la ronda: worktree limpio y original y referencia sin cambios
-    $sucio = @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
-    if ($sucio.Count -gt 0) { Undo-Lote $rondaRama $head }
-    if ((Get-Huella $LegacyRoot) -ne $H0.Legacy -or (Get-Huella $PlantillaRoot) -ne $H0.Plantilla) {
-      Set-Parada 'guardas' 'Ha cambiado el original o la referencia durante una lectura. Esa carpeta no se deshace desde aqui: mira con git status y git diff, y vuelve a lanzar.' $res[0].Registro
-      $parada = $true
-      break
-    }
-    foreach ($o in $res) {
-      if ($o.Estado -in @('fallo', 'tiempo')) { $racha++ } else { $racha = 0 }
-      if ($sucio.Count -gt 0 -and $o.Estado -in @('ok', 'invalida')) {
-        $o.Estado = 'invalida'
-        $o.Motivo = 'La lectura toco ficheros del repositorio (' + (($sucio | Select-Object -First 3) -join '; ') + '). Lee sin cambiar nada: solo escribes el fichero de salida.'
-      }
-      $t = $o.Tarea
-      $t.intentos++
-      $t.motivo = $o.Motivo
-      $t.ultimoEstado = $o.Estado
-      if ($o.Estado -eq 'ok') { $t.estado = 'hecha'; $t.resultado = $o.Ficha }
-      elseif ($t.intentos -ge [int]$Cfg.Intentos) { $t.estado = 'atascada'; Aviso "Atascada: $($t.entradas.fichero): $($o.Motivo)" }
-      Save-Tarea $t
-    }
-    Save-Fichas $Tareas
-    if ($racha -ge [int]$Cfg.FallosSeguidos) {
-      # el fallo es de Copilot, no de las tareas: vuelven a empezar al relanzar
-      foreach ($o in $res) {
-        if ($o.Estado -in @('fallo', 'tiempo')) { $o.Tarea.estado = 'pendiente'; $o.Tarea.intentos = 0; Save-Tarea $o.Tarea }
-      }
-      $ultimo = @($res | Where-Object { $_.Estado -in @('fallo', 'tiempo') } | Select-Object -Last 1)[0]
-      Set-Parada 'copilot-no-responde' "$racha llamadas seguidas han fallado (sesion, cuota o red). Ultimo error: $($ultimo.Motivo)" $ultimo.Registro
-      $parada = $true
-      break
-    }
-    if ($MaxHoras -gt 0 -and $reloj.Elapsed.TotalHours -ge $MaxHoras -and @($Tareas | Where-Object { $_.estado -eq 'pendiente' }).Count -gt 0) {
-      Set-Parada 'tope-de-tiempo' "Se ha llegado al tope de -MaxHoras $MaxHoras. Relanza el mismo comando para seguir." $Registros
-      $parada = $true
-      break
-    }
+    Invoke-Fase $tareas
+    Save-Fase $fase $tareas
+    Info (Get-LineaFase $fase $tareas)
+    $quedan = @($tareas | Where-Object { $_.estado -eq 'pendiente' }).Count
+    if ($script:Parada -or $quedan -gt 0) { break }
   }
-  Save-Fichas $Tareas
-  $quedan = @($Tareas | Where-Object { $_.estado -eq 'pendiente' }).Count
-  if (-not $parada -and $quedan -eq 0) { $Estado['fase'] = 'fichas-clase-hechas'; Save-Estado }
+  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado }
 
-  $hechas = @($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count
-  $atascadas = @($Tareas | Where-Object { $_.estado -eq 'atascada' }).Count
   Info ''
-  Info "Lectura de clases: $hechas hechas, $atascadas atascadas, $quedan pendientes de $($Tareas.Count) tareas."
-  if (-not $parada -and $quedan -gt 0) { Info "Limite de -Limite $Limite alcanzado: quedan $quedan tareas pendientes. Relanza el mismo comando sin -Limite para seguir." }
+  if (-not $script:Parada -and $quedan -gt 0) { Info "Limite de -Limite $Limite alcanzado: quedan $quedan tareas pendientes. Relanza el mismo comando sin -Limite para seguir." }
   Info "Datos en: $Salida"
-  if ($atascadas -gt 0) { Aviso "Las tareas atascadas estan en $(Join-Path $Datos 'tareas') (estado 'atascada', con su motivo)." }
-  if ($parada -and $Estado['parada'].motivo -ne 'tope-de-tiempo') { exit 2 }
+  if (@($todas | Where-Object { $_.estado -eq 'atascada' }).Count -gt 0) { Aviso "Las tareas atascadas estan en $(Join-Path $Datos 'tareas') (estado 'atascada', con su motivo)." }
+  if ($script:Parada -and $Estado['parada'].motivo -ne 'tope-de-tiempo') { exit 2 }
   exit 0
 }
 catch {

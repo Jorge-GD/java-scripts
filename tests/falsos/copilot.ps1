@@ -42,6 +42,19 @@
 #   error-privado      sale con 1 y escribe el texto de la variable RESCATE_ERROR_TEXTO
 #   valor-secreto      ficha con un papel que no vale y que lleva un texto con comillas simples
 #   cita-secreta       ficha con todas las citas inventadas, con texto y comillas simples
+#   tipos-variados     ficha con un tipo de dato distinto en cada dato (reparte los diez tipos)
+# Los tres tipos de tarea del negocio llevan una linea TIPO: en el prompt y el falso escribe
+# lo que corresponde. La clave de los regex es 'tipo:nombre' (definicion-job:<fichero sin .java>,
+# ficha-job:<job>, resumen:); la de la ficha de clase sigue siendo el nombre de la clase:
+#   (vacio)            definicion-job: los jobs de la linea JOBS, cada paso (stepBuilderFactory.get("x"))
+#                      en el job cuya linea le precede, con las clases de la lista CLASES que
+#                      empiezan por el nombre del paso sin 'Step'. ficha-job: dos pasos con la
+#                      primera y la ultima referencia del prompt. resumen: todos los jobs en orden.
+#   job-clase-fuera    definicion-job con una clase que no esta en la lista cerrada
+#   job-ref-mixta      ficha-job con un paso bien referenciado y otro con una referencia que no existe
+#   job-ref-mala       ficha-job con todas las referencias inventadas
+#   job-clase-en-texto ficha-job con el nombre de una clase en el titulo (solo en el primer intento)
+#   resumen-sin-job    resumen cuyo orden no nombra el ultimo job
 # Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
 # (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
 # Con la variable RESCATE_LLAMADAS (una carpeta) deja ademas una copia de ese fichero alli:
@@ -76,7 +89,13 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   $id = [System.IO.Path]::GetFileName($salida) -replace '\.json$', ''
   $correccion = ($prompt -match '## CORRECCI')
   $efecto = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=|available-tools=|no-custom-instructions$)' }) -join ' ')
+  $tipo = 'ficha-clase'
+  if ($prompt -match '(?m)^TIPO: (\S+)') { $tipo = $Matches[1] }
+  $job = ([regex]::Match($prompt, '(?m)^JOB: (.+?)\s*$')).Groups[1].Value
   $clase = [System.IO.Path]::GetFileNameWithoutExtension($leer)
+  if ($tipo -eq 'ficha-job') { $clase = $job }
+  if ($tipo -eq 'resumen') { $clase = '' }
+  if ($tipo -ne 'ficha-clase') { $clase = $tipo + ':' + $clase }
   $guion = ''
   foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
     $nombre, $solo = ($g -split ':', 2)
@@ -106,37 +125,85 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   if ($guion -eq 'colgado') { Start-Sleep -Seconds 120 }
   if ($guion -eq 'lento') { Start-Sleep -Seconds 3 }
 
-  $lineas = [System.IO.File]::ReadAllLines($leer)
-  $desde = 1; $hasta = $lineas.Count
-  if ($rango.Success) { $desde = [int]$rango.Groups[1].Value; $hasta = [int]$rango.Groups[2].Value }
-  $reales = @(for ($n = $desde; $n -le [Math]::Min($hasta, $lineas.Count); $n++) {
-      if ($lineas[$n - 1] -match ';\s*$' -and $lineas[$n - 1] -notmatch '^\s*(package|import)\b') { $n }
-    })
-  function Nuevo-Dato([int]$Linea, [string]$Cita) {
-    return [ordered]@{ tipo = 'regla'; texto = "Linea $Linea"; linea = $Linea; cita = $Cita }
+  $json = ''
+  if ($tipo -eq 'definicion-job') {
+    $lineas = [System.IO.File]::ReadAllLines($leer)
+    $nombres = @(([regex]::Match($prompt, '(?m)^JOBS: (.+?)\s*$')).Groups[1].Value -split ',\s*' | Where-Object { $_ })
+    $cerradas = @(([regex]::Match($prompt, '(?m)^CLASES: (.+?)\s*$')).Groups[1].Value -split ',\s*' | Where-Object { $_ })
+    function Linea-De([string]$Nombre) {
+      for ($n = 1; $n -le $lineas.Count; $n++) { if ($lineas[$n - 1].Contains('get("' + $Nombre + '")')) { return $n } }
+      return 1
+    }
+    function Cita-De([int]$N) { $c = $lineas[$N - 1].Trim(); return $c.Substring(0, [Math]::Min(120, $c.Length)) }
+    $jobs = @()
+    foreach ($nj in $nombres) { $jobs += [ordered]@{ job = $nj; linea = (Linea-De $nj); cita = (Cita-De (Linea-De $nj)); pasos = @() } }
+    for ($n = 1; $n -le $lineas.Count; $n++) {
+      if (-not ($lineas[$n - 1] -match 'stepBuilder\w*\.get\("(\w+)"\)')) { continue }
+      $paso = $Matches[1]
+      $dueno = $jobs[0]
+      foreach ($j in $jobs) { if ($j.linea -le $n -and $j.linea -ge $dueno.linea) { $dueno = $j } }
+      $prefijo = $paso -replace 'Step$', ''
+      $cl = @($cerradas | Where-Object { $_ -like ($prefijo + '*') })
+      if ($guion -eq 'job-clase-fuera') { $cl += 'NoExiste' }
+      $dueno.pasos += [ordered]@{ paso = $paso; linea = $n; cita = (Cita-De $n); clases = $cl }
+    }
+    $json = ConvertTo-Json -InputObject ([ordered]@{ jobs = $jobs }) -Depth 8
   }
-  $datos = @()
-  foreach ($n in @($reales | Select-Object -First 2)) { $datos += (Nuevo-Dato $n $lineas[$n - 1].Trim()) }
-  if ($guion -eq 'citas-inventadas') {
-    $datos = @(1..3 | ForEach-Object { Nuevo-Dato $_ "esta cita no sale en el fichero $_" })
+  elseif ($tipo -eq 'ficha-job') {
+    $refs = @([regex]::Matches($prompt, '(?m)^(clase-[0-9a-f]{8}#\d+) \[') | ForEach-Object { $_.Groups[1].Value })
+    $primera = ([regex]::Match($prompt, '(?m)^### (\w+) \(')).Groups[1].Value
+    $malo = 'clase-00000000#9'
+    $r1 = $refs[0]; $r2 = $refs[$refs.Count - 1]
+    if ($guion -eq 'job-ref-mixta') { $r2 = $malo }
+    if ($guion -eq 'job-ref-mala') { $r1 = $malo; $r2 = $malo }
+    $titulo = "Titulo de $job"
+    if ($guion -eq 'job-clase-en-texto' -and -not $correccion) { $titulo = "Carga con $primera" }
+    $pasos = @([ordered]@{ titulo = 'Primer paso'; texto = 'Hace lo primero.'; refs = @($r1) }, [ordered]@{ titulo = 'Segundo paso'; texto = 'Hace lo segundo.'; refs = @($r2) })
+    $json = ConvertTo-Json -InputObject ([ordered]@{ job = $job; titulo = $titulo; paraQue = "Sirve para probar $job."; pasos = $pasos; dudas = @() }) -Depth 8
   }
-  if ($guion -eq 'cita-inventada') {
-    $datos = @((Nuevo-Dato $reales[0] $lineas[$reales[0] - 1].Trim()), (Nuevo-Dato ($reales[1] + 40) $lineas[$reales[1] - 1].Trim()), (Nuevo-Dato 3 'esta cita no sale en el fichero'))
+  elseif ($tipo -eq 'resumen') {
+    $orden = @([regex]::Matches($prompt, '(?m)^JOB: (.+?)\s*$') | ForEach-Object { [ordered]@{ job = $_.Groups[1].Value; motivo = ('Va en su sitio: ' + $_.Groups[1].Value + '.') } })
+    if ($guion -eq 'resumen-sin-job' -and $orden.Count -gt 0) { $orden = @($orden | Select-Object -First ($orden.Count - 1)) }
+    $json = ConvertTo-Json -InputObject ([ordered]@{ resumen = 'El batch hace cosas para quien las necesita.'; orden = $orden; glosario = @([ordered]@{ termino = 'remesa'; definicion = 'Un grupo de recibos.' }) }) -Depth 8
   }
-  if ($guion -eq 'sin-datos') { $datos = @() }
-  if ($guion -eq 'cita-larga') { $datos[0].cita = ('x' * 130) }
-  if ($guion -eq 'tipo-libre') { $datos[0].tipo = 'inventado' }
-  if ($guion -eq 'linea-texto') { $datos[0].linea = '31' }
-  if ($guion -eq 'linea-cero') { $datos[0].linea = 0 }
-  if ($guion -eq 'linea-decimal') { $datos[0].linea = 3.5 }
-  if ($guion -eq 'cita-secreta') {
-    $datos = @(1..3 | ForEach-Object { Nuevo-Dato $_ "SECRETO-ZORBA 'cita $_' no sale en el fichero" })
+  else {
+    $lineas = [System.IO.File]::ReadAllLines($leer)
+    $desde = 1; $hasta = $lineas.Count
+    if ($rango.Success) { $desde = [int]$rango.Groups[1].Value; $hasta = [int]$rango.Groups[2].Value }
+    $reales = @(for ($n = $desde; $n -le [Math]::Min($hasta, $lineas.Count); $n++) {
+        if ($lineas[$n - 1] -match ';\s*$' -and $lineas[$n - 1] -notmatch '^\s*(package|import)\b') { $n }
+      })
+    function Nuevo-Dato([int]$Linea, [string]$Cita) {
+      return [ordered]@{ tipo = 'regla'; texto = "Linea $Linea"; linea = $Linea; cita = $Cita }
+    }
+    $datos = @()
+    foreach ($n in @($reales | Select-Object -First 2)) { $datos += (Nuevo-Dato $n $lineas[$n - 1].Trim()) }
+    if ($guion -eq 'citas-inventadas') {
+      $datos = @(1..3 | ForEach-Object { Nuevo-Dato $_ "esta cita no sale en el fichero $_" })
+    }
+    if ($guion -eq 'cita-inventada') {
+      $datos = @((Nuevo-Dato $reales[0] $lineas[$reales[0] - 1].Trim()), (Nuevo-Dato ($reales[1] + 40) $lineas[$reales[1] - 1].Trim()), (Nuevo-Dato 3 'esta cita no sale en el fichero'))
+    }
+    if ($guion -eq 'sin-datos') { $datos = @() }
+    if ($guion -eq 'tipos-variados') {
+      $tipos = @('entrada-fichero', 'salida-fichero', 'sftp', 'error', 'tabla-lee', 'regla', 'parametro', 'tabla-escribe', 'externo', 'config')
+      $datos = @()
+      foreach ($n in $reales) { $d = Nuevo-Dato $n $lineas[$n - 1].Trim(); $d.tipo = $tipos[$datos.Count % $tipos.Count]; $datos += $d }
+    }
+    if ($guion -eq 'cita-larga') { $datos[0].cita = ('x' * 130) }
+    if ($guion -eq 'tipo-libre') { $datos[0].tipo = 'inventado' }
+    if ($guion -eq 'linea-texto') { $datos[0].linea = '31' }
+    if ($guion -eq 'linea-cero') { $datos[0].linea = 0 }
+    if ($guion -eq 'linea-decimal') { $datos[0].linea = 3.5 }
+    if ($guion -eq 'cita-secreta') {
+      $datos = @(1..3 | ForEach-Object { Nuevo-Dato $_ "SECRETO-ZORBA 'cita $_' no sale en el fichero" })
+    }
+    $papel = 'otro'
+    if ($guion -eq 'papel-libre') { $papel = 'inventado' }
+    if ($guion -eq 'valor-secreto') { $papel = "SECRETO-ZORBA'valor'raro" }
+    $ficha = [ordered]@{ fichero = (Split-Path $leer -Leaf); clase = $clase; papel = $papel; queHace = "Ficha de prueba de $clase."; datos = $datos }
+    $json = ConvertTo-Json -InputObject $ficha -Depth 6
   }
-  $papel = 'otro'
-  if ($guion -eq 'papel-libre') { $papel = 'inventado' }
-  if ($guion -eq 'valor-secreto') { $papel = "SECRETO-ZORBA'valor'raro" }
-  $ficha = [ordered]@{ fichero = (Split-Path $leer -Leaf); clase = $clase; papel = $papel; queHace = "Ficha de prueba de $clase."; datos = $datos }
-  $json = ConvertTo-Json -InputObject $ficha -Depth 6
   if ($guion -eq 'json-lista') { $json = '[1, 2, 3]' }
   if ($guion -eq 'json-texto') { $json = '"hola"' }
   if ($guion -eq 'toca-y-calla' -and $intento -gt 1) { 'hecho'; & $copiar; exit 0 }
