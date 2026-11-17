@@ -368,6 +368,64 @@ function Nuevo-Escenario([string]$Nombre) {
   return [pscustomobject]@{ Plantilla = $pl; Repo = $repo; Wt = ($repo + '-rescate') }
 }
 
+# Nombres (ordenados y unidos con espacios) de los jobs que saca '-Modo pre -SinIA'
+# de un original con esos ficheros (ruta -> texto).
+function Jobs-Del-Original([string]$Nombre, $Ficheros) {
+  $e = Nuevo-Escenario $Nombre
+  $orig = Join-Path (Join-Path $Dir $Nombre) 'original'
+  foreach ($ruta in $Ficheros.Keys) { Escribe $orig $ruta $Ficheros[$ruta] }
+  $r = Rescate @('-Modo', 'pre', '-Repo', $e.Repo, '-Legacy', $orig, '-SinIA')
+  Igual 'el pre sale con 0' 0 $r.Codigo
+  $c = (Lee $e.Repo '.rescate/contrato.json') | ConvertFrom-Json
+  return (@($c.jobs | ForEach-Object { $_.nombre } | Sort-Object) -join ' ')
+}
+
+# Prompt de un lote de un solo fichero (el segundo pendiente) del paso 'estructura',
+# con este plan escrito a mano (el plan se hace antes con el Copilot de mentira).
+function Prompt-Con-Plan([string]$Nombre, [string]$Plan) {
+  $e = Nuevo-Escenario $Nombre
+  [void](Rescate @('-Modo', 'plan', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinBuild', '-Si'))
+  Escribe $e.Wt '.rescate/plan-estructura.md' $Plan
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '1'))
+  return (Lee $e.Wt '.rescate/prompt.md')
+}
+
+# Las lineas del prompt que van citadas ('> '), sin la cita, unidas con saltos de linea.
+function Citado([string]$Prompt) {
+  return (@($Prompt -split "`r?`n" | Where-Object { $_.StartsWith('> ') } | ForEach-Object { $_.Substring(2) }) -join "`n")
+}
+
+# Nombre de la clase del primer hallazgo del lote de un prompt.
+function Clase-Del-Lote([string]$Prompt) {
+  $m = [regex]::Match($Prompt, '(?m)^## Hallazgos de este lote[^\n]*\n- (\S+?)(?::\d+)? - ')
+  return [System.IO.Path]::GetFileNameWithoutExtension($m.Groups[1].Value)
+}
+
+# La orden de Maven que lleva el prompt del lote de un solo fichero de 'estructura' (sin plan).
+function Maven-Del-Prompt($E) {
+  [void](Rescate @('-Modo', 'fix', '-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '1'))
+  return ([regex]::Match((Lee $E.Wt '.rescate/prompt.md'), '(?m)^- Ejecuta: (.+?) -q -B')).Groups[1].Value
+}
+
+# Plan de tres ficheros: dos con hallazgos en 'estructura' y un tercero (Cliente) que no.
+$PlanTres = @'
+# Plan del paso 'estructura'
+
+## Piezas comunes
+- `com.acme.life.application.ports.output.PagoPort` PIEZA-COMUN-MARCA: puerto que comparten los ficheros
+
+## Ficheros
+- `src/main/java/com/acme/life/Suelta.java` -> mover a usecases | destino: application.usecases | riesgo: bajo
+- `src/main/java/com/acme/life/service/PolizaService.java` -> mover a usecases | destino: application.usecases | riesgo: bajo
+- `src/main/java/com/acme/life/domain/model/Cliente.java` -> dejarlo donde esta | destino: - | riesgo: bajo
+
+## Orden
+ORDEN-MARCA: primero lo que otros necesitan.
+
+## Dudas
+DUDAS-MARCA: ninguna de momento.
+'@
+
 # ================================ PRUEBAS ================================
 $Pruebas = [ordered]@{}
 
@@ -538,6 +596,156 @@ $Pruebas['sinworktree: -SinWorktree arregla en la misma carpeta, como antes'] = 
   Comprueba 'no crea worktree' (-not (Test-Path -LiteralPath $e.Wt))
   Comprueba 'la carpeta pasa a una rama rescate/' ((GitEn $e.Repo @('rev-parse', '--abbrev-ref', 'HEAD')).StartsWith('rescate/main-')) (Cola $r.Salida)
   Igual 'estructura queda a 0' 0 (Cuenta (Hallazgos $e.Repo) 'estructura')
+}
+
+$Pruebas['jobs: un job dentro de un comentario no es un job'] = {
+  $java = @'
+package com.acme.old;
+
+public class Cargas {
+    // jobBuilderFactory.get("jobEnLinea").start(paso).build();
+    /*
+     * new JobBuilder("jobEnBloque", repo).start(paso).build();
+     */
+    /** Antes: jobBuilderFactory.get("jobEnJavadoc"). */
+    public Job real() {
+        return jobBuilderFactory.get("jobReal").start(paso).build();
+    }
+}
+'@
+  $xml = @'
+<beans>
+  <!-- <job id="jobEnXml"><step id="uno"/></job> -->
+  <bean id="otra" class="com.acme.Otra"/>
+</beans>
+'@
+  $f = @{ 'src/main/java/com/acme/old/Cargas.java' = $java; 'src/main/resources/jobs.xml' = $xml }
+  Igual 'el contrato trae solo el job de verdad' 'jobReal' (Jobs-Del-Original 'jobs-comentarios' $f)
+}
+
+$Pruebas['jobs: el comentario detras de un job no lo cuenta'] = {
+  $java = @'
+package com.acme.old;
+
+public class Cargas {
+    public Job carga() {
+        return jobBuilderFactory.get("cargaJob").start(paso).build(); // antes: jobBuilderFactory.get("reprocesoJob")
+    }
+}
+'@
+  Igual 'sale cargaJob y no reprocesoJob' 'cargaJob' (Jobs-Del-Original 'jobs-detras' @{ 'src/main/java/com/acme/old/Cargas.java' = $java })
+}
+
+$Pruebas['jobs: un // dentro de una cadena no es un comentario'] = {
+  $java = @'
+package com.acme.old;
+
+public class Cargas {
+    private static final String URL = "http://servidor/api"; Job a = jobBuilderFactory.get("jobMismaLinea").build();
+    private static final String RARA = "a\"//b"; Job b = new JobBuilder("jobTrasEscape", repo).build();
+    public Job c() {
+        return jobBuilderFactory.get("jobDespues").start(paso).build();
+    }
+}
+'@
+  Igual 'salen los tres jobs, los de detras de la cadena tambien' 'jobDespues jobMismaLinea jobTrasEscape' (Jobs-Del-Original 'jobs-cadena' @{ 'src/main/java/com/acme/old/Cargas.java' = $java })
+}
+
+$Pruebas['prompt: el lote solo lleva su parte del plan'] = {
+  $p = Prompt-Con-Plan 'prompt-parte' $PlanTres
+  $c = Citado $p
+  $suya = Clase-Del-Lote $p
+  Comprueba 'el lote es de un fichero de los dos con hallazgos' (@('Suelta', 'PolizaService') -contains $suya) "clase del lote: '$suya'"
+  Comprueba 'el titulo dice que es solo la parte del lote' $p.Contains('## Plan aprobado de este paso (solo la parte de este lote)')
+  Comprueba 'lleva la frase de los demas ficheros' $p.Contains('El plan completo tiene mas ficheros. Los hara otro lote: no los muevas ni los cambies. Toca otro fichero solo si hace falta para que compile (su import o la llamada que cambia).')
+  Comprueba 'cita la primera linea del plan' $c.Contains("# Plan del paso 'estructura'")
+  Comprueba 'cita las piezas comunes' ($c.Contains('## Piezas comunes') -and $c.Contains('PIEZA-COMUN-MARCA'))
+  Comprueba 'cita la linea de su fichero' ($c -match ('(?m)^- `[^`]*' + $suya + '\.java` -> '))
+  foreach ($otra in @(@('Suelta', 'PolizaService', 'Cliente') | Where-Object { $_ -ne $suya })) {
+    Comprueba "no cita la linea de $otra" ($c -notmatch ('(?<![\w])' + $otra + '(?![\w])'))
+  }
+  Comprueba 'no cita ## Orden ni su texto' (-not $p.Contains('ORDEN-MARCA') -and -not $p.Contains('## Orden'))
+  Comprueba 'no cita ## Dudas ni su texto' (-not $p.Contains('DUDAS-MARCA') -and -not $p.Contains('## Dudas'))
+}
+
+$Pruebas['prompt: un lote que el plan no nombra lo dice'] = {
+  # El plan solo nombra a Cliente en '## Ficheros'; Suelta y PolizaService salen en el texto de '## Orden'
+  # (por eso el script no rehace el plan) y no hay linea suya que citar. Los titulos, con otras
+  # mayusculas y espacios de mas.
+  $plan = @'
+# Plan del paso 'estructura'
+
+##   piezas   COMUNES  
+ninguna PIEZA-COMUN-MARCA
+
+##  FICHEROS
+- `src/main/java/com/acme/life/domain/model/Cliente.java` -> dejarlo donde esta | destino: - | riesgo: bajo
+
+## Orden
+ORDEN-MARCA: primero Suelta y despues PolizaService.
+
+## Dudas
+ninguna
+'@
+  $p = Prompt-Con-Plan 'prompt-sin-nombrar' $plan
+  $c = Citado $p
+  Comprueba 'cita las piezas comunes' $c.Contains('PIEZA-COMUN-MARCA')
+  Comprueba 'dice que el plan no nombra los ficheros del lote' $c.Contains('(el plan no nombra los ficheros de este lote: aplica el mismo criterio que con los demas)')
+  Comprueba 'no cita la linea de otro fichero' ($c -notmatch 'Cliente')
+  Comprueba 'no cita ## Orden' (-not $p.Contains('ORDEN-MARCA'))
+}
+
+$Pruebas['prompt: un plan sin ## Ficheros se cita entero'] = {
+  $plan = @'
+# Plan del paso 'estructura'
+
+## Piezas comunes
+ninguna PIEZA-COMUN-MARCA
+
+## Cambios
+- `src/main/java/com/acme/life/Suelta.java` -> mover a usecases
+- `src/main/java/com/acme/life/service/PolizaService.java` -> mover a usecases
+
+## Orden
+ORDEN-MARCA: el de la lista.
+
+## Dudas
+DUDAS-MARCA: ninguna
+'@
+  $p = Prompt-Con-Plan 'prompt-entero' $plan
+  Igual 'el plan va citado tal cual' ($plan.Trim() -replace "`r", '') (Citado $p)
+}
+
+$Pruebas['prompt: Maven fuera del repo va con su ruta, y entre comillas si tiene espacios'] = {
+  $e = Nuevo-Escenario 'maven-fuera'
+  $mvn = Join-Path $falsos 'mvn.ps1'
+  Igual 'MvnExe fuera del repo: su ruta, sin ./' $mvn (Maven-Del-Prompt $e)
+  $e2 = Nuevo-Escenario 'maven-espacios'
+  $conEspacios = Join-Path $Dir 'con espacios'
+  [void](New-Item -ItemType Directory -Path $conEspacios -Force)
+  Copy-Item -LiteralPath $mvn -Destination (Join-Path $conEspacios 'mvn.ps1')
+  $cfg = [pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $conEspacios 'mvn.ps1') }
+  Escribe $e2.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
+  Igual 'con espacios: entre comillas dobles' ('"' + (Join-Path $conEspacios 'mvn.ps1') + '"') (Maven-Del-Prompt $e2)
+}
+
+$Pruebas['prompt: con mvnw en la raiz del repo el prompt dice ./mvnw'] = {
+  $e = Nuevo-Escenario 'maven-mvnw'
+  $mvn = Join-Path $falsos 'mvn.ps1'
+  # un mvnw de mentira que llama al Maven de mentira
+  if ($env:OS -eq 'Windows_NT') {
+    $w = 'mvnw.cmd'; $esperado = '.\mvnw.cmd'
+    Escribe $e.Repo $w ('@echo off' + "`r`n" + '"' + $ps + '" -NoProfile -File "' + $mvn + '" %*' + "`r`n" + 'exit /b %ERRORLEVEL%' + "`r`n")
+  }
+  else {
+    $w = 'mvnw'; $esperado = './mvnw'
+    Escribe $e.Repo $w ('#!/bin/sh' + "`n" + 'exec "' + $ps + '" -NoProfile -File "' + $mvn + '" "$@"' + "`n")
+  }
+  [void](GitEn $e.Repo @('add', '--', $w))
+  [void](GitEn $e.Repo @('update-index', '--chmod=+x', '--', $w))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'mvnw'))
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1') }))
+  Igual 'dentro del repo: ./mvnw' $esperado (Maven-Del-Prompt $e)
 }
 
 # ================================ LANZADOR ================================

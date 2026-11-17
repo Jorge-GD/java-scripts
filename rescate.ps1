@@ -315,13 +315,16 @@ function Get-TextoArbol([string]$Dir) {
   return $sb.ToString()
 }
 
-# Jobs del original detectados por texto: nombre -> fichero.
+# Jobs del original detectados por texto: nombre -> fichero. Se busca sin los
+# comentarios (un job comentado no es un job) y con las cadenas, que es donde van los nombres.
 function Get-JobsPorRegex([string]$Raiz) {
   $res = @{}
   foreach ($f in @(Get-Arbol $Raiz)) {
     $ext = $f.Extension.ToLower()
     if (($ext -ne '.java' -and $ext -ne '.xml') -or $f.Length -gt 1MB) { continue }
     $t = [System.IO.File]::ReadAllText($f.FullName)
+    if ($ext -eq '.xml') { $t = [regex]::Replace($t, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline) }
+    else { $t = $script:RxLexico.Replace($t, [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('/')) { return '' } else { return $m.Value } }) }
     foreach ($rx in $Cfg.JobRegex) {
       foreach ($m in [regex]::Matches($t, $rx)) {
         $n = $m.Groups[1].Value
@@ -844,8 +847,11 @@ $TextoCalidad = @(
 )
 
 function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
+  # La orden de Maven: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
+  $sep = [System.IO.Path]::DirectorySeparatorChar
   $mvn = Get-Mvn $RepoRoot
-  if ($mvn -ne 'mvn') { $mvn = '.' + [System.IO.Path]::DirectorySeparatorChar + (Split-Path $mvn -Leaf) }
+  if ($mvn.StartsWith($RepoRoot + $sep, [System.StringComparison]::OrdinalIgnoreCase)) { $mvn = '.' + $sep + $mvn.Substring($RepoRoot.Length + 1) }
+  if ($mvn -match '\s') { $mvn = '"' + $mvn + '"' }
   $l = New-Object System.Collections.Generic.List[string]
   $l.Add("# Tarea de rescate de migracion: paso '$PasoId'")
   $l.Add('')
@@ -868,10 +874,12 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
   $l.Add('')
   $rutaPlan = Get-RutaPlan $PasoId
   if (-not $SinPlan -and (Test-Path -LiteralPath $rutaPlan)) {
-    $l.Add('## Plan aprobado de este paso (siguelo)')
+    $l.Add('## Plan aprobado de este paso (solo la parte de este lote)')
     $l.Add('Si una pieza comun del plan ya existe en el repo, reutilizala. Si aun no existe y este lote la necesita, creala como dice el plan. Si un fichero del lote no esta en el plan, aplica el mismo criterio que con los demas.')
+    $l.Add('El plan completo tiene mas ficheros. Los hara otro lote: no los muevas ni los cambies. Toca otro fichero solo si hace falta para que compile (su import o la llamada que cambia).')
     $l.Add('')
-    foreach ($linea in ([System.IO.File]::ReadAllText($rutaPlan).Trim() -split "`r?`n")) { $l.Add('> ' + $linea) }
+    $fichsLote = @($LoteH | ForEach-Object { $_.Fichero } | Where-Object { $_ } | Select-Object -Unique)
+    foreach ($linea in (Get-PlanDelLote ([System.IO.File]::ReadAllText($rutaPlan)) $fichsLote)) { $l.Add('> ' + $linea) }
     $l.Add('')
   }
   $l.Add('## Que hay que hacer')
@@ -946,11 +954,39 @@ function Get-Guardas {
 # ================================ PLAN ================================
 function Get-RutaPlan([string]$PasoId) { return (Join-Path $Work "plan-$PasoId.md") }
 
-# Ficheros con hallazgos que el plan no nombra (se busca el nombre de la clase).
+# Como se nombra un fichero en un plan: el nombre de su clase, como palabra entera.
+function Get-RxClase([string]$Fichero) {
+  return '(?<![\w])' + [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($Fichero.Split('/')[-1])) + '(?![\w])'
+}
+
+# Ficheros con hallazgos que el plan no nombra.
 function Get-SinPlan([string]$Ruta, $Fichs) {
   if (-not (Test-Path -LiteralPath $Ruta)) { return @($Fichs) }
   $t = [System.IO.File]::ReadAllText($Ruta)
-  return @($Fichs | Where-Object { $t -notmatch ('(?<![\w])' + [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($_.Split('/')[-1])) + '(?![\w])') })
+  return @($Fichs | Where-Object { $t -notmatch (Get-RxClase $_) })
+}
+
+# Del plan, lo que toca a un lote: su primera linea, '## Piezas comunes' entera y, de
+# '## Ficheros', las lineas que nombran un fichero del lote. Sin '## Ficheros' (formato que
+# no conozco) devuelve el plan entero. Los titulos, sin distinguir mayusculas y con espacios de mas.
+function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
+  $todo = @($Plan.Trim() -split "`r?`n")
+  $rx = @($Fichs | ForEach-Object { Get-RxClase $_ })
+  $sal = New-Object System.Collections.Generic.List[string]
+  $sec = ''; $posF = -1; $suyas = 0
+  foreach ($x in $todo) {
+    $titulo = ($x -match '^\s*##\s')
+    if ($titulo) { $sec = (($x -replace '^\s*##\s+', '') -replace '\s+', ' ').Trim() }
+    if ($sec -eq '') { if ($sal.Count -eq 0) { $sal.Add($x); $sal.Add('') } }
+    elseif ($sec -eq 'Piezas comunes') { $sal.Add($x) }
+    elseif ($sec -eq 'Ficheros') {
+      if ($titulo) { $posF = $sal.Count; $sal.Add($x) }
+      elseif (@($rx | Where-Object { $x -match $_ }).Count -gt 0) { $sal.Add($x); $suyas++ }
+    }
+  }
+  if ($posF -lt 0) { return $todo }
+  if ($suyas -eq 0) { $sal.Insert($posF + 1, '(el plan no nombra los ficheros de este lote: aplica el mismo criterio que con los demas)') }
+  return $sal
 }
 
 # Revision previa de un paso: la IA lee todos los ficheros con hallazgos y la
