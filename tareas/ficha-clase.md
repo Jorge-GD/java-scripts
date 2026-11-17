@@ -42,6 +42,8 @@ Qué es cada `tipo`:
 - Cada dato lleva su `cita`, copiada del código. Si no puedes citarlo, no lo escribas.
 - Una cita inventada hace que se rechace la ficha entera, y se te pedirá repetirla.
 - Cuenta solo lo que ves en esas líneas. No supongas lo que hacen otras clases.
+- Cuenta cada condición por separado. Si un método comprueba cuatro cosas, son cuatro datos, aunque compartan el mismo código de error. No resumas varias en una.
+- Cada sitio donde el código rechaza, salta o para (un `return` o un `throw` con un mensaje) es un dato. También los que parecen obvios: el dato que no existe en una tabla, el formato mal escrito, la fecha fuera de plazo.
 - Si no hay nada que contar, escribe `"datos": []`.
 
 ## Ejemplo de salida
@@ -60,6 +62,12 @@ Para un fichero `ReciboValidator.java` que valida importes, el fichero de salida
       "texto": "El importe tiene que ser mayor que cero.",
       "linea": 31,
       "cita": "if (recibo.getImporte().signum() <= 0)"
+    },
+    {
+      "tipo": "regla",
+      "texto": "Si el cliente del recibo no existe, el recibo no vale.",
+      "linea": 36,
+      "cita": "if (cliente == null)"
     },
     {
       "tipo": "error",
