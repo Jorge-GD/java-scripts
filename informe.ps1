@@ -392,7 +392,7 @@ function Get-FaseHtml($D, $T, [string]$Fase, [string]$Tipo) {
 }
 
 # Una linea corta de un motivo: la primera con texto, con los espacios juntos y de 220 caracteres como mucho.
-function Get-MotivoCorto([string]$Motivo) {
+function Get-PrimeraLinea([string]$Motivo) {
   $l = @($Motivo -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
   if ($l.Count -eq 0) { return '' }
   $s = ($l[0] -replace '\s+', ' ').Trim()
@@ -412,7 +412,7 @@ function Get-TocaHtml($D, $T) {
   $grupos = @()
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
   if ($atascadas.Count -gt 0) {
-    $items = @($atascadas | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-tarea' @{ ID = $_.id; DONDE = $_.entradas.fichero }); TEXTO = (Get-MotivoCorto $_.motivo) } })
+    $items = @($atascadas | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-tarea' @{ ID = $_.id; DONDE = $_.entradas.fichero }); TEXTO = (Get-PrimeraLinea $_.motivo) } })
     $grupos += (Get-GrupoToca $T 'atascadas' $items "$($atascadas.Count)")
   }
   $sinFicha = @($D.Vistas | Where-Object { @($_.SinFicha).Count -gt 0 })
