@@ -358,7 +358,7 @@ function Test-Ficha($T, [string]$Dir, [string]$Leer) {
 # ================================ TAREAS ================================
 function New-Tarea([string]$Id, [string]$Ficha, [string]$Rel, [int]$Desde, [int]$Hasta) {
   return [pscustomobject]@{
-    id = $Id; ficha = $Ficha; tipo = 'ficha-clase'; estado = 'pendiente'; intentos = 0; motivo = ''
+    id = $Id; ficha = $Ficha; tipo = 'ficha-clase'; salida = "datos/fichas/$Ficha.json"; estado = 'pendiente'; intentos = 0; motivo = ''
     entradas = [pscustomobject]@{ fichero = $Rel; desde = $Desde; hasta = $Hasta }; resultado = $null
   }
 }

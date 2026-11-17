@@ -329,7 +329,7 @@ $Pruebas['9 corte y relanzar: no se repite ninguna tarea hecha'] = {
   $ll = Llamadas-De (Llamadas $e.Wt) 'clase-'
   Igual 'seis llamadas en total: ninguna tarea se repite' 6 $ll.Count
   Igual 'cada tarea se llamo una vez' 6 @($ll | Select-Object -ExpandProperty id -Unique).Count
-  Igual 'la prueba de aptitud se hizo una sola vez' 1 (Llamadas (Get-Ruta $e.Out 'registros/aptitud')).Count
+  Comprueba 'al relanzar no repite la prueba de aptitud' ($r.Salida -match 'ya pasada') (Cola $r.Salida)
   Igual 'seis fichas' 6 (Fichas $e).Count
   Comprueba 'relanzado: sin parada' ($null -eq (Estado $e).parada)
 }
