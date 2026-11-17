@@ -1,6 +1,7 @@
 <#
 tareas.ps1 - Las piezas de migracion.ps1 que no son el arranque: las llamadas a Copilot
-en paralelo, la ficha de clase y su comprobacion, las tareas y la prueba de aptitud.
+en paralelo, las tareas (ficha de clase, definicion de job, ficha de job y resumen) con su
+comprobacion, el mapa de jobs, las variables del migrado y la prueba de aptitud.
 Se carga con '. (Join-Path $PSScriptRoot 'tareas.ps1')' despues de comun.ps1, desde
 migracion.ps1 o desde cualquier script que necesite lo mismo (un preflight) sin pasar
 por el arranque. Cargarlo no ejecuta nada. Solo ASCII a proposito.
@@ -8,8 +9,9 @@ Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto 
 
 DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
-EsfuerzoReintento, Papeles, TiposDato y JavaExe) y las funciones, entre ellas
-Get-RutaAjustes (donde esta ajustes.json; RESCATE_HOME lo cambia).
+EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
+PasosDefinicionMax, PasosFichaMax, GlosarioMax, ListasJob, Papeles, TiposDato y JavaExe) y
+las funciones, entre ellas Get-RutaAjustes (donde esta ajustes.json; RESCATE_HOME lo cambia).
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $Cfg            el de comun.ps1 (este fichero le anade sus claves al cargarse)
@@ -18,6 +20,9 @@ ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $Registros      carpeta de registros: Invoke-Ronda y Test-Aptitud escriben ahi
   $ModeloElegido  id del modelo ('' = el que tenga Copilot): Invoke-Ronda
   $Datos          carpeta datos\: Save-Tarea, Get-TareasFichas y Save-Fichas
+Las tareas del negocio (mapa, ficha de job, resumen y variables) necesitan ademas $RepoRoot
+(el worktree: de ahi salen .rescate\contrato.json y las variables) y $Fuentes (los .java del
+original que se leen); Get-JobsContrato llama a rescate.ps1 (junto a este script) si falta el contrato.
 Test-Aptitud solo usa $Cfg, $LegacyRoot, $Registros y $ModeloElegido.
 Invoke-Ronda devuelve, por tarea, tambien Segundos y Codigo de la llamada (para medir sin
 leer el registro).
@@ -35,7 +40,22 @@ $Cfg += @{
   CitaMax            = 120    # caracteres de una cita
   CitaCerca          = 3      # una cita a esta distancia (o menos) de su linea cuenta como bien situada
   EsfuerzoLectura    = 'medium'
+  EsfuerzoRedaccion  = 'high'     # ficha de job y resumen: no leen codigo, solo redactan
   EsfuerzoReintento  = 'high'
+  CaracteresPorTarea = 24000  # lo que cabe de datos de clases en el prompt de una ficha de job
+  ClasesPorJob       = 40     # clases de un job (con sus referencias)
+  ProfundidadJob     = 2      # niveles de referencias desde los pasos y el fichero que define el job
+  PasosDefinicionMax = 20     # pasos de un job en la definicion
+  PasosFichaMax      = 12     # pasos de una ficha de job
+  GlosarioMax        = 15
+  # Que datos de las fichas de clase van a cada lista de la ficha de job (cada tipo de dato, a una)
+  ListasJob          = [ordered]@{
+    necesita   = @('entrada-fichero', 'tabla-lee', 'parametro', 'config')
+    produce    = @('salida-fichero', 'tabla-escribe')
+    conexiones = @('sftp', 'externo')
+    reglas     = @('regla')
+    siFalla    = @('error')
+  }
   Papeles            = @('lector', 'procesador', 'escritor', 'tarea', 'validador', 'configuracion', 'acceso-datos', 'sftp', 'modelo', 'otro')
   TiposDato          = @('entrada-fichero', 'salida-fichero', 'sftp', 'tabla-lee', 'tabla-escribe', 'parametro', 'config', 'regla', 'error', 'externo')
 }
@@ -138,7 +158,7 @@ function Start-Llamada([string]$Dir, [string[]]$A) {
   return $v
 }
 
-# Una llamada por elemento de $Lote (Id, Dir, Prompt, Modelo, Esfuerzo), todas a la vez.
+# Una llamada por elemento de $Lote (Id, Dir, Prompt, Modelo, Esfuerzo, Dirs: las carpetas que puede leer), todas a la vez.
 # Escribe el prompt, lanza, espera (matando las que pasan del tope) y devuelve, en el
 # mismo orden: Codigo, Texto (lo que ha escrito), Agotado y Segundos.
 function Invoke-Llamadas($Lote) {
@@ -150,7 +170,7 @@ function Invoke-Llamadas($Lote) {
     $salida = Join-Path $carpeta ($it.Id + '.json')
     if (Test-Path -LiteralPath $salida) { Remove-Item -LiteralPath $salida -Force }
     $texto = "Lee el fichero .rescate/tareas/$($it.Id).prompt.md y sigue sus instrucciones al pie de la letra."
-    $vivos += , (Start-Llamada $it.Dir (Get-ArgsCopilot $texto $it.Modelo $it.Esfuerzo @($LegacyRoot) $true))
+    $vivos += , (Start-Llamada $it.Dir (Get-ArgsCopilot $texto $it.Modelo $it.Esfuerzo @($it.Dirs) $true))
   }
   while (@($vivos | Where-Object { -not $_.Fin }).Count -gt 0) {
     foreach ($v in $vivos) {
@@ -175,23 +195,44 @@ function Invoke-Llamadas($Lote) {
   return $vivos
 }
 
-# ============================ FICHA DE CLASE ============================
-function Get-PlantillaFicha {
-  if (-not $script:PlantillaFicha) {
-    $ruta = Join-Ruta $PSScriptRoot 'tareas/ficha-clase.md'
+# ================================ PROMPTS ================================
+# La plantilla de cada tipo de tarea es tareas\<tipo>.md.
+function Get-Plantilla([string]$Tipo) {
+  if (-not $script:Plantillas) { $script:Plantillas = @{} }
+  if (-not $script:Plantillas.ContainsKey($Tipo)) {
+    $ruta = Join-Ruta $PSScriptRoot "tareas/$Tipo.md"
     if (-not (Test-Path -LiteralPath $ruta)) { Stop-Arranque "Falta la plantilla del prompt: $ruta" }
-    $script:PlantillaFicha = [System.IO.File]::ReadAllText($ruta, $Utf8) -replace "`r`n", "`n"
+    $script:Plantillas[$Tipo] = [System.IO.File]::ReadAllText($ruta, $Utf8) -replace "`r`n", "`n"
   }
-  return $script:PlantillaFicha
+  return $script:Plantillas[$Tipo]
+}
+
+# Lo que va en cada {{CLAVE}} de la plantilla de una tarea. $Leer es el fichero del original que se lee.
+function Get-VariablesPrompt($T, [string]$Leer) {
+  $e = $T.entradas
+  $v = @{ SALIDA = ".rescate/tareas/$($T.id).json"; CITA_MAX = "$($Cfg.CitaMax)" }
+  switch ($T.tipo) {
+    'definicion-job' {
+      $v.FICHERO = $Leer; $v.RELATIVO = $e.fichero; $v.LINEAS = "$($e.desde)-$($e.hasta)"
+      $v.JOBS = (@($e.jobs) -join ', '); $v.CLASES = ((Get-NombresClases) -join ', '); $v.PASOS_MAX = "$($Cfg.PasosDefinicionMax)"
+    }
+    'ficha-job' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.PASOS_MAX = "$($Cfg.PasosFichaMax)" }
+    'resumen' { $v.JOBS = $e.datos; $v.GLOSARIO_MAX = "$($Cfg.GlosarioMax)" }
+    default {
+      $v.FICHERO = $Leer; $v.RELATIVO = $e.fichero; $v.LINEAS = "$($e.desde)-$($e.hasta)"
+      $v.PAPELES = ($Cfg.Papeles -join ', '); $v.TIPOS = ($Cfg.TiposDato -join ', ')
+    }
+  }
+  return $v
 }
 
 # El prompt de una tarea. Con $Motivo (reintento) lleva ademas la seccion de correccion.
-function Get-PromptFicha($T, [string]$Leer, [string]$Motivo) {
-  $partes = (Get-PlantillaFicha) -split '<!--CORRECCION-->\n', 2
+function Get-Prompt($T, [string]$Leer, [string]$Motivo) {
+  $partes = (Get-Plantilla $T.tipo) -split '<!--CORRECCION-->\n', 2
   $p = $partes[0]
   if ($Motivo) { $p += $partes[1].Replace('{{MOTIVO}}', $Motivo) }
-  $rango = "$($T.entradas.desde)-$($T.entradas.hasta)"
-  return $p.Replace('{{FICHERO}}', $Leer).Replace('{{LINEAS}}', $rango).Replace('{{SALIDA}}', ".rescate/tareas/$($T.id).json").Replace('{{RELATIVO}}', $T.entradas.fichero).Replace('{{PAPELES}}', ($Cfg.Papeles -join ', ')).Replace('{{TIPOS}}', ($Cfg.TiposDato -join ', ')).Replace('{{CITA_MAX}}', "$($Cfg.CitaMax)")
+  $v = Get-VariablesPrompt $T $Leer
+  return [regex]::Replace($p, '\{\{(\w+)\}\}', { param($m) $v[$m.Groups[1].Value] })
 }
 
 # El fichero sin espacios, y donde empieza cada linea dentro de ese texto.
@@ -234,13 +275,47 @@ function New-Resultado([bool]$Ok, [string]$Motivo, $Ficha) {
   return [pscustomobject]@{ Ok = $Ok; Motivo = $Motivo; Ficha = $Ficha }
 }
 
-# Comprueba lo que ha escrito Copilot: JSON, campos, vocabularios y citas.
-# Si vale, devuelve la ficha con 'probado' en cada dato y la linea corregida.
-function Test-Ficha($T, [string]$Dir, [string]$Leer) {
+# Lo que ha escrito Copilot en .rescate\tareas\<id>.json, como objeto en Ficha, o el motivo de que no valga.
+function Read-Salida($T, [string]$Dir) {
   $ruta = Join-Ruta $Dir ".rescate/tareas/$($T.id).json"
   if (-not (Test-Path -LiteralPath $ruta)) { return (New-Resultado $false "No has escrito el fichero de salida .rescate/tareas/$($T.id).json. Escribe ahi el JSON." $null) }
   try { $o = Read-Json $ruta } catch { return (New-Resultado $false ('El JSON no es valido: ' + $_.Exception.Message) $null) }
   if ($o -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false 'El JSON no es valido: tiene que ser un objeto { ... }.' $null) }
+  return (New-Resultado $true '' $o)
+}
+
+# La linea y la cita de $D, que se llama $Pre en los motivos. Devuelve '' si valen o el motivo.
+function Test-LineaCita($D, [string]$Pre) {
+  if (-not (Test-Entero $D.linea)) { return "$Pre.linea tiene que ser un numero entero desde 1." }
+  if (-not (Test-Texto $D.cita) -or (($D.cita -replace '\s', '') -eq '')) { return "$Pre.cita falta o esta vacia." }
+  if ($D.cita.Length -gt [int]$Cfg.CitaMax) { return "$Pre.cita pasa de $($Cfg.CitaMax) caracteres: copia solo un trozo corto." }
+  return ''
+}
+
+# Busca la cita de cada elemento de $Lista (con linea, cita y probado) en el fichero $Leer: corrige la
+# linea y marca probado los que salen. Si mas de la mitad no salen devuelve el motivo; si no, ''.
+function Test-Citas($Lista, [string]$Leer) {
+  $indice = Get-IndiceCitas $Leer
+  $inventadas = @()
+  foreach ($d in $Lista) {
+    $donde = @(Find-Cita $indice $d.cita)
+    if ($donde.Count -eq 0) { $inventadas += $d.cita; continue }
+    $cerca = @($donde | Where-Object { [math]::Abs($_ - $d.linea) -le [int]$Cfg.CitaCerca })
+    if ($cerca.Count -eq 0) { $d.linea = [int](@($donde | Sort-Object { [math]::Abs($_ - $d.linea) })[0]) }
+    $d.probado = $true
+  }
+  if (($inventadas.Count * 2) -gt $Lista.Count) {
+    return "Mas de la mitad de las citas ($($inventadas.Count) de $($Lista.Count)) no salen en el fichero, por ejemplo: '$($inventadas[0])'. Copia las citas tal cual del codigo y no inventes ninguna."
+  }
+  return ''
+}
+
+# Comprueba lo que ha escrito Copilot: JSON, campos, vocabularios y citas.
+# Si vale, devuelve la ficha con 'probado' en cada dato y la linea corregida.
+function Test-Ficha($T, [string]$Dir, [string]$Leer) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
   foreach ($c in @('clase', 'papel', 'queHace')) {
     if (-not (Test-Texto $o.$c)) { return (New-Resultado $false "Falta el campo '$c' (o esta vacio)." $null) }
   }
@@ -253,37 +328,204 @@ function Test-Ficha($T, [string]$Dir, [string]$Leer) {
     if ($d -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con tipo, texto, linea y cita." $null) }
     if ($Cfg.TiposDato -cnotcontains $d.tipo) { return (New-Resultado $false ("$pre.tipo vale '$($d.tipo)' y tiene que ser uno de: " + ($Cfg.TiposDato -join ', ') + '.') $null) }
     if (-not (Test-Texto $d.texto)) { return (New-Resultado $false "$pre.texto falta o esta vacio." $null) }
-    if (-not (Test-Entero $d.linea)) { return (New-Resultado $false "$pre.linea tiene que ser un numero entero desde 1." $null) }
-    if (-not (Test-Texto $d.cita) -or (($d.cita -replace '\s', '') -eq '')) { return (New-Resultado $false "$pre.cita falta o esta vacia." $null) }
-    if ($d.cita.Length -gt [int]$Cfg.CitaMax) { return (New-Resultado $false "$pre.cita pasa de $($Cfg.CitaMax) caracteres: copia solo un trozo corto." $null) }
+    $m = Test-LineaCita $d $pre
+    if ($m) { return (New-Resultado $false $m $null) }
     $lista += [ordered]@{ tipo = $d.tipo; texto = $d.texto; linea = [int]$d.linea; cita = $d.cita; probado = $false }
     $i++
   }
-  $indice = Get-IndiceCitas $Leer
-  $inventadas = @()
-  foreach ($d in $lista) {
-    $donde = @(Find-Cita $indice $d.cita)
-    if ($donde.Count -eq 0) { $inventadas += $d.cita; continue }
-    $cerca = @($donde | Where-Object { [math]::Abs($_ - $d.linea) -le [int]$Cfg.CitaCerca })
-    if ($cerca.Count -eq 0) { $d.linea = [int](@($donde | Sort-Object { [math]::Abs($_ - $d.linea) })[0]) }
-    $d.probado = $true
-  }
-  if (($inventadas.Count * 2) -gt $lista.Count) {
-    return (New-Resultado $false ("Mas de la mitad de las citas ($($inventadas.Count) de $($lista.Count)) no salen en el fichero, por ejemplo: '$($inventadas[0])'. Copia las citas tal cual del codigo y no inventes ninguna.") $null)
-  }
+  $m = Test-Citas $lista $Leer
+  if ($m) { return (New-Resultado $false $m $null) }
   $ficha = [ordered]@{ fichero = $T.entradas.fichero; clase = $o.clase; papel = $o.papel; queHace = $o.queHace; datos = $lista }
   return (New-Resultado $true '' $ficha)
 }
 
-# ================================ TAREAS ================================
-function New-Tarea([string]$Id, [string]$Ficha, [string]$Rel, [int]$Desde, [int]$Hasta) {
-  return [pscustomobject]@{
-    id = $Id; ficha = $Ficha; tipo = 'ficha-clase'; salida = "datos/fichas/$Ficha.json"; estado = 'pendiente'; intentos = 0; ultimoEstado = ''; motivo = ''
-    entradas = [pscustomobject]@{ fichero = $Rel; desde = $Desde; hasta = $Hasta }; resultado = $null
+# Los nombres simples de las clases del original (la lista cerrada que se le da al modelo).
+function Get-NombresClases { return @($Fuentes | ForEach-Object { $_.BaseName } | Sort-Object -Unique) }
+
+# '' si $Dados son exactamente los $Pedidos, cada uno una vez; si no, el motivo ($Donde dice de que lista se habla).
+function Compare-Nombres($Pedidos, $Dados, [string]$Donde) {
+  $faltan = @($Pedidos | Where-Object { $Dados -cnotcontains $_ })
+  $sobran = @($Dados | Where-Object { $Pedidos -cnotcontains $_ } | Select-Object -Unique)
+  $repes = @($Dados | Group-Object -CaseSensitive | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+  $partes = @()
+  if ($faltan.Count -gt 0) { $partes += 'faltan ' + ($faltan -join ', ') }
+  if ($sobran.Count -gt 0) { $partes += 'sobran ' + ($sobran -join ', ') }
+  if ($repes.Count -gt 0) { $partes += 'estan repetidos ' + ($repes -join ', ') }
+  if ($partes.Count -eq 0) { return '' }
+  return "En $Donde tiene que estar exactamente cada uno de estos, una sola vez: $($Pedidos -join ', '). Pero " + ($partes -join '; ') + '.'
+}
+
+# Un texto de negocio no puede llevar el nombre de una clase del original como palabra entera.
+# $Campos es nombre del campo -> texto. Devuelve '' si valen o el motivo, que dice cual sobra y en que campo.
+function Test-LenguajeNegocio($Campos) {
+  $nombres = @(Get-NombresClases)
+  if ($nombres.Count -eq 0) { return '' }
+  $rx = '(?<!\w)(?:' + (($nombres | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')(?!\w)'
+  $mal = @()
+  foreach ($k in $Campos.Keys) {
+    foreach ($n in @([regex]::Matches([string]$Campos[$k], $rx) | ForEach-Object { $_.Value } | Select-Object -Unique)) { $mal += "$k lleva el nombre de la clase $n" }
+  }
+  if ($mal.Count -eq 0) { return '' }
+  return ('Esto es para gente de negocio y no puede llevar nombres de clases: ' + ($mal -join '; ') + '. Cuenta lo que hace con palabras normales.')
+}
+
+# Comprueba la definicion de los jobs de un fichero: exactamente los jobs pedidos, de 1 a PasosDefinicionMax
+# pasos cada uno, clases de la lista cerrada del original y citas que salen en el fichero.
+function Test-DefinicionJob($T, [string]$Dir, [string]$Leer) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
+  if ($o.jobs -isnot [array]) { return (New-Resultado $false "Falta el campo 'jobs': una lista con un elemento por job." $null) }
+  $max = [int]$Cfg.PasosDefinicionMax
+  $cerradas = @(Get-NombresClases)
+  $jobs = @(); $citas = @(); $nombres = @(); $fuera = @()
+  $i = 0
+  foreach ($j in $o.jobs) {
+    $pre = "jobs[$i]"
+    if ($j -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con job, linea, cita y pasos." $null) }
+    if (-not (Test-Texto $j.job)) { return (New-Resultado $false "$pre.job falta o esta vacio." $null) }
+    $m = Test-LineaCita $j $pre
+    if ($m) { return (New-Resultado $false $m $null) }
+    if (($j.pasos -isnot [array]) -or @($j.pasos).Count -lt 1 -or @($j.pasos).Count -gt $max) { return (New-Resultado $false "$pre.pasos tiene que ser una lista de 1 a $max pasos." $null) }
+    $ej = [ordered]@{ job = $j.job; linea = [int]$j.linea; cita = $j.cita; probado = $false; pasos = @() }
+    $nombres += $j.job
+    $citas += $ej
+    $k = 0
+    foreach ($p in $j.pasos) {
+      $pp = "$pre.pasos[$k]"
+      if ($p -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pp tiene que ser un objeto con paso, linea, cita y clases." $null) }
+      if (-not (Test-Texto $p.paso)) { return (New-Resultado $false "$pp.paso falta o esta vacio." $null) }
+      $m = Test-LineaCita $p $pp
+      if ($m) { return (New-Resultado $false $m $null) }
+      if ($p.clases -isnot [array]) { return (New-Resultado $false "$pp.clases tiene que ser una lista de nombres de clase (vacia si el paso no usa ninguna de CLASES)." $null) }
+      foreach ($c in $p.clases) { if (($c -isnot [string]) -or ($cerradas -cnotcontains $c)) { $fuera += "$c" } }
+      $ep = [ordered]@{ paso = $p.paso; linea = [int]$p.linea; cita = $p.cita; probado = $false; clases = @($p.clases | ForEach-Object { "$_" }) }
+      $ej.pasos += $ep
+      $citas += $ep
+      $k++
+    }
+    $jobs += $ej
+    $i++
+  }
+  $m = Compare-Nombres @($T.entradas.jobs) $nombres "'jobs'"
+  if ($m) { return (New-Resultado $false $m $null) }
+  if ($fuera.Count -gt 0) { return (New-Resultado $false ("En 'clases' hay nombres que no estan en la lista CLASES: " + (($fuera | Select-Object -Unique) -join ', ') + '. Usa solo nombres de esa lista, tal cual.') $null) }
+  $m = Test-Citas $citas $Leer
+  if ($m) { return (New-Resultado $false $m $null) }
+  return (New-Resultado $true '' ([ordered]@{ jobs = $jobs }))
+}
+
+# Comprueba la ficha de un job: el job pedido, titulo, paraQue y de 1 a PasosFichaMax pasos con sus referencias
+# (las que estan en el prompt), y sin nombres de clase en ningun texto. Un paso sin referencia valida queda
+# probado: false; con mas de la mitad asi, no vale.
+function Test-FichaJob($T, [string]$Dir) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
+  if ($o.job -cne $T.entradas.job) { return (New-Resultado $false "El campo 'job' tiene que valer '$($T.entradas.job)'." $null) }
+  foreach ($c in @('titulo', 'paraQue')) {
+    if (-not (Test-Texto $o.$c)) { return (New-Resultado $false "Falta el campo '$c' (o esta vacio)." $null) }
+  }
+  $max = [int]$Cfg.PasosFichaMax
+  if (($o.pasos -isnot [array]) -or @($o.pasos).Count -lt 1 -or @($o.pasos).Count -gt $max) { return (New-Resultado $false "El campo 'pasos' tiene que ser una lista de 1 a $max pasos." $null) }
+  if ($null -ne $o.dudas -and $o.dudas -isnot [array]) { return (New-Resultado $false "El campo 'dudas' tiene que ser una lista de frases (vacia si no hay dudas)." $null) }
+  $validas = @{}
+  foreach ($m in [regex]::Matches($T.entradas.datos, '(?m)^(clase-[0-9a-f]{8}#\d+) \[')) { $validas[$m.Groups[1].Value] = $true }
+  $campos = [ordered]@{ titulo = $o.titulo; paraQue = $o.paraQue }
+  $pasos = @()
+  $sinRef = 0
+  $i = 0
+  foreach ($p in $o.pasos) {
+    $pre = "pasos[$i]"
+    if ($p -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con titulo, texto y refs." $null) }
+    foreach ($c in @('titulo', 'texto')) {
+      if (-not (Test-Texto $p.$c)) { return (New-Resultado $false "$pre.$c falta o esta vacio." $null) }
+    }
+    if (($p.refs -isnot [array]) -or @($p.refs).Count -eq 0) { return (New-Resultado $false "$pre.refs tiene que ser una lista con al menos una referencia." $null) }
+    $refs = @($p.refs | Where-Object { ($_ -is [string]) -and $validas.ContainsKey($_) })
+    if ($refs.Count -eq 0) { $sinRef++ }
+    $campos["$pre.titulo"] = $p.titulo
+    $campos["$pre.texto"] = $p.texto
+    $pasos += [ordered]@{ titulo = $p.titulo; texto = $p.texto; refs = $refs; probado = ($refs.Count -gt 0) }
+    $i++
+  }
+  if (($sinRef * 2) -gt $pasos.Count) {
+    return (New-Resultado $false "Mas de la mitad de los pasos ($sinRef de $($pasos.Count)) no llevan ninguna referencia valida. Las referencias son las de los datos del prompt (clase-xxxxxxxx#n), copiadas tal cual; no se inventan." $null)
+  }
+  $m = Test-LenguajeNegocio $campos
+  if ($m) { return (New-Resultado $false $m $null) }
+  $dudas = @($o.dudas | Where-Object { Test-Texto $_ })
+  return (New-Resultado $true '' ([ordered]@{ job = $o.job; titulo = $o.titulo; paraQue = $o.paraQue; pasos = $pasos; dudas = $dudas }))
+}
+
+# Comprueba el resumen: texto sin nombres de clase, todos los jobs del mapa una vez en 'orden' y de 0 a GlosarioMax terminos.
+function Test-Resumen($T, [string]$Dir) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
+  if (-not (Test-Texto $o.resumen)) { return (New-Resultado $false "Falta el campo 'resumen' (o esta vacio)." $null) }
+  $m = Test-LenguajeNegocio ([ordered]@{ resumen = $o.resumen })
+  if ($m) { return (New-Resultado $false $m $null) }
+  if ($o.orden -isnot [array]) { return (New-Resultado $false "Falta el campo 'orden': una lista con un elemento por job." $null) }
+  $orden = @()
+  $i = 0
+  foreach ($x in $o.orden) {
+    if (($x -isnot [System.Management.Automation.PSCustomObject]) -or -not (Test-Texto $x.job)) { return (New-Resultado $false "orden[$i] tiene que ser un objeto con job y motivo." $null) }
+    $orden += [ordered]@{ job = $x.job; motivo = "$($x.motivo)" }
+    $i++
+  }
+  $m = Compare-Nombres @($T.entradas.jobs) @($orden | ForEach-Object { $_.job }) "'orden'"
+  if ($m) { return (New-Resultado $false $m $null) }
+  if (($o.glosario -isnot [array]) -or @($o.glosario).Count -gt [int]$Cfg.GlosarioMax) { return (New-Resultado $false "El campo 'glosario' tiene que ser una lista de 0 a $($Cfg.GlosarioMax) terminos (vacia si no hay)." $null) }
+  $glosario = @()
+  $i = 0
+  foreach ($g in $o.glosario) {
+    if (($g -isnot [System.Management.Automation.PSCustomObject]) -or -not (Test-Texto $g.termino) -or -not (Test-Texto $g.definicion)) { return (New-Resultado $false "glosario[$i] tiene que ser un objeto con termino y definicion, los dos con texto." $null) }
+    $glosario += [ordered]@{ termino = $g.termino; definicion = $g.definicion }
+    $i++
+  }
+  return (New-Resultado $true '' ([ordered]@{ resumen = $o.resumen; orden = $orden; glosario = $glosario }))
+}
+
+# Comprueba lo que ha escrito Copilot segun el tipo de la tarea.
+function Test-Salida($T, [string]$Dir, [string]$Leer) {
+  switch ($T.tipo) {
+    'definicion-job' { return (Test-DefinicionJob $T $Dir $Leer) }
+    'ficha-job' { return (Test-FichaJob $T $Dir) }
+    'resumen' { return (Test-Resumen $T $Dir) }
+    default { return (Test-Ficha $T $Dir $Leer) }
   }
 }
 
+# ================================ TAREAS ================================
+function New-TareaTipo([string]$Tipo, [string]$Id, [string]$Ficha, [string]$Salida, $Entradas) {
+  return [pscustomobject]@{
+    id = $Id; ficha = $Ficha; tipo = $Tipo; salida = $Salida; estado = 'pendiente'; intentos = 0; ultimoEstado = ''; motivo = ''
+    entradas = $Entradas; resultado = $null
+  }
+}
+
+# La ficha de clase de un fichero (o de un trozo de sus lineas).
+function New-Tarea([string]$Id, [string]$Ficha, [string]$Rel, [int]$Desde, [int]$Hasta) {
+  return (New-TareaTipo 'ficha-clase' $Id $Ficha "datos/fichas/$Ficha.json" ([pscustomobject]@{ fichero = $Rel; desde = $Desde; hasta = $Hasta }))
+}
+
 function Save-Tarea($T) { Write-Json (Join-Path (Join-Path $Datos 'tareas') ($T.id + '.json')) $T }
+
+# Guarda la tarea y devuelve la que queda: la de un lanzamiento anterior si esta hecha (o atascada, con
+# $ConservarAtascadas) y sus entradas siguen siendo las mismas (huella); si no, la nueva.
+function Restore-Tarea($T, [bool]$ConservarAtascadas) {
+  $previa = Join-Path (Join-Path $Datos 'tareas') ($T.id + '.json')
+  if (Test-Path -LiteralPath $previa) {
+    try {
+      $p = Read-Json $previa
+      if (($p.estado -eq 'hecha' -or ($ConservarAtascadas -and $p.estado -eq 'atascada')) -and $p.entradas.huella -eq $T.entradas.huella) { $T = $p }
+    }
+    catch { }
+  }
+  Save-Tarea $T
+  return $T
+}
 
 # Los .java que se leen del original: los de cada src/main/java (de cualquier modulo y a
 # cualquier profundidad, sin entrar en .git, target ni node_modules). Si no hay ninguno,
@@ -325,13 +567,7 @@ function Get-TareasFichas($Ficheros, [bool]$ConservarAtascadas) {
       $desde = $k * [int]$Cfg.LineasPorTarea + 1
       $hasta = [math]::Min($n, ($k + 1) * [int]$Cfg.LineasPorTarea)
       if ($trozos -eq 1) { $id = $ficha } else { $id = $ficha + '-p' + ($k + 1) }
-      $t = New-Tarea $id $ficha $rel $desde $hasta
-      $previa = Join-Path (Join-Path $Datos 'tareas') ($id + '.json')
-      if (Test-Path -LiteralPath $previa) {
-        try { $p = Read-Json $previa; if ($p.estado -eq 'hecha' -or ($ConservarAtascadas -and $p.estado -eq 'atascada')) { $t = $p } } catch { }
-      }
-      Save-Tarea $t
-      $tareas += $t
+      $tareas += , (Restore-Tarea (New-Tarea $id $ficha $rel $desde $hasta) $ConservarAtascadas)
     }
   }
   return $tareas
@@ -358,22 +594,26 @@ function Get-UltimaLinea([string]$Texto) {
   return $s
 }
 
-# Una ronda de lectura: llama a Copilot para cada tarea de $Lote y comprueba lo que escribe.
-# $Dir es la carpeta de trabajo de Copilot; $RaizOrig la carpeta de donde salen los ficheros.
+# Una ronda: llama a Copilot para cada tarea de $Lote (del tipo que sea) y comprueba lo que escribe.
+# $Dir es la carpeta de trabajo de Copilot; $RaizOrig la carpeta de donde salen los ficheros. Las tareas
+# con un fichero que leer (ficha de clase, definicion de job) pueden leer el original, con EsfuerzoLectura;
+# las que solo redactan (ficha de job, resumen) no leen nada, con EsfuerzoRedaccion.
 # Devuelve, por tarea: Tarea, Estado (ok, invalida, fallo, tiempo), Motivo, Linea (la ultima linea
 # de lo que dijo Copilot si fallo), Ficha, Registro, Segundos y Codigo (los de la llamada).
 function Invoke-Ronda($Lote, [string]$Dir, [string]$RaizOrig) {
   $items = @()
   foreach ($t in $Lote) {
-    $leer = Join-Ruta $RaizOrig $t.entradas.fichero
+    $leer = ''
+    $dirs = @()
+    $esf = $Cfg.EsfuerzoRedaccion
+    if ($t.entradas.fichero) { $leer = Join-Ruta $RaizOrig $t.entradas.fichero; $dirs = @($LegacyRoot); $esf = $Cfg.EsfuerzoLectura }
     $motivo = ''
-    $esf = $Cfg.EsfuerzoLectura
     if ($t.intentos -gt 0) {
       $esf = $Cfg.EsfuerzoReintento
       # la correccion es para una ficha que no paso la comprobacion; tras un fallo de Copilot se repite el prompt tal cual
       if ($t.ultimoEstado -eq 'invalida') { $motivo = $t.motivo }
     }
-    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $Dir; Modelo = $ModeloElegido; Esfuerzo = $esf; Prompt = (Get-PromptFicha $t $leer $motivo) })
+    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $Dir; Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = $dirs; Leer = $leer; Prompt = (Get-Prompt $t $leer $motivo) })
   }
   $llamadas = @(Invoke-Llamadas $items)
   $res = @()
@@ -387,10 +627,278 @@ function Invoke-Ronda($Lote, [string]$Dir, [string]$RaizOrig) {
     if ($c.Agotado) { $r.Estado = 'tiempo'; $r.Motivo = "Tiempo agotado: la llamada pasaba de $($Cfg.SegundosPorLlamada) s y se mato." }
     elseif ($c.Codigo -ne 0) { $r.Estado = 'fallo'; $r.Linea = Get-UltimaLinea $c.Texto; $r.Motivo = "Copilot salio con codigo $($c.Codigo): " + $r.Linea }
     else {
-      $v = Test-Ficha $t $Dir (Join-Ruta $RaizOrig $t.entradas.fichero)
+      $v = Test-Salida $t $Dir ($items[$i].Leer)
       if ($v.Ok) { $r.Ficha = $v.Ficha } else { $r.Estado = 'invalida'; $r.Motivo = $v.Motivo }
     }
     $res += $r
+  }
+  return $res
+}
+
+# ================================== MAPA ==================================
+# Los jobs del contrato (.rescate\contrato.json del worktree). Si no esta, lo escribe rescate.ps1 (-Modo pre -SinIA).
+function Get-JobsContrato {
+  $ruta = Join-Ruta $RepoRoot '.rescate/contrato.json'
+  if (-not (Test-Path -LiteralPath $ruta)) {
+    $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'pre', '-Repo', $RepoRoot, '-Legacy', $LegacyRoot, '-SinIA', '-Si')
+    if ($r.Codigo -ne 0 -or -not (Test-Path -LiteralPath $ruta)) { throw ("rescate.ps1 -Modo pre no ha escrito el contrato (codigo $($r.Codigo)): " + (@($r.Salida | Select-Object -Last 3) -join ' / ')) }
+  }
+  return @((Read-Json $ruta).jobs | Where-Object { $_ -and $_.nombre })
+}
+
+# El fichero que define un job: Rel, Existe y Motivo (vacio si se puede leer de una vez, y si no, por que).
+function Get-FicheroDefinicion($Job) {
+  $rel = ("$($Job.definidoEn)" -replace '\\', '/').Trim()
+  $d = [pscustomobject]@{ Rel = $rel; Existe = $false; Lineas = 0; Motivo = '' }
+  if ($rel -and (Test-Path -LiteralPath (Join-Ruta $LegacyRoot $rel) -PathType Leaf)) {
+    $d.Existe = $true
+    $d.Lineas = [math]::Max(1, @([System.IO.File]::ReadAllLines((Join-Ruta $LegacyRoot $rel))).Count)
+    if ($d.Lineas -gt (3 * [int]$Cfg.LineasPorTarea)) { $d.Motivo = "el fichero que lo define ($rel) pasa de $(3 * [int]$Cfg.LineasPorTarea) lineas" }
+  }
+  elseif ($rel) { $d.Motivo = "el fichero que lo define ($rel) no esta en el original" }
+  else { $d.Motivo = 'el contrato no dice en que fichero se define' }
+  return $d
+}
+
+# Una tarea de definicion por cada fichero (que se pueda leer) que define jobs.
+function Get-TareasDefinicion($Jobs, [bool]$ConservarAtascadas) {
+  $porFichero = [ordered]@{}
+  foreach ($j in $Jobs) {
+    $d = Get-FicheroDefinicion $j
+    if ($d.Motivo) { continue }
+    if (-not $porFichero.Contains($d.Rel)) { $porFichero[$d.Rel] = @{ Lineas = $d.Lineas; Jobs = @() } }
+    $porFichero[$d.Rel].Jobs += $j.nombre
+  }
+  $tareas = @()
+  foreach ($rel in $porFichero.Keys) {
+    $x = $porFichero[$rel]
+    $huella = Get-Hash8 ($rel + '|' + ($x.Jobs -join ',') + '|' + ((Get-NombresClases) -join ','))
+    $entradas = [pscustomobject]@{ fichero = $rel; desde = 1; hasta = $x.Lineas; jobs = @($x.Jobs); huella = $huella }
+    $tareas += , (Restore-Tarea (New-TareaTipo 'definicion-job' ('definicion-' + (Get-Hash8 $rel)) '' 'datos/mapa.json' $entradas) $ConservarAtascadas)
+  }
+  return $tareas
+}
+
+# Las palabras enteras del texto de un fichero del original (para ver a quien nombra).
+function Get-Palabras([string]$Rel) {
+  if (-not $script:Palabras.ContainsKey($Rel)) {
+    $p = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($m in [regex]::Matches([System.IO.File]::ReadAllText((Join-Ruta $LegacyRoot $Rel)), '\w+')) { [void]$p.Add($m.Value) }
+    $script:Palabras[$Rel] = $p
+  }
+  return , $script:Palabras[$Rel]
+}
+
+# Las clases de un job: las semillas (Rel, Por: primero los pasos, luego el fichero que define el job) y, desde
+# ellas, las clases del original cuyo nombre simple sale como palabra entera en su texto, hasta ProfundidadJob
+# niveles. Devuelve las primeras ClasesPorJob que son .java del original ($Rutas), en el orden en que se encuentran.
+function Get-ClasesJob($Semillas, $PorNombre, $Rutas) {
+  $nodos = New-Object System.Collections.Generic.List[object]
+  $vistos = @{}
+  foreach ($s in $Semillas) {
+    if (-not $vistos.ContainsKey($s.Rel)) { $vistos[$s.Rel] = $true; $nodos.Add([pscustomobject]@{ Rel = $s.Rel; Prof = 0; Por = $s.Por }) }
+  }
+  $nombres = @($PorNombre.Keys | Sort-Object)
+  for ($i = 0; $i -lt $nodos.Count; $i++) {
+    if ($nodos[$i].Prof -ge [int]$Cfg.ProfundidadJob) { continue }
+    $palabras = Get-Palabras $nodos[$i].Rel
+    foreach ($n in $nombres) {
+      if (-not $palabras.Contains($n)) { continue }
+      foreach ($rel in $PorNombre[$n]) {
+        if (-not $vistos.ContainsKey($rel)) { $vistos[$rel] = $true; $nodos.Add([pscustomobject]@{ Rel = $rel; Prof = ($nodos[$i].Prof + 1); Por = 'referencia' }) }
+      }
+    }
+  }
+  return @($nodos | Where-Object { $Rutas.ContainsKey($_.Rel) } | Select-Object -First ([int]$Cfg.ClasesPorJob))
+}
+
+# El mapa: de cada job, sus pasos (los de la tarea de definicion, si esta hecha), sus clases y sus dudas; y los
+# ficheros del original que no cuelgan de ningun job. Sin ningun job en el contrato, un solo job con el nombre
+# del batch y las primeras clases del original.
+function Get-Mapa($Jobs, $Tareas, [string]$Batch) {
+  $script:Palabras = @{}
+  $rutas = @{}
+  $porNombre = @{}
+  foreach ($f in @($Fuentes | Sort-Object FullName)) {
+    $rel = Get-Rel $LegacyRoot $f.FullName
+    $rutas[$rel] = $f.BaseName
+    if ($porNombre.ContainsKey($f.BaseName)) { $porNombre[$f.BaseName] += $rel } else { $porNombre[$f.BaseName] = @($rel) }
+  }
+  $sinContrato = (@($Jobs).Count -eq 0)
+  if ($sinContrato) { $Jobs = @([pscustomobject]@{ nombre = $Batch; definidoEn = '' }) }
+  $conJob = @{}
+  $mapa = @()
+  foreach ($j in $Jobs) {
+    $d = Get-FicheroDefinicion $j
+    $def = $null
+    $dudas = @()
+    if ($sinContrato) { $dudas += 'No se ha detectado ningun job en el original: se cuenta el batch entero como un solo job, sin pasos.' }
+    else {
+      $porque = $d.Motivo
+      if (-not $porque) {
+        $t = @($Tareas | Where-Object { $_.entradas.fichero -eq $d.Rel })[0]
+        if ($t.estado -eq 'hecha') { $def = @($t.resultado.jobs | Where-Object { $_.job -ceq $j.nombre })[0] }
+        if (-not $def) { $porque = 'la lectura del fichero que lo define se ha atascado' }
+      }
+      if ($porque) { $dudas += "No se han podido sacar los pasos de este job: $porque." }
+    }
+    $semillas = @()
+    $pasos = @()
+    if ($sinContrato) { foreach ($rel in $rutas.Keys | Sort-Object) { $semillas += [pscustomobject]@{ Rel = $rel; Por = 'referencia' } } }
+    if ($def) {
+      foreach ($p in @($def.pasos)) {
+        $pasos += [ordered]@{ paso = $p.paso; clases = @($p.clases) }
+        foreach ($c in @($p.clases)) { foreach ($rel in @($porNombre[$c])) { if ($rel) { $semillas += [pscustomobject]@{ Rel = $rel; Por = 'paso' } } } }
+      }
+    }
+    if ($d.Existe) { $semillas += [pscustomobject]@{ Rel = $d.Rel; Por = 'definicion' } }
+    $clases = @()
+    foreach ($n in @(Get-ClasesJob $semillas $porNombre $rutas)) {
+      $ficha = 'clase-' + (Get-Hash8 $n.Rel)
+      $clases += [ordered]@{ clase = $rutas[$n.Rel]; fichero = $n.Rel; ficha = $ficha; por = $n.Por; tieneFicha = (Test-Path -LiteralPath (Join-Path (Join-Path $Datos 'fichas') ($ficha + '.json'))) }
+      $conJob[$n.Rel] = $true
+    }
+    $linea = 0
+    $probado = $false
+    if ($def) { $linea = [int]$def.linea; $probado = [bool]$def.probado }
+    $mapa += [ordered]@{ job = $j.nombre; definidoEn = $d.Rel; linea = $linea; probado = $probado; pasos = $pasos; clases = $clases; dudas = $dudas }
+  }
+  $sinJob = @($rutas.Keys | Where-Object { -not $conJob.ContainsKey($_) } | Sort-Object)
+  return [ordered]@{ jobs = $mapa; sinJob = $sinJob }
+}
+
+# ============================== FICHAS DE JOB ==============================
+# El nombre del job vale para un fichero y para un id de tarea.
+function Get-NombreJob([string]$Job) { return ($Job -replace '[^\w\.\-]', '-') }
+
+function Get-RutaJob([string]$Job) { return (Join-Path (Join-Path $Datos 'jobs') ((Get-NombreJob $Job) + '.json')) }
+
+# Las fichas de clase (las que existen) de las clases de un job, en el orden del mapa.
+function Get-FichasJob($JobMapa) {
+  $fichas = @()
+  foreach ($c in @($JobMapa.clases)) {
+    $ruta = Join-Path (Join-Path $Datos 'fichas') ($c.ficha + '.json')
+    if (Test-Path -LiteralPath $ruta) { $fichas += Read-Json $ruta }
+  }
+  return $fichas
+}
+
+# Lo que lleva el prompt de la ficha de un job: Pasos (los del mapa) y Datos (de cada clase con ficha, lo que hace
+# y sus datos con su referencia clase-xxxxxxxx#n, que es el lugar del dato en su ficha), las de los pasos primero,
+# hasta CaracteresPorTarea. Fuera: las clases que no caben. Refs: cuantos datos hay en el prompt.
+function Get-ContextoJob($JobMapa) {
+  $pasos = @($JobMapa.pasos | ForEach-Object { '- ' + $_.paso + ' (clases: ' + (@($_.clases) -join ', ') + ')' })
+  if ($pasos.Count -eq 0) { $pasos = @('(No se han podido sacar los pasos de este job: agrupa tu las clases en pasos con sentido para negocio.)') }
+  $texto = ''   # no se llama $datos: taparia el $Datos del script a las funciones que llama
+  $fuera = @()
+  $refs = 0
+  foreach ($f in @(Get-FichasJob $JobMapa)) {
+    $b = "### $($f.clase) ($($f.id), $($f.papel)): $($f.queHace -replace '\s+', ' ')`n"
+    $n = 0
+    foreach ($d in @($f.datos)) { $b += "$($f.id)#$n [$($d.tipo)] $($d.texto -replace '\s+', ' ')`n"; $n++ }
+    if (($texto.Length + $b.Length) -gt [int]$Cfg.CaracteresPorTarea) { $fuera += $f.clase; continue }
+    $texto += $b + "`n"
+    $refs += $n
+  }
+  return [pscustomobject]@{ Pasos = ($pasos -join "`n"); Datos = $texto.TrimEnd(); Fuera = $fuera; Refs = $refs }
+}
+
+# Una tarea de ficha de job por cada job del mapa que tenga algun dato que contar.
+function Get-TareasJob($Mapa, [bool]$ConservarAtascadas) {
+  $tareas = @()
+  foreach ($j in @($Mapa.jobs)) {
+    $c = Get-ContextoJob $j
+    if ($c.Refs -eq 0) { continue }
+    $entradas = [pscustomobject]@{ job = $j.job; pasos = $c.Pasos; datos = $c.Datos; fuera = @($c.Fuera); huella = (Get-Hash8 ($c.Pasos + "`n" + $c.Datos)) }
+    $tareas += , (Restore-Tarea (New-TareaTipo 'ficha-job' ('job-' + (Get-NombreJob $j.job)) '' ('datos/jobs/' + (Get-NombreJob $j.job) + '.json') $entradas) $ConservarAtascadas)
+  }
+  return $tareas
+}
+
+# Las listas de un job que monta el script con los datos de las fichas de sus clases (ListasJob: a que lista va
+# cada tipo de dato), sin repetir: mismo tipo y mismo texto sin contar espacios ni mayusculas.
+function Get-ListasJob($JobMapa) {
+  $listas = [ordered]@{}
+  foreach ($k in $Cfg.ListasJob.Keys) { $listas[$k] = @() }
+  $vistos = @{}
+  foreach ($f in @(Get-FichasJob $JobMapa)) {
+    $n = -1
+    foreach ($d in @($f.datos)) {
+      $n++
+      $clave = $d.tipo + '|' + (($d.texto -replace '\s', '').ToLowerInvariant())
+      if ($vistos.ContainsKey($clave)) { continue }
+      foreach ($k in $Cfg.ListasJob.Keys) {
+        if ($Cfg.ListasJob[$k] -ccontains $d.tipo) {
+          $vistos[$clave] = $true
+          $listas[$k] += [ordered]@{ tipo = $d.tipo; texto = $d.texto; ref = "$($f.id)#$n"; clase = $f.clase; fichero = $f.fichero; linea = $d.linea; cita = $d.cita; probado = $d.probado }
+        }
+      }
+    }
+  }
+  return $listas
+}
+
+# Escribe datos\jobs\<job>.json de cada job cuya redaccion ha acabado (hecha o atascada, tenga tarea o no):
+# lo que dijo el modelo y, siempre, las listas del script.
+function Save-Jobs($Mapa, $Tareas) {
+  foreach ($j in @($Mapa.jobs)) {
+    $t = @($Tareas | Where-Object { $_.entradas.job -ceq $j.job })[0]
+    if ($t -and $t.estado -eq 'pendiente') { continue }
+    $hecha = ($t -and $t.estado -eq 'hecha')
+    $dudas = @()
+    $o = [ordered]@{ job = $j.job }
+    if ($hecha) { $o['titulo'] = $t.resultado.titulo; $o['paraQue'] = $t.resultado.paraQue; $o['pasos'] = @($t.resultado.pasos); $dudas += @($t.resultado.dudas) }
+    else { $dudas += 'No se ha podido redactar este job: la tarea ha quedado atascada o no hay datos de clases que contar.' }
+    foreach ($e in (Get-ListasJob $j).GetEnumerator()) { $o[$e.Key] = @($e.Value) }
+    $o['sinFicha'] = @(@($j.clases | Where-Object { -not (Test-Path -LiteralPath (Join-Path (Join-Path $Datos 'fichas') ($_.ficha + '.json'))) }) | ForEach-Object { $_.clase })
+    if ($t -and @($t.entradas.fuera).Count -gt 0) { $dudas += ('No caben en la redaccion estas clases: ' + (@($t.entradas.fuera) -join ', ') + '.') }
+    $o['dudas'] = $dudas
+    if ($hecha) { $o['redaccion'] = 'hecha' } else { $o['redaccion'] = 'atascada' }
+    Write-Json (Get-RutaJob $j.job) $o
+  }
+}
+
+# ================================== RESUMEN ==================================
+# La tarea del resumen: de cada job del mapa, el titulo, el para que y los pasos de su redaccion, si esta hecha
+# (si no, solo su nombre). Sin ninguna redaccion hecha no hay tarea.
+function Get-TareasResumen($Mapa, [bool]$ConservarAtascadas) {
+  $bloques = @()
+  $hechas = 0
+  foreach ($j in @($Mapa.jobs)) {
+    $b = "JOB: $($j.job)`n"
+    $ruta = Get-RutaJob $j.job
+    $f = $null
+    if (Test-Path -LiteralPath $ruta) { $f = Read-Json $ruta }
+    if ($f -and $f.redaccion -eq 'hecha') {
+      $hechas++
+      $b += "TITULO: $($f.titulo)`nPARA QUE: $($f.paraQue -replace '\s+', ' ')`nPASOS: " + ((@($f.pasos) | ForEach-Object { $_.titulo }) -join '; ') + "`n"
+    }
+    else { $b += "(Sin redaccion: de este job solo se sabe el nombre.)`n" }
+    $bloques += $b
+  }
+  if ($hechas -eq 0) { return @() }
+  $texto = ($bloques -join "`n").TrimEnd()
+  $entradas = [pscustomobject]@{ jobs = @($Mapa.jobs | ForEach-Object { $_.job }); datos = $texto; huella = (Get-Hash8 $texto) }
+  return @(Restore-Tarea (New-TareaTipo 'resumen' 'resumen' '' 'datos/resumen.json' $entradas) $ConservarAtascadas)
+}
+
+# ============================== VARIABLES ==============================
+# Cada ${NOMBRE} y ${NOMBRE:valor} de los application*.yml, .yaml y .properties de src/main/resources del
+# worktree (sin las lineas de comentario): variable, porDefecto (null si no lleva), fichero y linea.
+function Get-Variables {
+  $res = @()
+  $dir = Join-Ruta $RepoRoot 'src/main/resources'
+  if (-not (Test-Path -LiteralPath $dir)) { return $res }
+  foreach ($f in @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Name -match '^application.*\.(yml|yaml|properties)$' } | Sort-Object Name)) {
+    $lineas = [System.IO.File]::ReadAllLines($f.FullName)
+    for ($i = 0; $i -lt $lineas.Count; $i++) {
+      if ($lineas[$i].TrimStart().StartsWith('#')) { continue }
+      foreach ($m in [regex]::Matches($lineas[$i], '\$\{([\w\.\-]+)(?::([^}]*))?\}')) {
+        $defecto = $null
+        if ($m.Groups[2].Success) { $defecto = $m.Groups[2].Value }
+        $res += [ordered]@{ variable = $m.Groups[1].Value; porDefecto = $defecto; fichero = ('src/main/resources/' + $f.Name); linea = ($i + 1) }
+      }
+    }
   }
   return $res
 }
