@@ -21,7 +21,8 @@ BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   6 maven         compilar, JaCoCo y OpenRewrite sobre preflight\juguete (Maven de los ajustes, el mvn del
                   PATH o el mvnw de -Migrado, por este orden; la linea 'maven usado' dice cual)
   7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
-                  diagnostico de rescate.ps1 (solo numeros y palabras fijas)
+                  diagnostico de rescate.ps1, con cuantas reglas incumple la propia referencia
+                  (solo numeros y palabras fijas)
   8 clases reales 5 clases del original por tamano: la ficha de cada una
   9 examen        con cada modelo de -Modelos y cada esfuerzo de -Esfuerzos (medium por defecto): la ficha de
                   una clase corta y de una larga, y arreglar un Maven de juguete y ponerle Javadoc. Cuenta
@@ -1123,6 +1124,10 @@ try {
     foreach ($m in [regex]::Matches($t, '(?m)^([a-z0-9]+)\s+(\d+)\s+(\d+)\s*$')) {
       Add-Linea ("$($m.Groups[1].Value): $($m.Groups[2].Value) errores, $($m.Groups[3].Value) avisos")
     }
+    # cuanto incumple la propia referencia (lo que ella hace se permite en el migrado): solo digitos
+    $ref = [regex]::Match($t, '(?m)^Plantilla incumple: capas ([0-9]+) \| ficheros ([0-9]+) \| calidad ([0-9]+) \| secretos ([0-9]+)\s*$')
+    if ($ref.Success) { Add-Linea "plantilla incumple: capas $($ref.Groups[1].Value) | ficheros $($ref.Groups[2].Value) | calidad $($ref.Groups[3].Value) | secretos $($ref.Groups[4].Value)" }
+    else { Add-Linea 'plantilla incumple: desconocido' }
   } $true
 
   # ----------------------------------- 8 -----------------------------------

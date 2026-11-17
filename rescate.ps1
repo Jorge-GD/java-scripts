@@ -551,11 +551,16 @@ function Get-Calibracion([string]$Raiz) {
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object)
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
-    Calidad = $calReglas
+    Calidad = $calReglas; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
     YmlSftp = ($h.Yml -match 'sftp'); Pom = (Get-Pom $Raiz); Extra = $extra
   }
+}
+
+# Cuanto incumple la propia plantilla (lo que se permite en el repo porque ella lo hace), en una linea.
+function Get-TextoIncumple($Cal) {
+  return "capas $($Cal.ExcImports.Count) | ficheros $($Cal.ExcFicheros.Count) | calidad $($Cal.Calidad.Count) | secretos $($Cal.Secretos)"
 }
 
 # ============================== DIAGNOSTICO ==============================
@@ -820,6 +825,7 @@ function Write-Informe($Hall) {
   [void]$sb.AppendLine('- Fecha: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm'))
   [void]$sb.AppendLine('- Paquete base: ' + $script:BasePkg)
   [void]$sb.AppendLine('- Plantilla: ' + $PlantillaRoot)
+  if ($script:Cal) { [void]$sb.AppendLine('- La plantilla incumple: ' + (Get-TextoIncumple $script:Cal)) }
   [void]$sb.AppendLine('- Estado: ' + (Get-TextoBuild))
   [void]$sb.AppendLine('')
   [void]$sb.AppendLine('| Paso | Errores | Avisos |')
@@ -1442,6 +1448,7 @@ $script:Cal = $null
 if ($PlantillaRoot) {
   Info 'Leyendo la plantilla...'
   $script:Cal = Get-Calibracion $PlantillaRoot
+  Info ('Plantilla incumple: ' + (Get-TextoIncumple $script:Cal))
 }
 
 switch ($Modo) {

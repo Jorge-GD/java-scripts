@@ -938,5 +938,80 @@ $Pruebas['config: en .properties el separador puede ser dos puntos'] = {
   Igual 'con su clave' ($DetalleSecreto -f 'mi.password') $d.H[0].Detalle
 }
 
+# ===================== LA PLANTILLA INCUMPLE LO QUE EXIGE =====================
+# Escenario cuya plantilla son estos ficheros (ruta -> texto) en vez de la de siempre.
+function Escenario-Con-Plantilla([string]$Nombre, $Ficheros) {
+  $e = Nuevo-Escenario $Nombre
+  Remove-Item -LiteralPath $e.Plantilla -Recurse -Force
+  Escribe $e.Plantilla 'pom.xml' $Pom
+  foreach ($ruta in $Ficheros.Keys) { Escribe $e.Plantilla $ruta $Ficheros[$ruta] }
+  return $e
+}
+
+$Base = 'src/main/java/com/acme/plantilla/'
+$Arranque = "package com.acme.plantilla;`n`n/** Arranque. */`n@org.springframework.boot.autoconfigure.SpringBootApplication`npublic class PlantillaApplication {`n}`n"
+# Incumple: dos clases de dominio que importan el mismo paquete de infrastructure (1 capa, no 2), dos clases que abren
+# ficheros en la misma carpeta (1 fichero, no 2), dos tipos publicos sin Javadoc y un println (2 reglas de calidad, no 3
+# hallazgos) y un secreto en application.yml (1 error; el de application-local.yml es un aviso y no cuenta).
+$PlantillaIncumple = [ordered]@{
+  ($Base + 'PlantillaApplication.java') = $Arranque
+  ($Base + 'infrastructure/config/BatchProperties.java') = "package com.acme.plantilla.infrastructure.config;`n`n/** Propiedades. */`npublic record BatchProperties(String carpeta) {`n}`n"
+  ($Base + 'domain/model/Poliza.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Poliza. */`npublic record Poliza(String numero) {`n}`n"
+  ($Base + 'domain/model/Cliente.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Cliente. */`npublic record Cliente(String nombre) {`n}`n"
+  ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+  ($Base + 'infrastructure/adapters/output/sftp/EscritorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.FileWriter;`n`n/** Escribe ficheros locales a pelo. */`npublic class EscritorLocal {`n    private FileWriter salida;`n}`n"
+  ($Base + 'application/usecases/SinDocUno.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocUno {`n    void saluda() {`n        System.out.println(`"hola`");`n    }`n}`n"
+  ($Base + 'application/usecases/SinDocDos.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocDos {`n}`n"
+  'src/main/resources/application.yml' = "sftp:`n  password: valor-secreto-9z`n"
+  'src/main/resources/application-local.yml' = "sftp:`n  token: otro-valor-secreto-7y`n"
+}
+# Cumple todo: Javadoc, capas respetadas, ningun fichero local y el secreto entra por una variable sin valor por defecto.
+$PlantillaLimpia = [ordered]@{
+  ($Base + 'PlantillaApplication.java') = $Arranque
+  ($Base + 'domain/model/Poliza.java') = "package com.acme.plantilla.domain.model;`n`n/** Poliza. */`npublic record Poliza(String numero) {`n}`n"
+  ($Base + 'application/usecases/CargarUseCase.java') = "package com.acme.plantilla.application.usecases;`n`nimport com.acme.plantilla.domain.model.Poliza;`n`n/** Carga. */`npublic class CargarUseCase {`n    private Poliza ultima;`n}`n"
+  'src/main/resources/application.yml' = "sftp:`n  password: `${SFTP_PASSWORD}`n"
+}
+$SecretosPlantilla = @('valor-secreto-9z', 'otro-valor-secreto-7y')
+
+$Pruebas['plantilla incumple: la consola y diagnostico.md cuentan capas, ficheros, calidad y secretos, sin el valor del secreto'] = {
+  $e = Escenario-Con-Plantilla 'incumple' $PlantillaIncumple
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $linea = 'capas 1 | ficheros 1 | calidad 2 | secretos 1'
+  $consola = @($r.Salida -split "`r?`n")
+  $i = [array]::IndexOf($consola, 'Plantilla incumple: ' + $linea)
+  Comprueba 'la consola trae la linea con los numeros de la plantilla' ($i -ge 0) (Cola $r.Salida)
+  Comprueba 'va justo despues de leer la plantilla' ($i -gt 0 -and $consola[$i - 1] -ceq 'Leyendo la plantilla...') (Cola $r.Salida)
+  $md = @((Lee $e.Repo '.rescate/diagnostico.md') -split "`r?`n")
+  $j = [array]::IndexOf($md, '- La plantilla incumple: ' + $linea)
+  Comprueba 'diagnostico.md trae los mismos numeros' ($j -ge 0) ($md -join ' / ')
+  Comprueba 'y va debajo de la linea de la plantilla' ($j -gt 0 -and $md[$j - 1] -clike '- Plantilla: *') ($md -join ' / ')
+  $todo = Lo-Que-Sale $e.Repo $r.Salida
+  foreach ($s in $SecretosPlantilla) { Comprueba ('el valor del secreto ' + $s.Substring(0, 5) + '... no sale en ninguna salida') (-not $todo.Contains($s)) }
+}
+
+$Pruebas['plantilla incumple: una plantilla que cumple todo cuenta cero'] = {
+  $e = Escenario-Con-Plantilla 'limpia' $PlantillaLimpia
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $linea = 'capas 0 | ficheros 0 | calidad 0 | secretos 0'
+  Comprueba 'la consola dice todo a cero' (@($r.Salida -split "`r?`n") -contains ('Plantilla incumple: ' + $linea)) (Cola $r.Salida)
+  Comprueba 'y diagnostico.md tambien' (@((Lee $e.Repo '.rescate/diagnostico.md') -split "`r?`n") -contains ('- La plantilla incumple: ' + $linea))
+}
+
+$Pruebas['plantilla incumple: sin -Plantilla no hay linea; con ella, la hay tambien en el modo pre'] = {
+  $e = Escenario-Con-Plantilla 'sin-plantilla' $PlantillaIncumple
+  $r = Rescate @('-Repo', $e.Repo, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola no dice nada de lo que incumple' ($r.Salida -notmatch 'incumple') (Cola $r.Salida)
+  Comprueba 'diagnostico.md tampoco' ((Lee $e.Repo '.rescate/diagnostico.md') -notmatch 'incumple')
+  $orig = Join-Path (Join-Path $Dir 'sin-plantilla') 'original'
+  Escribe $orig 'src/main/java/com/acme/viejo/Viejo.java' "package com.acme.viejo;`n`npublic class Viejo {`n}`n"
+  $pre = Rescate @('-Modo', 'pre', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Legacy', $orig, '-SinIA')
+  Igual 'el modo pre sale con 0' 0 $pre.Codigo
+  Comprueba 'el modo pre trae la linea' (@($pre.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 1 | ficheros 1 | calidad 2 | secretos 1') (Cola $pre.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

@@ -24,6 +24,8 @@ Al final suma créditos (`--usage-output-file`, si tu Copilot lo conoce), segund
 
 El diagnóstico del bloque 7 usa `rescate.ps1` en modo diagnóstico sobre `-Migrado`: deja allí su carpeta `.rescate`, que git ignora.
 
+Ese mismo bloque cuenta cuántas reglas incumple la propia referencia (`plantilla incumple: capas N | ficheros N | calidad N | secretos N`, solo números), porque lo que ella hace se permite también en el migrado.
+
 Si el resultado dice `original sin cambios: no`, mira `git status` en el original antes de seguir: algo lo tocó durante la lectura.
 
 Si Windows no deja lanzar el script:

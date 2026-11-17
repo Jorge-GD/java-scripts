@@ -1244,5 +1244,72 @@ $Pruebas['30 bloque 9, privacidad: nada de la empresa en el examen (errores de C
   finally { Restaura-Claves }
 }
 
+# La referencia de juguete del escenario con lo que incumple: 2 capas (dominio y application importan infrastructure), 1 fichero
+# (una clase abre ficheros a pelo), 3 reglas de calidad (Javadoc, consola y catch vacio) y 4 secretos en claro.
+$SecretosRef = @('zorba-pw-uno', 'zorba-tk-dos', 'zorba-ak-tres', 'zorba-cl-cuatro')
+function Pon-Referencia-Que-Incumple($E) {
+  $b = 'src/main/java/com/zorba/plantilla/'
+  $inf = 'com.zorba.plantilla.infrastructure.config.Ajustes'
+  Escribe $E.Plantilla ($b + 'infrastructure/config/Ajustes.java') (Clase-Con 'Ajustes' 'com.zorba.plantilla.infrastructure.config' @() @('int a = 1;'))
+  Escribe $E.Plantilla ($b + 'domain/Modelo.java') (Clase-Con 'Modelo' 'com.zorba.plantilla.domain' @($inf) @('int a = 1;'))
+  Escribe $E.Plantilla ($b + 'application/Caso.java') (Clase-Con 'Caso' 'com.zorba.plantilla.application' @($inf) @('int a = 1;', 'void m() { System.out.println("x"); }'))
+  Escribe $E.Plantilla ($b + 'infrastructure/adapters/output/sftp/Local.java') (Clase-Con 'Local' 'com.zorba.plantilla.infrastructure.adapters.output.sftp' @('java.io.FileReader') @('Object r = null;', 'void m() { try { r = null; } catch (Exception e) { } }'))
+  Escribe $E.Plantilla 'src/main/resources/application.yml' ("sftp:`n  password: zorba-pw-uno`n  token: zorba-tk-dos`n  api-key: zorba-ak-tres`n  clave: zorba-cl-cuatro`n")
+}
+
+$Pruebas['31 bloque 7, referencia que incumple: cuenta capas, ficheros, calidad y secretos de la referencia, sin el valor de los secretos'] = {
+  $e = Nuevo-Escenario 'referencia'
+  Pon-Referencia-Que-Incumple $e
+  $r = Pf $e (Todos $e @('-Solo', '7'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la linea dice los numeros de la referencia de juguete' 'capas 2 | ficheros 1 | calidad 3 | secretos 4' (Valor-De $r 'plantilla incumple')
+  Igual 'una sola linea' 1 (Cuenta-Lineas $r '^plantilla incumple: ')
+  $l = Lineas-De $r
+  $iLinea = [array]::IndexOf($l, @($l | Where-Object { $_ -match '^plantilla incumple: ' })[0])
+  $iDiag = [array]::IndexOf($l, @($l | Where-Object { $_ -match '^calidad: ' })[0])
+  Comprueba 'va tras las lineas del diagnostico' ($iDiag -ge 0 -and $iLinea -gt $iDiag) "$iDiag $iLinea"
+  Comprueba 'es el bloque 7 quien la escribe' (@(Bloque-De $r '7') -contains ('plantilla incumple: capas 2 | ficheros 1 | calidad 3 | secretos 4'))
+  $todo = $r.Fichero + "`n" + $r.Salida
+  foreach ($s in $SecretosRef) { Comprueba ('el valor del secreto ' + $s.Substring(6, 2) + ' no sale') (-not $todo.Contains($s)) }
+  Sin-Fugas $r 'referencia'
+  Comprueba 'y es ASCII puro' ((Es-Ascii $r.Fichero) -and (Es-Ascii $r.Salida))
+}
+
+$Pruebas['32 bloque 7, referencia que incumple: si el diagnostico corre y no trae la linea o la trae con otra cosa que digitos, desconocido'] = {
+  $e = Nuevo-Escenario 'referencia-sin-linea'
+  Nueva-Instalacion
+  $real = Join-Path $origen 'rescate.ps1'
+  $falso = Join-Path $Inst 'rescate.ps1'
+  try {
+    # a) un rescate.ps1 que hace su diagnostico y no dice nada de la referencia
+    Escribe $Inst 'rescate.ps1' ("param([string]`$Repo, [string]`$Plantilla, [switch]`$SinWorktree)`nWrite-Host 'build               0        0'`nexit 0`n")
+    $a = Pf $e (Todos $e @('-Solo', '7'))
+    Igual 'a) sale con 0' 0 $a.Codigo
+    Igual 'a) el diagnostico corrio' 'codigo 0' ((Valor-De $a 'diagnostico') -replace ' en \d+ s$', '')
+    Igual 'a) build sale' '0 errores, 0 avisos' (Valor-De $a 'build')
+    Igual 'a) la linea dice desconocido' 'desconocido' (Valor-De $a 'plantilla incumple')
+    # b) la linea trae algo que no son digitos (una ruta con nombres): no pasa nada de eso
+    Escribe $Inst 'rescate.ps1' ("param([string]`$Repo, [string]`$Plantilla, [switch]`$SinWorktree)`nWrite-Host 'build               0        0'`nWrite-Host 'Plantilla incumple: capas C:\Users\zorbalex | ficheros 1 | calidad 2 | secretos 3'`nexit 0`n")
+    $b = Pf $e (Todos $e @('-Solo', '7'))
+    Igual 'b) la linea dice desconocido' 'desconocido' (Valor-De $b 'plantilla incumple')
+    Sin-Fugas $b 'referencia b'
+  }
+  finally { Copy-Item -LiteralPath $real -Destination $falso -Force }
+}
+
+$Pruebas['33 bloque 7, referencia que incumple: sin -Plantilla, o con el diagnostico saltado, no hay linea'] = {
+  $e = Nuevo-Escenario 'referencia-sin'
+  Pon-Referencia-Que-Incumple $e
+  $a = Pf $e @('-Legacy', $e.Legacy, '-Migrado', $e.Migrado, '-Solo', '7')
+  Igual 'a) sale con 0' 0 $a.Codigo
+  Comprueba 'a) sin -Plantilla el diagnostico se salta' ((Valor-De $a 'diagnostico') -match '^saltado') ((Bloque-De $a '7') -join ' / ')
+  Igual 'a) no hay linea de la referencia' 0 (Cuenta-Lineas $a 'incumple')
+  Sin-Fugas $a 'referencia a'
+  $b = Pf $e (Todos $e @('-Solo', '7', '-SinMaven'))
+  Comprueba 'b) con -SinMaven el diagnostico se salta' ((Valor-De $b 'diagnostico') -match '^saltado') ((Bloque-De $b '7') -join ' / ')
+  Igual 'b) no hay linea de la referencia' 0 (Cuenta-Lineas $b 'incumple')
+  Sin-Fugas $b 'referencia b'
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
