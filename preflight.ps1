@@ -9,6 +9,7 @@ USO (todo es opcional)
   .\preflight.ps1 -Solo 1,3        # solo esos bloques
   .\preflight.ps1 -SinCopilot      # salta los bloques 4, 5 y 8 (los que llaman al modelo)
   .\preflight.ps1 -SinMaven        # salta el 6 y el diagnostico del 7
+Una ruta de -Legacy, -Migrado o -Plantilla que no es una carpeta se dice al instante (sin repetirla) y sale con 1.
 
 BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   1 entorno       modo de lenguaje, versiones, politica de ejecucion, suspension, disco
@@ -16,11 +17,14 @@ BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   3 copilot       que banderas conoce (sin llamar a ningun modelo)
   4 aptitud       la ficha de un fichero de juguete, 3 veces + esfuerzo alto + herramientas limitadas
   5 paralelo      4 fichas de juguete a la vez
-  6 maven         compilar, JaCoCo y OpenRewrite sobre preflight\juguete
-  7 forma         numeros de los repos y diagnostico de rescate.ps1 (solo numeros)
+  6 maven         compilar, JaCoCo y OpenRewrite sobre preflight\juguete (Maven de los ajustes, el mvn del
+                  PATH o el mvnw de -Migrado, por este orden; la linea 'maven usado' dice cual)
+  7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
+                  diagnostico de rescate.ps1 (solo numeros y palabras fijas)
   8 clases reales 5 clases del original por tamano: la ficha de cada una
 
-RESULTADO preflight-resultado.txt junto al script (lo copia al portapapeles en Windows si puede).
+RESULTADO preflight-resultado.txt junto al script. Por consola, al final, dice donde esta y si lo copio
+al portapapeles (solo en Windows y si puede); esas dos lineas no van al fichero.
 Sale con 0 si ha podido escribirlo y con 1 si no. Es para pegarlo en un chat: todo texto libre
 pasa por Get-Seguro, que quita rutas, usuario, equipo, dominio, correos, IP y URL internas, nombres
 de los repos y de sus clases; corta a 200 caracteres y deja solo ASCII. Del original no sale
@@ -221,10 +225,9 @@ function Resolve-Param([string]$Ruta) {
   return ''
 }
 
+# La politica de ejecucion es la del equipo: los procesos hijo no la cambian.
 function Get-ArgsPowerShell([string[]]$Mas) {
-  $a = @('-NoProfile')
-  if ($env:OS -eq 'Windows_NT') { $a += @('-ExecutionPolicy', 'Bypass') }
-  return ($a + @('-File') + $Mas)
+  return (@('-NoProfile', '-File') + $Mas)
 }
 
 # Un programa con tope de tiempo. Lo lanza como la biblioteca lanza a Copilot (Get-Lanzador: un .ps1 va por
@@ -264,15 +267,28 @@ function Invoke-Proceso([string]$Exe, [string[]]$A, [string]$Dir, [int]$Segundos
 }
 
 # El numero de version que sale en la salida de '<exe> <args>'.
-function Get-Version([string]$Exe, [string[]]$A, [string]$Patron) {
+function Get-Version([string]$Exe, [string[]]$A, [string]$Patron, [string]$Dir = $PSScriptRoot) {
   try {
-    $r = Invoke-Proceso $Exe $A $PSScriptRoot 60
+    $r = Invoke-Proceso $Exe $A $Dir 60
     if ($r.Agotado) { return 'tiempo agotado' }
     $m = [regex]::Match($r.Texto, $Patron)
     if ($m.Success) { return $m.Groups[1].Value }
     return 'desconocida'
   }
   catch { return 'no disponible' }
+}
+
+# El Maven del preflight: el de los ajustes (MvnExe), si no el mvn del PATH y si no el mvnw de -Migrado.
+# Origen: ajustes, mvn, envoltorio o ninguno.
+function Get-MavenElegido {
+  if ($Cfg.MvnExe) { return [pscustomobject]@{ Exe = $Cfg.MvnExe; Origen = 'ajustes' } }
+  if (@(Get-Command mvn -CommandType Application -ErrorAction SilentlyContinue).Count -gt 0) { return [pscustomobject]@{ Exe = 'mvn'; Origen = 'mvn' } }
+  $raiz = Resolve-Param $Migrado
+  if ($raiz) {
+    $w = Get-Mvn $raiz
+    if ($w -ne 'mvn') { return [pscustomobject]@{ Exe = $w; Origen = 'envoltorio' } }
+  }
+  return [pscustomobject]@{ Exe = ''; Origen = 'ninguno' }
 }
 
 function Get-Segundos([double]$S) { return ([int][math]::Floor($S)) }
@@ -335,6 +351,100 @@ function Get-Ficheros([string]$Raiz, [string]$Filtro) {
     })
 }
 
+# Un valor de un pom solo se escribe si tiene forma de version; si no, 'otro' (puede ser ${revision} o un texto suyo).
+function Get-ValorPom([string]$Texto) {
+  $t = "$Texto".Trim()
+  if (-not $t) { return 'ninguno' }
+  if ($t -cmatch '^[0-9][0-9A-Za-z.\-]{0,20}$') { return $t }
+  return 'otro'
+}
+
+# El primer hijo de un nodo XML con ese nombre local (sin mirar el espacio de nombres).
+function Get-HijoXml($Nodo, [string]$Nombre) {
+  if ($null -eq $Nodo) { return $null }
+  foreach ($h in $Nodo.ChildNodes) { if ($h.NodeType -eq 'Element' -and $h.LocalName -ceq $Nombre) { return $h } }
+  return $null
+}
+
+# 'java <v> | spring-boot <v> | padre <spring-boot|propio|ninguno>' del pom.xml de la raiz, 'sin pom' o 'ilegible'.
+# De un padre que no es spring-boot-starter-parent no sale ni el nombre ni la version.
+function Get-LineaPom([string]$Raiz) {
+  $ruta = Join-Path $Raiz 'pom.xml'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { return 'sin pom' }
+  $doc = New-Object System.Xml.XmlDocument
+  $flujo = $null
+  $lector = $null
+  try {
+    $ajustes = New-Object System.Xml.XmlReaderSettings
+    $ajustes.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+    $flujo = [System.IO.File]::OpenRead($ruta)
+    $lector = [System.Xml.XmlReader]::Create($flujo, $ajustes)
+    $doc.Load($lector)
+  }
+  catch { return 'ilegible' }
+  finally {
+    if ($lector) { $lector.Close() }
+    if ($flujo) { $flujo.Close() }
+  }
+  $java = 'ninguno'
+  $props = Get-HijoXml $doc.DocumentElement 'properties'
+  foreach ($n in @('java.version', 'maven.compiler.release', 'maven.compiler.source')) {
+    $h = Get-HijoXml $props $n
+    if ($h) { $java = Get-ValorPom $h.InnerText; break }
+  }
+  $boot = 'ninguno'
+  $padre = 'ninguno'
+  $p = Get-HijoXml $doc.DocumentElement 'parent'
+  if ($p) {
+    $art = Get-HijoXml $p 'artifactId'
+    if ($art -and $art.InnerText.Trim() -ceq 'spring-boot-starter-parent') {
+      $padre = 'spring-boot'
+      $boot = Get-ValorPom (Get-HijoXml $p 'version').InnerText
+    }
+    else { $padre = 'propio' }
+  }
+  return "java $java | spring-boot $boot | padre $padre"
+}
+
+# 'si' si HEAD apunta a una rama, 'no' si esta suelta y 'desconocido' si git no contesta.
+function Get-EnRama([string]$Raiz) {
+  try {
+    $r = Invoke-Git $Raiz @('symbolic-ref', '-q', 'HEAD')
+    if ($r.Codigo -eq 0) { return 'si' }
+    if ($r.Codigo -eq 1) { return 'no' }
+  }
+  catch { }
+  return 'desconocido'
+}
+
+# Lo que se cuenta de un repo, solo numeros y palabras fijas: nunca un nombre ni un texto suyo.
+function Add-DatosRepo([string]$Nombre, [string]$Raiz) {
+  $git = Test-Path -LiteralPath (Join-Path $Raiz '.git')
+  Add-Linea "$Nombre repo git: $(Get-SiNo $git)"
+  if ($git) { Add-Linea "$Nombre en una rama: $(Get-EnRama $Raiz)" }
+  $codigo = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($j in @(Get-JavaOriginal $Raiz)) { [void]$codigo.Add($j.FullName) }
+  $c = [ordered]@{ tests = 0; jsch = 0; sshd = 0; integracion = 0; sshj = 0; valor = 0; propiedades = 0; getenv = 0; locales = 0 }
+  foreach ($j in @(Get-Ficheros $Raiz '*.java')) {
+    if ((Get-Rel $Raiz $j.FullName) -match '(^|/)src/test/') { $c.tests++ }
+    $t = [System.IO.File]::ReadAllText($j.FullName)
+    if ($t -cmatch 'import\s+(?:static\s+)?com\.jcraft\.jsch\b') { $c.jsch++ }
+    if ($t -cmatch 'import\s+(?:static\s+)?org\.apache\.sshd\b') { $c.sshd++ }
+    if ($t -cmatch 'import\s+(?:static\s+)?org\.springframework\.integration\.sftp\b') { $c.integracion++ }
+    if ($t -cmatch 'import\s+(?:static\s+)?net\.schmizz\.sshj\b') { $c.sshj++ }
+    if ($t -cmatch '@Value\b') { $c.valor++ }
+    if ($t -cmatch '@ConfigurationProperties\b') { $c.propiedades++ }
+    if ($t -cmatch '\bgetenv\s*\(') { $c.getenv++ }
+    if ($codigo.Contains($j.FullName) -and $t -cmatch 'java\.io\.File\b|\bFileReader\b|\bFileWriter\b|\bFileInputStream\b|\bFileOutputStream\b|java\.nio\.file\.Files\b') { $c.locales++ }
+  }
+  $aplicacion = @(Get-Ficheros $Raiz 'application*' | Where-Object { $_.Name -match '^application.*\.(yml|yaml|properties)$' }).Count
+  Add-Linea "$Nombre tests: $($c.tests) ficheros"
+  Add-Linea "$Nombre pom: $(Get-LineaPom $Raiz)"
+  Add-Linea "$Nombre sftp: jsch $($c.jsch) | sshd $($c.sshd) | spring-integration $($c.integracion) | sshj $($c.sshj)"
+  Add-Linea "$Nombre config: @Value $($c.valor) | @ConfigurationProperties $($c.propiedades) | getenv $($c.getenv) | ficheros application $aplicacion"
+  Add-Linea "$Nombre ficheros locales: $($c.locales)"
+}
+
 # Los bloques: cada uno en su try; el fichero se reescribe al acabar cada uno.
 function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cuerpo, [bool]$SinMensaje = $false) {
   if ($SoloN.Count -gt 0 -and $SoloN -notcontains $N) { return }
@@ -349,6 +459,26 @@ function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cu
   }
   if ($bien) { Write-Host 'hecho' } else { Write-Host 'fallo' }
   Save-Resultado
+}
+
+# ============================ RUTAS DE ENTRADA ============================
+# Una ruta mal escrita se dice al instante y no se lanza nada. Sin repetir la ruta: puede llevar nombres.
+$noExisten = @()
+foreach ($par in @(@('-Legacy', $Legacy), @('-Migrado', $Migrado), @('-Plantilla', $Plantilla))) {
+  if (-not $par[1]) { continue }
+  $esCarpeta = $false
+  try { $esCarpeta = [bool](Test-Path -LiteralPath $par[1] -PathType Container) } catch { }
+  if (-not $esCarpeta) { $noExisten += $par[0] }
+}
+if ($noExisten.Count -gt 0) {
+  Add-Linea $Cabecera
+  foreach ($n in $noExisten) {
+    Add-Linea "para: no existe la carpeta de $n"
+    Write-Host "No existe la carpeta de $n. Revisa la ruta y vuelve a lanzar."
+  }
+  Add-Linea '== fin'
+  Save-Resultado
+  exit 1
 }
 
 # ================================== ARRANQUE ==================================
@@ -376,8 +506,6 @@ if (Test-Path -LiteralPath $rutaAjustes) {
 # un preflight no espera 15 minutos a una llamada: pasados 10 se da por colgada
 if ([int]$Cfg.SegundosPorLlamada -gt 600) { $Cfg.SegundosPorLlamada = 600 }
 try { Initialize-Filtro } catch { Add-Linea ('aviso: el filtro de privacidad no se cargo entero (' + $_.Exception.GetType().Name + ')') }
-$raizMvn = $PSScriptRoot
-if ($Migrado) { $raizMvn = $Migrado }
 $despierto = Set-Despierto $true
 
 Add-Linea $Cabecera
@@ -394,14 +522,24 @@ try {
     Add-Linea ('windows: ' + [Environment]::OSVersion.Version.ToString())
     Add-Linea ('git: ' + (Get-Version 'git' @('--version') '(\d+(?:\.\d+)+)'))
     Add-Linea ('java: ' + (Get-Version $Cfg.JavaExe @('-version') 'version "(\d[\d._]*)'))
-    Add-Linea ('maven: ' + (Get-Version (Get-Mvn $raizMvn) @('--version') 'Apache Maven (\d+(?:\.\d+)+)'))
+    $mvnElegido = Get-MavenElegido
+    if ($mvnElegido.Origen -eq 'ninguno') { Add-Linea 'maven: no disponible' }
+    else {
+      # un mvnw busca su .mvn desde la carpeta de trabajo: se mide desde la suya
+      $carpetaMvn = $PSScriptRoot
+      if ($mvnElegido.Origen -eq 'envoltorio') { $carpetaMvn = Split-Path $mvnElegido.Exe -Parent }
+      Add-Linea ('maven: ' + (Get-Version $mvnElegido.Exe @('--version') 'Apache Maven (\d+(?:\.\d+)+)' $carpetaMvn))
+    }
     Add-Linea ('copilot: ' + (Get-Version $Cfg.CopilotExe @('--version') '(\d+\.\d+(?:\.\d+)*)'))
-    $tipo = 'ninguna'
+    # la extension del Copilot (.exe, .cmd, .bat, .ps1 o .com; otra cualquiera sale como 'otra')
+    $tipo = 'no encontrado'
     try {
       $c = @(Get-Command $Cfg.CopilotExe -ErrorAction SilentlyContinue)
       if ($c.Count -gt 0) {
         $ext = [System.IO.Path]::GetExtension("$($c[0].Source)").ToLowerInvariant()
-        if ($ext) { $tipo = $ext }
+        if (-not $ext) { $tipo = 'sin extension' }
+        elseif (@('.exe', '.cmd', '.bat', '.ps1', '.com') -contains $ext) { $tipo = $ext }
+        else { $tipo = 'otra' }
       }
     }
     catch { }
@@ -414,7 +552,10 @@ try {
     Add-Linea "pagina de codigos: $cp"
     $gb = 'desconocido'
     try {
-      $disco = New-Object System.IO.DriveInfo ([System.IO.Path]::GetPathRoot($raizMvn))
+      # el disco de -Migrado (con su ruta completa: una relativa no tiene raiz) o el del script
+      $enDisco = Resolve-Param $Migrado
+      if (-not $enDisco) { $enDisco = $PSScriptRoot }
+      $disco = New-Object System.IO.DriveInfo ([System.IO.Path]::GetPathRoot($enDisco))
       $gb = ([math]::Round($disco.AvailableFreeSpace / 1GB, 1)).ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture)
     }
     catch { }
@@ -423,7 +564,7 @@ try {
   }
 
   # ----------------------------------- 2 -----------------------------------
-  Invoke-Bloque 2 'bancos' 15 {
+  Invoke-Bloque 2 'bancos' 30 {
     $fallan = @()
     foreach ($b in @('probar', 'probar-migracion')) {
       $ruta = Join-Path (Join-Path $PSScriptRoot 'tests') ($b + '.ps1')
@@ -541,9 +682,21 @@ try {
   # ----------------------------------- 6 -----------------------------------
   Invoke-Bloque 6 'maven de juguete' 45 {
     if ($SinMaven) { Add-Linea 'saltado: -SinMaven'; return }
+    $elegido = Get-MavenElegido
+    Add-Linea ('maven usado: ' + $elegido.Origen)
+    if ($elegido.Origen -eq 'ninguno') { Add-Linea 'saltado: no hay Maven (ni en los ajustes, ni mvn en el PATH, ni mvnw en -Migrado)'; return }
     $dir = Join-Path $Tmp 'juguete'
     Copy-Item -LiteralPath (Join-Path (Join-Path $PSScriptRoot 'preflight') 'juguete') -Destination $dir -Recurse
-    $mvn = Get-Mvn $raizMvn
+    $mvn = $elegido.Exe
+    if ($elegido.Origen -eq 'envoltorio') {
+      # el mvnw funciona desde su carpeta: se lleva al juguete con su .mvn
+      $origen = Split-Path $elegido.Exe -Parent
+      foreach ($f in @('mvnw', 'mvnw.cmd', '.mvn')) {
+        $de = Join-Path $origen $f
+        if (Test-Path -LiteralPath $de) { Copy-Item -LiteralPath $de -Destination (Join-Path $dir $f) -Recurse -Force }
+      }
+      $mvn = Get-Mvn $dir
+    }
     $jacoco = 'org.jacoco:jacoco-maven-plugin:0.8.16'
     $rewrite = 'org.openrewrite.maven:rewrite-maven-plugin:6.46.1'
     $r = Invoke-Proceso $mvn @('-B', 'test') $dir 1500
@@ -568,8 +721,10 @@ try {
   # ----------------------------------- 7 -----------------------------------
   Invoke-Bloque 7 'forma de los repos' 30 {
     if (-not $Legacy -and -not $Migrado -and -not $Plantilla) { Add-Linea 'saltado: sin repos (-Legacy, -Migrado, -Plantilla)'; return }
+    $repos = @()
     if ($Legacy) {
       $raiz = Resolve-Dir $Legacy
+      $repos += , @('original', $raiz)
       $f = Get-FormaRepo $raiz
       Add-Linea "original ficheros java: $($f.Ficheros)"
       Add-Linea "original lineas: $($f.Lineas)"
@@ -597,9 +752,12 @@ try {
     }
     foreach ($par in @(@('migrado', $Migrado), @('plantilla', $Plantilla))) {
       if (-not $par[1]) { continue }
-      $f = Get-FormaRepo (Resolve-Dir $par[1])
+      $raizPar = Resolve-Dir $par[1]
+      $repos += , @($par[0], $raizPar)
+      $f = Get-FormaRepo $raizPar
       Add-Linea ("$($par[0]) ficheros java: $($f.Ficheros) | lineas: $($f.Lineas) | modulos: $($f.Modulos)")
     }
+    foreach ($r in $repos) { Add-DatosRepo $r[0] $r[1] }
     if ($SinMaven) { Add-Linea 'diagnostico: saltado (-SinMaven)'; return }
     if (-not $Migrado -or -not $Plantilla) { Add-Linea 'diagnostico: saltado (faltan -Migrado y -Plantilla)'; return }
     $a = Get-ArgsPowerShell @((Join-Path $PSScriptRoot 'rescate.ps1'), '-Repo', (Resolve-Dir $Migrado), '-Plantilla', (Resolve-Dir $Plantilla), '-SinWorktree')
@@ -665,9 +823,13 @@ finally {
   try { Remove-Item -LiteralPath $Tmp -Recurse -Force } catch { }
   Write-Host ''
   foreach ($l in $script:Lineas) { Write-Host $l }
+  $copiado = $false
   if ($env:OS -eq 'Windows_NT') {
-    try { Set-Clipboard -Value ($script:Lineas -join "`r`n") } catch { }
+    try { Set-Clipboard -Value ($script:Lineas -join "`r`n"); $copiado = $true } catch { }
   }
+  Write-Host ''
+  Write-Host 'Resultado en preflight-resultado.txt, junto al script.'
+  Write-Host ('Copiado al portapapeles: ' + (Get-SiNo $copiado))
 }
 if ($script:NoEscribe) { exit 1 }
 exit 0

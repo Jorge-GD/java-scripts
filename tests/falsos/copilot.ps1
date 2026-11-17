@@ -42,10 +42,13 @@
 #   error-privado      sale con 1 y escribe el texto de la variable RESCATE_ERROR_TEXTO
 #   valor-secreto      ficha con un papel que no vale y que lleva un texto con comillas simples
 #   cita-secreta       ficha con todas las citas inventadas, con texto y comillas simples
+#   borra-carpeta      borra la carpeta de la variable RESCATE_BORRAR antes de leer (la ficha sale bien)
 # Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
 # (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
 # Con la variable RESCATE_LLAMADAS (una carpeta) deja ademas una copia de ese fichero alli:
 # sirve para ver las llamadas de un script que borra su carpeta de trabajo (el preflight).
+# Si ademas existe la variable RESCATE_COPIA_RESULTADO (un fichero), deja en esa carpeta una copia
+# de ese fichero, tal como estaba en el momento de la llamada, como resultado-<id>.txt.
 #
 # Sondas del preflight (bloque 3): con --version o --help no llama a ningun modelo. Dice una
 # version o una ayuda con modelos. El guion 'rechaza-bandera:<bandera>' hace que rechace esa
@@ -92,6 +95,10 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
     if ($env:RESCATE_LLAMADAS) {
       [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
       Copy-Item -LiteralPath $registro -Destination (Join-Path $env:RESCATE_LLAMADAS (Split-Path $registro -Leaf)) -Force
+      if ($env:RESCATE_COPIA_RESULTADO -and (Test-Path -LiteralPath $env:RESCATE_COPIA_RESULTADO)) {
+        $copia = Join-Path $env:RESCATE_LLAMADAS ('resultado-' + $id + '.txt')
+        if (-not (Test-Path -LiteralPath $copia)) { Copy-Item -LiteralPath $env:RESCATE_COPIA_RESULTADO -Destination $copia }
+      }
     }
   }
   & $copiar
@@ -103,6 +110,7 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   if ($guion -eq 'sin-cuota') { 'Error: You have exceeded your monthly quota.'; exit 1 }
   if ($guion -eq 'error-privado') { "$env:RESCATE_ERROR_TEXTO"; exit 1 }
   if ($guion -eq 'texto-libre') { 'Claro, el fichero valida importes y es muy sencillo.'; & $copiar; exit 0 }
+  if ($guion -eq 'borra-carpeta' -and $env:RESCATE_BORRAR) { Remove-Item -LiteralPath $env:RESCATE_BORRAR -Recurse -Force -ErrorAction SilentlyContinue }
   if ($guion -eq 'colgado') { Start-Sleep -Seconds 120 }
   if ($guion -eq 'lento') { Start-Sleep -Seconds 3 }
 

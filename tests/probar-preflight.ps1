@@ -150,6 +150,20 @@ function Clase-Zorba([string]$Nombre, [int]$Lineas, [string]$Paquete = 'com.zorb
   return (($t -join "`n") + "`n")
 }
 
+# Una clase con esos imports y esas lineas dentro.
+function Clase-Con([string]$Nombre, [string]$Paquete, [string[]]$Imports, [string[]]$Cuerpo) {
+  $t = @("package $Paquete;", '') + @($Imports | ForEach-Object { "import $_;" }) + @('', "public class $Nombre {") + @($Cuerpo | ForEach-Object { "    $_" }) + @('}')
+  return (($t -join "`n") + "`n")
+}
+
+# Un pom con padre (artifactId y version) y propiedades (elementos ya escritos) si se piden.
+function Pom-Con([string]$ArtifactPadre = '', [string]$VersionPadre = '', [string]$Props = '') {
+  $t = '<project xmlns="http://maven.apache.org/POM/4.0.0">' + "`n" + '  <modelVersion>4.0.0</modelVersion>' + "`n"
+  if ($ArtifactPadre) { $t += '  <parent><groupId>g</groupId><artifactId>' + $ArtifactPadre + '</artifactId><version>' + $VersionPadre + '</version></parent>' + "`n" }
+  if ($Props) { $t += '  <properties>' + $Props + '</properties>' + "`n" }
+  return ($t + '</project>' + "`n")
+}
+
 # El original tiene 9 ficheros .java (697 lineas, 2 modulos, 2 pom.xml, 3 jobs en 2 xml, 2 clases de
 # batch, 1 fichero que no es UTF-8) y el migrado y la referencia uno o dos cada uno.
 function Nuevo-Escenario([string]$Nombre, [hashtable]$Ajustes = @{}) {
@@ -189,7 +203,29 @@ function Nuevo-Escenario([string]$Nombre, [hashtable]$Ajustes = @{}) {
   Escribe $casa 'ajustes.json' (ConvertTo-Json -InputObject $aj)
   # rescate.ps1 lee el Maven de .rescate/config.json del repo (no de ajustes.json)
   Escribe $mig '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ MvnExe = $aj['MvnExe'] }))
-  return [pscustomobject]@{ Raiz = $raizE; Legacy = $leg; Migrado = $mig; Plantilla = $pl; Home = $casa; Llamadas = (Join-Path $raizE 'llamadas') }
+  return [pscustomobject]@{ Raiz = $raizE; Legacy = $leg; Migrado = $mig; Plantilla = $pl; Home = $casa; Llamadas = (Join-Path $raizE 'llamadas'); Ajustes = $aj }
+}
+
+# Cambia ajustes.json de un escenario (lo demas se queda como estaba).
+function Pon-Ajustes($E, [hashtable]$Cambios) {
+  foreach ($k in $Cambios.Keys) { $E.Ajustes[$k] = $Cambios[$k] }
+  Escribe $E.Home 'ajustes.json' (ConvertTo-Json -InputObject $E.Ajustes)
+}
+
+# Un programa de mentira en un fichero (un .sh que lanza el falso con este PowerShell); solo fuera de Windows.
+function Nuevo-Lanzador([string]$Ruta, [string]$Falso, [string]$Antes = '') {
+  $d = Split-Path $Ruta -Parent
+  if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+  $t = "#!/bin/sh`n" + $Antes + "exec '" + $ps + "' -NoProfile -File '" + $Falso + "' `"`$@`"`n"
+  [System.IO.File]::WriteAllText($Ruta, $t)
+  & chmod +x $Ruta
+}
+
+# El bloque 6 con un Maven que falla con ese texto; devuelve el resultado.
+function Pf-ErrorMaven($E, [string]$Texto, [hashtable]$Extra = @{}) {
+  $v = @{ RESCATE_MVN_ERROR = $Texto }
+  foreach ($k in $Extra.Keys) { $v[$k] = $Extra[$k] }
+  return (Pf $E (Todos $E @('-Solo', '6')) '' $v)
 }
 
 # Todo seguido, con los tres repos: lo que usan las pruebas que no miran un detalle concreto.
@@ -224,7 +260,11 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   Comprueba 'dice la duracion' ((Valor-De $r 'duracion') -match '^\d+ min$') (Valor-De $r 'duracion')
   Comprueba 'ningun bloque escribe fallo:' ((Cuenta-Lineas $r '^fallo:') -eq 0) (($l | Where-Object { $_ -match '^fallo:' }) -join ' / ')
   Comprueba 'la consola ensena el resultado al final' ($r.Salida -match '(?m)^== fin') (Cola $r.Salida)
-  Comprueba 'la consola avisa de cada bloque con lo que puede tardar' ($r.Salida -match '== 2 bancos \(hasta \d+ min\)\.\.\.' -and $r.Salida -match '== 8 clases reales \(hasta \d+ min\)\.\.\.') (Cola $r.Salida)
+  Comprueba 'la consola avisa de cada bloque con lo que puede tardar (los bancos, hasta 30 min)' ($r.Salida -match '== 2 bancos \(hasta 30 min\)\.\.\.' -and $r.Salida -match '== 8 clases reales \(hasta \d+ min\)\.\.\.') (Cola $r.Salida)
+  $fin = @($r.Salida -split "\r?\n" | Where-Object { $_.Trim() -ne '' } | Select-Object -Last 2)
+  Comprueba 'la consola acaba diciendo donde esta el resultado, sin ruta' ($fin.Count -eq 2 -and $fin[0] -ceq 'Resultado en preflight-resultado.txt, junto al script.') ($fin -join ' / ')
+  Comprueba 'y si lo copio al portapapeles (si o no)' ($fin.Count -eq 2 -and $fin[1] -cmatch '^Copiado al portapapeles: (si|no)$') ($fin -join ' / ')
+  Comprueba 'esas dos lineas no van al fichero' ($r.Fichero -notmatch 'portapapeles' -and $r.Fichero -notmatch 'Resultado en')
   Comprueba 'y cada bloque acaba con hecho' ((@($r.Salida -split "\r?\n" | Where-Object { $_ -eq 'hecho' }).Count) -eq 8) (Cola $r.Salida)
 
   # 1 entorno
@@ -265,6 +305,7 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   Comprueba '6: compila y pasa el test' ((Valor-De $r 'compila y pasa el test') -match '^si \| \d+ s$') (Valor-De $r 'compila y pasa el test')
   Comprueba '6: jacoco' ((Valor-De $r 'jacoco') -match '^si \| \d+ s$') (Valor-De $r 'jacoco')
   Comprueba '6: openrewrite' ((Valor-De $r 'openrewrite') -match '^si \| \d+ s$') (Valor-De $r 'openrewrite')
+  Igual '6: maven usado (el de los ajustes)' 'ajustes' (Valor-De $r 'maven usado')
 
   # 7 forma de los repos (solo numeros)
   Igual '7: ficheros java del original' '9' (Valor-De $r 'original ficheros java')
@@ -278,6 +319,19 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   Igual '7: ficheros que no son UTF-8' '1' (Valor-De $r 'original ficheros no UTF-8')
   Igual '7: migrado' '2 | lineas: 17 | modulos: 1' (Valor-De $r 'migrado ficheros java')
   Igual '7: referencia' '1 | lineas: 5 | modulos: 1' (Valor-De $r 'plantilla ficheros java')
+  # la forma de los tres repos, con un repo sin nada de lo que se cuenta
+  foreach ($n in @('original', 'migrado', 'plantilla')) {
+    Igual "7: $n repo git" 'si' (Valor-De $r "$n repo git")
+    Igual "7: $n en una rama" 'si' (Valor-De $r "$n en una rama")
+    Igual "7: $n tests" '0 ficheros' (Valor-De $r "$n tests")
+    Igual "7: $n pom" 'java ninguno | spring-boot ninguno | padre ninguno' (Valor-De $r "$n pom")
+    Igual "7: $n sftp" 'jsch 0 | sshd 0 | spring-integration 0 | sshj 0' (Valor-De $r "$n sftp")
+    Igual "7: $n config" '@Value 0 | @ConfigurationProperties 0 | getenv 0 | ficheros application 0' (Valor-De $r "$n config")
+    Igual "7: $n ficheros locales" '0' (Valor-De $r "$n ficheros locales")
+  }
+  $iNuevo = [array]::IndexOf($l, ('original repo git: si'))
+  $iDiag = [array]::IndexOf($l, @($l | Where-Object { $_ -match '^diagnostico: ' })[0])
+  Comprueba '7: las lineas nuevas van tras las de siempre y antes del diagnostico' ($iNuevo -gt [array]::IndexOf($l, 'plantilla ficheros java: 1 | lineas: 5 | modulos: 1') -and $iNuevo -lt $iDiag) "$iNuevo $iDiag"
   foreach ($p in @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')) {
     Comprueba "7: diagnostico, paso $p" ((Valor-De $r $p) -match '^\d+ errores, \d+ avisos$') (Valor-De $r $p)
   }
@@ -296,10 +350,14 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   $apt = @(Llamadas-De $ll 'pf-apt-')
   Comprueba 'aptitud: tres con esfuerzo de lectura, una con esfuerzo alto y una con herramientas limitadas' (@($apt | Where-Object { $_.id -match '^pf-apt-\d$' -and $_.flags -match '--effort=medium' }).Count -eq 3 -and @($apt | Where-Object { $_.id -eq 'pf-apt-alto' -and $_.flags -match '--effort=high' }).Count -eq 1 -and @($apt | Where-Object { $_.flags -match '--available-tools=view,create' }).Count -eq 1) (($apt | ForEach-Object { $_.id + ' ' + $_.flags }) -join ' | ')
   Comprueba 'aptitud: ningun prompt lleva la seccion de correccion (el esfuerzo alto sale con el mismo prompt)' (@($ll | Where-Object { $_.correccion -eq 'True' }).Count -eq 0)
-  Igual 'paralelo: cuatro llamadas a la vez' 4 (Max-Simultaneas @(Llamadas-De $ll 'pf-par-'))
+  $par = Max-Simultaneas @(Llamadas-De $ll 'pf-par-')
+  Comprueba 'paralelo: a lo sumo cuatro llamadas a la vez' ($par -le 4) $par
+  Comprueba 'paralelo: y mas de una a la vez (con la maquina cargada no siempre llegan a cuatro)' ($par -ge 2) $par
   $cl = @(Llamadas-De $ll 'pf-cls-')
   Comprueba 'clases reales: 5 llamadas, todas con --add-dir del original' ($cl.Count -eq 5 -and @($cl | Where-Object { $_.flags -match '--add-dir=\S*zorba-legado-xq' }).Count -eq 5) (($cl | ForEach-Object { $_.flags }) -join ' | ')
-  Igual 'clases reales: la ronda de 4 y la de 1 (a lo sumo 4 a la vez)' 4 (Max-Simultaneas $cl)
+  $clMax = Max-Simultaneas $cl
+  Comprueba 'clases reales: a lo sumo 4 a la vez' ($clMax -le 4) $clMax
+  Comprueba 'clases reales: y mas de una a la vez' ($clMax -ge 2) $clMax
   Sin-Fugas $r 'completo'
   Igual 'el original queda limpio' '' (GitEn $e.Legacy @('status', '--porcelain'))
   Comprueba 'el original no recibe carpeta .rescate' (-not (Test-Path -LiteralPath (Join-Path $e.Legacy '.rescate')))
@@ -397,17 +455,13 @@ $Pruebas['5 un bloque que revienta deja fallo: y los siguientes se hacen'] = {
   $r = Pf $e (Todos $e @('-Solo', '1,6,7,8'))
   Igual 'sale con 0 (pudo escribir el fichero)' 0 $r.Codigo
   $b6 = @(Bloque-De $r '6')
-  Comprueba 'el bloque 6 deja fallo:' ($b6.Count -ge 1 -and $b6[0] -match '^fallo: .+') ($b6 -join ' / ')
+  Comprueba 'el bloque 6 dice que Maven uso y deja fallo:' ($b6.Count -ge 2 -and $b6[0] -ceq 'maven usado: ajustes' -and @($b6 | Where-Object { $_ -match '^fallo: .+' }).Count -eq 1) ($b6 -join ' / ')
   Comprueba 'los siguientes se hacen: hay bloque 7 con numeros y bloque 8 con sus 5 clases' ((Valor-De $r 'original ficheros java') -eq '9' -and (Cuenta-Lineas $r '^clase \d: ') -eq 5) (Cola $r.Salida)
   Comprueba 'bloques con fallo nombra el 6' ((Valor-De $r 'bloques con fallo') -match '(^| )6( |$)') (Valor-De $r 'bloques con fallo')
   Comprueba 'acaba con == fin' ((Lineas-De $r) -contains '== fin')
   $b7 = @(Bloque-De $r '7')
   Comprueba 'el fallo del bloque 7 (si lo hay) no lleva texto del sistema: solo el tipo y el fichero:linea' (@($b7 | Where-Object { $_ -match '^fallo: ' -and $_ -notmatch '^fallo: \w+ \(\w+\.ps1:\d+\)$' }).Count -eq 0) ($b7 -join ' / ')
   Sin-Fugas $r 'revienta'
-  # un original que no existe: el bloque 7 falla sin decir la ruta y el 8 tambien
-  $r2 = Pf $e @('-Solo', '7,8', '-Legacy', (Join-Path $e.Raiz 'zorba-no-existe'))
-  Comprueba 'un -Legacy que no existe: los bloques 7 y 8 dejan fallo y siguen' ((Valor-De $r2 'bloques con fallo') -match '7' -and (Valor-De $r2 'bloques con fallo') -match '8' -and (Cuenta-Lineas $r2 '^fallo:') -eq 2) ((Lineas-De $r2) -join ' / ')
-  Sin-Fugas $r2 'sin original'
 }
 
 $Pruebas['6 bloque 3: un Copilot que rechaza una bandera sale no en esa y si en las demas'] = {
@@ -462,6 +516,24 @@ $Pruebas['9 .gitignore: preflight-resultado.txt no se sube'] = {
   }
 }
 
+$Pruebas['10 sin -ExecutionPolicy: la politica es la del equipo, ni en el preflight ni en los bancos'] = {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
+  $f = $ast.Find({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq 'Get-ArgsPowerShell' }, $true)
+  Comprueba 'preflight.ps1 define Get-ArgsPowerShell' ($null -ne $f)
+  if ($f) {
+    . ([scriptblock]::Create($f.Extent.Text))
+    $so = $env:OS
+    $env:OS = 'Windows_NT'
+    try { $a = @(Get-ArgsPowerShell @('x.ps1', '-Dir', 'd')) } finally { $env:OS = $so }
+    Comprueba 'con un Windows simulado, los argumentos no llevan ExecutionPolicy ni Bypass' (($a -join ' ') -notmatch 'ExecutionPolicy' -and ($a -join ' ') -notmatch 'Bypass') ($a -join ' ')
+    Igual 'y son -NoProfile -File y lo que se le pasa' '-NoProfile|-File|x.ps1|-Dir|d' ($a -join '|')
+  }
+  $src = [System.IO.File]::ReadAllText($Script)
+  Comprueba 'preflight.ps1 no pone -ExecutionPolicy ni Bypass en ninguna parte' ($src -notmatch '(?<!Get)-ExecutionPolicy' -and $src -notmatch 'Bypass')
+  $banco = [System.IO.File]::ReadAllText((Join-Path $aqui 'comun-banco.ps1'))
+  Comprueba 'comun-banco.ps1 (el Lanzar de los tres bancos) tampoco' ($banco -notmatch 'ExecutionPolicy' -and $banco -notmatch 'Bypass')
+}
+
 $Pruebas['11 modo de lenguaje restringido: solo el bloque 1 con su aviso, sin cargar nada'] = {
   $e = Nuevo-Escenario 'restringido'
   Nueva-Instalacion
@@ -470,7 +542,6 @@ $Pruebas['11 modo de lenguaje restringido: solo el bloque 1 con su aviso, sin ca
   $env:RESCATE_HOME = $e.Home
   $ErrorActionPreference = 'Continue'
   $pre = @('-NoProfile')
-  if ($env:OS -eq 'Windows_NT') { $pre += @('-ExecutionPolicy', 'Bypass') }
   $cmd = "`$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'; & '" + (Join-Path $Inst 'preflight.ps1') + "' -Legacy '" + $e.Legacy + "'; exit `$LASTEXITCODE"
   $o = & $ps @pre -Command $cmd 2>&1 | ForEach-Object { "$_" }
   $c = $LASTEXITCODE
@@ -484,6 +555,209 @@ $Pruebas['11 modo de lenguaje restringido: solo el bloque 1 con su aviso, sin ca
   Comprueba 'dice para: modo de lenguaje restringido' ($txt -match '(?m)^para: modo de lenguaje restringido')
   Comprueba 'solo el bloque 1 y el fin' ((@($txt -split "\r?\n" | Where-Object { $_ -match '^== ' }).Count) -eq 2 -and $txt -match '== fin') $txt
   Comprueba 'y es ASCII puro' (Es-Ascii $txt)
+}
+
+$Pruebas['12 ruta mal escrita: se dice al instante, sale con 1, no ejecuta ningun bloque y no repite la ruta'] = {
+  $e = Nuevo-Escenario 'rutas'
+  $r = Pf $e @('-Legacy', (Join-Path $e.Raiz 'zorba-no-existe'), '-Migrado', $e.Migrado)
+  Igual '-Legacy: sale con 1' 1 $r.Codigo
+  Comprueba '-Legacy: lo dice por consola' ($r.Salida -match '(?m)^No existe la carpeta de -Legacy\. Revisa la ruta y vuelve a lanzar\.\s*$') (Cola $r.Salida)
+  $l = @(Lineas-De $r)
+  Comprueba '-Legacy: el fichero lleva la cabecera, el motivo y el fin' ($l.Count -eq 3 -and $l[0] -match '^PREFLIGHT java-scripts ' -and $l[1] -ceq 'para: no existe la carpeta de -Legacy' -and $l[2] -ceq '== fin') ($l -join ' / ')
+  Comprueba '-Legacy: no ejecuta ningun bloque (ni en el fichero ni en la consola)' ((Cuenta-Lineas $r '^== \d') -eq 0 -and $r.Salida -notmatch '(?m)^== \d') (Cola $r.Salida)
+  Comprueba '-Legacy: no llama a ningun modelo' (@(Llamadas $e.Llamadas).Count -eq 0)
+  Sin-Fugas $r '-Legacy'
+  # dos mal a la vez (una carpeta que no existe y un fichero): una linea para cada una, en el orden de los parametros
+  $r2 = Pf $e @('-Legacy', $e.Legacy, '-Migrado', (Join-Path $e.Raiz 'zorba-otra-ruta-mala'), '-Plantilla', (Join-Path $e.Legacy 'pom.xml'))
+  Igual 'dos mal: sale con 1' 1 $r2.Codigo
+  $l2 = @(Lineas-De $r2)
+  Comprueba 'dos mal: el fichero dice -Migrado y -Plantilla' ($l2.Count -eq 4 -and $l2[1] -ceq 'para: no existe la carpeta de -Migrado' -and $l2[2] -ceq 'para: no existe la carpeta de -Plantilla' -and $l2[3] -ceq '== fin') ($l2 -join ' / ')
+  Comprueba 'dos mal: y la consola tambien' ($r2.Salida -match '(?m)^No existe la carpeta de -Migrado\. Revisa la ruta y vuelve a lanzar\.\s*$' -and $r2.Salida -match '(?m)^No existe la carpeta de -Plantilla\. Revisa la ruta y vuelve a lanzar\.\s*$') (Cola $r2.Salida)
+  Comprueba 'dos mal: no ejecuta ningun bloque' ((Cuenta-Lineas $r2 '^== \d') -eq 0 -and $r2.Salida -notmatch '(?m)^== \d')
+  Sin-Fugas $r2 'dos mal'
+}
+
+$Pruebas['13 bloque 1: tipo de copilot (extension, sin extension, no encontrado) y GB libres con una ruta relativa'] = {
+  $e = Nuevo-Escenario 'tipo'
+  Pon-Ajustes $e @{ CopilotExe = (Join-Path $Dir 'no-existe-zorba/copilot.exe') }
+  $r = Pf $e (Todos $e @('-Solo', '1'))
+  Igual 'un Copilot que no esta: no encontrado' 'no encontrado' (Valor-De $r 'tipo de copilot')
+  Sin-Fugas $r 'tipo'
+  if ($env:OS -ne 'Windows_NT') {
+    foreach ($c in @(@('copilot-sin-ext', 'sin extension'), @('copilot.cmd', '.cmd'), @('copilot.zorba', 'otra'))) {
+      $exe = Join-Path (Join-Path $e.Raiz 'bin') $c[0]
+      Nuevo-Lanzador $exe (Join-Path $falsos 'copilot.ps1')
+      Pon-Ajustes $e @{ CopilotExe = $exe }
+      $x = Pf $e (Todos $e @('-Solo', '1'))
+      Igual ('un Copilot ' + $c[0] + ': ' + $c[1]) $c[1] (Valor-De $x 'tipo de copilot')
+    }
+  }
+  Pon-Ajustes $e @{ CopilotExe = (Join-Path $falsos 'copilot.ps1') }
+  Push-Location -LiteralPath $e.Raiz
+  try { $g = Pf $e @('-Solo', '1', '-Migrado', 'zorba-migrado-xq') } finally { Pop-Location }
+  Comprueba 'GB libres con -Migrado en ruta relativa: un numero' ((Valor-De $g 'GB libres') -match '^\d+\.\d$') (Valor-De $g 'GB libres')
+}
+
+$Pruebas['14 bloque 6: Maven de los ajustes, mvn del PATH, envoltorio del migrado (mvnw) o ninguno'] = {
+  if ($env:OS -eq 'Windows_NT') { return }   # los programas de mentira de esta prueba son scripts de sh
+  $fal = Join-Path $falsos 'mvn.ps1'
+  $vacia = Join-Path $Dir 'sin-mvn'
+  [void](New-Item -ItemType Directory -Path $vacia -Force)
+  # b) sin MvnExe, con mvn en el PATH y un mvnw en el migrado que no debe usarse
+  $e = Nuevo-Escenario 'maven-path' @{ MvnExe = '' }
+  Nuevo-Lanzador (Join-Path $e.Raiz 'bin/mvn') $fal
+  Escribe $e.Migrado 'mvnw' "#!/bin/sh`necho '[ERROR] no debia usarse el envoltorio'`nexit 1`n"
+  & chmod +x (Get-Ruta $e.Migrado 'mvnw')
+  $r = Pf $e (Todos $e @('-Solo', '6')) '' @{ PATH = ((Join-Path $e.Raiz 'bin') + [System.IO.Path]::PathSeparator + $env:PATH) }
+  Igual 'b) maven usado: mvn (el del PATH gana al mvnw del migrado)' 'mvn' (Valor-De $r 'maven usado')
+  foreach ($p in @('compila y pasa el test', 'jacoco', 'openrewrite')) { Comprueba "b) $p" ((Valor-De $r $p) -match '^si \| \d+ s$') ((Bloque-De $r '6') -join ' / ') }
+  # c) sin MvnExe ni mvn en el PATH: el mvnw del migrado, copiado al proyecto de juguete con su carpeta .mvn
+  $e2 = Nuevo-Escenario 'maven-envoltorio' @{ MvnExe = '' }
+  $w = "#!/bin/sh`n[ -f ./mvnw ] && [ -f ./.mvn/wrapper/maven-wrapper.properties ] || { echo '[ERROR] falta el envoltorio en la carpeta de trabajo'; exit 1; }`nexec '" + $ps + "' -NoProfile -File '" + $fal + "' `"`$@`"`n"
+  Escribe $e2.Migrado 'mvnw' $w
+  & chmod +x (Get-Ruta $e2.Migrado 'mvnw')
+  Escribe $e2.Migrado '.mvn/wrapper/maven-wrapper.properties' "distributionUrl=x`n"
+  $r2 = Pf $e2 (Todos $e2 @('-Solo', '1,6')) '' @{ PATH = $vacia }
+  Igual 'c) maven usado: envoltorio' 'envoltorio' (Valor-De $r2 'maven usado')
+  foreach ($p in @('compila y pasa el test', 'jacoco', 'openrewrite')) { Comprueba "c) $p (con el mvnw y .mvn copiados al juguete)" ((Valor-De $r2 $p) -match '^si \| \d+ s$') ((Bloque-De $r2 '6') -join ' / ') }
+  Igual 'c) el bloque 1 mide la version con ese mismo envoltorio' '3.9.8' (Valor-De $r2 'maven')
+  Igual 'c) sin fallos' 'ninguno' (Valor-De $r2 'bloques con fallo')
+  # d) ni ajustes, ni mvn, ni mvnw
+  $e3 = Nuevo-Escenario 'maven-ninguno' @{ MvnExe = '' }
+  $r3 = Pf $e3 (Todos $e3 @('-Solo', '1,6')) '' @{ PATH = $vacia }
+  Igual 'd) maven usado: ninguno' 'ninguno' (Valor-De $r3 'maven usado')
+  Comprueba 'd) el bloque 6 queda saltado con su motivo' (@(Bloque-De $r3 '6' | Where-Object { $_ -match '^saltado: ' }).Count -eq 1) ((Bloque-De $r3 '6') -join ' / ')
+  Igual 'd) el bloque 1 dice maven: no disponible' 'no disponible' (Valor-De $r3 'maven')
+  Igual 'd) sin fallos' 'ninguno' (Valor-De $r3 'bloques con fallo')
+}
+
+$Pruebas['15 bloque 7: git, tests, pom, sftp, config y ficheros locales de cada repo (solo numeros y palabras fijas)'] = {
+  $e = Nuevo-Escenario 'forma'
+  $leg = $e.Legacy
+  $jsch = 'com.jcraft.jsch.JSch'
+  $sshd = 'org.apache.sshd.client.SshClient'
+  $integ = 'org.springframework.integration.sftp.session.DefaultSftpSessionFactory'
+  $sshj = 'net.schmizz.sshj.SSHClient'
+  $m = 'src/main/java/com/zorba/legado/'
+  $t = 'src/test/java/com/zorba/legado/'
+  $pq = 'com.zorba.legado'
+  # sftp: jsch 1, sshd 2, spring-integration 3, sshj 4 (el ultimo en un test); config: @Value 3, @ConfigurationProperties 1, getenv 2
+  Escribe $leg ($m + 'ZorbaSftpUno.java') (Clase-Con 'ZorbaSftpUno' $pq @($jsch, $sshd, $integ, $sshj, 'java.io.FileReader') @('@Value("${a}") private String a;', 'String e = System.getenv("A");', 'Object r = new FileReader("x");'))
+  Escribe $leg ($m + 'ZorbaSftpDos.java') (Clase-Con 'ZorbaSftpDos' $pq @($sshd, $integ, $sshj, 'java.nio.file.Files') @('@ConfigurationProperties("x") private Object p;', 'Object f = Files.readAllBytes(null);'))
+  Escribe $leg ($m + 'ZorbaSftpTres.java') (Clase-Con 'ZorbaSftpTres' $pq @($integ, $sshj, 'java.io.FileInputStream') @('@Value("${b}") private String b;', 'Object s = new FileInputStream("x");'))
+  Escribe $leg ($t + 'ZorbaSftpPrueba.java') (Clase-Con 'ZorbaSftpPrueba' $pq @($sshj, 'java.io.FileWriter') @('@Value("${c}") private String c;', 'String e = System.getenv("B");', 'Object w = new FileWriter("y");'))
+  Escribe $leg ($t + 'ZorbaOtraPrueba.java') (Clase-Con 'ZorbaOtraPrueba' $pq @() @('int a = 1;'))
+  # ficheros locales de codigo: uno por cada clase que cuenta (el de FileWriter en un test no cuenta)
+  Escribe $leg ($m + 'ZorbaLocalA.java') (Clase-Con 'ZorbaLocalA' $pq @('java.io.File') @('File f = null;'))
+  Escribe $leg ($m + 'ZorbaLocalB.java') (Clase-Con 'ZorbaLocalB' $pq @('java.io.FileWriter') @('Object w = null;'))
+  Escribe $leg ($m + 'ZorbaLocalC.java') (Clase-Con 'ZorbaLocalC' $pq @('java.io.FileOutputStream') @('Object o = null;'))
+  foreach ($f in @('src/main/resources/application.properties', 'src/main/resources/application-dev.yml', 'src/main/resources/application.yaml', 'src/test/resources/application-test.properties', 'zorba-mod2/src/main/resources/application.yml')) { Escribe $leg $f "a: 1`n" }
+  foreach ($f in @('src/main/resources/application.json', 'src/main/resources/applicationContext.xml')) { Escribe $leg $f "x`n" }
+  Escribe $leg 'pom.xml' (Pom-Con 'zorba-parent-secreto' '9.9.9' '<java.version>${revision}</java.version>')
+  # el migrado: un test, spring-boot 3.2.5 y release 21, y la cabeza suelta (no esta en una rama)
+  Escribe $e.Migrado 'src/test/java/com/zorba/migrado/ZorbaNuevaPrueba.java' (Clase-Con 'ZorbaNuevaPrueba' 'com.zorba.migrado' @() @('int a = 1;'))
+  Escribe $e.Migrado 'pom.xml' (Pom-Con 'spring-boot-starter-parent' '3.2.5' '<maven.compiler.release>21</maven.compiler.release>')
+  [void](GitEn $e.Migrado @('checkout', '-q', '--detach'))
+  # la referencia: ni pom ni git
+  Remove-Item -LiteralPath (Join-Path $e.Plantilla 'pom.xml') -Force
+  Remove-Item -LiteralPath (Join-Path $e.Plantilla '.git') -Recurse -Force
+  $r = Pf $e (Todos $e @('-Solo', '7', '-SinMaven'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'original: repo git' 'si' (Valor-De $r 'original repo git')
+  Igual 'original: en una rama' 'si' (Valor-De $r 'original en una rama')
+  Igual 'original: tests (.java bajo src/test)' '2 ficheros' (Valor-De $r 'original tests')
+  Igual 'original: padre propio sin nombre ni version, y java.version ${revision} es otro' 'java otro | spring-boot ninguno | padre propio' (Valor-De $r 'original pom')
+  Igual 'original: sftp, con codigo y test' 'jsch 1 | sshd 2 | spring-integration 3 | sshj 4' (Valor-De $r 'original sftp')
+  Igual 'original: config' '@Value 3 | @ConfigurationProperties 1 | getenv 2 | ficheros application 5' (Valor-De $r 'original config')
+  Igual 'original: ficheros locales (solo codigo, uno por cada clase de E/S de ficheros)' '6' (Valor-De $r 'original ficheros locales')
+  Igual 'migrado: repo git' 'si' (Valor-De $r 'migrado repo git')
+  Igual 'migrado: la cabeza suelta no es una rama' 'no' (Valor-De $r 'migrado en una rama')
+  Igual 'migrado: tests' '1 ficheros' (Valor-De $r 'migrado tests')
+  Igual 'migrado: spring-boot de su padre y java de maven.compiler.release' 'java 21 | spring-boot 3.2.5 | padre spring-boot' (Valor-De $r 'migrado pom')
+  Igual 'migrado: sftp' 'jsch 0 | sshd 0 | spring-integration 0 | sshj 0' (Valor-De $r 'migrado sftp')
+  Igual 'plantilla: sin git' 'no' (Valor-De $r 'plantilla repo git')
+  Comprueba 'plantilla: sin git no hay linea de rama' ((Cuenta-Lineas $r '^plantilla en una rama: ') -eq 0)
+  Igual 'plantilla: sin pom' 'sin pom' (Valor-De $r 'plantilla pom')
+  Igual 'plantilla: tests' '0 ficheros' (Valor-De $r 'plantilla tests')
+  Comprueba 'del padre propio no sale ni el nombre ni la version' (($r.Fichero + $r.Salida) -notmatch 'secreto' -and ($r.Fichero + $r.Salida) -notmatch '9\.9\.9')
+  Sin-Fugas $r 'forma'
+  Comprueba 'y es ASCII puro' ((Es-Ascii $r.Fichero) -and (Es-Ascii $r.Salida))
+}
+
+$Pruebas['16 bloque 7: java y spring-boot del pom (propiedades en orden, versiones con forma de version, pom roto)'] = {
+  $e = Nuevo-Escenario 'poms'
+  $d = @{}
+  foreach ($n in @('a', 'b', 'c', 'd', 'e', 'f')) { $d[$n] = Join-Path $e.Raiz ('pom-' + $n) }
+  Escribe $d['a'] 'pom.xml' (Pom-Con 'spring-boot-starter-parent' '${sb.version}' '<maven.compiler.source>1.8</maven.compiler.source>')
+  Escribe $d['b'] 'pom.xml' (Pom-Con '' '' '<maven.compiler.source>11</maven.compiler.source><maven.compiler.release>21</maven.compiler.release><java.version>17</java.version>')
+  Escribe $d['c'] 'pom.xml' "<project><zorba-secreto></project>`n"
+  Escribe $d['d'] 'pom.xml' (Pom-Con '' '' '<maven.compiler.source>11</maven.compiler.source><maven.compiler.release>21</maven.compiler.release>')
+  Escribe $d['e'] 'pom.xml' (Pom-Con 'spring-boot-starter-parent' ('1' * 21) '<java.version>v17</java.version>')
+  Escribe $d['f'] 'pom.xml' (Pom-Con 'zorba-spring-boot-starter-parent-x' '1.0' ('<java.version>' + ('1' * 22) + '</java.version>'))
+  $r = Pf $e @('-Solo', '7', '-SinMaven', '-Legacy', $d['a'], '-Migrado', $d['b'], '-Plantilla', $d['c'])
+  Igual 'a) con ${sb.version} y solo maven.compiler.source' 'java 1.8 | spring-boot otro | padre spring-boot' (Valor-De $r 'original pom')
+  Igual 'b) java.version gana a maven.compiler.release y este a maven.compiler.source' 'java 17 | spring-boot ninguno | padre ninguno' (Valor-De $r 'migrado pom')
+  Igual 'c) un pom que no es XML bueno' 'ilegible' (Valor-De $r 'plantilla pom')
+  Sin-Fugas $r 'poms 1'
+  $r2 = Pf $e @('-Solo', '7', '-SinMaven', '-Legacy', $d['d'], '-Migrado', $d['e'], '-Plantilla', $d['f'])
+  Igual 'd) maven.compiler.release gana a maven.compiler.source' 'java 21 | spring-boot ninguno | padre ninguno' (Valor-De $r2 'original pom')
+  Igual 'e) 21 caracteres de version se escriben y java.version v17 es otro' ('java otro | spring-boot ' + ('1' * 21) + ' | padre spring-boot') (Valor-De $r2 'migrado pom')
+  Igual 'f) 22 caracteres son otro, y un padre que no se llama exactamente spring-boot-starter-parent es propio' 'java otro | spring-boot ninguno | padre propio' (Valor-De $r2 'plantilla pom')
+  Sin-Fugas $r2 'poms 2'
+}
+
+$Pruebas['17 filtro: cada regla con un dato que solo ella atrapa'] = {
+  # a) repos dentro de una carpeta con espacios: la ruta entera es la etiqueta, sin el nombre de la carpeta
+  $e = Nuevo-Escenario 'carpeta zorba con espacio'
+  $a = Pf-ErrorMaven $e ($e.Legacy + ' y ' + $e.Migrado + ' y ' + $e.Plantilla)
+  Igual 'a) las rutas de los repos salen enteras como <LEGACY>, <MIGRADO> y <PLANTILLA>' '<LEGACY> y <MIGRADO> y <PLANTILLA>' (Valor-De $a 'error')
+  Comprueba 'a) y nada del nombre de la carpeta con espacios' (($a.Fichero + $a.Salida) -notmatch 'espacio' -and ($a.Fichero + $a.Salida) -notmatch '(?i)zorba') (Valor-De $a 'error')
+  # b) la carpeta personal, con un espacio en el nombre
+  $e2 = Nuevo-Escenario 'casa'
+  $casa = Join-Path $Dir 'perfil zorba'
+  $b = Pf-ErrorMaven $e2 ('No se pudo leer ' + $casa) @{ USERPROFILE = $casa }
+  Igual 'b) la carpeta personal sale como <CASA>, sin su nombre' 'No se pudo leer <CASA>' (Valor-De $b 'error')
+  # c) nombres sueltos: la carpeta de cada repo y una clase
+  $e3 = Nuevo-Escenario 'nombres'
+  $c = Pf-ErrorMaven $e3 'zorba-legado-xq y ZorbaCorta y zorba-migrado-xq y zorba-plantilla-xq'
+  $vc = Valor-De $c 'error'
+  Comprueba 'c) el nombre suelto de la carpeta de un repo sale como etiqueta' ($vc -cmatch '^<LEGACY> y .* y <MIGRADO> y <PLANTILLA>$') $vc
+  Comprueba 'c) el nombre suelto de una clase de los repos sale como <clase>' ($vc -cmatch ' y <clase> y ') $vc
+  # d) una URL interna, la de Maven Central, tildes y una linea de 560 caracteres
+  $e4 = Nuevo-Escenario 'texto'
+  $nene = [string][char]0xF1 + [char]0xE9
+  $d = Pf-ErrorMaven $e4 ('Fallo en ' + $nene + ' con https://artefactos.interno-zorba.corp/maven/x y https://repo.maven.apache.org/maven2/ ' + ('palabra ' * 70))
+  $vd = Valor-De $d 'error'
+  Comprueba 'd) una URL interna sale como <url-interna> y la de Maven Central se queda' ($vd.StartsWith('Fallo en ?? con <url-interna> y https://repo.maven.apache.org/maven2/ palabra')) $vd
+  Comprueba 'd) las tildes y las enes salen como ? y el fichero es ASCII' ($vd.StartsWith('Fallo en ?? con ') -and (Es-Ascii $d.Fichero)) $vd
+  Igual 'd) una linea larga se corta a 200 caracteres' 200 $vd.Length
+}
+
+$Pruebas['18 el fichero se guarda al acabar cada bloque: a mitad del lanzamiento ya tiene los anteriores'] = {
+  $e = Nuevo-Escenario 'medio'
+  $r = Pf $e (Todos $e @('-Solo', '1,4')) '' @{ RESCATE_COPIA_RESULTADO = (Join-Path $Inst 'preflight-resultado.txt') }
+  Igual 'sale con 0' 0 $r.Codigo
+  $copia = Join-Path $e.Llamadas 'resultado-pf-apt-1.txt'
+  Comprueba 'el Copilot de la primera llamada del bloque 4 vio el fichero' (Test-Path -LiteralPath $copia)
+  $t = ''
+  if (Test-Path -LiteralPath $copia) { $t = [System.IO.File]::ReadAllText($copia) }
+  Comprueba 'el fichero ya tenia el bloque 1 entero' ($t -match '(?m)^== 1 entorno' -and $t -match '(?m)^ajustes: ') $t
+  Comprueba 'y aun no tenia ni el bloque 4 ni el fin' ($t -notmatch '(?m)^== 4 ' -and $t -notmatch '(?m)^== fin') $t
+  Comprueba 'y al acabar si tiene los dos bloques y el fin' ((Cuenta-Lineas $r '^== 1 ') -eq 1 -and (Cuenta-Lineas $r '^== 4 ') -eq 1 -and (Lineas-De $r) -contains '== fin')
+}
+
+$Pruebas['19 bloques 7 y 8: si fallan, solo el tipo del fallo y el sitio, sin su mensaje'] = {
+  $e = Nuevo-Escenario 'sinmensaje'
+  # el Copilot del bloque 4 borra el original: los bloques 7 y 8 no lo encuentran y su fallo lleva la ruta en el mensaje
+  $r = Pf $e (Todos $e @('-Solo', '4,7,8')) 'borra-carpeta:^ValidadorImporte$' @{ RESCATE_BORRAR = $e.Legacy }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'fallan el 7 y el 8' ((Valor-De $r 'bloques con fallo') -ceq '7 8') (Valor-De $r 'bloques con fallo')
+  foreach ($n in @('7', '8')) {
+    $f = @(Bloque-De $r $n | Where-Object { $_ -match '^fallo: ' })
+    Comprueba "bloque ${n}: una linea fallo: con solo el tipo y el fichero:linea" ($f.Count -eq 1 -and $f[0] -cmatch '^fallo: \w+ \(\w+\.ps1:\d+\)$') ($f -join ' / ')
+  }
+  Comprueba 'ni el texto del fallo ni la ruta salen' (($r.Fichero + $r.Salida) -notmatch 'No existe' -and ($r.Fichero + $r.Salida) -notmatch '<LEGACY>')
+  Sin-Fugas $r 'sin mensaje'
 }
 
 # ================================ LANZADOR ================================

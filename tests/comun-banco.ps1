@@ -62,7 +62,6 @@ function Lanzar([string]$Ruta, [string[]]$A, [string]$Guion = '', [string[]]$Ent
   $ErrorActionPreference = 'Continue'
   $env:RESCATE_FALSO = $Guion
   $pre = @('-NoProfile')
-  if ($env:OS -eq 'Windows_NT') { $pre += @('-ExecutionPolicy', 'Bypass') }
   $o = $Entrada | & $ps @pre -File $Ruta @A 2>&1 | ForEach-Object { "$_" }
   $c = $LASTEXITCODE
   $env:RESCATE_FALSO = ''

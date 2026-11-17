@@ -10,11 +10,13 @@ Scripts sueltos para trabajar con proyectos Java.
 .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
 ```
 
-Todo es opcional. `-Solo 1,3` hace solo esos bloques, `-SinCopilot` salta los que llaman al modelo (4, 5 y 8) y `-SinMaven` salta Maven (6 y el diagnóstico del 7). Cada bloque avisa por consola de lo que puede tardar. El bloque 2 lanza los dos bancos de pruebas (unos minutos).
+Todo es opcional. `-Solo 1,3` hace solo esos bloques, `-SinCopilot` salta los que llaman al modelo (4, 5 y 8) y `-SinMaven` salta Maven (6 y el diagnóstico del 7). Cada bloque avisa por consola de lo que puede tardar. El bloque 2 lanza los dos bancos de pruebas (hasta 30 min). Si una ruta de `-Legacy`, `-Migrado` o `-Plantilla` no es una carpeta, lo dice al instante y no hace nada más. Para Maven usa el de `ajustes.json` (`MvnExe`), si no el `mvn` del PATH y si no el `mvnw` de `-Migrado`; el resultado dice cuál (`maven usado`).
 
 Deja `preflight-resultado.txt` junto al script (git lo ignora), lo reescribe al acabar cada bloque, lo enseña al final y lo copia al portapapeles si puede. **Ese fichero es lo que se pega en el chat.** No lleva rutas, usuario, equipo, dominio, correos, IP, URL internas ni nombres de tus repos, de sus clases o de sus ficheros: de tus repos solo salen números y el principio de un mensaje nuestro. Aun así, léelo antes de pegarlo.
 
 El diagnóstico del bloque 7 usa `rescate.ps1` en modo diagnóstico sobre `-Migrado`: deja allí su carpeta `.rescate`, que git ignora.
+
+Si el resultado dice `original sin cambios: no`, mira `git status` en el original antes de seguir: algo lo tocó durante la lectura.
 
 Si Windows no deja lanzar el script:
 
