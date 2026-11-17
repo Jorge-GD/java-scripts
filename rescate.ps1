@@ -311,6 +311,12 @@ function Get-UsoFicheros($Hechos) {
   return $out.ToArray()
 }
 
+# Si una carpeta (relativa al paquete base) es de las que pueden abrir ficheros locales.
+function Test-FicheroPermitido([string]$Dir) {
+  foreach ($p in $Cfg.FicheroPermitidoEn) { if ($Dir -eq $p -or $Dir.StartsWith($p + '/')) { return $true } }
+  return $false
+}
+
 # Secretos escritos en claro en application*.yml|properties: claves cuyo ultimo trozo acaba en una
 # palabra de PalabrasSecreto y cuyo valor es un literal o una variable con valor por defecto.
 # Error en application.(yml|yaml|properties); aviso en los de un perfil. El valor no se guarda.
@@ -536,7 +542,7 @@ function Get-Calibracion([string]$Raiz) {
     if ($n -ge 1) { $dirs3[($seg[0..($n - 1)] -join '/')] = $true }
   }
   foreach ($v in @(Get-ViolImports $h)) { $excImp[$v.Clave] = $true }
-  foreach ($u in @(Get-UsoFicheros $h)) { $excFic[$u.Clave] = $true }
+  foreach ($u in @(Get-UsoFicheros $h)) { if (-not (Test-FicheroPermitido $u.Dir)) { $excFic[$u.Clave] = $true } }
   $todo = (@($h.Ficheros | ForEach-Object { $_.Texto }) -join "`n")
   foreach ($t in $Cfg.ApiAntigua) { $tokens[$t] = ($todo -match ('\b' + $t + '\b')) }
   $jakarta = $false
@@ -700,11 +706,7 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   # ---------- ficheros (SFTP) ----------
   $uso = @(Get-UsoFicheros $h)
   $usaFicheros = ($uso.Count -gt 0)   # si el batch no toca ficheros, no se le exige SFTP
-  $uso = @($uso | Where-Object {
-      $d = $_.Dir; $ok = $false
-      foreach ($p in $Cfg.FicheroPermitidoEn) { if ($d -eq $p -or $d.StartsWith($p + '/')) { $ok = $true } }
-      if ($cal -and $cal.ExcFicheros.ContainsKey($_.Clave)) { $ok = $true }
-      -not $ok })
+  $uso = @($uso | Where-Object { -not ((Test-FicheroPermitido $_.Dir) -or ($cal -and $cal.ExcFicheros.ContainsKey($_.Clave))) })
   foreach ($g in @($uso | Group-Object RelRaiz)) {
     $imps = (@($g.Group | ForEach-Object { $_.Fqn }) | Select-Object -Unique | Select-Object -First 5) -join ', '
     Add-Hallazgo 'ficheros' 'error' $g.Name $g.Group[0].Linea "acceso directo a ficheros locales ($imps): debe ir por el puerto de ficheros"

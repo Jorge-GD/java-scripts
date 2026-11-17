@@ -1013,5 +1013,45 @@ $Pruebas['plantilla incumple: sin -Plantilla no hay linea; con ella, la hay tamb
   Comprueba 'el modo pre trae la linea' (@($pre.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 1 | ficheros 1 | calidad 2 | secretos 1') (Cola $pre.Salida)
 }
 
+# Un adaptador que abre ficheros donde se puede (infrastructure/adapters/output/file) no es un incumplimiento de la referencia.
+$AdaptadorFichero = "package com.acme.plantilla.infrastructure.adapters.output.file;`n`nimport java.nio.file.Files;`n`n/** Lee ficheros del disco. */`npublic class FicheroLocalAdapter {`n    private Files ayuda;`n}`n"
+$LectorFuera = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+
+# La plantilla que cumple todo, con estos ficheros mas (ruta -> texto).
+function Limpia-Mas([hashtable]$Mas) {
+  $f = @{}
+  foreach ($k in $PlantillaLimpia.Keys) { $f[$k] = $PlantillaLimpia[$k] }
+  foreach ($k in $Mas.Keys) { $f[$k] = $Mas[$k] }
+  return $f
+}
+
+# Lo que dice diagnostico.md de lo que se permite porque la plantilla tambien lo hace (desde su titulo hasta el final).
+function Permitido-Del-Informe($E) {
+  $md = Lee $E.Repo '.rescate/diagnostico.md'
+  return $md.Substring($md.IndexOf('## Permitido porque la plantilla tambien lo hace'))
+}
+
+$Pruebas['plantilla incumple: el adaptador de ficheros de su carpeta permitida no cuenta ni sale en lo permitido'] = {
+  $e = Escenario-Con-Plantilla 'adaptador-permitido' (Limpia-Mas @{ ($Base + 'infrastructure/adapters/output/file/FicheroLocalAdapter.java') = $AdaptadorFichero })
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola dice ficheros 0' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 0 | calidad 0 | secretos 0') (Cola $r.Salida)
+  $p = Permitido-Del-Informe $e
+  Comprueba 'lo permitido dice que no hay nada' ($p -match '- \(nada: la plantilla cumple todas las reglas\)') $p
+  Comprueba 'y no lista el uso de ficheros del adaptador' ($p -notmatch 'java\.nio') $p
+}
+
+$Pruebas['plantilla incumple: con el adaptador permitido y un uso de ficheros en otra carpeta, ficheros 1'] = {
+  $e = Escenario-Con-Plantilla 'adaptador-y-fuera' (Limpia-Mas @{
+      ($Base + 'infrastructure/adapters/output/file/FicheroLocalAdapter.java') = $AdaptadorFichero
+      ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java')         = $LectorFuera
+    })
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola dice ficheros 1' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 1 | calidad 0 | secretos 0') (Cola $r.Salida)
+  $p = Permitido-Del-Informe $e
+  Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/sftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
