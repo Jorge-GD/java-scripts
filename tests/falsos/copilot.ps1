@@ -9,6 +9,89 @@
 #   plan-toca-codigo   en la revision previa toca codigo (prohibido)
 # Cada llamada deja una linea en .rescate/llamadas.log, con el modelo y el
 # esfuerzo que ha recibido.
+#
+# Tareas de migracion.ps1 (el texto de -p nombra .rescate/tareas/<id>.prompt.md):
+# lee del prompt las lineas LEER, LINEAS y ESCRIBIR y escribe una ficha de clase.
+# RESCATE_FALSO es 'guion' o 'guion:regex', y varios se separan con ';'. Cada guion
+# solo vale para los ficheros cuyo nombre (sin .java) cumple su regex (sin regex,
+# para todos); gana el primero que encaja y los demas ficheros salen bien:
+#   (vacio)            ficha correcta
+#   texto-libre        contesta con texto y no escribe el fichero
+#   cita-inventada     tres datos: uno bien, uno en otra linea y uno con la cita inventada
+#   citas-inventadas   todas las citas inventadas
+#   sin-datos          ficha valida pero con la lista de datos vacia
+#   json-roto          JSON cortado
+#   una-vez-roto       JSON cortado la primera vez y bien en el reintento
+#   lento              tarda 3 s
+#   colgado            no acaba nunca
+#   toca-codigo        ficha correcta, pero cambia un fichero del repo de trabajo
+#   toca-original      ficha correcta, pero cambia el fichero que lee
+#   falla-siempre      sale con 1 sin escribir nada
+# Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
+# (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
+$texto = ''
+for ($i = 0; $i -lt $args.Count - 1; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
+if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
+  $raiz = (Get-Location).Path
+  $prompt = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Join-Path $raiz '.rescate') 'tareas') (Split-Path $Matches[0] -Leaf)))
+  $leer = ([regex]::Match($prompt, '(?m)^LEER: (.+?)\s*$')).Groups[1].Value
+  $salida = ([regex]::Match($prompt, '(?m)^ESCRIBIR: (.+?)\s*$')).Groups[1].Value
+  $rango = [regex]::Match($prompt, '(?m)^LINEAS: (\d+)-(\d+)\s*$')
+  $id = [System.IO.Path]::GetFileName($salida) -replace '\.json$', ''
+  $correccion = ($prompt -match '## CORRECCI')
+  $efecto = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
+  $clase = [System.IO.Path]::GetFileNameWithoutExtension($leer)
+  $guion = ''
+  foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
+    $nombre, $solo = ($g -split ':', 2)
+    if (-not $solo) { $solo = '.' }
+    if ($nombre -and -not $guion -and $clase -match $solo) { $guion = $nombre }
+  }
+  $dirFalso = Join-Path (Join-Path $raiz '.rescate') 'falso'
+  [void](New-Item -ItemType Directory -Path $dirFalso -Force)
+  $registro = Join-Path $dirFalso ($id + '-' + $PID + '.txt')
+  $reg = @("id=$id", "flags=$efecto", "correccion=$correccion", "guion=$guion", ('inicio=' + [DateTime]::UtcNow.Ticks))
+  [System.IO.File]::WriteAllLines($registro, [string[]]$reg)
+
+  if ($guion -eq 'falla-siempre') { 'Error: no hay sesion iniciada'; exit 1 }
+  if ($guion -eq 'texto-libre') { 'Claro, el fichero valida importes y es muy sencillo.'; exit 0 }
+  if ($guion -eq 'colgado') { Start-Sleep -Seconds 120 }
+  if ($guion -eq 'lento') { Start-Sleep -Seconds 3 }
+
+  $lineas = [System.IO.File]::ReadAllLines($leer)
+  $desde = 1; $hasta = $lineas.Count
+  if ($rango.Success) { $desde = [int]$rango.Groups[1].Value; $hasta = [int]$rango.Groups[2].Value }
+  $reales = @(for ($n = $desde; $n -le [Math]::Min($hasta, $lineas.Count); $n++) {
+      if ($lineas[$n - 1] -match ';\s*$' -and $lineas[$n - 1] -notmatch '^\s*(package|import)\b') { $n }
+    })
+  function Nuevo-Dato([int]$Linea, [string]$Cita) {
+    return [ordered]@{ tipo = 'regla'; texto = "Linea $Linea"; linea = $Linea; cita = $Cita }
+  }
+  $datos = @()
+  foreach ($n in @($reales | Select-Object -First 2)) { $datos += (Nuevo-Dato $n $lineas[$n - 1].Trim()) }
+  if ($guion -eq 'citas-inventadas') {
+    $datos = @(1..3 | ForEach-Object { Nuevo-Dato $_ "esta cita no sale en el fichero $_" })
+  }
+  if ($guion -eq 'cita-inventada') {
+    $datos = @((Nuevo-Dato $reales[0] $lineas[$reales[0] - 1].Trim()), (Nuevo-Dato ($reales[1] + 40) $lineas[$reales[1] - 1].Trim()), (Nuevo-Dato 3 'esta cita no sale en el fichero'))
+  }
+  if ($guion -eq 'sin-datos') { $datos = @() }
+  $ficha = [ordered]@{ fichero = (Split-Path $leer -Leaf); clase = $clase; papel = 'otro'; queHace = "Ficha de prueba de $clase."; datos = $datos }
+  $json = ConvertTo-Json -InputObject $ficha -Depth 6
+  if ($guion -eq 'json-roto' -or ($guion -eq 'una-vez-roto' -and -not $correccion)) { $json = $json.Substring(0, [int]($json.Length / 2)) }
+  $ruta = $raiz
+  foreach ($s in $salida.Split('/')) { $ruta = Join-Path $ruta $s }
+  [System.IO.File]::WriteAllText($ruta, $json)
+  if ($guion -eq 'toca-codigo') {
+    $f = @(Get-ChildItem -LiteralPath (Join-Path $raiz 'src') -Recurse -File -Filter '*.java')[0]
+    [System.IO.File]::AppendAllText($f.FullName, "`n// tocado por la lectura`n")
+  }
+  if ($guion -eq 'toca-original') { [System.IO.File]::AppendAllText($leer, "`n// tocado por la lectura`n") }
+  [System.IO.File]::AppendAllText($registro, ('fin=' + [DateTime]::UtcNow.Ticks + "`n"))
+  'hecho'
+  exit 0
+}
+
 $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
 $raiz = (Get-Location).Path
 $rescate = Join-Path $raiz '.rescate'

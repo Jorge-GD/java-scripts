@@ -201,11 +201,6 @@ function Get-Arbol([string]$Dir, [int]$Prof = 99) {
   return $out.ToArray()
 }
 
-function Get-JavaFiles([string]$Dir) {
-  if (-not (Test-Path -LiteralPath $Dir)) { return @() }
-  return @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Filter '*.java')
-}
-
 function Get-Imports([string]$Ruta) {
   $res = New-Object System.Collections.Generic.List[object]
   $n = 0

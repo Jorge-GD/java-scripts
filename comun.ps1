@@ -59,6 +59,11 @@ function Resolve-Dir([string]$p) {
   return (Resolve-Path -LiteralPath $p).Path.TrimEnd('\', '/')
 }
 
+function Get-JavaFiles([string]$Dir) {
+  if (-not (Test-Path -LiteralPath $Dir)) { return @() }
+  return @(Get-ChildItem -LiteralPath $Dir -Recurse -File -Filter '*.java')
+}
+
 function Confirmar([string]$Pregunta) {
   if ($Si) { return $true }
   $r = Read-Host "$Pregunta (s/n)"
@@ -189,7 +194,7 @@ function Show-Ignorados {
   $ign = @((Invoke-Git $OrigenRoot @('-c', 'core.quotepath=off', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')).Salida | Where-Object { $_ } | Where-Object {
       $p = $_.TrimEnd('/')
       $enIgnorada = @($p.Split('/') | Where-Object { $Cfg.DirsIgnorados -contains $_ }).Count -gt 0
-      (-not $enIgnorada) -and ($p -notmatch '\.(class|log|iml)$') })
+      (-not $enIgnorada) -and ($p -notmatch '\.(class|log|iml)$') -and ($p -notmatch '^migracion-[^/]*$') })
   if ($ign.Count -eq 0) { return }
   Aviso 'Ojo: git ignora estos ficheros de tu carpeta y por eso NO estan en el worktree.'
   Aviso 'Si el build o los tests los necesitan, copialos a mano:'
