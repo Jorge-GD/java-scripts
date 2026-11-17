@@ -5,7 +5,7 @@ Scripts sueltos para trabajar con proyectos Java.
 ## rescate.ps1
 
 Primeros auxilios para un batch Java migrado a medias (Java 8 → Java 21, arquitectura hexagonal, SFTP y configuración externa).
-Es un script de PowerShell (Windows PowerShell 5.1 o PowerShell 7). Necesita `git`, Maven y, para arreglar, GitHub Copilot CLI.
+Es un script de PowerShell (Windows PowerShell 5.1 o PowerShell 7). Necesita `git`, Maven y, para arreglar, GitHub Copilot CLI. Si lo copias a otra máquina, lleva también `comun.ps1`: `rescate.ps1` lo carga desde su misma carpeta.
 
 Compara tu repo con una **plantilla** (un repo ya migrado y aprobado) y trabaja en cuatro fases:
 

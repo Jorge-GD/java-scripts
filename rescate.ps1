@@ -84,8 +84,9 @@ USO
   powershell -ExecutionPolicy Bypass -File .\rescate.ps1 -Repo ...
 
 SI HAY QUE REPARAR ESTE SCRIPT
-  Lo normal es tocar solo el bloque CONFIGURACION (flags de Copilot, comandos
-  de Maven, reglas). No quites las puertas de Invoke-Fix: son lo que evita que
+  Lo normal es tocar solo el bloque CONFIGURACION (reglas, comandos de Maven) o
+  el de comun.ps1 (flags de Copilot, ruta de Maven). rescate.ps1 necesita
+  comun.ps1 en su misma carpeta. No quites las puertas de Invoke-Fix: son lo que evita que
   la IA estropee el repo. Antes de darlo por bueno, pasa tests\probar.ps1.
 
 LIMITES
@@ -123,9 +124,11 @@ param(
   [switch]$SinIA            # modo pre: solo busqueda por texto, sin Copilot
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'comun.ps1')
 
 # ============================ CONFIGURACION ============================
-$Cfg = @{
+# Los flags de Copilot, la ruta de Maven y las carpetas ignoradas estan en comun.ps1.
+$Cfg += @{
   Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')
   Capas  = @('domain', 'application', 'infrastructure')   # si no hay plantilla
   # Reglas de dependencias. En = carpeta (relativa al paquete base).
@@ -153,7 +156,6 @@ $Cfg = @{
   ApiAntigua            = @('JobBuilderFactory', 'StepBuilderFactory')
   JavaxAntiguo          = '^javax\.(annotation|persistence|validation|servlet|inject|batch|transaction|ws\.rs|jms|mail|xml\.bind)\.'
   ExtTexto              = @('.java', '.yml', '.yaml', '.properties', '.xml', '.sh', '.bat', '.cmd', '.json', '.conf', '.cfg', '.ini')
-  DirsIgnorados         = @('.git', 'target', '.rescate', 'node_modules', '.idea', '.vscode', '.github', '.mvn')
   # Como se reconoce un job en el ORIGINAL (grupo 1 = nombre del job)
   JobRegex              = @(
     '(?i)jobBuilder\w*\s*\.\s*get\(\s*"([^"]+)"',
@@ -177,62 +179,11 @@ $Cfg = @{
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # lotes deshechos seguidos antes de parar (no gastar llamadas en balde)
   # Maven
-  MvnExe                = ''    # vacio = mvnw del repo o, si no hay, mvn del PATH
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
   MvnTests              = @('-q', '-B', 'test')
-  # Copilot CLI. Si tu version no conoce algun flag, quitalo de aqui.
-  CopilotExe            = 'copilot'
-  CopilotArgs           = @('-s', '--allow-all-tools', '--no-ask-user', '--deny-tool=shell(git push)')
-  CommitArgs            = @()     # p.ej. @('--no-verify') si un hook local bloquea
 }
 
 # ============================== UTILIDADES ==============================
-function Info([string]$m) { Write-Host $m }
-function Bien([string]$m) { Write-Host $m -ForegroundColor Green }
-function Aviso([string]$m) { Write-Host $m -ForegroundColor Yellow }
-function Fallo([string]$m) { Write-Host $m -ForegroundColor Red }
-
-# Ejecuta un programa externo sin que su stderr rompa el script (PS 5.1).
-function Invoke-Nativo {
-  param([string]$Exe, [string[]]$Argumentos = @(), [string]$Dir = '')
-  $ErrorActionPreference = 'Continue'
-  $out = $null
-  $code = 0
-  if ($Dir) { Push-Location -LiteralPath $Dir }
-  try {
-    $out = & $Exe @Argumentos 2>&1 | ForEach-Object { "$_" }
-    $code = $LASTEXITCODE
-  }
-  finally { if ($Dir) { Pop-Location } }
-  if ($null -eq $code) { $code = 0 }
-  if ($null -eq $out) { $out = @() }
-  return [pscustomobject]@{ Codigo = $code; Salida = @($out) }
-}
-
-function Invoke-Git([string]$Dir, [string[]]$A) { return Invoke-Nativo 'git' (@('-C', $Dir) + $A) }
-
-function Get-Rel([string]$Raiz, [string]$Completa) {
-  return (($Completa.Substring($Raiz.Length).TrimStart('\', '/')) -replace '\\', '/')
-}
-
-function Join-Ruta([string]$Raiz, [string]$Rel) {
-  $p = $Raiz
-  foreach ($s in $Rel.Split('/')) { if ($s) { $p = Join-Path $p $s } }
-  return $p
-}
-
-function Resolve-Dir([string]$p) {
-  if (-not $p) { return '' }
-  if (-not (Test-Path -LiteralPath $p)) { throw "No existe la carpeta: $p" }
-  return (Resolve-Path -LiteralPath $p).Path.TrimEnd('\', '/')
-}
-
-function Confirmar([string]$Pregunta) {
-  if ($Si) { return $true }
-  $r = Read-Host "$Pregunta (s/n)"
-  return ($r -match '^[sSyY]')
-}
-
 # Ficheros de un arbol, sin entrar en carpetas ignoradas.
 function Get-Arbol([string]$Dir, [int]$Prof = 99) {
   $out = New-Object System.Collections.Generic.List[object]
@@ -577,19 +528,12 @@ function Add-Hallazgo([string]$Cat, [string]$Sev, [string]$Fichero, [int]$Linea,
   [void]$script:H.Add([pscustomobject]@{ Cat = $Cat; Sev = $Sev; Fichero = $Fichero; Linea = $Linea; Detalle = $Detalle })
 }
 
-function Get-Mvn {
-  if ($Cfg.MvnExe) { return $Cfg.MvnExe }
-  if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $w = Join-Path $RepoRoot 'mvnw.cmd' } else { $w = Join-Path $RepoRoot 'mvnw' }
-  if (Test-Path -LiteralPath $w) { return $w }
-  return 'mvn'
-}
-
 function Invoke-Build([bool]$ConTests) {
   $b = [pscustomobject]@{ Ejecutado = $true; Compila = $true; TestsEjecutados = $false; TestsOk = $false }
   $rep = Join-Ruta $RepoRoot 'target/surefire-reports'
   if ($ConTests -and (Test-Path -LiteralPath $rep)) { Remove-Item -LiteralPath $rep -Recurse -Force }
   if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
-  $r = Invoke-Nativo (Get-Mvn) $a $RepoRoot
+  $r = Invoke-Nativo (Get-Mvn $RepoRoot) $a $RepoRoot
   [System.IO.File]::WriteAllLines((Join-Path $Work 'build.log'), [string[]]$r.Salida)
   if ($r.Codigo -eq 0) {
     if ($ConTests) { $b.TestsEjecutados = $true; $b.TestsOk = $true }
@@ -905,7 +849,7 @@ $TextoCalidad = @(
 )
 
 function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
-  $mvn = Get-Mvn
+  $mvn = Get-Mvn $RepoRoot
   if ($mvn -ne 'mvn') { $mvn = '.' + [System.IO.Path]::DirectorySeparatorChar + (Split-Path $mvn -Leaf) }
   $l = New-Object System.Collections.Generic.List[string]
   $l.Add("# Tarea de rescate de migracion: paso '$PasoId'")
@@ -974,13 +918,9 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
 function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '') {
-  $a = @('-p', 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.') + $Cfg.CopilotArgs
   if (-not $Mod) { $Mod = $Modelo }
-  if ($Mod) { $a += "--model=$Mod" }
   if (-not $Esf) { $Esf = $Esfuerzo }
-  if ($Esf) { $a += "--effort=$Esf" }
-  if ($SinInstrucciones) { $a += '--no-custom-instructions' }
-  foreach ($d in @($PlantillaRoot, $LegacyRoot)) { if ($d) { $a += "--add-dir=$d" } }
+  $a = Get-ArgsCopilot 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.' $Mod $Esf @($PlantillaRoot, $LegacyRoot) ([bool]$SinInstrucciones)
   $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot
   [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
   return $r
@@ -995,20 +935,6 @@ function Get-TextoModelo {
   $t = "Copilot (copilot -p): modelo $m | esfuerzo en los lotes: $e | en la revision previa: $p"
   if ($ModeloB) { $t += " | modelo de reserva: $ModeloB" }
   return $t
-}
-
-# Huella de una carpeta de solo lectura, para detectar si alguien la toca.
-function Get-Huella([string]$Dir) {
-  if (-not $Dir) { return '' }
-  if (Test-Path -LiteralPath (Join-Path $Dir '.git')) {
-    $a = (Invoke-Git $Dir @('rev-parse', 'HEAD')).Salida -join ''
-    $b = (Invoke-Git $Dir @('status', '--porcelain')).Salida -join "`n"
-    $c = (Invoke-Git $Dir @('diff', 'HEAD', '--numstat')).Salida -join "`n"
-    return "$a`n$b`n$c"
-  }
-  $fs = @(Get-ChildItem -LiteralPath $Dir -Recurse -File)
-  $max = ($fs | Measure-Object -Property LastWriteTimeUtc -Maximum).Maximum
-  return "$($fs.Count)|$max"
 }
 
 function Get-Guardas {
@@ -1027,10 +953,6 @@ function Undo-Lote([string]$Rama, [string]$Check) {
   [void](Invoke-Git $RepoRoot @('reset', '-q', '--hard', $Check))
   [void](Invoke-Git $RepoRoot @('clean', '-fdq'))
 }
-
-function Get-Rama([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', '--abbrev-ref', 'HEAD')).Salida -join '').Trim() }
-
-function Get-Head([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', 'HEAD')).Salida -join '').Trim() }
 
 # ================================ PLAN ================================
 function Get-RutaPlan([string]$PasoId) { return (Join-Path $Work "plan-$PasoId.md") }
@@ -1136,126 +1058,6 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
   if ($falta.Count -gt 0) { Aviso ('El plan no nombra: ' + (($falta | Select-Object -First 8) -join ', ')) }
   Bien "Plan escrito: $ruta"
   return 'nuevo'
-}
-
-# ============================== WORKTREE ==============================
-# .rescate y target se ignoran solo en local (no toca .gitignore).
-# info/exclude lo comparten el repo y todos sus worktrees.
-function Set-Excluidos([string]$Dir) {
-  $exc = ((Invoke-Git $Dir @('rev-parse', '--git-path', 'info/exclude')).Salida -join '').Trim()
-  if (-not $exc) { return }
-  if (-not [System.IO.Path]::IsPathRooted($exc)) { $exc = Join-Path $Dir $exc }
-  $dirExc = Split-Path $exc -Parent
-  if (-not (Test-Path -LiteralPath $dirExc)) { [void](New-Item -ItemType Directory -Path $dirExc) }
-  $ya = ''
-  if (Test-Path -LiteralPath $exc) { $ya = [System.IO.File]::ReadAllText($exc) }
-  if ($ya -notmatch '(?m)^\.rescate/') { [System.IO.File]::AppendAllText($exc, "`n.rescate/`ntarget/`n") }
-}
-
-# Ajustes propios de un repo: su .rescate/config.json pisa las claves de $Cfg.
-function Read-Config([string]$Raiz) {
-  $ruta = Join-Path (Join-Path $Raiz '.rescate') 'config.json'
-  if (-not (Test-Path -LiteralPath $ruta)) { return }
-  try {
-    $o = [System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json
-    foreach ($pr in $o.PSObject.Properties) {
-      if ($Cfg.ContainsKey($pr.Name)) { $Cfg[$pr.Name] = $pr.Value } else { Aviso "config.json: clave desconocida '$($pr.Name)'" }
-    }
-  }
-  catch { Fallo ("No puedo leer $ruta" + ': ' + $_.Exception.Message); exit 1 }
-}
-
-function Get-DirRescate {
-  if ($Worktree) { return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Worktree).TrimEnd('\', '/') }
-  return ($OrigenRoot + '-rescate')
-}
-
-# Es $Dir un worktree de ESTE repo en una rama rescate/?
-# (la rama es de este repo si aqui apunta al mismo commit que alli)
-function Test-WorktreeRescate([string]$Dir) {
-  if (-not (Test-Path -LiteralPath (Join-Path $Dir '.git'))) { return $false }
-  $rama = Get-Rama $Dir
-  if (-not $rama.StartsWith('rescate/')) { return $false }
-  $alli = Get-Head $Dir
-  $aqui = ((Invoke-Git $OrigenRoot @('rev-parse', '--verify', '-q', "refs/heads/$rama")).Salida -join '').Trim()
-  return [bool]($alli -and ($alli -eq $aqui))
-}
-
-# Copia al worktree lo que hay sin commit en la carpeta original, sin tocarla,
-# y lo guarda en un commit 'foto'. Devuelve '' o el motivo del fallo.
-function Copy-Sucio([string]$Dir, [bool]$HaySeguidos) {
-  if ($HaySeguidos) {
-    # stash create hace un commit con el estado actual y no cambia nada
-    $w = (@((Invoke-Git $OrigenRoot @('stash', 'create')).Salida | Where-Object { $_ -match '^[0-9a-f]{40,64}$' } | Select-Object -Last 1) -join '')
-    if (-not $w) { return 'git stash create no ha devuelto nada' }
-    $r = Invoke-Git $Dir @('read-tree', '--reset', '-u', $w)
-    if ($r.Codigo -ne 0) { return ('git read-tree: ' + ($r.Salida -join ' ')) }
-  }
-  foreach ($rel in @((Invoke-Git $OrigenRoot @('-c', 'core.quotepath=off', 'ls-files', '--others', '--exclude-standard')).Salida | Where-Object { $_ })) {
-    $de = Join-Ruta $OrigenRoot $rel
-    if (-not (Test-Path -LiteralPath $de -PathType Leaf)) { return "no encuentro el fichero sin seguimiento '$rel'" }
-    $a = Join-Ruta $Dir $rel
-    $carpeta = Split-Path $a -Parent
-    if (-not (Test-Path -LiteralPath $carpeta)) { [void](New-Item -ItemType Directory -Path $carpeta -Force) }
-    Copy-Item -LiteralPath $de -Destination $a -Force
-  }
-  [void](Invoke-Git $Dir @('add', '-A'))
-  $r = Invoke-Git $Dir (@('commit', '-q', '-m', 'rescate: foto del estado antes de empezar') + $Cfg.CommitArgs)
-  if ($r.Codigo -ne 0) { return ('git commit: ' + ($r.Salida -join ' ')) }
-  return ''
-}
-
-# Lo que git ignora (configuracion local, .env...) no viaja al worktree.
-function Show-Ignorados {
-  $ign = @((Invoke-Git $OrigenRoot @('-c', 'core.quotepath=off', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory')).Salida | Where-Object { $_ } | Where-Object {
-      $p = $_.TrimEnd('/')
-      $enIgnorada = @($p.Split('/') | Where-Object { $Cfg.DirsIgnorados -contains $_ }).Count -gt 0
-      (-not $enIgnorada) -and ($p -notmatch '\.(class|log|iml)$') })
-  if ($ign.Count -eq 0) { return }
-  Aviso 'Ojo: git ignora estos ficheros de tu carpeta y por eso NO estan en el worktree.'
-  Aviso 'Si el build o los tests los necesitan, copialos a mano:'
-  $ign | Select-Object -First 12 | ForEach-Object { Info "  $_" }
-}
-
-# Crea el worktree de rescate al lado del repo. La carpeta original no se toca.
-function New-WorktreeRescate([string]$Dir) {
-  $rama = Get-Rama $OrigenRoot
-  if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
-  if (Test-Path -LiteralPath $Dir) { Fallo "La carpeta '$Dir' ya existe y no es un worktree de rescate de este repo. Borrala o elige otra con -Worktree."; exit 1 }
-  $nueva = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
-  $sucio = @((Invoke-Git $OrigenRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
-  Info "El rescate trabaja en una carpeta aparte (worktree de git): $Dir"
-  Info "Rama nueva: '$nueva'. Tu carpeta y tu rama '$rama' no se tocan."
-  if ($sucio.Count -gt 0) {
-    Aviso "Tienes $($sucio.Count) cambios sin commit. Se copian al worktree en un commit 'foto':"
-    $sucio | Select-Object -First 15 | ForEach-Object { Info "  $_" }
-  }
-  if (-not (Confirmar 'Seguir?')) { exit 0 }
-  $r = Invoke-Git $OrigenRoot @('worktree', 'add', '-q', '-b', $nueva, $Dir, 'HEAD')
-  if ($r.Codigo -ne 0) { Fallo ('No pude crear el worktree: ' + ($r.Salida -join ' ')); exit 1 }
-  if ($sucio.Count -gt 0) {
-    $haySeguidos = (@($sucio | Where-Object { $_ -notmatch '^\?\?' }).Count -gt 0)
-    $motivo = Copy-Sucio $Dir $haySeguidos
-    if ($motivo) {
-      # un worktree sin tus cambios daria un diagnostico falso: mejor no dejarlo
-      [void](Invoke-Git $OrigenRoot @('worktree', 'remove', '--force', $Dir))
-      [void](Invoke-Git $OrigenRoot @('branch', '-D', $nueva))
-      Fallo "No pude copiar al worktree tus cambios sin commit ($motivo). He borrado el worktree."
-      Fallo 'Haz commit de tus cambios y vuelve a lanzar.'
-      exit 3
-    }
-  }
-  # lo ya hecho en .rescate (contrato del pre, ajustes, planes) viaja al worktree
-  $de = Join-Path $OrigenRoot '.rescate'
-  if (Test-Path -LiteralPath $de) {
-    $a = Join-Path $Dir '.rescate'
-    if (-not (Test-Path -LiteralPath $a)) { [void](New-Item -ItemType Directory -Path $a) }
-    foreach ($f in @(Get-ChildItem -LiteralPath $de -File | Where-Object { $_.Name -match '^(contrato\.json|config\.json|plan-.+\.md)$' })) {
-      Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $a $f.Name) -Force
-    }
-  }
-  Show-Ignorados
-  Bien "Worktree creado: $Dir"
 }
 
 # ================================= PRE =================================
