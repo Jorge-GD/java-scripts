@@ -840,7 +840,7 @@ $Pruebas['20 bloque 9 sin -Modelos: sin -Modelos y ninguna llamada; los bloques 
 }
 
 $Pruebas['21 bloque 9, dos modelos y dos esfuerzos: las llamadas justas, en serie y con el modelo y el esfuerzo de cada una'] = {
-  $e = Nuevo-Examen 'examen-dos' @{ LineasPorTarea = 100 }
+  $e = Nuevo-Examen 'examen-dos' @{ LineasPorTarea = 100; SegundosPorLlamada = 200 }
   $rangos = @(Trozos-De 100)
   $t = $rangos.Count
   $r = Pf-Examen $e "$MA,$MB" 'medium,max'
@@ -888,8 +888,9 @@ $Pruebas['21 bloque 9, dos modelos y dos esfuerzos: las llamadas justas, en seri
   Comprueba 'y dice la mejor' ((Linea-Con $b 'la mejor: ') -match ('^la mejor: ' + [regex]::Escape($MA) + ' con esfuerzo \w+ \(clave \d+ de 36, arreglos 2 de 2\)$')) (Linea-Con $b 'la mejor: ')
   Igual 'todo con uno: no' 'todo con uno: no' (Linea-Con $b 'todo con uno: ')
   $llamadas = 4 * $por
-  $min = 2 * $llamadas
-  Comprueba 'la consola cuenta las llamadas y los minutos' ($r.Salida -match ('(?m)^' + $llamadas + ' llamadas, hasta ' + $min + ' min\s*$') -and $r.Salida -match ('== 9 examen de modelos \(hasta ' + $min + ' min\)\.\.\.')) (Cola $r.Salida)
+  # 2 min por llamada con medium; con max, el tope de una llamada (200 s: 4 min), no 2; dos modelos
+  $min = 2 * ($por * 2 + $por * [math]::Ceiling(200 / 60))
+  Comprueba 'la consola cuenta las llamadas y los minutos: 2 por llamada con medium y el tope de la llamada con max' ($r.Salida -match ('(?m)^' + $llamadas + ' llamadas, hasta ' + $min + ' min\s*$') -and $r.Salida -match ('== 9 examen de modelos \(hasta ' + $min + ' min\)\.\.\.')) (Cola $r.Salida)
   Sin-Fugas $r 'examen dos'
 }
 
@@ -919,6 +920,10 @@ $Pruebas['22 bloque 9, clave: cuenta los datos esperados con cita probada, tipo 
     $xc = @(Combinacion-De $c $MA 'medium')
     Comprueba 'c) L1: el reparto bueno acierta las 2 (153 para la segunda y 150 para la primera)' ((Linea-Con $xc 'L1: ') -match '^L1: json si \| citas 2 de 2 \| clave 2 de 2 \|') (Linea-Con $xc 'L1: ')
     Comprueba 'c) L2: dos datos para una sola condicion cuentan 1 de 1' ((Linea-Con $xc 'L2: ') -match '^L2: json si \| citas 2 de 2 \| clave 1 de 1 \|') (Linea-Con $xc 'L2: ')
+    # d) el contrario: un solo dato que vale para dos condiciones cuenta una (el 153 vale para las dos reglas de L1)
+    $d = Pf-Examen $e $MA 'medium' '' @{ RESCATE_EXAMEN_DATOS = 'L1=153:regla;L2=109:regla' } @('-SinMaven')
+    $xd = @(Combinacion-De $d $MA 'medium')
+    Comprueba 'd) L1: un dato para dos condiciones cuenta 1 de 2, no 2' ((Linea-Con $xd 'L1: ') -match '^L1: json si \| citas 1 de 1 \| clave 1 de 2 \|') (Linea-Con $xd 'L1: ')
   }
   finally { Restaura-Claves }
 }
@@ -928,6 +933,8 @@ $Pruebas['23 bloque 9, E1 (dos errores de compilacion): pasa o el motivo, del vo
   # tres esfuerzos = tres combinaciones: el falso arregla, deja un NO_COMPILA o toca un test
   $a = Pf-Examen $e $MA 'low,medium,high' 'exa-e1-no-compila:medium:E1$;exa-e1-toca-test:high:E1$'
   Igual 'a) sale con 0' 0 $a.Codigo
+  $por = 1 + @(Trozos-De 300).Count + 2
+  Comprueba 'a) la consola: 2 min por llamada con low y medium y el tope de la llamada (10 s: 1 min) con high' ($a.Salida -match ('(?m)^' + (3 * $por) + ' llamadas, hasta ' + ($por * (2 + 2 + 1)) + ' min\s*$')) (Cola $a.Salida)
   Igual 'a) low: el falso arregla y pasa' 'E1: pasa si' ((Linea-Con (Combinacion-De $a $MA 'low') 'E1: ') -replace ' \|.*$', '')
   Igual 'a) medium: no compila' 'E1: pasa no (no compila)' ((Linea-Con (Combinacion-De $a $MA 'medium') 'E1: ') -replace ' \|.*$', '')
   Igual 'a) high: toca un test' 'E1: pasa no (toco tests)' ((Linea-Con (Combinacion-De $a $MA 'high') 'E1: ') -replace ' \|.*$', '')
@@ -938,6 +945,7 @@ $Pruebas['23 bloque 9, E1 (dos errores de compilacion): pasa o el motivo, del vo
   $guion = 'exa-e1-test-falla:low:E1$;exa-e1-toca-pom:medium:E1$;exa-e1-nada:high:E1$;exa-error-privado:xhigh:E1$;exa-espera-14:max:E1$'
   $b = Pf-Examen $e $MA 'low,medium,high,xhigh,max' $guion @{ RESCATE_ERROR_TEXTO = 'Error: sin sesion de zorbalex en PCZORBA' }
   $motivos = [ordered]@{ low = 'test falla'; medium = 'toco fuera de src/main'; high = 'sin cambios'; xhigh = 'fallo de copilot'; max = 'tiempo' }
+  Comprueba 'b) la consola: low y medium a 2 min, xhigh, high y max al tope de la llamada (1 min)' ($b.Salida -match ('(?m)^' + (5 * $por) + ' llamadas, hasta ' + ($por * (2 + 2 + 1 + 1 + 1)) + ' min\s*$')) (Cola $b.Salida)
   foreach ($k in $motivos.Keys) {
     Igual "b) $k" ('E1: pasa no (' + $motivos[$k] + ')') ((Linea-Con (Combinacion-De $b $MA $k) 'E1: ') -replace ' \|.*$', '')
   }
@@ -989,6 +997,14 @@ $Pruebas['25 bloque 9, gasto: creditos y tokens del fichero de uso; sin fichero,
     $ll = @(Llamadas $e.Llamadas)
     Comprueba 'd) las 4 llamadas se hacen y ninguna lleva la bandera' ($ll.Count -eq 4 -and @($ll | Where-Object { $_.uso -eq 'no' }).Count -eq 4) (($ll | ForEach-Object { $_.uso }) -join ' ')
     Comprueba 'd) y los creditos salen desconocidos' ((Linea-Con (Combinacion-De $s $MA 'medium') 'total: ') -match '\| creditos desconocido \|')
+    # f) unas llamadas con fichero de uso y otras sin el: la suma de las que lo tienen engana, sale desconocido
+    $m = Nuevo-Examen 'examen-gasto-mixto' @{ LineasPorTarea = 100 }
+    Igual 'f) L2 se parte en dos trozos o mas' $true (@(Trozos-De 100).Count -ge 2)
+    $rm = Pf-Examen $m $MA 'medium' '' @{ RESCATE_EXAMEN_USO = 'L2-2$=-;E2$=-' }
+    $xm = @(Combinacion-De $rm $MA 'medium')
+    Comprueba 'f) L1 y E1 tienen fichero: llevan su gasto' ((Linea-Con $xm 'L1: ') -match '\| creditos 1,000$' -and (Linea-Con $xm 'E1: ') -match '\| creditos 1,000$') ((Linea-Con $xm 'L1: ') + ' / ' + (Linea-Con $xm 'E1: '))
+    Comprueba 'f) L2 (un trozo sin fichero) y E2 (sin fichero): desconocido' ((Linea-Con $xm 'L2: ') -match '\| creditos desconocido$' -and (Linea-Con $xm 'E2: ') -match '\| creditos desconocido$') ((Linea-Con $xm 'L2: ') + ' / ' + (Linea-Con $xm 'E2: '))
+    Comprueba 'f) el total dice desconocido en creditos y en tokens, no la suma de lo que se sabe' ((Linea-Con $xm 'total: ') -match '\| creditos desconocido \| tokens desconocido$') (Linea-Con $xm 'total: ')
   }
   finally { Restaura-Claves }
   # e) el lector de comun.ps1 con ficheros a mano

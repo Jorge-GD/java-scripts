@@ -515,14 +515,23 @@ function Get-TrozosExamen {
   return @($tareas | ForEach-Object { [pscustomobject]@{ Desde = [int]$_.entradas.desde; Hasta = [int]$_.entradas.hasta } })
 }
 
-# Los trozos, las llamadas y los minutos (2 por llamada) de todo el examen, y si las pruebas E tienen Maven.
+# Minutos que puede durar una llamada: 2 con low y medium; con otro esfuerzo (max puede tardar lo que el tope), el tope de
+# una llamada (SegundosPorLlamada) redondeado hacia arriba.
+function Get-MinutosPorLlamada([string]$Esfuerzo) {
+  if ($Esfuerzo -ceq 'low' -or $Esfuerzo -ceq 'medium') { return 2 }
+  return [int][math]::Ceiling([double]$Cfg.SegundosPorLlamada / 60)
+}
+
+# Los trozos, las llamadas y los minutos de todo el examen, y si las pruebas E tienen Maven.
 function Get-PlanExamen {
   $plan = [pscustomobject]@{ Trozos = @(Get-TrozosExamen); ConMaven = $false; Llamadas = 0; Minutos = 1 }
   $plan.ConMaven = (-not $SinMaven -and $script:Fallos -notcontains 6 -and $script:MavenBien -ne $false -and (Get-MavenElegido).Origen -ne 'ninguno')
   $por = 1 + $plan.Trozos.Count
   if ($plan.ConMaven) { $por += 2 }
   $plan.Llamadas = $ModelosN.Count * $EsfuerzosN.Count * $por
-  $plan.Minutos = [math]::Max(1, 2 * $plan.Llamadas)
+  $minutos = 0
+  foreach ($e in $EsfuerzosN) { $minutos += $ModelosN.Count * $por * (Get-MinutosPorLlamada $e) }
+  $plan.Minutos = [math]::Max(1, $minutos)
   return $plan
 }
 
@@ -680,7 +689,7 @@ function Test-JavadocMain([string]$Dir) {
 }
 
 # Ruta relativa -> huella de cada fichero de una carpeta (sin .git, target ni .rescate): lo que cambia entre antes y despues.
-function Get-Arbol([string]$Dir) {
+function Get-HuellasPorFichero([string]$Dir) {
   $arbol = @{}
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try { foreach ($f in @(Get-Ficheros $Dir '*')) { $arbol[(Get-Rel $Dir $f.FullName)] = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($f.FullName))) } }
@@ -706,7 +715,7 @@ function Invoke-Lectura($Tarea, [string]$Dir, [string]$Modelo, [string]$Esfuerzo
 function Get-MotivoArreglo([string]$Prueba, $Llamada, [string]$Dir, $Antes, [string]$Mvn) {
   if ($Llamada.Agotado) { return 'tiempo' }
   if ($Llamada.Codigo -ne 0) { return 'fallo de copilot' }
-  $despues = Get-Arbol $Dir
+  $despues = Get-HuellasPorFichero $Dir
   $cambios = @(@($Antes.Keys) + @($despues.Keys) | Select-Object -Unique | Where-Object { $Antes[$_] -cne $despues[$_] })
   if ($cambios.Count -eq 0) { return 'sin cambios' }
   if (@($cambios | Where-Object { $_ -like 'src/test/*' }).Count -gt 0) { return 'toco tests' }
@@ -731,7 +740,7 @@ function Invoke-Arreglo([int]$K, [string]$Prueba, [string]$Modelo, [string]$Esfu
   [void](New-Carpeta $dir)
   foreach ($h in @(Get-ChildItem -LiteralPath (Join-Ruta $PSScriptRoot "preflight/examen/$carpeta") -Force)) { Copy-Item -LiteralPath $h.FullName -Destination $dir -Recurse }
   $mvn = Get-MvnProyecto (Get-MavenElegido) $dir
-  $antes = Get-Arbol $dir
+  $antes = Get-HuellasPorFichero $dir
   $prompt = [System.IO.File]::ReadAllText((Join-Ruta $PSScriptRoot "preflight/examen/arreglo-$carpeta.md"), $Utf8) -replace "`r`n", "`n"
   $archivo = Join-Path $Tmp "uso-pf-exa-$K-$Prueba.json"
   $argsAntes = @($Cfg.CopilotArgs)
