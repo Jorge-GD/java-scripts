@@ -33,8 +33,8 @@ function Migra($E, [string[]]$A, [string]$Guion = '', [string[]]$Entrada = @('')
 }
 
 # Argumentos de un arranque normal que no pregunta nada y no corrige.
-function Basicos($E) {
-  return @('-Legacy', $E.Legacy, '-Migrado', $E.Migrado, '-Plantilla', $E.Plantilla, '-Modelo', 'modelo-x', '-SoloInforme')
+function Basicos($E, [string]$Modelo = 'modelo-x') {
+  return @('-Legacy', $E.Legacy, '-Migrado', $E.Migrado, '-Plantilla', $E.Plantilla, '-Modelo', $Modelo, '-SoloInforme')
 }
 
 function Lee-Json([string]$Ruta) {
@@ -166,7 +166,8 @@ $Pruebas['1 arranque: valida lo que falta, guarda la referencia y no la vuelve a
   [void](GitEn $e.Migrado @('checkout', '-q', '--detach'))
   $r = Migra $e (Basicos $e)
   Igual 'un migrado sin rama sale con 1' 1 $r.Codigo
-  Comprueba 'dice que no esta en una rama' ($r.Salida -match 'rama') (Cola $r.Salida)
+  Comprueba 'dice que no esta en una rama (HEAD suelto)' ($r.Salida -match 'no esta en una rama \(HEAD suelto\)') (Cola $r.Salida)
+  Comprueba 'y no llega a crear el worktree' (-not (Test-Path -LiteralPath $e.Wt))
   [void](GitEn $e.Migrado @('checkout', '-q', 'main'))
   Comprueba 'hasta aqui no hay worktree ni estado' ((-not (Test-Path -LiteralPath $e.Wt)) -and ($null -eq (Estado $e)))
   # la referencia se contesta por la entrada y se guarda
@@ -220,6 +221,10 @@ $Pruebas['3 fichas: cinco clases con el falso lento, nunca mas de 4 a la vez'] =
   Igual 'como mucho 4 a la vez, y llegan a 4' 4 (Max-Simultaneas $ll)
   Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
   Igual 'estado: fase' 'fichas-clase-hechas' (Estado $e).fase
+  Comprueba 'las 5 lecturas llevan --no-custom-instructions' (@($ll | Where-Object { $_.flags -match '--no-custom-instructions' }).Count -eq 5) (($ll | ForEach-Object { $_.flags }) -join ' | ')
+  $la = @(Llamadas (Get-Ruta $e.Out 'registros/aptitud'))
+  Comprueba 'la prueba de aptitud tambien' ($la.Count -eq 1 -and $la[0].flags -match '--no-custom-instructions') (($la | ForEach-Object { $_.flags }) -join ' | ')
+  Comprueba 'las 5 lecturas llevan --add-dir del original' (@($ll | Where-Object { $_.flags -match '--add-dir=\S*life-java8' }).Count -eq 5) (($ll | ForEach-Object { $_.flags }) -join ' | ')
 }
 
 $Pruebas['4 cita inventada: probado false; con mas de la mitad inventadas, reintento y atascada'] = {
@@ -276,6 +281,7 @@ $Pruebas['6 colgada: se mata al pasar el tope y la tarea queda atascada'] = {
   $ll = Llamadas-De (Llamadas $e.Wt) $c.id
   Igual 'Cuelga: dos llamadas' 2 $ll.Count
   Comprueba 'ninguna llegara a acabar' (@($ll | Where-Object { $_.fin }).Count -eq 0)
+  Comprueba 'y ninguna sigue viva: se mataron' (@($ll | Where-Object { Get-Process -Id ([int]$_.pid) -ErrorAction SilentlyContinue }).Count -eq 0) (($ll | ForEach-Object { $_.pid }) -join ' ')
   Igual 'las sanas estan hechas' 2 (Cuenta-Estado $t 'hecha')
   Comprueba 'queda el registro de la llamada' (Test-Path -LiteralPath (Join-Path (Join-Path $e.Out 'registros') ($c.id + '-1.log')))
 }
@@ -359,6 +365,267 @@ $Pruebas['11 trozos: un fichero largo se trocea y las fichas se juntan'] = {
 $Pruebas['14 el banco del motor sigue en 75 de 75'] = {
   $r = Lanzar (Join-Path $aqui 'probar.ps1') @('-Dir', (Join-Path $Dir 'motor'))
   Comprueba 'probar.ps1 pasa sus 75 comprobaciones' ($r.Codigo -eq 0 -and $r.Salida -match 'TODO BIEN: 75 comprobaciones') (Cola $r.Salida)
+}
+
+# ============================ BIBLIOTECA Y LANZADOR ============================
+# Lanza un script de prueba que carga comun.ps1 y tareas.ps1 (nunca migracion.ps1), como haria un preflight.
+function En-Biblioteca([string]$Nombre, [string]$Codigo) {
+  $raiz = Split-Path -Parent $Script
+  $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n"
+  $carpeta = Join-Path $Dir 'biblioteca'
+  Escribe $carpeta "$Nombre.ps1" ($cab + $Codigo)
+  return (Lanzar (Join-Path $carpeta "$Nombre.ps1") @())
+}
+
+function Funciones-De([string]$Ruta) {
+  return @([regex]::Matches([System.IO.File]::ReadAllText($Ruta), '(?m)^function ([\w-]+)') | ForEach-Object { $_.Groups[1].Value })
+}
+
+$Pruebas['15 biblioteca: tareas.ps1 se carga sola, nombra sus variables y sirve para la aptitud sin arranque'] = {
+  $raiz = Split-Path -Parent $Script
+  $lib = Join-Path $raiz 'tareas.ps1'
+  Comprueba 'existe tareas.ps1' (Test-Path -LiteralPath $lib)
+  if (-not (Test-Path -LiteralPath $lib)) { return }
+  $cab = [regex]::Match([System.IO.File]::ReadAllText($lib), '(?s)^<#.*?#>').Value
+  foreach ($v in @('$Cfg', '$LegacyRoot', '$Registros', '$ModeloElegido', '$Datos')) {
+    Comprueba "la cabecera nombra $v" $cab.Contains($v)
+  }
+  $deTareas = Funciones-De $lib
+  $deMigra = Funciones-De $Script
+  foreach ($f in @('Test-Aptitud', 'Invoke-Llamadas', 'Invoke-Ronda', 'Get-Lanzador', 'Get-TareasFichas', 'Test-Ficha', 'Read-Json', 'Write-Json', 'Get-Hash8', 'Stop-Arranque', 'Set-Despierto')) {
+    Comprueba "$f esta en tareas.ps1 y no en migracion.ps1" (($deTareas -contains $f) -and ($deMigra -cnotcontains $f))
+  }
+  $todas = @($deTareas) + @($deMigra) + @(Funciones-De (Join-Path $raiz 'comun.ps1'))
+  $dup = @($todas | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+  Comprueba 'ninguna funcion esta definida dos veces entre comun, tareas y migracion' ($dup.Count -eq 0) ($dup -join ', ')
+  $e = Nuevo-Escenario 'biblioteca' @('Clase1')
+  $codigo = @'
+$Cfg.CopilotExe = '{{COPILOT}}'
+$Cfg += @{ SegundosPorLlamada = 20; Intentos = 2; EsfuerzoLectura = 'medium'; EsfuerzoReintento = 'high'; CitaMax = 120; CitaCerca = 3; Papeles = @('otro'); TiposDato = @('regla') }
+$LegacyRoot = '{{LEGACY}}'
+$Registros = '{{REGISTROS}}'
+$ModeloElegido = 'modelo-x'
+$mal = Test-Aptitud
+if ($mal) { 'MAL: ' + $mal; exit 3 }
+'APTITUD-OK'
+'@
+  $codigo = $codigo.Replace('{{COPILOT}}', (Join-Path $falsos 'copilot.ps1')).Replace('{{LEGACY}}', $e.Legacy).Replace('{{REGISTROS}}', (Get-Ruta $e.Out 'registros'))
+  $r = En-Biblioteca 'aptitud' $codigo
+  Igual 'la aptitud corre con solo esas variables y sale con 0' 0 $r.Codigo
+  Comprueba 'dice APTITUD-OK' ($r.Salida -match 'APTITUD-OK') (Cola $r.Salida)
+  Igual 'una sola llamada de aptitud' 1 (Llamadas (Get-Ruta $e.Out 'registros/aptitud')).Count
+  Comprueba 'no ha creado estado.json (no hay arranque)' ($null -eq (Estado $e))
+}
+
+$Pruebas['16 lanzador: sin ExecutionPolicy, comillas para cmd y equipo despierto'] = {
+  $raiz = Split-Path -Parent $Script
+  if (-not (Test-Path -LiteralPath (Join-Path $raiz 'tareas.ps1'))) { Comprueba 'existe tareas.ps1' $false; return }
+  $cmd = Join-Path (Join-Path $Dir 'lanzador') 'ejemplo.cmd'
+  Escribe (Join-Path $Dir 'lanzador') 'ejemplo.cmd' "@echo off`n"
+  if ($env:OS -ne 'Windows_NT') { & chmod +x $cmd }
+  $codigo = @'
+'DESPIERTO_SI=' + (Set-Despierto $true)
+'DESPIERTO_NO=' + (Set-Despierto $false)
+$env:OS = 'Windows_NT'
+$env:ComSpec = 'cmd.exe'
+'PS1=' + (Get-Lanzador '{{PS1}}' @('-p', 'a&b', 'dos palabras')).Args
+'CMD=' + (Get-Lanzador '{{CMD}}' @('-p', 'a&b', 'x(y)', 'z^w', 'a|b', 'c<d', 'e>f', 'dos palabras', 'llano')).Args
+'WIN=' + (Set-Despierto $true)
+'FIN'
+'@
+  $codigo = $codigo.Replace('{{PS1}}', (Join-Path $falsos 'copilot.ps1')).Replace('{{CMD}}', $cmd)
+  $r = En-Biblioteca 'lanzador' $codigo
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  Comprueba 'Set-Despierto devuelve True fuera de Windows (activar)' ($r.Salida -match '(?m)^DESPIERTO_SI=True\r?$') (Cola $r.Salida)
+  Comprueba 'Set-Despierto devuelve True fuera de Windows (soltar)' ($r.Salida -match '(?m)^DESPIERTO_NO=True\r?$') (Cola $r.Salida)
+  Comprueba 'Set-Despierto no lanza ni con un Windows simulado' ($r.Salida -match '(?m)^WIN=(True|False)\r?$' -and $r.Salida -match '(?m)^FIN\r?$') (Cola $r.Salida)
+  $ps1 = ''; if ($r.Salida -match '(?m)^PS1=(.*)$') { $ps1 = $Matches[1] }
+  Comprueba 'un .ps1 no lleva -ExecutionPolicy: la politica es la del padre' ($ps1 -and $ps1 -notmatch 'ExecutionPolicy' -and $ps1 -notmatch 'Bypass') $ps1
+  Comprueba 'un .ps1 no pone comillas a & (no pasa por cmd)' ($ps1.Contains(' a&b ')) $ps1
+  $c = ''; if ($r.Salida -match '(?m)^CMD=(.*)$') { $c = $Matches[1] }
+  Comprueba 'un .cmd va por cmd /d /s /c' ($c.StartsWith('/d /s /c "')) $c
+  foreach ($a in @('a&b', 'x(y)', 'z^w', 'a|b', 'c<d', 'e>f', 'dos palabras')) {
+    Comprueba "un .cmd entrecomilla '$a'" ($c.Contains('"' + $a + '"')) $c
+  }
+  Comprueba 'un .cmd no entrecomilla lo que no hace falta' ($c.EndsWith(' llano"') -and -not $c.Contains('"llano"')) $c
+}
+
+# ============================== RELANZAR, ERRORES, ORIGEN, LIMITE ==============================
+$Pruebas['17 atascadas: no se repiten al relanzar salvo con -Reintentar o con otro modelo'] = {
+  $e = Nuevo-Escenario 'atascadas' @('Rota', 'Sana1')
+  $r = Migra $e (Basicos $e) 'json-roto:^Rota$'
+  Igual 'primer lanzamiento sale con 0' 0 $r.Codigo
+  $ro = @(Tareas $e | Where-Object { $_.entradas.fichero -like '*/Rota.java' })[0]
+  $id = $ro.id
+  Igual 'Rota: atascada' 'atascada' $ro.estado
+  Igual 'Rota: dos llamadas' 2 (Llamadas-De (Llamadas $e.Wt) $id).Count
+  # 1: relanzar, mismo modelo: no la llama otra vez
+  $r = Migra $e (Basicos $e)
+  Igual 'relanzado sale con 0' 0 $r.Codigo
+  Igual 'Rota sigue atascada' 'atascada' @(Tareas $e | Where-Object { $_.id -eq $id })[0].estado
+  Igual 'no hay ninguna llamada nueva para ella' 2 (Llamadas-De (Llamadas $e.Wt) $id).Count
+  Comprueba 'avisa de que la conserva y de -Reintentar' ($r.Salida -match 'Reintentar') (Cola $r.Salida)
+  # 2: con -Reintentar si (y como el falso la rompe otra vez, queda atascada de nuevo)
+  $r = Migra $e ((Basicos $e) + '-Reintentar') 'json-roto:^Rota$'
+  Igual 'con -Reintentar sale con 0' 0 $r.Codigo
+  Igual 'con -Reintentar la llama otra vez (dos llamadas mas)' 4 (Llamadas-De (Llamadas $e.Wt) $id).Count
+  # 3: con otro modelo si
+  $r = Migra $e (Basicos $e 'otro-modelo') 'json-roto:^Rota$'
+  Igual 'con otro modelo sale con 0' 0 $r.Codigo
+  $ll = Llamadas-De (Llamadas $e.Wt) $id
+  Igual 'con otro modelo la llama otra vez (dos llamadas mas)' 6 $ll.Count
+  Comprueba 'las nuevas llevan el otro modelo' (@($ll | Where-Object { $_.flags -match '--model=otro-modelo' }).Count -eq 2) (($ll | ForEach-Object { $_.flags }) -join ' | ')
+  # con ese mismo modelo otra vez: se conserva
+  $r = Migra $e (Basicos $e 'otro-modelo')
+  Igual 'con el modelo de la ultima vez no la llama' 6 (Llamadas-De (Llamadas $e.Wt) $id).Count
+  Igual 'la sana no se repitio nunca' 1 (Llamadas-De (Llamadas $e.Wt) (@(Tareas $e | Where-Object { $_.entradas.fichero -like '*/Sana1.java' })[0].id)).Count
+  # y con -Reintentar y un Copilot que responde, se arregla
+  $r = Migra $e ((Basicos $e 'otro-modelo') + '-Reintentar')
+  Igual 'con -Reintentar y un Copilot que responde sale con 0' 0 $r.Codigo
+  Igual 'Rota queda hecha' 'hecha' @(Tareas $e | Where-Object { $_.id -eq $id })[0].estado
+  Igual 'y tiene su ficha' 2 (Fichas $e).Count
+}
+
+$Pruebas['18 error interno: una excepcion deja parada error-interno y sale con 2'] = {
+  $e = Nuevo-Escenario 'interno' @('Clase1', 'Clase2')
+  Escribe $e.Out 'datos/fichas' 'esto es un fichero donde tendria que haber una carpeta'
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'hay estado.json' ($null -ne $s) (Cola $r.Salida)
+  if ($null -eq $s) { return }
+  Igual 'parada: motivo' 'error-interno' $s.parada.motivo
+  Comprueba 'parada: el detalle lleva el mensaje y fichero:linea' ($s.parada.detalle -match '\.ps1:\d+') "$($s.parada.detalle)"
+  Igual 'parada: registro es la carpeta de registros' (Get-Ruta $e.Out 'registros') $s.parada.registro
+  Comprueba 'parada: la ayuda nombra el motivo' ($s.parada.ayuda -match 'error-interno')
+  Comprueba 'la salida dice la parada' ($r.Salida -match 'error-interno') (Cola $r.Salida)
+}
+
+$Pruebas['19 original: sin .java falla al arrancar; con varios modulos lee todos'] = {
+  $e = Nuevo-Escenario 'vacio' @()
+  $r = Migra $e (Basicos $e)
+  Igual 'un original sin .java sale con 1' 1 $r.Codigo
+  Comprueba 'dice que no hay ficheros .java' ($r.Salida -match 'no hay ningun \.java|No hay ningun \.java') (Cola $r.Salida)
+  Igual 'no llega a la prueba de aptitud' 0 (Llamadas (Get-Ruta $e.Out 'registros/aptitud')).Count
+  Comprueba 'ni crea el worktree ni el estado' ((-not (Test-Path -LiteralPath $e.Wt)) -and ($null -eq (Estado $e)))
+  # dos modulos, con ruido que no se lee
+  $e = Nuevo-Escenario 'modulos' @()
+  Escribe $e.Legacy 'modA/src/main/java/com/acme/ClaseA.java' (Clase-Juguete 'ClaseA')
+  Escribe $e.Legacy 'modB/sub/src/main/java/com/acme/ClaseB.java' (Clase-Juguete 'ClaseB')
+  Escribe $e.Legacy 'modA/src/test/java/com/acme/ClaseATest.java' (Clase-Juguete 'ClaseATest')
+  Escribe $e.Legacy 'modA/target/gen/src/main/java/com/acme/Generada.java' (Clase-Juguete 'Generada')
+  Escribe $e.Legacy 'node_modules/x/src/main/java/Ruido.java' (Clase-Juguete 'Ruido')
+  Escribe $e.Legacy 'docs/Suelta.java' (Clase-Juguete 'Suelta')
+  [void](GitEn $e.Legacy @('add', '-A'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'modulos'))
+  $r = Migra $e (Basicos $e)
+  Igual 'con dos modulos sale con 0' 0 $r.Codigo
+  $t = Tareas $e
+  Igual 'solo hay dos tareas (ni tests, ni target, ni node_modules, ni sueltos)' 2 $t.Count
+  $f = Fichas $e
+  Igual 'hay una ficha de cada modulo' 'ClaseA ClaseB' ((@($f | ForEach-Object { $_.clase }) | Sort-Object) -join ' ')
+  Comprueba 'las rutas son relativas al original' (@($f | Where-Object { $_.fichero -eq 'modA/src/main/java/com/acme/ClaseA.java' }).Count -eq 1) (($f | ForEach-Object { $_.fichero }) -join ' ')
+  # sin ningun src/main/java: todos los .java menos src/test, target y .git
+  $e = Nuevo-Escenario 'sueltos' @()
+  Escribe $e.Legacy 'fuentes/com/acme/Suelta.java' (Clase-Juguete 'Suelta')
+  Escribe $e.Legacy 'src/test/java/SoloTest.java' (Clase-Juguete 'SoloTest')
+  Escribe $e.Legacy 'target/Generada.java' (Clase-Juguete 'Generada')
+  [void](GitEn $e.Legacy @('add', '-A'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'sueltos'))
+  $r = Migra $e (Basicos $e)
+  Igual 'sin src/main/java sale con 0' 0 $r.Codigo
+  Igual 'lee solo el que no es test ni target' 'fuentes/com/acme/Suelta.java' (@(Tareas $e | ForEach-Object { $_.entradas.fichero }) -join ' ')
+}
+
+$Pruebas['20 limite: -Limite N hace solo N tareas, sin parada, y relanzar hace el resto'] = {
+  $e = Nuevo-Escenario 'limite'
+  $r = Migra $e ((Basicos $e) + @('-Limite', '2'))
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = Tareas $e
+  Igual 'dos hechas' 2 (Cuenta-Estado $t 'hecha')
+  Igual 'tres pendientes' 3 (Cuenta-Estado $t 'pendiente')
+  Igual 'dos fichas' 2 (Fichas $e).Count
+  Igual 'dos llamadas' 2 (Llamadas-De (Llamadas $e.Wt) 'clase-').Count
+  Comprueba 'sin parada' ($null -eq (Estado $e).parada)
+  Igual 'la fase sigue en lectura' 'fichas-clase' (Estado $e).fase
+  Comprueba 'el mensaje dice cuantas quedan' ($r.Salida -match 'quedan 3 ') (Cola $r.Salida)
+  $r = Migra $e (Basicos $e)
+  Igual 'relanzado sin limite sale con 0' 0 $r.Codigo
+  Igual 'ahora estan las 5 hechas' 5 (Cuenta-Estado (Tareas $e) 'hecha')
+  Igual 'cinco llamadas en total: las dos primeras no se repiten' 5 (Llamadas-De (Llamadas $e.Wt) 'clase-').Count
+  Igual 'la fase acaba' 'fichas-clase-hechas' (Estado $e).fase
+}
+
+$Pruebas['21 racha: una llamada buena la pone a 0 y un tiempo agotado cuenta como fallo'] = {
+  $e = Nuevo-Escenario 'racha' @('Clase1', 'Clase2', 'Clase3', 'Clase4') @{ FallosSeguidos = 2 }
+  $r = Migra $e (Basicos $e) 'falla-una-vez:^Clase[13]$'
+  Igual 'fallo, bien, fallo, bien con tope 2: no para (sale con 0)' 0 $r.Codigo
+  Comprueba 'sin parada' ($null -eq (Estado $e).parada) (Cola $r.Salida)
+  Igual 'las 4 acaban hechas' 4 (Cuenta-Estado (Tareas $e) 'hecha')
+  Igual 'seis llamadas: las dos que fallaron se repiten' 6 (Llamadas-De (Llamadas $e.Wt) 'clase-').Count
+  $e = Nuevo-Escenario 'racha-tiempo' @('Clase1', 'Clase2', 'Clase3', 'Clase4') @{ FallosSeguidos = 2; SegundosPorLlamada = 3 }
+  $r = Migra $e (Basicos $e) 'colgado:^Clase'
+  Igual 'cuatro llamadas colgadas con tope 2: sale con 2' 2 $r.Codigo
+  Igual 'parada: copilot-no-responde' 'copilot-no-responde' (Estado $e).parada.motivo
+  Igual 'ninguna tarea atascada (el fallo es de Copilot)' 0 (Cuenta-Estado (Tareas $e) 'atascada')
+}
+
+$Pruebas['22 ficha invalida: cita larga, papel o tipo fuera de la lista, linea y JSON que no valen'] = {
+  $e = Nuevo-Escenario 'validacion' @('Larga', 'PapelX', 'TipoX', 'LTexto', 'LCero', 'LDec', 'Lista', 'Texto', 'Bien')
+  $g = 'cita-larga:^Larga$;papel-libre:^PapelX$;tipo-libre:^TipoX$;linea-texto:^LTexto$;linea-cero:^LCero$;linea-decimal:^LDec$;json-lista:^Lista$;json-texto:^Texto$'
+  $r = Migra $e (Basicos $e) $g
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = Tareas $e
+  $casos = @(@('Larga', 'pasa de 120'), @('PapelX', "papel' vale"), @('TipoX', 'tipo vale'), @('LTexto', 'linea tiene que ser'), @('LCero', 'linea tiene que ser'), @('LDec', 'linea tiene que ser'), @('Lista', 'tiene que ser un objeto'), @('Texto', 'tiene que ser un objeto'))
+  foreach ($c in $casos) {
+    $x = @($t | Where-Object { $_.entradas.fichero -like "*/$($c[0]).java" })[0]
+    Comprueba "$($c[0]): atascada con su motivo" (($x.estado -eq 'atascada') -and ($x.motivo -match $c[1])) "$($x.estado): $($x.motivo)"
+  }
+  Igual 'Bien: hecha' 'hecha' @($t | Where-Object { $_.entradas.fichero -like '*/Bien.java' })[0].estado
+  Igual 'solo hay la ficha de Bien' 1 (Fichas $e).Count
+}
+
+$Pruebas['23 salida vieja: lo que escribio un intento anterior no vale para el siguiente'] = {
+  $e = Nuevo-Escenario 'vieja' @('Clase1')
+  $r = Migra $e (Basicos $e) 'toca-y-calla:^Clase'
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tareas $e)[0]
+  Igual 'la tarea queda atascada' 'atascada' $t.estado
+  Comprueba 'el motivo es que no escribio el fichero' ($t.motivo -match 'No has escrito') $t.motivo
+  $ll = Llamadas-De (Llamadas $e.Wt) $t.id
+  Igual 'dos llamadas' 2 $ll.Count
+  Comprueba 'el segundo intento lleva la correccion (el primero toco codigo)' ($ll.Count -eq 2 -and $ll[1].correccion -eq 'True')
+  Igual 'no hay fichas' 0 (Fichas $e).Count
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['24 reintento tras un fallo de Copilot: el mismo prompt, sin la seccion de correccion'] = {
+  $e = Nuevo-Escenario 'reintento' @('Clase1')
+  $r = Migra $e (Basicos $e) 'falla-una-vez:^Clase'
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tareas $e)[0]
+  Igual 'la tarea acaba hecha en el segundo intento' 'hecha 2' "$($t.estado) $($t.intentos)"
+  $ll = Llamadas-De (Llamadas $e.Wt) $t.id
+  Igual 'dos llamadas' 2 $ll.Count
+  Comprueba 'el primer prompt no lleva correccion' ($ll.Count -eq 2 -and $ll[0].correccion -eq 'False')
+  Comprueba 'el segundo tampoco: el fallo es de Copilot, no de la ficha' ($ll.Count -eq 2 -and $ll[1].correccion -eq 'False')
+  Comprueba 'pero el esfuerzo sube' ($ll.Count -eq 2 -and $ll[1].flags -match '--effort=high' -and $ll[0].flags -notmatch '--effort=high')
+  $p = [System.IO.File]::ReadAllText((Get-Ruta $e.Wt (".rescate/tareas/" + $t.id + '.prompt.md')))
+  Comprueba 'el prompt guardado del segundo intento no tiene la seccion' ($p -notmatch 'CORRECCI')
+}
+
+$Pruebas['25 aptitud sin Copilot: si sale con error no se reintenta y el arranque dice por que'] = {
+  $e = Nuevo-Escenario 'sinmodelo' @('Clase1') @{ SegundosPorLlamada = 3 }
+  $r = Migra $e (Basicos $e) 'falla-siempre:^Validador'
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que Copilot no ha podido responder' ($r.Salida -match 'Copilot no ha podido responder') (Cola $r.Salida)
+  Comprueba 'con la ultima linea de lo que dijo' ($r.Salida -match 'no hay sesion iniciada') (Cola $r.Salida)
+  Igual 'una sola llamada de aptitud' 1 (Llamadas (Get-Ruta $e.Out 'registros/aptitud')).Count
+  Comprueba 'sin estado ni worktree' ((-not (Test-Path -LiteralPath $e.Wt)) -and ($null -eq (Estado $e)))
+  $r = Migra $e (Basicos $e) 'colgado:^Validador'
+  Igual 'una llamada colgada en la aptitud: sale con 1' 1 $r.Codigo
+  Comprueba 'tambien dice que Copilot no ha podido responder' ($r.Salida -match 'Copilot no ha podido responder') (Cola $r.Salida)
+  Igual 'y tampoco se repite' 1 (Llamadas (Get-Ruta $e.Out 'registros/aptitud')).Count
 }
 
 # ================================ LANZADOR ================================
