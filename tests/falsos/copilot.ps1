@@ -38,8 +38,33 @@
 #   json-texto         el JSON es un texto, no un objeto
 #   toca-y-calla       el primer intento: ficha correcta y cambia el repo; el segundo:
 #                      no escribe nada y sale con 0 (la ficha vieja no puede dar el paso por buena)
+#   sin-cuota          sale con 1 diciendo que se ha pasado la cuota mensual
+#   error-privado      sale con 1 y escribe el texto de la variable RESCATE_ERROR_TEXTO
+#   valor-secreto      ficha con un papel que no vale y que lleva un texto con comillas simples
+#   cita-secreta       ficha con todas las citas inventadas, con texto y comillas simples
 # Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
 # (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
+# Con la variable RESCATE_LLAMADAS (una carpeta) deja ademas una copia de ese fichero alli:
+# sirve para ver las llamadas de un script que borra su carpeta de trabajo (el preflight).
+#
+# Sondas del preflight (bloque 3): con --version o --help no llama a ningun modelo. Dice una
+# version o una ayuda con modelos. El guion 'rechaza-bandera:<bandera>' hace que rechace esa
+# bandera con el mismo error que el Copilot real ("error: unexpected argument '<bandera>' found").
+if ($args -contains '--version' -or $args -contains '--help') {
+  foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
+    $nombre, $solo = ($g -split ':', 2)
+    if ($nombre -eq 'rechaza-bandera' -and $solo) {
+      foreach ($a in $args) { if ("$a" -eq $solo -or "$a" -like "$solo=*") { "error: unexpected argument '$a' found"; exit 2 } }
+    }
+  }
+  if ($args -contains '--help') {
+    'GitHub Copilot CLI (de mentira)'
+    '  --model <model>   Modelo a usar (choices: "gpt-6-luna", "claude-sonnet-5.5", "gemini-3.8-flash")'
+    exit 0
+  }
+  'GitHub Copilot CLI 1.0.112 (de mentira).'
+  exit 0
+}
 $texto = ''
 for ($i = 0; $i -lt $args.Count - 1; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
 if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
@@ -50,7 +75,7 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   $rango = [regex]::Match($prompt, '(?m)^LINEAS: (\d+)-(\d+)\s*$')
   $id = [System.IO.Path]::GetFileName($salida) -replace '\.json$', ''
   $correccion = ($prompt -match '## CORRECCI')
-  $efecto = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=|no-custom-instructions$)' }) -join ' ')
+  $efecto = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=|available-tools=|no-custom-instructions$)' }) -join ' ')
   $clase = [System.IO.Path]::GetFileNameWithoutExtension($leer)
   $guion = ''
   foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
@@ -63,12 +88,21 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   $registro = Join-Path $dirFalso ($id + '-' + $PID + '.txt')
   $reg = @("id=$id", "pid=$PID", "flags=$efecto", "correccion=$correccion", "guion=$guion", ('inicio=' + [DateTime]::UtcNow.Ticks))
   [System.IO.File]::WriteAllLines($registro, [string[]]$reg)
+  $copiar = {
+    if ($env:RESCATE_LLAMADAS) {
+      [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
+      Copy-Item -LiteralPath $registro -Destination (Join-Path $env:RESCATE_LLAMADAS (Split-Path $registro -Leaf)) -Force
+    }
+  }
+  & $copiar
   # que intento es: las llamadas que ha tenido esta tarea, contada la actual
   $patron = '^' + [regex]::Escape($id) + '-\d+\.txt$'
   $intento = @(Get-ChildItem -LiteralPath $dirFalso -File | Where-Object { $_.Name -match $patron }).Count
 
   if ($guion -eq 'falla-siempre' -or ($guion -eq 'falla-una-vez' -and $intento -eq 1)) { 'Error: no hay sesion iniciada'; exit 1 }
-  if ($guion -eq 'texto-libre') { 'Claro, el fichero valida importes y es muy sencillo.'; exit 0 }
+  if ($guion -eq 'sin-cuota') { 'Error: You have exceeded your monthly quota.'; exit 1 }
+  if ($guion -eq 'error-privado') { "$env:RESCATE_ERROR_TEXTO"; exit 1 }
+  if ($guion -eq 'texto-libre') { 'Claro, el fichero valida importes y es muy sencillo.'; & $copiar; exit 0 }
   if ($guion -eq 'colgado') { Start-Sleep -Seconds 120 }
   if ($guion -eq 'lento') { Start-Sleep -Seconds 3 }
 
@@ -95,13 +129,17 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   if ($guion -eq 'linea-texto') { $datos[0].linea = '31' }
   if ($guion -eq 'linea-cero') { $datos[0].linea = 0 }
   if ($guion -eq 'linea-decimal') { $datos[0].linea = 3.5 }
+  if ($guion -eq 'cita-secreta') {
+    $datos = @(1..3 | ForEach-Object { Nuevo-Dato $_ "SECRETO-ZORBA 'cita $_' no sale en el fichero" })
+  }
   $papel = 'otro'
   if ($guion -eq 'papel-libre') { $papel = 'inventado' }
+  if ($guion -eq 'valor-secreto') { $papel = "SECRETO-ZORBA'valor'raro" }
   $ficha = [ordered]@{ fichero = (Split-Path $leer -Leaf); clase = $clase; papel = $papel; queHace = "Ficha de prueba de $clase."; datos = $datos }
   $json = ConvertTo-Json -InputObject $ficha -Depth 6
   if ($guion -eq 'json-lista') { $json = '[1, 2, 3]' }
   if ($guion -eq 'json-texto') { $json = '"hola"' }
-  if ($guion -eq 'toca-y-calla' -and $intento -gt 1) { 'hecho'; exit 0 }
+  if ($guion -eq 'toca-y-calla' -and $intento -gt 1) { 'hecho'; & $copiar; exit 0 }
   if ($guion -eq 'json-roto' -or ($guion -eq 'una-vez-roto' -and -not $correccion)) { $json = $json.Substring(0, [int]($json.Length / 2)) }
   $ruta = $raiz
   foreach ($s in $salida.Split('/')) { $ruta = Join-Path $ruta $s }
@@ -112,6 +150,7 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   }
   if ($guion -eq 'toca-original') { [System.IO.File]::AppendAllText($leer, "`n// tocado por la lectura`n") }
   [System.IO.File]::AppendAllText($registro, ('fin=' + [DateTime]::UtcNow.Ticks + "`n"))
+  & $copiar
   'hecho'
   exit 0
 }

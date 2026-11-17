@@ -1,0 +1,7 @@
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.ejemplo.MoverSaludo
+recipeList:
+  - org.openrewrite.java.ChangeType:
+      oldFullyQualifiedTypeName: com.ejemplo.service.Saludo
+      newFullyQualifiedTypeName: com.ejemplo.application.usecase.Saludo
