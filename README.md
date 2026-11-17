@@ -51,6 +51,8 @@ El resto de opciones (elegir paso, tamaño del lote, deshacer, modelo de reserva
 
 Si es tu primera vez, deja que una IA te acompañe. [GUIA-IA.md](GUIA-IA.md) es un prompt que le dice cómo guiarte paso a paso: comprobar el entorno, leer el diagnóstico, revisar el plan y el primer lote, y qué hacer si algo falla.
 
+La guía va por trozos para que la IA no se adelante: `GUIA-IA.md` tiene las reglas y el mapa, y cada paso está en su fichero de la carpeta [guia/](guia/), que la IA lee solo cuando toca.
+
 ### Modelo y esfuerzo
 
 Cada llamada a la IA es `copilot -p` con `--model` y `--effort`
