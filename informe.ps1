@@ -63,12 +63,20 @@ function Split-Plantilla([string]$Texto) {
 }
 
 # Pone cada {{X}} (escapado) y cada {{{X}}} (tal cual) con su valor. Una sola pasada: un valor no se vuelve a expandir.
+# No se usa un bloque de script como delegado de Regex: son miles de conversiones por pagina, sospechosas de las caidas
+# intermitentes de pwsh 7.4 (SIGSEGV) que se vieron en los bancos.
+$RxHueco = New-Object System.Text.RegularExpressions.Regex('\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}')
 function Expand-Plantilla([string]$Texto, $Valores) {
-  return [regex]::Replace($Texto, '\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}', {
-      param($m)
-      if ($m.Groups[1].Success) { return [string]$Valores[$m.Groups[1].Value] }
-      return (ConvertTo-TextoHtml ([string]$Valores[$m.Groups[2].Value]))
-    })
+  $sb = New-Object System.Text.StringBuilder
+  $pos = 0
+  foreach ($m in $RxHueco.Matches($Texto)) {
+    [void]$sb.Append($Texto.Substring($pos, $m.Index - $pos))
+    if ($m.Groups[1].Success) { [void]$sb.Append([string]$Valores[$m.Groups[1].Value]) }
+    else { [void]$sb.Append((ConvertTo-TextoHtml ([string]$Valores[$m.Groups[2].Value]))) }
+    $pos = $m.Index + $m.Length
+  }
+  [void]$sb.Append($Texto.Substring($pos))
+  return $sb.ToString()
 }
 
 function Format-Trozo($Trozos, [string]$Nombre, $Valores = @{}) {
