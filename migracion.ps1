@@ -33,8 +33,8 @@ USO
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).
   Los ajustes de ajustes.json (y de .rescate\config.json del migrado) pisan las claves
-  del bloque CONFIGURACION; la carpeta de ajustes se cambia con la variable de
-  entorno RESCATE_HOME. Antes de darlo por bueno, pasa tests\probar-migracion.ps1.
+  de CONFIGURACION (la de aqui y la de tareas.ps1); la carpeta de ajustes se cambia con
+  la variable de entorno RESCATE_HOME. Antes de darlo por bueno, pasa tests\probar-migracion.ps1.
 #>
 [CmdletBinding()]
 param(
@@ -55,18 +55,7 @@ $ErrorActionPreference = 'Stop'
 # ============================ CONFIGURACION ============================
 $Cfg += @{
   Modelos            = @('claude-sonnet-5.5', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'claude-haiku-5.5', 'gemini-3.8-flash')
-  JavaExe            = 'java'
-  Paralelo           = 4      # llamadas a Copilot a la vez
-  SegundosPorLlamada = 900    # pasado este tiempo, la llamada se mata
   FallosSeguidos     = 6      # llamadas fallidas seguidas antes de parar
-  Intentos           = 2      # el primero y un reintento con el motivo
-  LineasPorTarea     = 300    # un fichero mas largo se trocea por rangos de lineas
-  CitaMax            = 120    # caracteres de una cita
-  CitaCerca          = 3      # una cita a esta distancia (o menos) de su linea cuenta como bien situada
-  EsfuerzoLectura    = 'medium'
-  EsfuerzoReintento  = 'high'
-  Papeles            = @('lector', 'procesador', 'escritor', 'tarea', 'validador', 'configuracion', 'acceso-datos', 'sftp', 'modelo', 'otro')
-  TiposDato          = @('entrada-fichero', 'salida-fichero', 'sftp', 'tabla-lee', 'tabla-escribe', 'parametro', 'config', 'regla', 'error', 'externo')
 }
 
 # ============================== UTILIDADES ==============================
@@ -94,11 +83,6 @@ function Get-Batch([string]$Raiz) {
 }
 
 # ============================ AJUSTES Y ESTADO ============================
-function Get-RutaAjustes {
-  if ($env:RESCATE_HOME) { return (Join-Path $env:RESCATE_HOME 'ajustes.json') }
-  return (Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.rescate') 'ajustes.json')
-}
-
 # Guarda la referencia en ajustes.json sin tocar el resto de claves.
 function Save-Plantilla([string]$Ruta) {
   $f = Get-RutaAjustes

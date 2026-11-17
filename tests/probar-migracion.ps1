@@ -401,7 +401,7 @@ $Pruebas['15 biblioteca: tareas.ps1 se carga sola, nombra sus variables y sirve 
   $e = Nuevo-Escenario 'biblioteca' @('Clase1')
   $codigo = @'
 $Cfg.CopilotExe = '{{COPILOT}}'
-$Cfg += @{ SegundosPorLlamada = 20; Intentos = 2; EsfuerzoLectura = 'medium'; EsfuerzoReintento = 'high'; CitaMax = 120; CitaCerca = 3; Papeles = @('otro'); TiposDato = @('regla') }
+$Cfg.SegundosPorLlamada = 20
 $LegacyRoot = '{{LEGACY}}'
 $Registros = '{{REGISTROS}}'
 $ModeloElegido = 'modelo-x'

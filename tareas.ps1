@@ -6,20 +6,39 @@ migracion.ps1 o desde cualquier script que necesite lo mismo (un preflight) sin 
 por el arranque. Cargarlo no ejecuta nada. Solo ASCII a proposito.
 Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto a este script.
 
-DEFINE al cargarse: $Utf8 y las funciones de abajo.
+DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
+SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
+EsfuerzoReintento, Papeles, TiposDato y JavaExe) y las funciones, entre ellas
+Get-RutaAjustes (donde esta ajustes.json; RESCATE_HOME lo cambia).
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
-  $Cfg            el de comun.ps1 mas estas claves: Paralelo, SegundosPorLlamada, Intentos,
-                  LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura, EsfuerzoReintento,
-                  Papeles y TiposDato (sus valores estan en CONFIGURACION de migracion.ps1)
+  $Cfg            el de comun.ps1 (este fichero le anade sus claves al cargarse)
   $LegacyRoot     carpeta del batch original: Invoke-Llamadas se la da a Copilot (--add-dir)
                   y Get-TareasFichas saca de ahi las rutas relativas
   $Registros      carpeta de registros: Invoke-Ronda y Test-Aptitud escriben ahi
   $ModeloElegido  id del modelo ('' = el que tenga Copilot): Invoke-Ronda
   $Datos          carpeta datos\: Save-Tarea, Get-TareasFichas y Save-Fichas
 Test-Aptitud solo usa $Cfg, $LegacyRoot, $Registros y $ModeloElegido.
+Invoke-Ronda devuelve, por tarea, tambien Segundos y Codigo de la llamada (para medir sin
+leer el registro).
 Stop-Arranque termina el script que lo llame con la salida 1.
 #>
+
+# ============================ CONFIGURACION ============================
+# Las claves de las tareas. Los ajustes (ajustes.json, .rescate\config.json) las pisan.
+$Cfg += @{
+  JavaExe            = 'java'
+  Paralelo           = 4      # llamadas a Copilot a la vez
+  SegundosPorLlamada = 900    # pasado este tiempo, la llamada se mata
+  Intentos           = 2      # el primero y un reintento con el motivo
+  LineasPorTarea     = 300    # un fichero mas largo se trocea por rangos de lineas
+  CitaMax            = 120    # caracteres de una cita
+  CitaCerca          = 3      # una cita a esta distancia (o menos) de su linea cuenta como bien situada
+  EsfuerzoLectura    = 'medium'
+  EsfuerzoReintento  = 'high'
+  Papeles            = @('lector', 'procesador', 'escritor', 'tarea', 'validador', 'configuracion', 'acceso-datos', 'sftp', 'modelo', 'otro')
+  TiposDato          = @('entrada-fichero', 'salida-fichero', 'sftp', 'tabla-lee', 'tabla-escribe', 'parametro', 'config', 'regla', 'error', 'externo')
+}
 
 # ============================== UTILIDADES ==============================
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -40,6 +59,12 @@ function Get-Hash8([string]$Texto) {
   $sha = [System.Security.Cryptography.SHA1]::Create()
   try { $b = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Texto)) } finally { $sha.Dispose() }
   return ((@($b[0..3]) | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# Donde esta ajustes.json: RESCATE_HOME o la carpeta .rescate del usuario.
+function Get-RutaAjustes {
+  if ($env:RESCATE_HOME) { return (Join-Path $env:RESCATE_HOME 'ajustes.json') }
+  return (Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.rescate') 'ajustes.json')
 }
 
 # ================================ LLAMADAS ================================
@@ -336,7 +361,7 @@ function Get-UltimaLinea([string]$Texto) {
 # Una ronda de lectura: llama a Copilot para cada tarea de $Lote y comprueba lo que escribe.
 # $Dir es la carpeta de trabajo de Copilot; $RaizOrig la carpeta de donde salen los ficheros.
 # Devuelve, por tarea: Tarea, Estado (ok, invalida, fallo, tiempo), Motivo, Linea (la ultima linea
-# de lo que dijo Copilot si fallo), Ficha y Registro.
+# de lo que dijo Copilot si fallo), Ficha, Registro, Segundos y Codigo (los de la llamada).
 function Invoke-Ronda($Lote, [string]$Dir, [string]$RaizOrig) {
   $items = @()
   foreach ($t in $Lote) {
@@ -358,7 +383,7 @@ function Invoke-Ronda($Lote, [string]$Dir, [string]$RaizOrig) {
     $cab = "# salida (codigo $($c.Codigo), $($c.Segundos) s"
     if ($c.Agotado) { $cab += ', tiempo agotado' }
     [System.IO.File]::WriteAllText($registro, ("# prompt`n" + $items[$i].Prompt + "`n`n" + $cab + ")`n" + $c.Texto + "`n"), $Utf8)
-    $r = [pscustomobject]@{ Tarea = $t; Estado = 'ok'; Motivo = ''; Linea = ''; Ficha = $null; Registro = $registro }
+    $r = [pscustomobject]@{ Tarea = $t; Estado = 'ok'; Motivo = ''; Linea = ''; Ficha = $null; Registro = $registro; Segundos = $c.Segundos; Codigo = $c.Codigo }
     if ($c.Agotado) { $r.Estado = 'tiempo'; $r.Motivo = "Tiempo agotado: la llamada pasaba de $($Cfg.SegundosPorLlamada) s y se mato." }
     elseif ($c.Codigo -ne 0) { $r.Estado = 'fallo'; $r.Linea = Get-UltimaLinea $c.Texto; $r.Motivo = "Copilot salio con codigo $($c.Codigo): " + $r.Linea }
     else {
