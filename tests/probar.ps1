@@ -791,6 +791,7 @@ $Pruebas['prompt: con mvnw en la raiz del repo el prompt dice ./mvnw'] = {
   else {
     $w = 'mvnw'; $esperado = './mvnw'
     Escribe $e.Repo $w ('#!/bin/sh' + "`n" + 'exec "' + $ps + '" -NoProfile -File "' + $mvn + '" "$@"' + "`n")
+    & chmod +x (Get-Ruta $e.Repo $w)   # ejecutable de verdad: un mvnw que no se puede lanzar ya no pasa por un build bueno
   }
   [void](GitEn $e.Repo @('add', '--', $w))
   [void](GitEn $e.Repo @('update-index', '--chmod=+x', '--', $w))
@@ -1051,6 +1052,53 @@ $Pruebas['plantilla incumple: con el adaptador permitido y un uso de ficheros en
   Comprueba 'la consola dice ficheros 1' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 1 | calidad 0 | secretos 0') (Cola $r.Salida)
   $p = Permitido-Del-Informe $e
   Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/sftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
+}
+
+# ======================= LATIDO MIENTRAS ESPERA ========================
+# Mientras Copilot o Maven tardan, la consola escribe cada SegundosLatido una linea
+# "  ... sigue: <que> (lleva N min M s)" para que se vea que el script no esta colgado.
+function Lineas-Latido([string]$Salida) { return @($Salida -split "`r?`n" | Where-Object { $_ -match '^\s*\.\.\. sigue' }) }
+
+# El config.json del repo del escenario: Maven y Copilot, los falsos, mas estos ajustes (nombre -> valor).
+function Pon-Config($E, [hashtable]$Mas) {
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
+}
+
+$ArgsFix = @('-Modo', 'fix', '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
+
+$Pruebas['latido: mientras Copilot tarda, la consola dice que sigue, y el arreglo sale como siempre'] = {
+  $e = Nuevo-Escenario 'latido-copilot'
+  Pon-Config $e @{ SegundosLatido = 1 }
+  $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) 'lento'
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  $l = Lineas-Latido $r.Salida
+  Comprueba 'hay al menos una linea del latido' ($l.Count -ge 1) (Cola $r.Salida)
+  # el tope es holgado a proposito: el arranque de pwsh bajo carga suma segundos a los 3 del falso
+  Comprueba 'y no un aluvion (como mucho 6)' ($l.Count -le 6) ($l.Count.ToString() + ' lineas')
+  Comprueba 'cada una dice que espera a Copilot y cuanto lleva' (@($l | Where-Object { $_ -match '^  \.\.\. sigue: Copilot .*\(lleva \d+ min \d+ s\)$' }).Count -eq $l.Count) ($l -join ' / ')
+  $hw = Hallazgos $e.Wt
+  Igual 'estructura queda a 0 en el worktree' 0 (Cuenta $hw 'estructura')
+  Comprueba 'hay commit del lote' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(estructura\): lote 1') (Cola $r.Salida)
+}
+
+$Pruebas['latido: mientras Maven tarda, la consola dice que sigue'] = {
+  $e = Nuevo-Escenario 'latido-maven'
+  Pon-Config $e @{ SegundosLatido = 1 }
+  $env:RESCATE_MVN_ESPERA = '3'
+  try { $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) }
+  finally { $env:RESCATE_MVN_ESPERA = '' }
+  Igual 'el diagnostico sale con 0' 0 $r.Codigo
+  $l = Lineas-Latido $r.Salida
+  Comprueba 'hay al menos una linea del latido de Maven' (@($l | Where-Object { $_ -match '^  \.\.\. sigue: Maven \((compilar|tests)\) \(lleva \d+ min \d+ s\)$' }).Count -ge 1) (Cola $r.Salida)
+}
+
+$Pruebas['latido: con los falsos rapidos y el intervalo por defecto no sale ninguna linea'] = {
+  $e = Nuevo-Escenario 'latido-rapido'
+  $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix)
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  Igual 'ninguna linea del latido' 0 (Lineas-Latido $r.Salida).Count
 }
 
 # ================================ LANZADOR ================================

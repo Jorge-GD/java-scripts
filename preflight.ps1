@@ -481,12 +481,14 @@ function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cu
   Write-Host "== $N $Nombre (hasta $Minutos min)..."
   Add-Linea "== $N $Nombre"
   $bien = $true
+  $latido = Start-Latido "bloque $N, $Nombre" $Cfg.SegundosLatido
   try { & $Cuerpo }
   catch {
     $bien = $false
     Add-Linea ('fallo: ' + (Get-Fallo $_ $SinMensaje))
     $script:Fallos += $N
   }
+  finally { Stop-Latido $latido }
   if ($bien) { Write-Host 'hecho' } else { Write-Host 'fallo' }
   Save-Resultado
 }

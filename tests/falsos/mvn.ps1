@@ -4,7 +4,9 @@
 # Para el preflight: '--version' dice una version; el paso de JaCoCo deja
 # target/site/jacoco/jacoco.csv (y falla con '[ERROR] <texto>' si existe RESCATE_MVN_ERROR);
 # el de OpenRewrite mueve com.ejemplo.service.Saludo a com.ejemplo.application.usecase.
+# Con RESCATE_MVN_ESPERA=<n>, cada llamada (menos '--version') tarda n segundos mas (para probar el latido).
 if ($args -contains '--version') { 'Apache Maven 3.9.8 (de mentira)'; exit 0 }
+if ($env:RESCATE_MVN_ESPERA) { Start-Sleep -Seconds ([int]$env:RESCATE_MVN_ESPERA) }
 $raiz = (Get-Location).Path
 $conJacoco = (@($args | Where-Object { "$_" -match 'jacoco-maven-plugin' }).Count -gt 0)
 $conRewrite = (@($args | Where-Object { "$_" -match 'rewrite-maven-plugin' }).Count -gt 0)

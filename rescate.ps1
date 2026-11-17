@@ -579,7 +579,10 @@ function Invoke-Build([bool]$ConTests) {
   $rep = Join-Ruta $RepoRoot 'target/surefire-reports'
   if ($ConTests -and (Test-Path -LiteralPath $rep)) { Remove-Item -LiteralPath $rep -Recurse -Force }
   if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
-  $r = Invoke-Nativo (Get-Mvn $RepoRoot) $a $RepoRoot
+  if ($ConTests) { $que = 'Maven (tests)' } else { $que = 'Maven (compilar)' }
+  $latido = Start-Latido $que $Cfg.SegundosLatido
+  try { $r = Invoke-Nativo (Get-Mvn $RepoRoot) $a $RepoRoot }
+  finally { Stop-Latido $latido }
   [System.IO.File]::WriteAllLines((Join-Path $Work 'build.log'), [string[]]$r.Salida)
   if ($r.Codigo -eq 0) {
     if ($ConTests) { $b.TestsEjecutados = $true; $b.TestsOk = $true }
@@ -968,11 +971,14 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
-function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '') {
+# $Que es lo que dice el latido mientras Copilot trabaja.
+function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [string]$Que = 'Copilot') {
   if (-not $Mod) { $Mod = $Modelo }
   if (-not $Esf) { $Esf = $Esfuerzo }
   $a = Get-ArgsCopilot 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.' $Mod $Esf @($PlantillaRoot, $LegacyRoot) ([bool]$SinInstrucciones)
-  $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot
+  $latido = Start-Latido $Que $Cfg.SegundosLatido
+  try { $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot }
+  finally { Stop-Latido $latido }
   [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
   return $r
 }
@@ -1106,7 +1112,7 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
   $rama = Get-Rama $RepoRoot
   $hp = Get-Huella $PlantillaRoot; $h0 = Get-Huella $LegacyRoot
   Info "Revision previa del paso '$PasoId': Copilot lee $($fichs.Count) fichero(s) y la plantilla..."
-  [void](Invoke-Copilot (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan)
+  [void](Invoke-Copilot (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId)")
   if ((Get-Huella $PlantillaRoot) -ne $hp -or (Get-Huella $LegacyRoot) -ne $h0) {
     Fallo 'ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL durante la revision. Restauralos antes de seguir.'
     exit 4
@@ -1169,7 +1175,7 @@ function Invoke-Pre {
       )
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
       Info 'Copilot leyendo el original...'
-      [void](Invoke-Copilot (Join-Path $Work 'pre.log') '' $EsfuerzoPlan)
+      [void](Invoke-Copilot (Join-Path $Work 'pre.log') '' $EsfuerzoPlan 'Copilot (pre)')
       if ((Get-Huella $LegacyRoot) -ne $h0 -or (Get-Huella $PlantillaRoot) -ne $hp) { Fallo 'ALTO: se ha modificado el ORIGINAL o la PLANTILLA durante el pre. Restauralos antes de seguir.'; exit 4 }
       $despues = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
       if ($despues -ne $antes) { Aviso 'Ojo: Copilot ha tocado ficheros de este repo durante el pre (solo debia escribir en .rescate). Mira git status.' }
@@ -1301,7 +1307,7 @@ function Invoke-Fix {
     for ($i = 1; $i -le $MaxIntentos; $i++) {
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion))
       Info "  Copilot trabajando (intento $i de $MaxIntentos)..."
-      $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod
+      $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod '' "Copilot (paso $paso, lote $n, intento $i)"
       if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)" }
 
       # -- guardas duras: si saltan, no hay reintento --

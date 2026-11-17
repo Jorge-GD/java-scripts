@@ -16,6 +16,7 @@ $Cfg = @{
   CommitArgs    = @()     # p.ej. @('--no-verify') si un hook local bloquea
   MvnExe        = ''      # vacio = mvnw del repo o, si no hay, mvn del PATH
   DirsIgnorados = @('.git', 'target', '.rescate', 'node_modules', '.idea', '.vscode', '.github', '.mvn')
+  SegundosLatido = 60     # cada cuantos segundos escribe '... sigue' mientras espera a Copilot o a Maven (0 = nunca)
 }
 
 # ============================== UTILIDADES ==============================
@@ -39,6 +40,36 @@ function Invoke-Nativo {
   if ($null -eq $code) { $code = 0 }
   if ($null -eq $out) { $out = @() }
   return [pscustomobject]@{ Codigo = $code; Salida = @($out) }
+}
+
+# Latido: mientras un programa largo corre, una linea cada $Cada segundos para que se vea que el script sigue vivo
+# ("  ... sigue: <que> (lleva N min M s)"). Corre en un runspace aparte, asi no cambia como se lanzan los programas.
+# Devuelve $null si no se puede crear (y Stop-Latido $null no hace nada): el latido nunca rompe nada. Usar con try/finally.
+function Start-Latido([string]$Que, [int]$Cada) {
+  if ($Cada -lt 1) { return $null }
+  try {
+    $cuerpo = {
+      param([string]$Que, [int]$Cada)
+      $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+      while ($true) {
+        Start-Sleep -Seconds $Cada
+        $s = [int][Math]::Floor($reloj.Elapsed.TotalSeconds)
+        [Console]::WriteLine('  ... sigue: ' + $Que + ' (lleva ' + [Math]::Floor($s / 60) + ' min ' + ($s % 60) + ' s)')
+      }
+    }
+    $ps = [powershell]::Create()
+    [void]$ps.AddScript($cuerpo.ToString()).AddArgument($Que).AddArgument($Cada)
+    [void]$ps.BeginInvoke()
+    return $ps
+  }
+  catch { return $null }
+}
+
+# Para el latido y libera su runspace. Cuando vuelve no sale ninguna linea mas.
+function Stop-Latido($Latido) {
+  if ($null -eq $Latido) { return }
+  try { $Latido.Stop() } catch { $null = $_ }
+  try { $Latido.Dispose() } catch { $null = $_ }
 }
 
 function Invoke-Git([string]$Dir, [string[]]$A) { return Invoke-Nativo 'git' (@('-C', $Dir) + $A) }

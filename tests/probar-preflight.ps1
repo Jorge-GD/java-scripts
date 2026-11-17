@@ -1327,5 +1327,17 @@ $Pruebas['33 bloque 7, referencia que incumple: sin -Plantilla, o con el diagnos
   Sin-Fugas $b 'referencia b'
 }
 
+$Pruebas['34 latido: un bloque que tarda mas que el intervalo escribe "... sigue" en la consola y nunca en el fichero de resultado'] = {
+  $e = Nuevo-Examen 'latido' @{ SegundosLatido = 1 }
+  # la primera llamada del examen (L1) espera 3 s: el bloque 9 dura mas que el intervalo
+  $r = Pf-Examen $e $MA 'medium' 'exa-espera-3:L1$' @{} @('-SinMaven')
+  Igual 'sale con 0' 0 $r.Codigo
+  $l = @($r.Salida -split "`r?`n" | Where-Object { $_ -match '^  \.\.\. sigue: bloque 9, examen de modelos \(lleva \d+ min \d+ s\)$' })
+  Comprueba 'la consola trae al menos una linea del latido del bloque 9' ($l.Count -ge 1) (Cola $r.Salida)
+  Igual 'el fichero de resultado no trae ninguna' 0 (Cuenta-Lineas $r '\.\.\. sigue')
+  Comprueba 'el fichero de resultado sigue entero (tiene el bloque 9 y acaba con == fin)' ((Cuenta-Lineas $r '^== 9 ') -eq 1 -and (Lineas-De $r) -contains '== fin')
+  Sin-Fugas $r 'latido'
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
