@@ -355,12 +355,14 @@ function Compare-Nombres($Pedidos, $Dados, [string]$Donde) {
   return "En $Donde tiene que estar exactamente cada uno de estos, una sola vez: $($Pedidos -join ', '). Pero " + ($partes -join '; ') + '.'
 }
 
-# Un texto de negocio no puede llevar el nombre de una clase del original como palabra entera.
-# $Campos es nombre del campo -> texto. Devuelve '' si valen o el motivo, que dice cual sobra y en que campo.
+# Un texto de negocio no puede llevar el nombre compuesto de una clase del original (dos o mas mayusculas y alguna
+# minuscula: GestorRecibos, SFTPClient) como palabra entera, ni el nombre de ningun fichero .java. Recibo, Estado o
+# IBAN, sueltos, son palabras de negocio y valen. $Campos es nombre del campo -> texto. Devuelve '' si valen o el
+# motivo, que dice cual sobra y en que campo.
 function Test-LenguajeNegocio($Campos) {
-  $nombres = @(Get-NombresClases)
-  if ($nombres.Count -eq 0) { return '' }
-  $rx = '(?<!\w)(?:' + (($nombres | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')(?!\w)'
+  $nombres = @(Get-NombresClases | Where-Object { $_ -cmatch '^(?=(?:[^A-Z]*[A-Z]){2})(?=.*[a-z])' } | ForEach-Object { [regex]::Escape($_) })
+  $rx = '(?<!\w)[\w\-]+\.java(?!\w)'
+  if ($nombres.Count -gt 0) { $rx = '(?<!\w)(?:' + ($nombres -join '|') + ')(?!\w)|' + $rx }
   $mal = @()
   foreach ($k in $Campos.Keys) {
     foreach ($n in @([regex]::Matches([string]$Campos[$k], $rx) | ForEach-Object { $_.Value } | Select-Object -Unique)) { $mal += "$k lleva el nombre de la clase $n" }
@@ -458,20 +460,21 @@ function Test-FichaJob($T, [string]$Dir) {
   return (New-Resultado $true '' ([ordered]@{ job = $o.job; titulo = $o.titulo; paraQue = $o.paraQue; pasos = $pasos; dudas = $dudas }))
 }
 
-# Comprueba el resumen: texto sin nombres de clase, todos los jobs del mapa una vez en 'orden' y de 0 a GlosarioMax terminos.
+# Comprueba el resumen: todos los textos sin nombres de clase, todos los jobs del mapa una vez en 'orden' y de 0 a
+# GlosarioMax terminos.
 function Test-Resumen($T, [string]$Dir) {
   $s = Read-Salida $T $Dir
   if (-not $s.Ok) { return $s }
   $o = $s.Ficha
   if (-not (Test-Texto $o.resumen)) { return (New-Resultado $false "Falta el campo 'resumen' (o esta vacio)." $null) }
-  $m = Test-LenguajeNegocio ([ordered]@{ resumen = $o.resumen })
-  if ($m) { return (New-Resultado $false $m $null) }
+  $campos = [ordered]@{ resumen = $o.resumen }
   if ($o.orden -isnot [array]) { return (New-Resultado $false "Falta el campo 'orden': una lista con un elemento por job." $null) }
   $orden = @()
   $i = 0
   foreach ($x in $o.orden) {
     if (($x -isnot [System.Management.Automation.PSCustomObject]) -or -not (Test-Texto $x.job)) { return (New-Resultado $false "orden[$i] tiene que ser un objeto con job y motivo." $null) }
     $orden += [ordered]@{ job = $x.job; motivo = "$($x.motivo)" }
+    $campos["orden[$i].motivo"] = "$($x.motivo)"
     $i++
   }
   $m = Compare-Nombres @($T.entradas.jobs) @($orden | ForEach-Object { $_.job }) "'orden'"
@@ -482,8 +485,12 @@ function Test-Resumen($T, [string]$Dir) {
   foreach ($g in $o.glosario) {
     if (($g -isnot [System.Management.Automation.PSCustomObject]) -or -not (Test-Texto $g.termino) -or -not (Test-Texto $g.definicion)) { return (New-Resultado $false "glosario[$i] tiene que ser un objeto con termino y definicion, los dos con texto." $null) }
     $glosario += [ordered]@{ termino = $g.termino; definicion = $g.definicion }
+    $campos["glosario[$i].termino"] = $g.termino
+    $campos["glosario[$i].definicion"] = $g.definicion
     $i++
   }
+  $m = Test-LenguajeNegocio $campos
+  if ($m) { return (New-Resultado $false $m $null) }
   return (New-Resultado $true '' ([ordered]@{ resumen = $o.resumen; orden = $orden; glosario = $glosario }))
 }
 
@@ -691,10 +698,12 @@ function Get-Palabras([string]$Rel) {
 
 # Las clases de un job: las semillas (Rel, Por: primero los pasos, luego el fichero que define el job) y, desde
 # ellas, las clases del original cuyo nombre simple sale como palabra entera en su texto, hasta ProfundidadJob
-# niveles. Devuelve las primeras ClasesPorJob que son .java del original ($Rutas), en el orden en que se encuentran.
-function Get-ClasesJob($Semillas, $PorNombre, $Rutas) {
+# niveles. Las clases de $Ajenas (las de los pasos de los otros jobs) no entran ni se atraviesan. Devuelve las
+# primeras ClasesPorJob que son .java del original ($Rutas), en el orden en que se encuentran.
+function Get-ClasesJob($Semillas, $PorNombre, $Rutas, $Ajenas) {
   $nodos = New-Object System.Collections.Generic.List[object]
   $vistos = @{}
+  foreach ($rel in $Ajenas.Keys) { $vistos[$rel] = $true }
   foreach ($s in $Semillas) {
     if (-not $vistos.ContainsKey($s.Rel)) { $vistos[$s.Rel] = $true; $nodos.Add([pscustomobject]@{ Rel = $s.Rel; Prof = 0; Por = $s.Por }) }
   }
@@ -726,8 +735,7 @@ function Get-Mapa($Jobs, $Tareas, [string]$Batch) {
   }
   $sinContrato = (@($Jobs).Count -eq 0)
   if ($sinContrato) { $Jobs = @([pscustomobject]@{ nombre = $Batch; definidoEn = '' }) }
-  $conJob = @{}
-  $mapa = @()
+  $lecturas = @()
   foreach ($j in $Jobs) {
     $d = Get-FicheroDefinicion $j
     $def = $null
@@ -744,24 +752,34 @@ function Get-Mapa($Jobs, $Tareas, [string]$Batch) {
     }
     $semillas = @()
     $pasos = @()
+    $deLosPasos = @{}
     if ($sinContrato) { foreach ($rel in $rutas.Keys | Sort-Object) { $semillas += [pscustomobject]@{ Rel = $rel; Por = 'referencia' } } }
     if ($def) {
       foreach ($p in @($def.pasos)) {
         $pasos += [ordered]@{ paso = $p.paso; clases = @($p.clases) }
-        foreach ($c in @($p.clases)) { foreach ($rel in @($porNombre[$c])) { if ($rel) { $semillas += [pscustomobject]@{ Rel = $rel; Por = 'paso' } } } }
+        foreach ($c in @($p.clases)) { foreach ($rel in @($porNombre[$c])) { if ($rel) { $semillas += [pscustomobject]@{ Rel = $rel; Por = 'paso' }; $deLosPasos[$rel] = $true } } }
       }
     }
     if ($d.Existe) { $semillas += [pscustomobject]@{ Rel = $d.Rel; Por = 'definicion' } }
+    $lecturas += [pscustomobject]@{ Job = $j; D = $d; Def = $def; Dudas = $dudas; Semillas = $semillas; Pasos = $pasos; DeLosPasos = $deLosPasos }
+  }
+  $conJob = @{}
+  $mapa = @()
+  foreach ($x in $lecturas) {
+    $ajenas = @{}
+    foreach ($y in $lecturas) {
+      if ($y.Job.nombre -cne $x.Job.nombre) { foreach ($rel in $y.DeLosPasos.Keys) { if (-not $x.DeLosPasos.ContainsKey($rel)) { $ajenas[$rel] = $true } } }
+    }
     $clases = @()
-    foreach ($n in @(Get-ClasesJob $semillas $porNombre $rutas)) {
+    foreach ($n in @(Get-ClasesJob $x.Semillas $porNombre $rutas $ajenas)) {
       $ficha = 'clase-' + (Get-Hash8 $n.Rel)
       $clases += [ordered]@{ clase = $rutas[$n.Rel]; fichero = $n.Rel; ficha = $ficha; por = $n.Por; tieneFicha = (Test-Path -LiteralPath (Join-Path (Join-Path $Datos 'fichas') ($ficha + '.json'))) }
       $conJob[$n.Rel] = $true
     }
     $linea = 0
     $probado = $false
-    if ($def) { $linea = [int]$def.linea; $probado = [bool]$def.probado }
-    $mapa += [ordered]@{ job = $j.nombre; definidoEn = $d.Rel; linea = $linea; probado = $probado; pasos = $pasos; clases = $clases; dudas = $dudas }
+    if ($x.Def) { $linea = [int]$x.Def.linea; $probado = [bool]$x.Def.probado }
+    $mapa += [ordered]@{ job = $x.Job.nombre; definidoEn = $x.D.Rel; linea = $linea; probado = $probado; pasos = $x.Pasos; clases = $clases; dudas = $x.Dudas }
   }
   $sinJob = @($rutas.Keys | Where-Object { -not $conJob.ContainsKey($_) } | Sort-Object)
   return [ordered]@{ jobs = $mapa; sinJob = $sinJob }

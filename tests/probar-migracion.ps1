@@ -1037,5 +1037,81 @@ $Pruebas['40 definicion de un fichero demasiado largo: sin tarea, el job sale si
   Igual 'y con las clases a las que llega desde el fichero' 'JobsConfig' (@($j.clases | ForEach-Object { $_.clase }) -join ' ')
 }
 
+$Pruebas['41 mapa: las clases de los pasos de los otros jobs no entran ni se atraviesan; una clase de paso de dos jobs entra en los dos'] = {
+  $e = Nuevo-Escenario 'ajenas' @()
+  $usa = @('CargaTasklet', 'InformeTasklet', 'CompartidoTasklet', 'ListenerJob')
+  Escribe-Original $e @{
+    JobsConfig = (Jobs-Config @('cargaJob:cargaStep,compartidoStep', 'informeJob:informeStep,compartidoStep') $usa)
+    CargaTasklet = (Clase-Con 'CargaTasklet' @('LectorPropio'))
+    LectorPropio = (Clase-Con 'LectorPropio')
+    InformeTasklet = (Clase-Con 'InformeTasklet' @('EscritorPropio'))
+    EscritorPropio = (Clase-Con 'EscritorPropio')
+    CompartidoTasklet = (Clase-Con 'CompartidoTasklet')
+    ListenerJob = (Clase-Con 'ListenerJob')
+  }
+  $r = Migra $e ((Basicos $e) + @('-Limite', '8'))
+  Igual 'sale con 0' 0 $r.Codigo
+  $m = Mapa $e
+  Comprueba 'hay mapa.json con los dos jobs' ($null -ne $m -and @($m.jobs).Count -eq 2) (Cola $r.Salida)
+  if ($null -eq $m -or @($m.jobs).Count -ne 2) { return }
+  $a = Del-Job $m 'cargaJob'
+  $b = Del-Job $m 'informeJob'
+  Igual 'cargaJob: sus pasos' 'cargaStep: CargaTasklet; compartidoStep: CompartidoTasklet' ((@($a.pasos | ForEach-Object { $_.paso + ': ' + (@($_.clases) -join ' ') })) -join '; ')
+  Igual 'cargaJob: su paso, el compartido, su colaborador, el listener y el fichero que lo define; ni el paso ni el colaborador del otro' 'CargaTasklet CompartidoTasklet JobsConfig LectorPropio ListenerJob' ((@($a.clases | ForEach-Object { $_.clase } | Sort-Object)) -join ' ')
+  Igual 'informeJob: lo mismo, con lo suyo' 'CompartidoTasklet EscritorPropio InformeTasklet JobsConfig ListenerJob' ((@($b.clases | ForEach-Object { $_.clase } | Sort-Object)) -join ' ')
+  Igual 'el fichero que define el job sigue siendo semilla (definicion) y por el llega el listener (referencia)' 'definicion referencia' ((@($a.clases | Where-Object { $_.clase -in @('ListenerJob', 'JobsConfig') } | Sort-Object clase | ForEach-Object { $_.por })) -join ' ')
+  Igual 'sinJob: todas las clases cuelgan de algun job' 0 @($m.sinJob).Count
+}
+
+$Pruebas['42 lenguaje de negocio: solo valen los nombres sencillos; el compuesto o el .java se rechaza, tambien en el orden y el glosario del resumen'] = {
+  $codigo = @'
+$Fuentes = @('Recibo', 'Estado', 'IBAN', 'GestorRecibos', 'SFTPClient', 'ParserCsv') | ForEach-Object { [pscustomobject]@{ BaseName = $_ } }
+function Prueba([string]$Texto) {
+  $m = Test-LenguajeNegocio ([ordered]@{ titulo = $Texto })
+  if ($m) { return ('MAL ' + $m) }
+  return 'BIEN'
+}
+'T1=' + (Prueba 'Recibo con importe minimo')
+'T2=' + (Prueba 'Estado del envio')
+'T3=' + (Prueba 'El IBAN tiene que ser valido')
+'T4=' + (Prueba 'Carga con GestorRecibos')
+'T5=' + (Prueba 'Mira Recibo.java')
+'T6=' + (Prueba 'Lo envia SFTPClient')
+'T7=' + (Prueba 'Lo lee ParserCsv')
+'T8=' + (Prueba 'Mira Inventada.java')
+'T9=' + (Prueba 'Los gestores de recibos y el estado')
+function Resumen([string]$Orden, [string]$Termino, [string]$Definicion) {
+  $dir = Join-Path '{{DIR}}' ('r' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  $o = [ordered]@{ resumen = 'El batch hace cosas.'; orden = @([ordered]@{ job = 'cargaJob'; motivo = $Orden }); glosario = @([ordered]@{ termino = $Termino; definicion = $Definicion }) }
+  [System.IO.File]::WriteAllText((Join-Path $dir '.rescate/tareas/resumen.json'), (ConvertTo-Json -InputObject $o -Depth 5))
+  $t = [pscustomobject]@{ id = 'resumen'; entradas = [pscustomobject]@{ jobs = @('cargaJob') } }
+  $r = Test-Resumen $t $dir
+  if ($r.Ok) { return 'BIEN' }
+  return ('MAL ' + $r.Motivo)
+}
+'R1=' + (Resumen 'Va primero.' 'remesa' 'Un grupo de recibos.')
+'R2=' + (Resumen 'Va primero.' 'recibo' 'El Recibo es un cobro y el Estado dice como va.')
+'R3=' + (Resumen 'Lo hace GestorRecibos.' 'remesa' 'Un grupo de recibos.')
+'R4=' + (Resumen 'Va primero.' 'ParserCsv' 'Un grupo de recibos.')
+'R5=' + (Resumen 'Va primero.' 'remesa' 'Lo prepara SFTPClient.')
+'FIN'
+'@
+  $codigo = $codigo.Replace('{{DIR}}', (Join-Path $Dir 'lenguaje'))
+  $r = En-Biblioteca 'lenguaje' $codigo
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^([TR]\d)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  foreach ($k in @('T1', 'T2', 'T3', 'T9', 'R1', 'R2')) { Igual "$k vale" 'BIEN' $v[$k] }
+  Comprueba 'el titulo con un nombre compuesto no vale y el motivo lo nombra' ($v['T4'] -match '^MAL' -and $v['T4'] -match 'titulo' -and $v['T4'] -match 'GestorRecibos') $v['T4']
+  Comprueba 'un nombre sencillo seguido de .java no vale' ($v['T5'] -match '^MAL' -and $v['T5'] -match 'Recibo\.java') $v['T5']
+  Comprueba 'SFTPClient (mayusculas seguidas) es compuesto' ($v['T6'] -match '^MAL' -and $v['T6'] -match 'SFTPClient') $v['T6']
+  Comprueba 'ParserCsv es compuesto' ($v['T7'] -match '^MAL') $v['T7']
+  Comprueba 'cualquier fichero .java sobra, sea o no del original' ($v['T8'] -match '^MAL' -and $v['T8'] -match 'Inventada\.java') $v['T8']
+  Comprueba 'un compuesto en orden[].motivo invalida el resumen y el motivo dice el campo' ($v['R3'] -match '^MAL' -and $v['R3'] -match 'orden\[0\]\.motivo' -and $v['R3'] -match 'GestorRecibos') $v['R3']
+  Comprueba 'un compuesto en el termino del glosario, igual' ($v['R4'] -match '^MAL' -and $v['R4'] -match 'glosario\[0\]\.termino') $v['R4']
+  Comprueba 'un compuesto en la definicion del glosario, igual' ($v['R5'] -match '^MAL' -and $v['R5'] -match 'glosario\[0\]\.definicion' -and $v['R5'] -match 'SFTPClient') $v['R5']
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
