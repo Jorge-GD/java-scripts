@@ -28,6 +28,14 @@ if ($args -contains 'test') {
     exit 1
   }
 }
+# Para el examen del preflight (E1): con 'test', los tests tambien fallan si algun fichero de src/main contiene TEST_FALLA.
+if ($args -contains 'test') {
+  $rotos = @($javas | Where-Object { ($_.FullName -match '[\\/]src[\\/]main[\\/]') -and ([System.IO.File]::ReadAllText($_.FullName) -match 'TEST_FALLA') })
+  if ($rotos.Count -gt 0) {
+    '[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0'
+    exit 1
+  }
+}
 if ($conJacoco) {
   $csv = Join-Path $raiz 'target/site/jacoco'
   [void](New-Item -ItemType Directory -Path $csv -Force)

@@ -247,14 +247,14 @@ function Get-Completo {
 # ================================ PRUEBAS ================================
 $Pruebas = [ordered]@{}
 
-$Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos'] = {
+$Pruebas['1 completo: nueve bloques con los tres repos y los falsos, sin fallos'] = {
   $r = Get-Completo
   $e = $script:E1
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'deja preflight-resultado.txt' (Test-Path -LiteralPath $r.Ruta) (Cola $r.Salida)
   $l = Lineas-De $r
   Comprueba 'la primera linea es PREFLIGHT java-scripts y el commit (o sin-git)' ($l.Count -gt 0 -and $l[0] -match '^PREFLIGHT java-scripts (sin-git|[0-9a-f]{4,40})$') $l[0]
-  foreach ($n in 1..8) { Comprueba "tiene el bloque $n" ((Cuenta-Lineas $r ("^== $n ")) -gt 0) }
+  foreach ($n in 1..9) { Comprueba "tiene el bloque $n" ((Cuenta-Lineas $r ("^== $n ")) -gt 0) }
   Comprueba 'acaba con == fin' ($l -contains '== fin')
   Igual 'bloques con fallo: ninguno' 'ninguno' (Valor-De $r 'bloques con fallo')
   Comprueba 'dice la duracion' ((Valor-De $r 'duracion') -match '^\d+ min$') (Valor-De $r 'duracion')
@@ -265,7 +265,7 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   Comprueba 'la consola acaba diciendo donde esta el resultado, sin ruta' ($fin.Count -eq 2 -and $fin[0] -ceq 'Resultado en preflight-resultado.txt, junto al script.') ($fin -join ' / ')
   Comprueba 'y si lo copio al portapapeles (si o no)' ($fin.Count -eq 2 -and $fin[1] -cmatch '^Copiado al portapapeles: (si|no)$') ($fin -join ' / ')
   Comprueba 'esas dos lineas no van al fichero' ($r.Fichero -notmatch 'portapapeles' -and $r.Fichero -notmatch 'Resultado en')
-  Comprueba 'y cada bloque acaba con hecho' ((@($r.Salida -split "\r?\n" | Where-Object { $_ -eq 'hecho' }).Count) -eq 8) (Cola $r.Salida)
+  Comprueba 'y cada bloque acaba con hecho' ((@($r.Salida -split "\r?\n" | Where-Object { $_ -eq 'hecho' }).Count) -eq 9) (Cola $r.Salida)
 
   # 1 entorno
   Igual '1: modo de lenguaje' 'FullLanguage' (Valor-De $r 'modo de lenguaje')
@@ -285,7 +285,7 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
 
   # 3 copilot
   $b3 = @(Bloque-De $r '3')
-  foreach ($f in @('-p', '-s', '--allow-all-tools', '--no-ask-user', '--deny-tool', '--model', '--effort', '--reasoning-effort', '--add-dir', '--no-custom-instructions', '--available-tools', '--max-ai-credits')) {
+  foreach ($f in @('-p', '-s', '--allow-all-tools', '--no-ask-user', '--deny-tool', '--model', '--effort', '--reasoning-effort', '--add-dir', '--no-custom-instructions', '--available-tools', '--max-ai-credits', '--usage-output-file')) {
     Igual "3: bandera $f" 'si' (Valor-De $r "bandera $f")
   }
   Igual '3: la ayuda lista modelos' 'si' (Valor-De $r 'ayuda lista modelos')
@@ -343,9 +343,12 @@ $Pruebas['1 completo: ocho bloques con los tres repos y los falsos, sin fallos']
   Igual '8: del mas corto al mas largo que cabe en una tarea' '25 30 55 80 120' ((@($l | Where-Object { $_ -match '^clase \d: (\d+) lineas' } | ForEach-Object { $Matches[1] })) -join ' ')
   Igual '8: original sin cambios' 'si' (Valor-De $r 'original sin cambios')
 
+  # 9 examen de modelos: sin -Modelos no hace nada
+  Igual '9: sin -Modelos' 'sin -Modelos' (@(Bloque-De $r '9') -join ' / ')
+
   # las llamadas que hizo el falso (el preflight borra sus carpetas)
   $ll = @(Llamadas $e.Llamadas)
-  Igual '14 llamadas al modelo: 5 de aptitud, 4 en paralelo y 5 de clases reales' 14 $ll.Count
+  Igual '14 llamadas al modelo: 5 de aptitud, 4 en paralelo y 5 de clases reales (y ninguna del examen)' 14 $ll.Count
   Comprueba 'todas llevan el modelo y --no-custom-instructions' (@($ll | Where-Object { $_.flags -match '--model=modelo-x' -and $_.flags -match '--no-custom-instructions' }).Count -eq 14)
   $apt = @(Llamadas-De $ll 'pf-apt-')
   Comprueba 'aptitud: tres con esfuerzo de lectura, una con esfuerzo alto y una con herramientas limitadas' (@($apt | Where-Object { $_.id -match '^pf-apt-\d$' -and $_.flags -match '--effort=medium' }).Count -eq 3 -and @($apt | Where-Object { $_.id -eq 'pf-apt-alto' -and $_.flags -match '--effort=high' }).Count -eq 1 -and @($apt | Where-Object { $_.flags -match '--available-tools=view,create' }).Count -eq 1) (($apt | ForEach-Object { $_.id + ' ' + $_.flags }) -join ' | ')
@@ -469,11 +472,11 @@ $Pruebas['6 bloque 3: un Copilot que rechaza una bandera sale no en esa y si en 
   $r = Pf $e (Todos $e @('-Solo', '3')) 'rechaza-bandera:--reasoning-effort'
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'bandera --reasoning-effort: no' 'no' (Valor-De $r 'bandera --reasoning-effort')
-  Igual 'las otras 11 dicen si' 11 (Cuenta-Lineas $r '^bandera \S+: si$')
+  Igual 'las otras 12 dicen si' 12 (Cuenta-Lineas $r '^bandera \S+: si$')
   Igual 'una sola dice no' 1 (Cuenta-Lineas $r '^bandera \S+: no$')
   $r2 = Pf $e (Todos $e @('-Solo', '3')) 'rechaza-bandera:-p'
   Igual 'con -p rechazada: -p dice no' 'no' (Valor-De $r2 'bandera -p')
-  Igual 'y las otras 11 si' 11 (Cuenta-Lineas $r2 '^bandera \S+: si$')
+  Igual 'y las otras 12 si' 12 (Cuenta-Lineas $r2 '^bandera \S+: si$')
   Igual 'ninguna sonda llamo a un modelo' 0 @(Llamadas $e.Llamadas).Count
 }
 
@@ -758,6 +761,487 @@ $Pruebas['19 bloques 7 y 8: si fallan, solo el tipo del fallo y el sitio, sin su
   }
   Comprueba 'ni el texto del fallo ni la ruta salen' (($r.Fichero + $r.Salida) -notmatch 'No existe' -and ($r.Fichero + $r.Salida) -notmatch '<LEGACY>')
   Sin-Fugas $r 'sin mensaje'
+}
+
+# ====================== EXAMEN DE MODELOS (bloque 9) ======================
+$MA = 'gpt-6-luna'
+$MB = 'claude-haiku-5.5'
+# Claves pequenas (en el repo van las de verdad) para contar a mano lo que trae cada ficha, y los datos que las aciertan todas.
+$ClavesPeque = '{"L1":[{"tipo":"regla","desde":151,"hasta":154,"nota":"a"},{"tipo":"regla","desde":155,"hasta":158,"nota":"b"},{"tipo":"tabla-lee","desde":33,"hasta":34,"nota":"c"}],"L2":[{"tipo":"regla","desde":108,"hasta":111,"nota":"d"},{"tipo":"regla","desde":113,"hasta":116,"nota":"e"},{"tipo":"tabla-lee","desde":194,"hasta":194,"nota":"f"}]}'
+$DatosPeque = 'L1=152:regla,156:regla,33:tabla-lee;L2=109:regla,114:regla,194:tabla-lee'
+
+function Pon-Claves([string]$Json) {
+  Nueva-Instalacion
+  Escribe $Inst 'preflight/examen/claves.json' $Json
+}
+
+function Restaura-Claves {
+  Nueva-Instalacion
+  Copy-Item -LiteralPath (Join-Path $origen 'preflight/examen/claves.json') -Destination (Join-Path $Inst 'preflight/examen/claves.json') -Force
+}
+
+# Un escenario para el examen: la clase de L2 cabe en un trozo salvo que se pida otra cosa.
+function Nuevo-Examen([string]$Nombre, [hashtable]$Ajustes = @{}) {
+  $a = @{ LineasPorTarea = 300 }
+  foreach ($k in $Ajustes.Keys) { $a[$k] = $Ajustes[$k] }
+  return (Nuevo-Escenario $Nombre $a)
+}
+
+# El bloque 9 con esos modelos y esfuerzos (separados por comas).
+function Pf-Examen($E, [string]$Modelos, [string]$Esfuerzos = '', [string]$Guion = '', $Extra = @{}, [string[]]$Mas = @()) {
+  $a = @('-Solo', '9', '-Modelos', $Modelos)
+  if ($Esfuerzos) { $a += @('-Esfuerzos', $Esfuerzos) }
+  return (Pf $E (Todos $E ($a + $Mas)) $Guion $Extra)
+}
+
+function Examen-De($R) { return @(Bloque-De $R '9') }
+
+# Las lineas de una combinacion: desde su cabecera hasta la siguiente cabecera, los campos de uso o la recomendacion.
+function Combinacion-De($R, [string]$Modelo, [string]$Esfuerzo) {
+  $res = @()
+  $dentro = $false
+  foreach ($l in (Examen-De $R)) {
+    if ($l -match '^(modelo .+ \| esfuerzo .+|campos de uso: .*|recomendado: .*)$') { $dentro = ($l -ceq "modelo $Modelo | esfuerzo $Esfuerzo") }
+    if ($dentro) { $res += $l }
+  }
+  return $res
+}
+
+function Linea-Con($Lineas, [string]$Prefijo) {
+  foreach ($l in $Lineas) { if ($l.StartsWith($Prefijo)) { return $l } }
+  return ''
+}
+
+# Los rangos de lineas en que el sistema trocea GestorRecibos.java con ese tamano.
+function Trozos-De([int]$Por) {
+  $n = @([System.IO.File]::ReadAllLines((Join-Path $origen 'preflight/examen/GestorRecibos.java'))).Count
+  $res = @()
+  for ($d = 1; $d -le $n; $d += $Por) { $res += ("$d-" + [math]::Min($n, $d + $Por - 1)) }
+  return $res
+}
+
+$Pruebas['20 bloque 9 sin -Modelos: sin -Modelos y ninguna llamada; los bloques 4, 5 y 8 usan el primer modelo de la lista'] = {
+  $e = Nuevo-Examen 'examen-sin'
+  $r = Pf $e (Todos $e @('-Solo', '9'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el bloque 9 dice sin -Modelos y nada mas' 'sin -Modelos' ((Examen-De $r) -join ' / ')
+  Igual 'ninguna llamada' 0 @(Llamadas $e.Llamadas).Count
+  Comprueba 'la consola no anuncia llamadas' ($r.Salida -notmatch 'llamadas, hasta')
+  $s = Pf $e (Todos $e @('-Solo', '9', '-SinCopilot', '-Modelos', "$MA,$MB"))
+  Igual '-SinCopilot: el bloque 9 queda saltado' 'saltado: -SinCopilot' ((Examen-De $s) -join ' / ')
+  Igual '-SinCopilot: ninguna llamada' 0 @(Llamadas $e.Llamadas).Count
+  # sin -Modelo el bloque 4 usa el primero de -Modelos; con -Modelo manda este
+  $m = Pf $e (Todos $e @('-Solo', '4', '-Modelos', "$MA,$MB"))
+  Igual 'sin -Modelo: el bloque 4 usa el primer modelo de -Modelos' $MA (Valor-De $m 'modelo')
+  $ll = @(Llamadas $e.Llamadas)
+  Comprueba '... y sus 5 llamadas llevan --model=ese' ($ll.Count -eq 5 -and @($ll | Where-Object { $_.flags -match ('--model=' + [regex]::Escape($MA) + '( |$)') }).Count -eq 5) (($ll | ForEach-Object { $_.flags }) -join ' | ')
+  $m2 = Pf $e (Todos $e @('-Solo', '4', '-Modelo', 'modelo-x', '-Modelos', "$MA,$MB"))
+  Igual 'con -Modelo manda -Modelo' 'modelo-x' (Valor-De $m2 'modelo')
+}
+
+$Pruebas['21 bloque 9, dos modelos y dos esfuerzos: las llamadas justas, en serie y con el modelo y el esfuerzo de cada una'] = {
+  $e = Nuevo-Examen 'examen-dos' @{ LineasPorTarea = 100 }
+  $rangos = @(Trozos-De 100)
+  $t = $rangos.Count
+  $r = Pf-Examen $e "$MA,$MB" 'medium,max'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin bloques con fallo' 'ninguno' (Valor-De $r 'bloques con fallo')
+  $ll = @(Llamadas $e.Llamadas)
+  $por = 1 + $t + 2
+  Igual "4 combinaciones de $por llamadas (L1, $t trozos de L2, E1 y E2)" (4 * $por) $ll.Count
+  $esperadas = @()
+  foreach ($m in @($MA, $MB)) {
+    foreach ($f in @('medium', 'max')) {
+      $esperadas += "${m}:${f}:L1"
+      for ($i = 1; $i -le $t; $i++) { $esperadas += "${m}:${f}:L2-$i" }
+      $esperadas += "${m}:${f}:E1"
+      $esperadas += "${m}:${f}:E2"
+    }
+  }
+  Igual 'en este orden, cada una con la clave modelo:esfuerzo:prueba que toca' ($esperadas -join ' ') ((@($ll | ForEach-Object { $_.clave })) -join ' ')
+  Igual 'nunca dos a la vez' 1 (Max-Simultaneas $ll)
+  $mal = @($ll | Where-Object { $p = $_.clave -split ':'; -not ($_.flags -match ('--model=' + [regex]::Escape($p[0]) + '( |$)') -and $_.flags -match ('--effort=' + $p[1] + '( |$)')) })
+  Comprueba 'cada llamada lleva --model y --effort de su clave' ($mal.Count -eq 0) (($mal | ForEach-Object { $_.clave + ' ' + $_.flags }) -join ' | ')
+  Comprueba 'y la bandera de uso (la sonda dice que existe)' (@($ll | Where-Object { $_.uso -eq 'si' }).Count -eq $ll.Count)
+  $l2 = @($ll | Where-Object { $_.clave -like "${MA}:medium:L2-*" } | ForEach-Object { $_.lineas })
+  Igual "L2 se trocea como el sistema, de 100 en 100 lineas ($t trozos)" ($rangos -join ' ') ($l2 -join ' ')
+  $l1 = @($ll | Where-Object { $_.clave -eq "${MA}:medium:L1" })
+  Comprueba 'L1 es una sola llamada con la clase entera' ($l1.Count -eq 1 -and $l1[0].lineas -match '^1-\d+$') ($l1 | ForEach-Object { $_.lineas })
+  $b = Examen-De $r
+  Igual 'la primera linea es la bandera de uso' 'bandera de uso: si' $b[0]
+  Igual 'cuatro cabeceras de combinacion' 4 (@($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo \w+$' }).Count)
+  Igual 'campos de uso, una sola vez y con los nombres de las hojas' 'campos de uso: inputTokens, outputTokens, cacheReadTokens, reasoningTokens' (Linea-Con $b 'campos de uso: ')
+  Igual '... y una sola linea de campos de uso' 1 (@($b | Where-Object { $_ -match '^campos de uso: ' }).Count)
+  $x = @(Combinacion-De $r $MA 'medium')
+  Comprueba 'L1: json, citas, clave, segundos y creditos' ((Linea-Con $x 'L1: ') -match '^L1: json si \| citas 2 de 2 \| clave \d+ de 12 \| \d+ s \| creditos 1,000$') (Linea-Con $x 'L1: ')
+  $citas = 2 * $t
+  Comprueba "L2: los $t trozos sumados" ((Linea-Con $x 'L2: ') -match ('^L2: json si \| citas ' + $citas + ' de ' + $citas + ' \| clave \d+ de 24 \| \d+ s \| creditos ' + $t + ',000$')) (Linea-Con $x 'L2: ')
+  Comprueba 'E1: pasa si, segundos y creditos' ((Linea-Con $x 'E1: ') -match '^E1: pasa si \| \d+ s \| creditos 1,000$') (Linea-Con $x 'E1: ')
+  Comprueba 'E2: pasa si, segundos y creditos' ((Linea-Con $x 'E2: ') -match '^E2: pasa si \| \d+ s \| creditos 1,000$') (Linea-Con $x 'E2: ')
+  $creditos = ($t + 3).ToString() + ',000'
+  $entrada = 1000 * ($t + 3)
+  $salida = 100 * ($t + 3)
+  Comprueba 'total: clave de 36, arreglos 2 de 2, segundos, creditos y tokens' ((Linea-Con $x 'total: ') -match ('^total: clave \d+ de 36 \| arreglos 2 de 2 \| \d+ s \| creditos ' + $creditos + ' \| tokens entrada ' + $entrada + ' salida ' + $salida + '$')) (Linea-Con $x 'total: ')
+  Comprueba 'las cuatro combinaciones llevan su total' (@($b | Where-Object { $_ -match '^total: ' }).Count -eq 4)
+  # los datos por defecto del falso no aciertan la clave: ninguna cumple
+  Igual 'ninguna cumple' 'recomendado: ninguno cumple' (Linea-Con $b 'recomendado: ')
+  Comprueba 'y dice la mejor' ((Linea-Con $b 'la mejor: ') -match ('^la mejor: ' + [regex]::Escape($MA) + ' con esfuerzo \w+ \(clave \d+ de 36, arreglos 2 de 2\)$')) (Linea-Con $b 'la mejor: ')
+  Igual 'todo con uno: no' 'todo con uno: no' (Linea-Con $b 'todo con uno: ')
+  $llamadas = 4 * $por
+  $min = 2 * $llamadas
+  Comprueba 'la consola cuenta las llamadas y los minutos' ($r.Salida -match ('(?m)^' + $llamadas + ' llamadas, hasta ' + $min + ' min\s*$') -and $r.Salida -match ('== 9 examen de modelos \(hasta ' + $min + ' min\)\.\.\.')) (Cola $r.Salida)
+  Sin-Fugas $r 'examen dos'
+}
+
+$Pruebas['22 bloque 9, clave: cuenta los datos esperados con cita probada, tipo equivalente y linea cerca; uno por dato'] = {
+  $e = Nuevo-Examen 'examen-clave'
+  try {
+    # a) 5 de 6: el sexto dato lleva la cita inventada y no cuenta
+    $kA = '{"L1":[{"tipo":"regla","desde":151,"hasta":154,"nota":"a"},{"tipo":"regla","desde":155,"hasta":158,"nota":"b"},{"tipo":"regla","desde":131,"hasta":133,"nota":"c"},{"tipo":"tabla-lee","desde":33,"hasta":34,"nota":"d"},{"tipo":"tabla-escribe","desde":90,"hasta":91,"nota":"e"},{"tipo":"salida-fichero","desde":74,"hasta":75,"nota":"f"}],"L2":[{"tipo":"regla","desde":108,"hasta":111,"nota":"g"},{"tipo":"regla","desde":113,"hasta":116,"nota":"h"}]}'
+    Pon-Claves $kA
+    $a = Pf-Examen $e $MA 'medium' '' @{ RESCATE_EXAMEN_DATOS = 'L1=152:regla,156:regla,132:regla,33:tabla-lee,90:tabla-escribe,-75:salida-fichero;L2=109:regla,114:regla' } @('-SinMaven')
+    $xa = @(Combinacion-De $a $MA 'medium')
+    Comprueba 'a) L1: trae 6 datos, 5 con cita probada y acierta 5 de 6' ((Linea-Con $xa 'L1: ') -match '^L1: json si \| citas 5 de 6 \| clave 5 de 6 \|') (Linea-Con $xa 'L1: ')
+    Comprueba 'a) L2: 2 de 2' ((Linea-Con $xa 'L2: ') -match '^L2: json si \| citas 2 de 2 \| clave 2 de 2 \|') (Linea-Con $xa 'L2: ')
+    Comprueba 'a) total: clave 7 de 8' ((Linea-Con $xa 'total: ') -match '^total: clave 7 de 8 \|') (Linea-Con $xa 'total: ')
+    Sin-Fugas $a 'clave a'
+    # b) tipo distinto, linea a mas de CitaCerca (3), en el limite, y regla = error
+    $kB = '{"L1":[{"tipo":"tabla-escribe","desde":184,"hasta":184,"nota":"a"},{"tipo":"tabla-lee","desde":33,"hasta":34,"nota":"b"},{"tipo":"tabla-lee","desde":139,"hasta":139,"nota":"c"},{"tipo":"tabla-escribe","desde":90,"hasta":91,"nota":"d"},{"tipo":"regla","desde":151,"hasta":154,"nota":"e"}],"L2":[{"tipo":"regla","desde":108,"hasta":111,"nota":"f"}]}'
+    Pon-Claves $kB
+    # 187 es hasta+3 (cuenta), 87 es desde-3 (cuenta), 142 es hasta+3 (cuenta), 29 es desde-4 (no) y el 34 con otro tipo (no); 152 como error vale por una regla
+    $b = Pf-Examen $e $MA 'medium' '' @{ RESCATE_EXAMEN_DATOS = 'L1=187:tabla-escribe,29:tabla-lee,34:tabla-escribe,142:tabla-lee,87:tabla-escribe,152:error;L2=109:regla' } @('-SinMaven')
+    $xb = @(Combinacion-De $b $MA 'medium')
+    Comprueba 'b) L1: acierta 4 de 5 (a 3 lineas vale, a 4 no, otro tipo no, error vale por regla)' ((Linea-Con $xb 'L1: ') -match '^L1: json si \| citas 6 de 6 \| clave 4 de 5 \|') (Linea-Con $xb 'L1: ')
+    # c) un dato vale para una sola condicion, y se reparten bien: el 153 vale para las dos reglas y el 150 solo para la primera
+    $kC = '{"L1":[{"tipo":"regla","desde":151,"hasta":154,"nota":"a"},{"tipo":"regla","desde":155,"hasta":158,"nota":"b"}],"L2":[{"tipo":"regla","desde":108,"hasta":111,"nota":"c"}]}'
+    Pon-Claves $kC
+    $c = Pf-Examen $e $MA 'medium' '' @{ RESCATE_EXAMEN_DATOS = 'L1=153:regla,150:regla;L2=109:regla,110:regla' } @('-SinMaven')
+    $xc = @(Combinacion-De $c $MA 'medium')
+    Comprueba 'c) L1: el reparto bueno acierta las 2 (153 para la segunda y 150 para la primera)' ((Linea-Con $xc 'L1: ') -match '^L1: json si \| citas 2 de 2 \| clave 2 de 2 \|') (Linea-Con $xc 'L1: ')
+    Comprueba 'c) L2: dos datos para una sola condicion cuentan 1 de 1' ((Linea-Con $xc 'L2: ') -match '^L2: json si \| citas 2 de 2 \| clave 1 de 1 \|') (Linea-Con $xc 'L2: ')
+  }
+  finally { Restaura-Claves }
+}
+
+$Pruebas['23 bloque 9, E1 (dos errores de compilacion): pasa o el motivo, del vocabulario cerrado'] = {
+  $e = Nuevo-Examen 'examen-e1' @{ SegundosPorLlamada = 10 }
+  # tres esfuerzos = tres combinaciones: el falso arregla, deja un NO_COMPILA o toca un test
+  $a = Pf-Examen $e $MA 'low,medium,high' 'exa-e1-no-compila:medium:E1$;exa-e1-toca-test:high:E1$'
+  Igual 'a) sale con 0' 0 $a.Codigo
+  Igual 'a) low: el falso arregla y pasa' 'E1: pasa si' ((Linea-Con (Combinacion-De $a $MA 'low') 'E1: ') -replace ' \|.*$', '')
+  Igual 'a) medium: no compila' 'E1: pasa no (no compila)' ((Linea-Con (Combinacion-De $a $MA 'medium') 'E1: ') -replace ' \|.*$', '')
+  Igual 'a) high: toca un test' 'E1: pasa no (toco tests)' ((Linea-Con (Combinacion-De $a $MA 'high') 'E1: ') -replace ' \|.*$', '')
+  Comprueba 'a) la linea de E1 con fallo sigue llevando segundos y creditos' ((Linea-Con (Combinacion-De $a $MA 'medium') 'E1: ') -match '^E1: pasa no \(no compila\) \| \d+ s \| creditos 1,000$') (Linea-Con (Combinacion-De $a $MA 'medium') 'E1: ')
+  Comprueba 'a) el total cuenta los arreglos que pasan (E1 y E2): 2 de 2, 1 de 2 y 1 de 2' ((Linea-Con (Combinacion-De $a $MA 'low') 'total: ') -match '\| arreglos 2 de 2 \|' -and (Linea-Con (Combinacion-De $a $MA 'medium') 'total: ') -match '\| arreglos 1 de 2 \|' -and (Linea-Con (Combinacion-De $a $MA 'high') 'total: ') -match '\| arreglos 1 de 2 \|')
+  Sin-Fugas $a 'e1 a'
+  # el resto del vocabulario: test que falla, toca el pom, sin cambios, fallo de Copilot y tiempo agotado
+  $guion = 'exa-e1-test-falla:low:E1$;exa-e1-toca-pom:medium:E1$;exa-e1-nada:high:E1$;exa-error-privado:xhigh:E1$;exa-espera-14:max:E1$'
+  $b = Pf-Examen $e $MA 'low,medium,high,xhigh,max' $guion @{ RESCATE_ERROR_TEXTO = 'Error: sin sesion de zorbalex en PCZORBA' }
+  $motivos = [ordered]@{ low = 'test falla'; medium = 'toco fuera de src/main'; high = 'sin cambios'; xhigh = 'fallo de copilot'; max = 'tiempo' }
+  foreach ($k in $motivos.Keys) {
+    Igual "b) $k" ('E1: pasa no (' + $motivos[$k] + ')') ((Linea-Con (Combinacion-De $b $MA $k) 'E1: ') -replace ' \|.*$', '')
+  }
+  Sin-Fugas $b 'e1 b'
+}
+
+$Pruebas['24 bloque 9, E2 (Javadoc sin tocar codigo): pasa o el motivo, del vocabulario cerrado'] = {
+  $e = Nuevo-Examen 'examen-e2'
+  $a = Pf-Examen $e $MA 'low,medium,high,xhigh' 'exa-e2-codigo:medium:E2$;exa-e2-falta:high:E2$;exa-e2-nada:xhigh:E2$'
+  Igual 'sale con 0' 0 $a.Codigo
+  Igual 'low: Javadoc bien' 'E2: pasa si' ((Linea-Con (Combinacion-De $a $MA 'low') 'E2: ') -replace ' \|.*$', '')
+  Igual 'medium: cambia una linea de codigo' 'E2: pasa no (cambio codigo)' ((Linea-Con (Combinacion-De $a $MA 'medium') 'E2: ') -replace ' \|.*$', '')
+  Igual 'high: falta el Javadoc de un metodo' 'E2: pasa no (sin javadoc)' ((Linea-Con (Combinacion-De $a $MA 'high') 'E2: ') -replace ' \|.*$', '')
+  Igual 'xhigh: no cambia nada' 'E2: pasa no (sin cambios)' ((Linea-Con (Combinacion-De $a $MA 'xhigh') 'E2: ') -replace ' \|.*$', '')
+  Comprueba 'las pruebas E1 de las cuatro pasan' (@(Examen-De $a | Where-Object { $_ -match '^E1: pasa si \|' }).Count -eq 4)
+  Sin-Fugas $a 'e2'
+}
+
+$Pruebas['25 bloque 9, gasto: creditos y tokens del fichero de uso; sin fichero, desconocido; sin bandera, la llamada no la lleva'] = {
+  $e = Nuevo-Examen 'examen-gasto'
+  try {
+    Pon-Claves $ClavesPeque
+    $d = @{ RESCATE_EXAMEN_DATOS = $DatosPeque }
+    # a) valores conocidos
+    $d['RESCATE_EXAMEN_USO'] = 'L1$=412000000,1000,100;L2=655000000,2000,200;E1$=1204000000,3000,300;E2$=980000000,4000,400'
+    $a = Pf-Examen $e $MA 'medium' '' $d
+    $xa = @(Combinacion-De $a $MA 'medium')
+    Comprueba 'a) L1 con 0,412 creditos' ((Linea-Con $xa 'L1: ') -match '\| creditos 0,412$') (Linea-Con $xa 'L1: ')
+    Comprueba 'a) L2 con 0,655' ((Linea-Con $xa 'L2: ') -match '\| creditos 0,655$') (Linea-Con $xa 'L2: ')
+    Comprueba 'a) E1 con 1,204' ((Linea-Con $xa 'E1: ') -match '\| creditos 1,204$') (Linea-Con $xa 'E1: ')
+    Comprueba 'a) E2 con 0,980' ((Linea-Con $xa 'E2: ') -match '\| creditos 0,980$') (Linea-Con $xa 'E2: ')
+    Comprueba 'a) el total suma creditos (3,251) y tokens (entrada 10000, salida 1000)' ((Linea-Con $xa 'total: ') -match '\| creditos 3,251 \| tokens entrada 10000 salida 1000$') (Linea-Con $xa 'total: ')
+    Igual 'a) campos de uso: solo las hojas de modelMetrics, con nombres' 'campos de uso: inputTokens, outputTokens, cacheReadTokens, reasoningTokens' (Linea-Con (Examen-De $a) 'campos de uso: ')
+    Igual 'a) ninguna llamada pierde el fichero de uso: todas llevan la bandera' 4 @(Llamadas $e.Llamadas | Where-Object { $_.uso -eq 'si' }).Count
+    # b) sin fichero de uso y c) con un fichero que no es JSON: desconocido, nunca 0
+    foreach ($caso in @(@('b) sin fichero', '-'), @('c) fichero ilegible', 'basura'))) {
+      $d['RESCATE_EXAMEN_USO'] = '.=' + $caso[1]
+      $r = Pf-Examen $e $MA 'medium' '' $d
+      $x = @(Combinacion-De $r $MA 'medium')
+      foreach ($p in @('L1', 'L2', 'E1', 'E2')) { Comprueba ($caso[0] + ': ' + $p + ' con creditos desconocido') ((Linea-Con $x ($p + ': ')) -match '\| creditos desconocido$') (Linea-Con $x ($p + ': ')) }
+      Comprueba ($caso[0] + ': el total dice desconocido, no 0') ((Linea-Con $x 'total: ') -match '\| creditos desconocido \| tokens desconocido$') (Linea-Con $x 'total: ')
+      Igual ($caso[0] + ': campos de uso ninguno') 'campos de uso: ninguno' (Linea-Con (Examen-De $r) 'campos de uso: ')
+      Comprueba ($caso[0] + ': el bloque no suma ceros') (-not ((Examen-De $r) -join "`n").Contains('creditos 0,000')) ((Examen-De $r) -join ' / ')
+    }
+    # d) la bandera no existe: la llamada no la lleva y no hay creditos
+    $d['RESCATE_EXAMEN_USO'] = ''
+    $s = Pf-Examen $e $MA 'medium' 'rechaza-bandera:--usage-output-file' $d
+    Igual 'd) bandera de uso: no' 'bandera de uso: no' ((Examen-De $s)[0])
+    $ll = @(Llamadas $e.Llamadas)
+    Comprueba 'd) las 4 llamadas se hacen y ninguna lleva la bandera' ($ll.Count -eq 4 -and @($ll | Where-Object { $_.uso -eq 'no' }).Count -eq 4) (($ll | ForEach-Object { $_.uso }) -join ' ')
+    Comprueba 'd) y los creditos salen desconocidos' ((Linea-Con (Combinacion-De $s $MA 'medium') 'total: ') -match '\| creditos desconocido \|')
+  }
+  finally { Restaura-Claves }
+  # e) el lector de comun.ps1 con ficheros a mano
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $origen 'comun.ps1'), [ref]$null, [ref]$null)
+  $fu = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $_.Name -eq 'Read-Uso' })
+  Comprueba 'e) comun.ps1 define Read-Uso' ($fu.Count -eq 1)
+  if ($fu.Count -eq 1) {
+    . ([scriptblock]::Create($fu[0].Extent.Text))
+    $car = Join-Path $Dir 'uso-lector'
+    [void](New-Item -ItemType Directory -Path $car -Force)
+    $lleno = '{"totalPremiumRequestCost":2.5,"totalUserRequests":1,"totalNanoAiu":3251000000,"totalApiDurationMs":4567,"modelMetrics":{"gpt-6-luna":{"usage":{"inputTokens":1000,"OutputTokens":200,"cacheReadTokens":30,"reasoningTokens":4},"requests":{"count":3}},"otro":{"inputTokens":10,"cacheWriteTokens":5,"outputTokens":"mucho","reasoningOutputTokens":2}},"lastCallInputTokens":99,"lastCallOutputTokens":98}'
+    Escribe $car 'lleno.json' $lleno
+    $u = Read-Uso (Join-Path $car 'lleno.json')
+    Igual 'e) creditos = totalNanoAiu / 1e9' 3.251 ([double]$u.Creditos)
+    Igual 'e) NanoAiu' 3251000000 ([long]$u.NanoAiu)
+    Igual 'e) Premium' 2.5 ([double]$u.Premium)
+    Igual 'e) MsApi' 4567 ([long]$u.MsApi)
+    Igual 'e) tokens de entrada: input.*tokens dentro de modelMetrics, de todos los modelos y sin distinguir mayusculas' 1010 ([long]$u.TokensEntrada)
+    Igual 'e) tokens de salida (un valor que no es numero no cuenta y OutputTokens si)' 200 ([long]$u.TokensSalida)
+    Igual 'e) tokens de cache (cacheRead y cacheWrite)' 35 ([long]$u.TokensCache)
+    Igual 'e) tokens de razonamiento (reasoningTokens y reasoningOutputTokens, sin contarlos tambien como salida)' 6 ([long]$u.TokensRazonamiento)
+    Comprueba 'e) las hojas de fuera de modelMetrics (lastCall...) no cuentan: la entrada no es 1109' ([long]$u.TokensEntrada -ne 1109)
+    $esperados = @('OutputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'count', 'inputTokens', 'reasoningOutputTokens', 'reasoningTokens')
+    Comprueba 'e) los campos son los nombres de las hojas numericas de modelMetrics, cada uno una vez' (@($u.Campos).Count -eq $esperados.Count -and @($u.Campos | Where-Object { $esperados -ccontains $_ }).Count -eq $esperados.Count) ((@($u.Campos) -join ','))
+    $u2 = Read-Uso (Join-Path $car 'no-existe.json')
+    Comprueba 'e) sin fichero: todo null' ($null -eq $u2.Creditos -and $null -eq $u2.NanoAiu -and $null -eq $u2.Premium -and $null -eq $u2.MsApi -and $null -eq $u2.TokensEntrada -and $null -eq $u2.TokensSalida -and $null -eq $u2.TokensCache -and $null -eq $u2.TokensRazonamiento)
+    Escribe $car 'roto.json' '{"totalNanoAiu": 12, '
+    $u3 = Read-Uso (Join-Path $car 'roto.json')
+    Comprueba 'e) JSON ilegible: todo null' ($null -eq $u3.Creditos -and $null -eq $u3.NanoAiu -and $null -eq $u3.TokensEntrada)
+    Escribe $car 'vacio.json' '{"totalPremiumRequestCost":0,"totalUserRequests":0,"totalNanoAiu":0,"totalApiDurationMs":0,"modelMetrics":{},"agentMetrics":{},"lastCallInputTokens":0}'
+    $u4 = Read-Uso (Join-Path $car 'vacio.json')
+    Comprueba 'e) la cuota agotada: 0 creditos de verdad, y tokens sin dato (null) porque no hay hojas' ($u4.Creditos -eq 0 -and $null -ne $u4.Creditos -and $null -eq $u4.TokensEntrada -and $null -eq $u4.TokensSalida)
+    Escribe $car 'sin-total.json' '{"modelMetrics":{"m":{"inputTokens":5}}}'
+    $u5 = Read-Uso (Join-Path $car 'sin-total.json')
+    Comprueba 'e) sin totalNanoAiu: creditos null (no 0) pero los tokens salen' ($null -eq $u5.Creditos -and [long]$u5.TokensEntrada -eq 5)
+  }
+}
+
+$Pruebas['26 bloque 9, recomendacion: regla fija (menos creditos, si no menos segundos, y solo entre las que cumplen)'] = {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
+  $todas = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))
+  foreach ($nombre in @('Format-Creditos', 'Test-Cumple', 'Get-Recomendacion')) {
+    $f = @($todas | Where-Object { $_.Name -eq $nombre })
+    Comprueba "preflight.ps1 define $nombre" ($f.Count -eq 1)
+    if ($f.Count -eq 1) { . ([scriptblock]::Create($f[0].Extent.Text)) }
+  }
+  if (@($todas | Where-Object { $_.Name -eq 'Get-Recomendacion' }).Count -eq 1) {
+    # modelo, esfuerzo, clave X de Y, citas X de Y, arreglos X de Y, creditos, segundos, lectura valida
+    function Combo([string]$M, [string]$E, [int]$Cl, [int]$ClDe, [int]$Ci, [int]$CiDe, [int]$Ar, [int]$ArDe, $Cred, [int]$Seg, [bool]$Lec = $true) {
+      return [pscustomobject]@{ Modelo = $M; Esfuerzo = $E; LecturaValida = $Lec; Clave = $Cl; ClaveTotal = $ClDe; Citas = $Ci; Datos = $CiDe; Arreglos = $Ar; Intentados = $ArDe; Creditos = $Cred; Segundos = $Seg }
+    }
+    $buena = @(36, 36, 20, 20, 2, 2)
+    # 1) dos cumplen: la de menos creditos
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 3.251 100
+    $b = Combo 'B' 'max' 36 36 20 20 2 2 5.870 50
+    $l = @(Get-Recomendacion @($b, $a))
+    Igual '1) dos cumplen: la de menos creditos, aunque sea mas lenta' 'recomendado: A con esfuerzo medium | motivo: cumple y es la mas barata (3,251 creditos; la siguiente, 5,870) | todo con uno: si' ($l -join ' | ')
+    # 2) sin creditos: la mas rapida
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 $null 100
+    $b = Combo 'B' 'medium' 36 36 20 20 2 2 $null 50
+    $l = @(Get-Recomendacion @($a, $b))
+    Igual '2) sin creditos: la mas rapida' 'recomendado: B con esfuerzo medium | motivo: cumple y es la mas rapida (sin dato de creditos) | todo con uno: si' ($l -join ' | ')
+    # 2b) a una le falta el dato: no se pueden comparar creditos
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 1.0 100
+    $b = Combo 'B' 'medium' 36 36 20 20 2 2 $null 50
+    $l = @(Get-Recomendacion @($a, $b))
+    Igual '2b) a una le falta el dato de creditos: la mas rapida' 'recomendado: B con esfuerzo medium | motivo: cumple y es la mas rapida (sin dato de creditos) | todo con uno: si' ($l -join ' | ')
+    # 3) empatan en creditos: la mas rapida
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 3.251 100
+    $b = Combo 'B' 'medium' 36 36 20 20 2 2 3.251 50
+    $l = @(Get-Recomendacion @($a, $b))
+    Igual '3) empatan en creditos: la mas rapida' 'recomendado: B con esfuerzo medium | motivo: cumple y es la mas rapida (empatan en creditos: 3,251) | todo con uno: si' ($l -join ' | ')
+    # 4) una sola cumple
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 3.251 100
+    $b = Combo 'B' 'medium' 10 36 20 20 2 2 1.0 10
+    $l = @(Get-Recomendacion @($b, $a))
+    Igual '4) una sola cumple' 'recomendado: A con esfuerzo medium | motivo: cumple y es la unica que cumple (3,251 creditos) | todo con uno: si' ($l -join ' | ')
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 $null 100
+    $l = @(Get-Recomendacion @($a))
+    Igual '4b) una sola y sin creditos' 'recomendado: A con esfuerzo medium | motivo: cumple y es la unica que cumple (sin dato de creditos) | todo con uno: si' ($l -join ' | ')
+    # 5) ninguna cumple: la mejor por arreglos que pasan y despues por clave
+    $a = Combo 'A' 'medium' 20 36 20 20 2 2 3.0 100
+    $b = Combo 'B' 'max' 35 36 20 20 1 2 1.0 10
+    $l = @(Get-Recomendacion @($b, $a))
+    Igual '5) ninguna cumple: la mejor, por arreglos que pasan antes que por clave' 'recomendado: ninguno cumple | la mejor: A con esfuerzo medium (clave 20 de 36, arreglos 2 de 2) | todo con uno: no' ($l -join ' | ')
+    $a = Combo 'A' 'medium' 20 36 20 20 2 2 3.0 100
+    $b = Combo 'B' 'max' 30 36 20 20 2 2 1.0 10
+    $l = @(Get-Recomendacion @($a, $b))
+    Igual '5b) con los mismos arreglos, la de mas clave' 'recomendado: ninguno cumple | la mejor: B con esfuerzo max (clave 30 de 36, arreglos 2 de 2) | todo con uno: no' ($l -join ' | ')
+    # 6) la mas barata falla un arreglo: no se recomienda
+    $a = Combo 'A' 'medium' 36 36 20 20 1 2 0.5 10
+    $b = Combo 'B' 'medium' 36 36 20 20 2 2 5.870 90
+    $l = @(Get-Recomendacion @($a, $b))
+    Igual '6) la mas barata falla un arreglo: se recomienda la otra' 'recomendado: B con esfuerzo medium | motivo: cumple y es la unica que cumple (5,870 creditos) | todo con uno: si' ($l -join ' | ')
+    # 7) lectura no valida, citas bajas y el limite del 90 %
+    $a = Combo 'A' 'medium' 36 36 20 20 2 2 0.5 10 $false
+    $b = Combo 'B' 'medium' 36 36 17 20 2 2 0.6 10
+    $c = Combo 'C' 'medium' 9 10 18 20 2 2 9.0 10
+    $l = @(Get-Recomendacion @($a, $b, $c))
+    Igual '7) lectura no valida y citas al 85 % no cumplen; clave y citas justo al 90 % si' 'recomendado: C con esfuerzo medium | motivo: cumple y es la unica que cumple (9,000 creditos) | todo con uno: si' ($l -join ' | ')
+    $d = Combo 'D' 'medium' 8 9 18 20 2 2 0.1 10
+    $l = @(Get-Recomendacion @($d))
+    Igual '7b) clave 8 de 9 (88,9 %) no cumple' 'recomendado: ninguno cumple' ($l[0])
+    $e0 = Combo 'E' 'medium' 0 0 0 0 2 2 0.1 10
+    $l = @(Get-Recomendacion @($e0))
+    Igual '7c) sin datos ni clave no cumple' 'recomendado: ninguno cumple' ($l[0])
+    # 8) solo lecturas (sin Maven): se recomienda, pero no se sabe si vale para todo
+    $a = Combo 'A' 'medium' 36 36 20 20 0 0 3.0 10
+    $l = @(Get-Recomendacion @($a))
+    Igual '8) sin arreglos: recomienda y dice sin dato de arreglos' 'recomendado: A con esfuerzo medium | motivo: cumple y es la unica que cumple (3,000 creditos) | todo con uno: sin dato de arreglos' ($l -join ' | ')
+    # 9) nada que comparar
+    $l = @(Get-Recomendacion @())
+    Igual '9) sin combinaciones' 'recomendado: sin datos' ($l -join ' | ')
+  }
+  # extremo a extremo con el falso
+  $e = Nuevo-Examen 'examen-reco'
+  try {
+    Pon-Claves $ClavesPeque
+    $d = @{ RESCATE_EXAMEN_DATOS = $DatosPeque }
+    # el B (claude) es mas barato pero su E1 no compila: se recomienda el A
+    $d['RESCATE_EXAMEN_USO'] = '^gpt=2000000000,1,1;^claude=1000000000,1,1'
+    $r1 = Pf-Examen $e "$MA,$MB" 'medium' 'exa-e1-no-compila:^claude.*:E1$' $d
+    $b1 = Examen-De $r1
+    Igual 'e2e 1) el mas barato falla un arreglo: no se recomienda' "recomendado: $MA con esfuerzo medium" (Linea-Con $b1 'recomendado: ')
+    Igual 'e2e 1) y es la unica que cumple' 'motivo: cumple y es la unica que cumple (8,000 creditos)' (Linea-Con $b1 'motivo: ')
+    Igual 'e2e 1) todo con uno: si' 'todo con uno: si' (Linea-Con $b1 'todo con uno: ')
+    Comprueba 'e2e 1) la fila de B dice que no compila' ((Linea-Con (Combinacion-De $r1 $MB 'medium') 'E1: ') -match '^E1: pasa no \(no compila\)')
+    # los dos cumplen y A cuesta la mitad
+    $d['RESCATE_EXAMEN_USO'] = '^claude=2000000000,1,1'
+    $r2 = Pf-Examen $e "$MA,$MB" 'medium' '' $d
+    $b2 = Examen-De $r2
+    Igual 'e2e 2) los dos cumplen: el mas barato' "recomendado: $MA con esfuerzo medium" (Linea-Con $b2 'recomendado: ')
+    Igual 'e2e 2) con la siguiente' 'motivo: cumple y es la mas barata (4,000 creditos; la siguiente, 8,000)' (Linea-Con $b2 'motivo: ')
+    # sin creditos: gana el mas rapido (A espera 10 s en L1)
+    $d['RESCATE_EXAMEN_USO'] = '.=-'
+    $r3 = Pf-Examen $e "$MA,$MB" 'medium' 'exa-espera-10:^gpt.*:L1$' $d
+    $b3 = Examen-De $r3
+    Igual 'e2e 3) sin creditos: el mas rapido' "recomendado: $MB con esfuerzo medium" (Linea-Con $b3 'recomendado: ')
+    Igual 'e2e 3) con su motivo' 'motivo: cumple y es la mas rapida (sin dato de creditos)' (Linea-Con $b3 'motivo: ')
+    # ninguna cumple: con los datos por defecto del falso no se acierta la clave
+    $r4 = Pf-Examen $e "$MA,$MB" 'medium'
+    $b4 = Examen-De $r4
+    Igual 'e2e 4) ninguna cumple' 'recomendado: ninguno cumple' (Linea-Con $b4 'recomendado: ')
+    Comprueba 'e2e 4) y la mejor' ((Linea-Con $b4 'la mejor: ') -match ('^la mejor: ' + [regex]::Escape($MA) + ' con esfuerzo medium \(clave 0 de 6, arreglos 2 de 2\)$')) (Linea-Con $b4 'la mejor: ')
+  }
+  finally { Restaura-Claves }
+}
+
+$Pruebas['27 bloque 9, esfuerzo no admitido: baja de max a xhigh y a high y lo dice'] = {
+  $e = Nuevo-Examen 'examen-esfuerzo'
+  try {
+    Pon-Claves $ClavesPeque
+    $d = @{ RESCATE_EXAMEN_DATOS = $DatosPeque }
+    # a) max no vale; medium si
+    $a = Pf-Examen $e $MA 'medium,max' ('exa-sin-esfuerzo:' + $MA + ':max:L1$') $d
+    Igual 'a) sale con 0' 0 $a.Codigo
+    $xa = @(Combinacion-De $a $MA 'max')
+    Igual 'a) la cabecera sigue diciendo el esfuerzo pedido' "modelo $MA | esfuerzo max" $xa[0]
+    Igual 'a) esfuerzo usado: xhigh' 'esfuerzo usado: xhigh (max no admitido)' $xa[1]
+    Comprueba 'a) y el motivo corto, filtrado, del rechazo' ((Linea-Con $xa 'motivo del esfuerzo: ') -match "^motivo del esfuerzo: .*invalid value 'max'") (Linea-Con $xa 'motivo del esfuerzo: ')
+    Igual 'a) la combinacion de medium no lleva esa linea' 0 @(Combinacion-De $a $MA 'medium' | Where-Object { $_ -match '^esfuerzo usado' }).Count
+    $claves = @((Llamadas $e.Llamadas) | ForEach-Object { $_.clave })
+    Igual 'a) las llamadas: medium entera, max (que falla), y xhigh entera' ("${MA}:medium:L1 ${MA}:medium:L2-1 ${MA}:medium:E1 ${MA}:medium:E2 ${MA}:max:L1 ${MA}:xhigh:L1 ${MA}:xhigh:L2-1 ${MA}:xhigh:E1 ${MA}:xhigh:E2") ($claves -join ' ')
+    Comprueba 'a) la recomendacion nunca dice max, que no se uso' ((Linea-Con (Examen-De $a) 'recomendado: ') -notmatch 'esfuerzo max$') (Linea-Con (Examen-De $a) 'recomendado: ')
+    Sin-Fugas $a 'esfuerzo a'
+    # b) ni max ni xhigh valen: se llega a high
+    $b = Pf-Examen $e $MA 'max' ('exa-sin-esfuerzo:' + $MA + ':(max|xhigh):L1$') $d
+    $xb = @(Combinacion-De $b $MA 'max')
+    Igual 'b) esfuerzo usado: high' 'esfuerzo usado: high (max no admitido)' $xb[1]
+    Igual 'b) tres llamadas a L1 hasta dar con uno que vale' "${MA}:max:L1 ${MA}:xhigh:L1 ${MA}:high:L1" ((@((Llamadas $e.Llamadas) | ForEach-Object { $_.clave }) | Select-Object -First 3) -join ' ')
+    Comprueba 'b) la combinacion se hace entera con high' ((Linea-Con $xb 'total: ') -match '^total: clave 6 de 6 \| arreglos 2 de 2 \|') (Linea-Con $xb 'total: ')
+    Igual 'b) se recomienda con high' "recomendado: $MA con esfuerzo high" (Linea-Con (Examen-De $b) 'recomendado: ')
+  }
+  finally { Restaura-Claves }
+}
+
+$Pruebas['28 bloque 9, modelo que no existe: su fila se salta y el otro se examina entero'] = {
+  $e = Nuevo-Examen 'examen-nomodelo'
+  try {
+    Pon-Claves $ClavesPeque
+    $d = @{ RESCATE_EXAMEN_DATOS = $DatosPeque }
+    $r = Pf-Examen $e "$MA,$MB" 'medium,max' 'exa-no-existe:^gpt' $d
+    Igual 'sale con 0' 0 $r.Codigo
+    Igual 'sin bloques con fallo' 'ninguno' (Valor-De $r 'bloques con fallo')
+    $b = Examen-De $r
+    Comprueba 'el modelo que no existe sale con sin modelo y el principio de lo que dijo Copilot' ((Linea-Con $b 'sin modelo: ') -match "^sin modelo: Error: model '$MA' is not available$") (Linea-Con $b 'sin modelo: ')
+    Igual 'y solo se intenta una vez (su fila se salta entera, tambien con max)' 0 @($b | Where-Object { $_ -ceq "modelo $MA | esfuerzo max" }).Count
+    $claves = @((Llamadas $e.Llamadas) | ForEach-Object { $_.clave })
+    Igual 'una sola llamada al modelo que no existe' 1 @($claves | Where-Object { $_ -like "${MA}:*" }).Count
+    Igual 'y las 8 del otro: dos combinaciones de 4' 8 @($claves | Where-Object { $_ -like "${MB}:*" }).Count
+    foreach ($f in @('medium', 'max')) {
+      $x = @(Combinacion-De $r $MB $f)
+      Comprueba "$MB con $f : L1, L2, E1, E2 y total" ($x.Count -ge 6 -and (Linea-Con $x 'L1: ') -ne '' -and (Linea-Con $x 'L2: ') -ne '' -and (Linea-Con $x 'E1: ') -ne '' -and (Linea-Con $x 'E2: ') -ne '' -and (Linea-Con $x 'total: ') -ne '') ($x -join ' / ')
+    }
+    Comprueba 'se recomienda el que existe' ((Linea-Con $b 'recomendado: ') -match ('^recomendado: ' + [regex]::Escape($MB) + ' con esfuerzo (medium|max)$')) (Linea-Con $b 'recomendado: ')
+    # un solo modelo con max y que no existe: tres intentos (max, xhigh, high) y sin modelo; nada que recomendar
+    $r2 = Pf-Examen $e $MA 'max' 'exa-no-existe:.' $d
+    Igual 'solo ese modelo con max: tres llamadas fallidas' "${MA}:max:L1 ${MA}:xhigh:L1 ${MA}:high:L1" ((@((Llamadas $e.Llamadas) | ForEach-Object { $_.clave })) -join ' ')
+    Comprueba 'dice sin modelo y no hay nada que recomendar' ((Linea-Con (Examen-De $r2) 'sin modelo: ') -ne '' -and (Linea-Con (Examen-De $r2) 'recomendado: ') -ceq 'recomendado: sin datos') ((Examen-De $r2) -join ' / ')
+    Igual 'y no es un fallo del bloque' 'ninguno' (Valor-De $r2 'bloques con fallo')
+  }
+  finally { Restaura-Claves }
+}
+
+$Pruebas['29 bloque 9 sin Maven: solo L1 y L2, sin maven en E y todo con uno: sin dato de arreglos'] = {
+  $e = Nuevo-Examen 'examen-sinmaven'
+  try {
+    Pon-Claves $ClavesPeque
+    $d = @{ RESCATE_EXAMEN_DATOS = $DatosPeque }
+    # a) -SinMaven, con los esfuerzos por defecto (medium y max)
+    $a = Pf-Examen $e "$MA,$MB" '' '' $d @('-SinMaven')
+    Igual 'a) sale con 0' 0 $a.Codigo
+    $ll = @(Llamadas $e.Llamadas)
+    Igual 'a) 2 modelos x 2 esfuerzos por defecto x (L1 + 1 trozo de L2) = 8 llamadas' 8 $ll.Count
+    Igual 'a) ninguna es de E1 ni de E2' 0 @($ll | Where-Object { $_.clave -match ':E[12]$' }).Count
+    $b = Examen-De $a
+    Comprueba 'a) los esfuerzos por defecto son medium y max' (@($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo (medium|max)$' }).Count -eq 4 -and @($b | Where-Object { $_ -match '^modelo \S+ \| esfuerzo max$' }).Count -eq 2)
+    $x = @(Combinacion-De $a $MA 'medium')
+    Igual 'a) E1: sin maven' 'E1: sin maven' (Linea-Con $x 'E1: ')
+    Igual 'a) E2: sin maven' 'E2: sin maven' (Linea-Con $x 'E2: ')
+    Comprueba 'a) el total no cuenta arreglos' ((Linea-Con $x 'total: ') -match '^total: clave 6 de 6 \| arreglos sin maven \| \d+ s \| creditos 2,000 \| tokens entrada 2000 salida 200$') (Linea-Con $x 'total: ')
+    Comprueba 'a) se recomienda igual' ((Linea-Con $b 'recomendado: ') -match '^recomendado: \S+ con esfuerzo \w+$') (Linea-Con $b 'recomendado: ')
+    Igual 'a) todo con uno: sin dato de arreglos' 'todo con uno: sin dato de arreglos' (Linea-Con $b 'todo con uno: ')
+    Comprueba 'a) la consola cuenta 8 llamadas (sin las de E)' ($a.Salida -match '(?m)^8 llamadas, hasta 16 min\s*$') (Cola $a.Salida)
+    # b) el bloque 6 falla (no hay Maven donde dicen los ajustes): el 9 tampoco se arriesga con E
+    Pon-Ajustes $e @{ MvnExe = (Join-Path $Dir 'no-existe-zorba/mvn.ps1') }
+    $c = Pf $e (Todos $e @('-Solo', '6,9', '-Modelos', $MA, '-Esfuerzos', 'medium')) '' $d
+    Igual 'b) bloques con fallo: el 6' '6' (Valor-De $c 'bloques con fallo')
+    $y = @(Combinacion-De $c $MA 'medium')
+    Comprueba 'b) E1 y E2 salen sin maven' ((Linea-Con $y 'E1: ') -ceq 'E1: sin maven' -and (Linea-Con $y 'E2: ') -ceq 'E2: sin maven') ($y -join ' / ')
+    Igual 'b) y solo se llamo para L1 y L2' 2 @(Llamadas $e.Llamadas).Count
+    Igual 'b) todo con uno: sin dato de arreglos' 'todo con uno: sin dato de arreglos' (Linea-Con (Examen-De $c) 'todo con uno: ')
+  }
+  finally { Restaura-Claves }
+}
+
+$Pruebas['30 bloque 9, privacidad: nada de la empresa en el examen (errores de Copilot, citas y textos del modelo con de todo)'] = {
+  $e = Nuevo-Examen 'examen-privado'
+  try {
+    Pon-Claves $ClavesPeque
+    $secreto = 'usuario zorbalex equipo PCZORBA dominio DOMZORBA zorba.local correo jefe.zorba@zorba-corp.com ip 10.77.88.99 url https://nexus.zorba-interno.local:8443/repo/x ' + $e.Legacy + ' ' + $e.Migrado + ' ' + [Environment]::GetFolderPath('UserProfile') + ' clase ZorbaCorta ' + $Dir
+    $guion = 'exa-error-privado:^gpt;exa-ficha-secreta:^claude.*:L[12];exa-error-privado:^claude.*:E1$'
+    $r = Pf-Examen $e "$MA,$MB" 'medium' $guion @{ RESCATE_ERROR_TEXTO = $secreto; RESCATE_EXAMEN_DATOS = $DatosPeque }
+    Igual 'sale con 0' 0 $r.Codigo
+    $b = Examen-De $r
+    Comprueba 'el modelo que falla sale con sin modelo y el error ya filtrado' ((Linea-Con $b 'sin modelo: ') -match '<usuario>' -and (Linea-Con $b 'sin modelo: ') -match '<equipo>') (Linea-Con $b 'sin modelo: ')
+    Comprueba 'las lecturas con citas inventadas dicen json no y el principio del motivo, sin la cita' ((Linea-Con (Combinacion-De $r $MB 'medium') 'L1: ') -match '^L1: json no \|' -and ((Combinacion-De $r $MB 'medium') -join ' / ') -match 'motivo: Mas de la mitad de las citas') ((Combinacion-De $r $MB 'medium') -join ' / ')
+    Igual 'un fallo de Copilot en E1 es solo fallo de copilot' 'E1: pasa no (fallo de copilot)' ((Linea-Con (Combinacion-De $r $MB 'medium') 'E1: ') -replace ' \|.*$', '')
+    Sin-Fugas $r 'examen'
+    Comprueba 'y es ASCII puro' ((Es-Ascii $r.Fichero) -and (Es-Ascii $r.Salida))
+    Comprueba 'ni el texto inventado del modelo ni su secreto salen' (($r.Fichero + $r.Salida) -notmatch 'SECRETO' -and ($r.Fichero + $r.Salida) -notmatch 'nexus')
+  }
+  finally { Restaura-Claves }
 }
 
 # ================================ LANZADOR ================================

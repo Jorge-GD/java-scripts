@@ -70,6 +70,163 @@ if ($args -contains '--version' -or $args -contains '--help') {
 }
 $texto = ''
 for ($i = 0; $i -lt $args.Count - 1; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
+# ---- Examen de modelos (bloque 9 del preflight): llamadas con id pf-exa-<k>-<L1 | L2-<n> | E1 | E2> ----
+# Todo lo del examen vive en este bloque. La clave de cada llamada es 'modelo:esfuerzo:tarea' (por ejemplo
+# 'gpt-6-luna:max:L2-1'). Los guiones de RESCATE_FALSO ('nombre:regex', separados por ';') valen para las llamadas
+# cuya clave cumple su regex, y valen todos los que encajan:
+#   exa-no-existe       sale con 1 diciendo que el modelo no esta disponible, sin escribir nada
+#   exa-sin-esfuerzo    sale con 1 diciendo que ese esfuerzo no vale
+#   exa-error-privado   sale con 1 y escribe el texto de la variable RESCATE_ERROR_TEXTO
+#   exa-espera-<n>      espera n segundos antes de hacer nada
+#   exa-ficha-mala      L1 y L2: JSON cortado
+#   exa-ficha-secreta   L1 y L2: todas las citas inventadas, con un texto con comillas simples
+#   exa-e1-nada         E1 no cambia nada
+#   exa-e1-no-compila   E1 arregla, pero deja un NO_COMPILA en el codigo
+#   exa-e1-test-falla   E1 arregla, pero deja un TEST_FALLA en el codigo (el Maven de mentira falla en 'test')
+#   exa-e1-toca-test    E1 arregla y ademas cambia un test
+#   exa-e1-toca-pom     E1 arregla y ademas cambia el pom.xml
+#   exa-e2-nada         E2 no cambia nada
+#   exa-e2-codigo       E2 pone el Javadoc y cambia una linea de codigo
+#   exa-e2-falta        E2 pone el Javadoc a todo menos a un metodo
+# Sin guion: L1 y L2 escriben una ficha con los datos de RESCATE_EXAMEN_DATOS ('regex=lista' separados por ';', gana la
+# primera cuya regex cumple la clave; la lista es de 'linea[:tipo]' separados por comas, el tipo por defecto es regla y
+# una linea negativa lleva una cita inventada; sin regla, las dos primeras lineas del rango que acaban en ';');
+# E1 arregla bien y E2 pone el Javadoc.
+# Si la llamada trae --usage-output-file=<ruta>, al acabar bien escribe ahi un JSON de uso como el del Copilot real, con
+# los valores de RESCATE_EXAMEN_USO ('regex=nanoAiu,entrada,salida' separados por ';', gana la primera cuya regex cumple
+# la clave; 'regex=-' no escribe nada y 'regex=basura' escribe un fichero que no es JSON). Sin regla: 1000000000,1000,100.
+# Cada llamada deja .rescate/falso/<id>-<pid>.txt (y su copia en RESCATE_LLAMADAS) con id, pid, flags, uso (si lleva la
+# bandera de uso), guion, clave, lineas (el rango de una lectura) e inicio y fin.
+if ($texto -match '\.rescate/tareas/(pf-exa-[^/\s]+?)\.prompt\.md') {
+  $idE = $Matches[1]
+  $raizE = (Get-Location).Path
+  $modeloE = ''; $esfuerzoE = ''; $usoE = ''
+  foreach ($a in $args) {
+    if ("$a" -match '^--model=(.*)$') { $modeloE = $Matches[1] }
+    elseif ("$a" -match '^--effort=(.*)$') { $esfuerzoE = $Matches[1] }
+    elseif ("$a" -match '^--usage-output-file=(.*)$') { $usoE = $Matches[1] }
+  }
+  $tareaE = $idE -replace '^pf-exa-\d+-', ''
+  $claveE = "${modeloE}:${esfuerzoE}:${tareaE}"
+  $gsE = @()
+  foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
+    $nE, $reE = ($g -split ':', 2)
+    if (-not $reE) { $reE = '.' }
+    if ($nE -like 'exa-*' -and $claveE -match $reE) { $gsE += $nE }
+  }
+  $promptE = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Join-Path $raizE '.rescate') 'tareas') ($idE + '.prompt.md')))
+  $rangoE = [regex]::Match($promptE, '(?m)^LINEAS: (\d+)-(\d+)\s*$')
+  $lineasE = ''
+  if ($rangoE.Success) { $lineasE = $rangoE.Groups[1].Value + '-' + $rangoE.Groups[2].Value }
+  $dirE = Join-Path (Join-Path $raizE '.rescate') 'falso'
+  [void](New-Item -ItemType Directory -Path $dirE -Force)
+  $regE = Join-Path $dirE ($idE + '-' + $PID + '.txt')
+  $flagsE = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=|available-tools=|no-custom-instructions$)' }) -join ' ')
+  $conUsoE = 'no'
+  if ($usoE) { $conUsoE = 'si' }
+  [System.IO.File]::WriteAllLines($regE, [string[]]@("id=$idE", "pid=$PID", "flags=$flagsE", "uso=$conUsoE", ('guion=' + ($gsE -join ',')), "clave=$claveE", "lineas=$lineasE", ('inicio=' + [DateTime]::UtcNow.Ticks)))
+  $copiarE = {
+    if ($env:RESCATE_LLAMADAS) {
+      [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
+      Copy-Item -LiteralPath $regE -Destination (Join-Path $env:RESCATE_LLAMADAS (Split-Path $regE -Leaf)) -Force
+    }
+  }
+  & $copiarE
+  $cierraE = {
+    [System.IO.File]::AppendAllText($regE, ('fin=' + [DateTime]::UtcNow.Ticks + "`n"))
+    & $copiarE
+  }
+  foreach ($g in $gsE) { if ($g -match '^exa-espera-(\d+)$') { Start-Sleep -Seconds ([int]$Matches[1]) } }
+  if ($gsE -contains 'exa-no-existe') { "Error: model '$modeloE' is not available"; & $cierraE; exit 1 }
+  if ($gsE -contains 'exa-sin-esfuerzo') { "error: invalid value '$esfuerzoE' for '--effort <level>'"; & $cierraE; exit 1 }
+  if ($gsE -contains 'exa-error-privado') { "$env:RESCATE_ERROR_TEXTO"; & $cierraE; exit 1 }
+  function Ruta-E([string]$Rel) { return [System.IO.Path]::Combine([string[]](@($raizE) + $Rel.Split('/'))) }
+  function Cambia-E([string]$Rel, [string[]]$Pares) {
+    $t = [System.IO.File]::ReadAllText((Ruta-E $Rel))
+    for ($i = 0; $i -lt $Pares.Count; $i += 2) {
+      if (-not $t.Contains($Pares[$i])) { 'el falso no reconoce el proyecto'; exit 1 }
+      $t = $t.Replace($Pares[$i], $Pares[$i + 1])
+    }
+    [System.IO.File]::WriteAllText((Ruta-E $Rel), $t)
+  }
+  function Anade-E([string]$Rel, [string]$Texto) { [System.IO.File]::AppendAllText((Ruta-E $Rel), $Texto) }
+  $factura = 'src/main/java/com/ejemplo/facturas/Factura.java'
+  if ($tareaE -match '^L') {
+    $leerE = ([regex]::Match($promptE, '(?m)^LEER: (.+?)\s*$')).Groups[1].Value
+    $salidaE = ([regex]::Match($promptE, '(?m)^ESCRIBIR: (.+?)\s*$')).Groups[1].Value
+    $fuenteE = [System.IO.File]::ReadAllLines($leerE)
+    $desdeE = [int]$rangoE.Groups[1].Value; $hastaE = [int]$rangoE.Groups[2].Value
+    $pedidosE = @()
+    $listaE = ''
+    foreach ($r in ("$env:RESCATE_EXAMEN_DATOS" -split ';')) {
+      $reD, $valD = ($r -split '=', 2)
+      if ($reD -and $valD -and $claveE -match $reD) { $listaE = $valD; break }
+    }
+    if ($listaE) { $pedidosE = @($listaE -split ',') }
+    else { $pedidosE = @(for ($n = $desdeE; $n -le [Math]::Min($hastaE, $fuenteE.Count); $n++) { if ($fuenteE[$n - 1] -match ';\s*$' -and $fuenteE[$n - 1] -notmatch '^\s*(package|import)\b') { "$n" } }) | Select-Object -First 2
+    }
+    $datosE = @()
+    foreach ($p in $pedidosE) {
+      $lE, $tE = ("$p" -split ':', 2)
+      $nE = [int]$lE
+      $inventada = ($nE -lt 0 -or $gsE -contains 'exa-ficha-secreta')
+      $nE = [Math]::Abs($nE)
+      if ($nE -lt $desdeE -or $nE -gt $hastaE) { continue }
+      if (-not $tE) { $tE = 'regla' }
+      $citaE = $fuenteE[$nE - 1].Trim()
+      if ($inventada) { $citaE = "SECRETO-ZORBA 'cita $nE' no sale en el fichero" }
+      $datosE += [ordered]@{ tipo = $tE; texto = "Linea $nE"; linea = $nE; cita = $citaE }
+    }
+    $claseE = [System.IO.Path]::GetFileNameWithoutExtension($leerE)
+    $fichaE = [ordered]@{ fichero = (Split-Path $leerE -Leaf); clase = $claseE; papel = 'otro'; queHace = "Ficha de prueba de $claseE."; datos = $datosE }
+    $jsonE = ConvertTo-Json -InputObject $fichaE -Depth 6
+    if ($gsE -contains 'exa-ficha-mala') { $jsonE = $jsonE.Substring(0, [int]($jsonE.Length / 2)) }
+    [System.IO.File]::WriteAllText((Ruta-E $salidaE), $jsonE)
+  }
+  elseif ($tareaE -eq 'E1' -and $gsE -notcontains 'exa-e1-nada') {
+    Cambia-E $factura @('return Tarifa.aplicar(base);', 'return Tarifa.aplicar(base, IVA, java.math.RoundingMode.HALF_UP);',
+      'Date vence = Calendario.vencimiento(emision, DIAS_DE_PAGO);', 'LocalDate vence = Calendario.vencimiento(emision, DIAS_DE_PAGO);',
+      'return new SimpleDateFormat("dd/MM/yyyy").format(vence);', 'return vence.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"));')
+    if ($gsE -contains 'exa-e1-no-compila') { Anade-E $factura "`n// NO_COMPILA`n" }
+    if ($gsE -contains 'exa-e1-test-falla') { Anade-E $factura "`n// TEST_FALLA`n" }
+    if ($gsE -contains 'exa-e1-toca-test') { Anade-E 'src/test/java/com/ejemplo/facturas/FacturaTest.java' "`n// tocado`n" }
+    if ($gsE -contains 'exa-e1-toca-pom') { Anade-E 'pom.xml' "`n<!-- tocado -->`n" }
+  }
+  elseif ($tareaE -eq 'E2' -and $gsE -notcontains 'exa-e2-nada') {
+    $almacen = 'src/main/java/com/ejemplo/inventario/Almacen.java'
+    $lineasJ = [System.IO.File]::ReadAllLines((Ruta-E $almacen))
+    $salidaJ = @()
+    foreach ($l in $lineasJ) {
+      $sangria = [regex]::Match($l, '^\s*').Value
+      if ($l -match '^\s*public ' -and -not ($gsE -contains 'exa-e2-falta' -and $l -match 'public int total\(')) { $salidaJ += ($sangria + '/** Documentado. */') }
+      $salidaJ += $l
+    }
+    [System.IO.File]::WriteAllLines((Ruta-E $almacen), [string[]]$salidaJ)
+    if ($gsE -contains 'exa-e2-codigo') { Cambia-E $almacen @('MAXIMO_POR_REFERENCIA = 500;', 'MAXIMO_POR_REFERENCIA = 501;') }
+  }
+  if ($usoE) {
+    $reglaE = '1000000000,1000,100'
+    foreach ($r in ("$env:RESCATE_EXAMEN_USO" -split ';')) {
+      $reU, $valU = ($r -split '=', 2)
+      if ($reU -and $valU -and $claveE -match $reU) { $reglaE = $valU; break }
+    }
+    if ($reglaE -eq 'basura') { [System.IO.File]::WriteAllText($usoE, 'esto no es json {') }
+    elseif ($reglaE -ne '-') {
+      $nanoE, $entE, $salE = ($reglaE -split ',')
+      if (-not $modeloE) { $modeloE = 'modelo' }
+      $usoJson = [ordered]@{
+        totalPremiumRequestCost = 0; totalUserRequests = 1; totalNanoAiu = [long]$nanoE; totalApiDurationMs = 1234
+        sessionStartTime = '2026-11-17T10:00:00Z'; codeChanges = [ordered]@{}
+        modelMetrics = [ordered]@{ $modeloE = [ordered]@{ usage = [ordered]@{ inputTokens = [long]$entE; outputTokens = [long]$salE; cacheReadTokens = 7; reasoningTokens = 3 } } }
+        agentMetrics = [ordered]@{}; providerModelMetrics = @(); lastCallInputTokens = 5; lastCallOutputTokens = 6
+      }
+      [System.IO.File]::WriteAllText($usoE, (ConvertTo-Json -InputObject $usoJson -Depth 8))
+    }
+  }
+  & $cierraE
+  'hecho'
+  exit 0
+}
 if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
   $raiz = (Get-Location).Path
   $prompt = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Join-Path $raiz '.rescate') 'tareas') (Split-Path $Matches[0] -Leaf)))

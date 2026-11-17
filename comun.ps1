@@ -241,3 +241,42 @@ function New-WorktreeRescate([string]$Dir) {
   Show-Ignorados
   Bien "Worktree creado: $Dir"
 }
+
+# Lo que ha gastado una llamada de Copilot, del fichero que escribe --usage-output-file. Devuelve Creditos (totalNanoAiu / 1e9),
+# NanoAiu, Premium, MsApi y los tokens: la suma, dentro de modelMetrics, de toda hoja numerica cuyo nombre case con
+# input.*tokens, output.*tokens, cache.*tokens o reasoning.*tokens (sin distinguir mayusculas; cada hoja cuenta en un solo
+# grupo, mirando primero cache y reasoning). Campos son los nombres de las hojas numericas de modelMetrics. Sin fichero, con
+# un JSON ilegible o sin el dato, el valor es $null: nunca 0 (un dato que falta no es un gasto de cero).
+function Read-Uso([string]$Ruta) {
+  $u = [pscustomobject]@{ Creditos = $null; NanoAiu = $null; Premium = $null; MsApi = $null; TokensEntrada = $null; TokensSalida = $null; TokensCache = $null; TokensRazonamiento = $null; Campos = @() }
+  function Test-Numero($V) { return ($V -is [int] -or $V -is [long] -or $V -is [double] -or $V -is [decimal] -or $V -is [single]) }
+  function Get-Hojas($Nodo, [string]$Nombre) {
+    if ($Nodo -is [System.Management.Automation.PSCustomObject]) {
+      foreach ($p in $Nodo.PSObject.Properties) { Get-Hojas $p.Value $p.Name }
+    }
+    elseif ($Nodo -is [System.Collections.IEnumerable] -and $Nodo -isnot [string]) {
+      foreach ($x in $Nodo) { Get-Hojas $x $Nombre }
+    }
+    elseif (Test-Numero $Nodo) { [pscustomobject]@{ Nombre = $Nombre; Valor = [double]$Nodo } }
+  }
+  try { $o = [System.IO.File]::ReadAllText($Ruta) | ConvertFrom-Json }
+  catch { return $u }
+  if ($o -isnot [System.Management.Automation.PSCustomObject]) { return $u }
+  if (Test-Numero $o.totalNanoAiu) { $u.NanoAiu = [long]$o.totalNanoAiu; $u.Creditos = [double]$o.totalNanoAiu / 1e9 }
+  if (Test-Numero $o.totalPremiumRequestCost) { $u.Premium = [double]$o.totalPremiumRequestCost }
+  if (Test-Numero $o.totalApiDurationMs) { $u.MsApi = [long]$o.totalApiDurationMs }
+  $suma = @{}
+  $campos = New-Object System.Collections.Generic.List[string]
+  foreach ($h in @(Get-Hojas $o.modelMetrics '')) {
+    if (-not $campos.Contains($h.Nombre)) { $campos.Add($h.Nombre) }
+    $g = ''
+    if ($h.Nombre -match '(?i)cache.*tokens') { $g = 'Cache' }
+    elseif ($h.Nombre -match '(?i)reasoning.*tokens') { $g = 'Razonamiento' }
+    elseif ($h.Nombre -match '(?i)input.*tokens') { $g = 'Entrada' }
+    elseif ($h.Nombre -match '(?i)output.*tokens') { $g = 'Salida' }
+    if ($g) { $suma[$g] = [double]$suma[$g] + $h.Valor }
+  }
+  foreach ($g in $suma.Keys) { $u."Tokens$g" = [long]$suma[$g] }
+  $u.Campos = $campos.ToArray()
+  return $u
+}
