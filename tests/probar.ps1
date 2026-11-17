@@ -912,5 +912,31 @@ $Pruebas['config: el prompt lleva el texto nuevo y no el valor del secreto'] = {
   Comprueba 'el valor no sale ni en el prompt, ni en la consola, ni en lo que deja el script' (-not ((Lo-Que-Sale $e.Wt $r.Salida) + $p).Contains('acme2015'))
 }
 
+$Pruebas['config: unas comillas vacias no son un secreto'] = {
+  $e = Escenario-Con-Recursos 'secreto-comillas-vacias' @{ 'application.yml' = "app:`n  password: `"`"`n  secret: ''`n" }
+  Igual 'ningun hallazgo' 0 (Diagnostica-Secretos $e).H.Count
+}
+
+$Pruebas['config: en YAML un comentario solo no es un valor y el del final no se lee como valor'] = {
+  $e = Escenario-Con-Recursos 'secreto-yml-comentario' @{ 'application.yml' = "app:`n  password: # solo un comentario`n  secret: abc # comentario`n" }
+  $d = Diagnostica-Secretos $e
+  Igual 'un hallazgo' 1 $d.H.Count
+  Igual 'es el de la linea con valor' 3 $d.H[0].Linea
+  Igual 'es un error' 'error' $d.H[0].Sev
+}
+
+$Pruebas['config: en .properties un ! pegado a la clave es un comentario'] = {
+  $e = Escenario-Con-Recursos 'secreto-admiracion' @{ 'application.properties' = "!spring.datasource.password=abc`n" }
+  Igual 'ningun hallazgo' 0 (Diagnostica-Secretos $e).H.Count
+}
+
+$Pruebas['config: en .properties el separador puede ser dos puntos'] = {
+  $e = Escenario-Con-Recursos 'secreto-dos-puntos' @{ 'application.properties' = "mi.password: abc`n" }
+  $d = Diagnostica-Secretos $e
+  Igual 'un hallazgo' 1 $d.H.Count
+  Igual 'es un error' 'error' $d.H[0].Sev
+  Igual 'con su clave' ($DetalleSecreto -f 'mi.password') $d.H[0].Detalle
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
