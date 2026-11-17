@@ -2,6 +2,26 @@
 
 Scripts sueltos para trabajar con proyectos Java.
 
+## Antes de la primera vez: preflight
+
+`preflight.ps1` se lanza **una vez**, antes de `migracion.ps1`, en el equipo donde se va a trabajar. Mide si ese equipo, Copilot y Maven sirven: versiones y modo de PowerShell, qué banderas conoce tu Copilot, si el modelo sabe rellenar una ficha de clase (un fichero de juguete y cinco clases tuyas), cuántas llamadas aguanta a la vez y si Maven compila, mide cobertura y refactoriza un proyecto de juguete. No cambia ningún repo tuyo.
+
+```powershell
+.\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
+```
+
+Todo es opcional. `-Solo 1,3` hace solo esos bloques, `-SinCopilot` salta los que llaman al modelo (4, 5 y 8) y `-SinMaven` salta Maven (6 y el diagnóstico del 7). Cada bloque avisa por consola de lo que puede tardar. El bloque 2 lanza los dos bancos de pruebas (unos minutos).
+
+Deja `preflight-resultado.txt` junto al script (git lo ignora), lo reescribe al acabar cada bloque, lo enseña al final y lo copia al portapapeles si puede. **Ese fichero es lo que se pega en el chat.** No lleva rutas, usuario, equipo, dominio, correos, IP, URL internas ni nombres de tus repos, de sus clases o de sus ficheros: de tus repos solo salen números y el principio de un mensaje nuestro. Aun así, léelo antes de pegarlo.
+
+El diagnóstico del bloque 7 usa `rescate.ps1` en modo diagnóstico sobre `-Migrado`: deja allí su carpeta `.rescate`, que git ignora.
+
+Si Windows no deja lanzar el script:
+
+- Si bajaste el repo como zip, desbloquea los ficheros: `Get-ChildItem -Recurse | Unblock-File`. Con `git clone` no hace falta.
+- Si tu empresa lo permite: `powershell -NoProfile -ExecutionPolicy Bypass -File .\preflight.ps1 -Legacy ... -Migrado ...`.
+- Si el script no llega a arrancar, pega el error tal cual: también sirve.
+
 ## rescate.ps1
 
 Primeros auxilios para un batch Java migrado a medias (Java 8 → Java 21, arquitectura hexagonal, SFTP y configuración externa).
