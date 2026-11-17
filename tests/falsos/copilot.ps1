@@ -64,6 +64,9 @@
 #   prueba-falta-siempre     deja sin caso el ultimo hecho regla o error, en todos los intentos
 #   prueba-clase-en-texto    el titulo del primer caso nombra la clase CargaReader (solo en el primer intento)
 #   prueba-de-mas            41 casos (siempre)
+# Un dato de la ficha de clase que nombra una clase (para las paginas de negocio; clave: el nombre de la clase):
+#   dato-con-clase           ficha correcta, pero el texto de su primer dato dice 'Delega el envio de la remesa en la
+#                            clase CargaValidator.' (con su cita buena)
 # Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
 # (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
 # Con la variable RESCATE_LLAMADAS (una carpeta) deja ademas una copia de ese fichero alli:
@@ -383,6 +386,7 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
       $datos = @()
       foreach ($n in $reales) { $d = Nuevo-Dato $n $lineas[$n - 1].Trim(); $d.tipo = $tipos[$datos.Count % $tipos.Count]; $datos += $d }
     }
+    if ($guion -eq 'dato-con-clase') { $datos[0].texto = 'Delega el envio de la remesa en la clase CargaValidator.' }
     if ($guion -eq 'cita-larga') { $datos[0].cita = ('x' * 130) }
     if ($guion -eq 'tipo-libre') { $datos[0].tipo = 'inventado' }
     if ($guion -eq 'linea-texto') { $datos[0].linea = '31' }

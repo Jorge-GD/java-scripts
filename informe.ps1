@@ -99,6 +99,10 @@ function Read-JsonSuave([string]$Ruta) {
 
 function Get-ClaveHecho($H) { return ([string]$H.tipo + '|' + (([string]$H.texto -replace '\s', '').ToLowerInvariant())) }
 
+# Un hecho es tecnico (nombra una clase: no va a la pagina de negocio) si lo es su ref o su clave tipo+texto: un paso
+# puede citar el mismo dato por la ficha de clase, con otra ref. $Tecnicos lleva las dos cosas de cada dato tecnico.
+function Test-HechoTecnico($Tecnicos, $H) { return ($Tecnicos.ContainsKey([string]$H.ref) -or $Tecnicos.ContainsKey((Get-ClaveHecho $H))) }
+
 # referencia (clase-xxxxxxxx#n) -> el dato de la ficha de clase que la tiene
 function Get-IndiceHechos([string]$Salida) {
   $indice = @{}
@@ -136,6 +140,11 @@ function Get-VistaJob($D, $J) {
   $hecha = [bool]($ficha -and $ficha.redaccion -eq 'hecha')
   $listas = @()
   if ($ficha) { foreach ($k in $Cfg.ListasJob.Keys) { $listas += @($ficha.$k | Where-Object { $null -ne $_ }) } }
+  # Los datos con tecnico: true no salen en la pagina de negocio (la portada si los cuenta, en lo que te toca).
+  $datosTecnicos = @($listas | Where-Object { $_.tecnico })
+  $tecnicos = @{}
+  foreach ($h in $datosTecnicos) { $tecnicos[[string]$h.ref] = $true; $tecnicos[(Get-ClaveHecho $h)] = $true }
+  $listas = @($listas | Where-Object { -not $_.tecnico })
   $porRef = @{}
   foreach ($h in $listas) { $porRef[[string]$h.ref] = $h }
   $citados = @()
@@ -148,7 +157,7 @@ function Get-VistaJob($D, $J) {
       foreach ($r in @($p.refs)) {
         $h = $null
         if ($porRef.ContainsKey([string]$r)) { $h = $porRef[[string]$r] } elseif ($D.Indice.ContainsKey([string]$r)) { $h = $D.Indice[[string]$r] }
-        if ($null -eq $h) { continue }
+        if ($null -eq $h -or (Test-HechoTecnico $tecnicos $h)) { continue }
         $hs += $h
         if (-not $vistos.ContainsKey($h.ref)) { $vistos[$h.ref] = $true; $claves[(Get-ClaveHecho $h)] = $true; $citados += $h }
       }
@@ -175,11 +184,14 @@ function Get-VistaJob($D, $J) {
     $dudas = @($ficha.dudas | Where-Object { $null -ne $_ })
     $sinFicha = @($ficha.sinFicha | Where-Object { $null -ne $_ })
   }
+  $sinCaso = @()
+  if ($pruebas) { $sinCaso = @($pruebas.sinCaso | Where-Object { $null -ne $_ -and -not (Test-HechoTecnico $tecnicos $_) }) }
   $motivo = ''
   if ($D.Resumen) { $m = @($D.Resumen.orden | Where-Object { $_.job -ceq $J.job })[0]; if ($m) { $motivo = $m.motivo } }
   return [pscustomobject]@{
     Job = $J.job; Id = $id; Ficha = $ficha; Pruebas = $pruebas; Hecha = $hecha; Titulo = $titulo; ParaQue = $paraQue; Motivo = $motivo
     Pasos = $pasos; Citados = $citados; Otros = $otros; Necesita = $necesita; Produce = $produce; Dudas = $dudas; SinFicha = $sinFicha
+    DatosTecnicos = $datosTecnicos; SinCaso = $sinCaso
   }
 }
 
@@ -275,7 +287,7 @@ function Get-PreHtml($D, $T, $V) {
     $casosHtml = Format-Trozo $T 'casos' @{ ITEMS = ($filas -join "`n") }
   }
   $sinCaso = ''
-  $falta = @($p.sinCaso | Where-Object { $null -ne $_ })
+  $falta = @($V.SinCaso)
   if ($falta.Count -gt 0) {
     $sinCaso = Format-Trozo $T 'sincaso' @{ ETIQUETA = (Format-Trozo $T 'et-sin'); ITEMS = (Format-Lista $T 'duda' $falta { param($x) @{ TEXTO = $x.texto } }) }
   }
@@ -407,7 +419,8 @@ function Get-GrupoToca($T, [string]$Nombre, $Items, [string]$N) {
     })
 }
 
-# "Lo que te toca": tareas atascadas, clases sin ficha, dudas de las fichas de job y reglas sin caso de prueba.
+# "Lo que te toca": tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba y datos
+# que nombran clases (los que la pagina de negocio no pinta).
 function Get-TocaHtml($D, $T) {
   $grupos = @()
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
@@ -429,6 +442,11 @@ function Get-TocaHtml($D, $T) {
     foreach ($x in @($v.Pruebas.sinCaso | Where-Object { $null -ne $_ })) { $sinCaso += (Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-job' @{ JOB = $v.Job }); TEXTO = $x.texto }) }
   }
   if ($sinCaso.Count -gt 0) { $grupos += (Get-GrupoToca $T 'sincaso' $sinCaso "$($sinCaso.Count)") }
+  $conClase = @()
+  foreach ($v in @($D.Vistas)) {
+    foreach ($h in @($v.DatosTecnicos)) { $conClase += (Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-dato' @{ JOB = $v.Job; DONDE = "$($h.fichero):$($h.linea)" }); TEXTO = $h.texto }) }
+  }
+  if ($conClase.Count -gt 0) { $grupos += (Get-GrupoToca $T 'tecnicos' $conClase "$($conClase.Count)") }
   if ($grupos.Count -eq 0) { return (Format-Trozo $T 'toca-nada') }
   return ($grupos -join "`n")
 }

@@ -50,7 +50,7 @@
   <p>Pega este texto en Copilot para que te diga qué hacer. Después vuelve a lanzar el mismo comando y sigue donde se quedó.</p>
   <pre class="cmd">{{AYUDA}}</pre>
 </div><!--FIN-->
-<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda y ninguna regla sin caso de prueba.</p><!--FIN-->
+<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba y ningún dato con nombres de clase.</p><!--FIN-->
 <!--TROZO toca-grupo--><div class="grupo">
   <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
   <p>{{TEXTO}}</p>
@@ -67,8 +67,11 @@
 <!--TROZO toca-dudas-texto-->Lo que la IA dice que no se puede saber con lo que leyó.<!--FIN-->
 <!--TROZO toca-sincaso-titulo-->Reglas sin caso de prueba ({{N}})<!--FIN-->
 <!--TROZO toca-sincaso-texto-->Reglas del código que ningún caso de prueba en pre cubre. Hay que escribirles un caso a mano.<!--FIN-->
+<!--TROZO toca-tecnicos-titulo-->Datos con nombres de clase ({{N}})<!--FIN-->
+<!--TROZO toca-tecnicos-texto-->Estos datos no salen en la página para negocio porque nombran clases del original. Están en datos/jobs/<job>.json con tecnico: true.<!--FIN-->
 <!--TROZO cab-tarea--><code>{{ID}}</code> {{DONDE}}<!--FIN-->
 <!--TROZO cab-job--><code>{{JOB}}</code> <!--FIN-->
+<!--TROZO cab-dato--><code>{{JOB}}</code> <code>{{DONDE}}</code> <!--FIN-->
 <!--TROZO fase-linea-->  <li><span class="fase-n">{{NOMBRE}}</span><span class="fase-e" data-e="{{ESTADO}}">{{{ESTADO_TEXTO}}}</span><span class="fase-c">{{{CUENTA}}}</span></li><!--FIN-->
 <!--TROZO fase-fichas-clase-->Lectura de las clases<!--FIN-->
 <!--TROZO fase-mapa-->Mapa de jobs, pasos y variables<!--FIN-->

@@ -1484,5 +1484,100 @@ $Pruebas['56 relanzar: creado sigue siendo el texto ISO de la primera vez y la p
   Comprueba 'Lleva da una duracion' ([regex]::Match($i, '<dt>Lleva</dt><dd>([^<]*)</dd>').Groups[1].Value -match '^\d+ (min|h \d+ min)$') (Cola $r.Salida)
 }
 
+# ============================ NEGOCIO: DATOS CON NOMBRE DE CLASE ============================
+# El dato de una ficha de clase que nombra otra clase (guion dato-con-clase de CargaReader): es el primero de la ficha,
+# asi que es el que cita el primer paso de cargaJob.
+$TextoClase = 'Delega el envio de la remesa en la clase CargaValidator.'
+$ListasJob = @('necesita', 'produce', 'conexiones', 'reglas', 'siFalla')
+$GuionClase = 'dato-con-clase:^CargaReader$'
+
+# Los elementos de las listas de una ficha de job.
+function Elementos-De($Job) { return @(foreach ($k in $ListasJob) { @($Job.$k) }) }
+
+# La seccion de lo que te toca de una portada.
+function Toca-De([string]$Html) { return [regex]::Match($Html, '(?s)<section[^>]*id="lo-que-te-toca".*?</section>').Value }
+
+$Pruebas['57 dato con nombre de clase: lleva tecnico en datos/jobs, no sale en la pagina de negocio, sale en la portada y los prompts lo llevan'] = {
+  $c = Corrida-Dos $GuionClase
+  $e = $c.E
+  $j = Job-De $e 'cargaJob'
+  Comprueba 'hay ficha de job' ($null -ne $j) (Cola $c.R.Salida)
+  if ($null -eq $j) { return }
+  $todos = Elementos-De $j
+  $tec = @($todos | Where-Object { $_.texto -ceq $TextoClase })
+  Igual 'el dato con la clase esta una vez en las listas del job' 1 $tec.Count
+  if ($tec.Count -ne 1) { return }
+  Comprueba 'lleva tecnico: true' ($tec[0].tecnico -eq $true) ($tec[0] | ConvertTo-Json -Compress)
+  Igual 'ningun otro elemento lleva el campo' 0 @($todos | Where-Object { $_.texto -cne $TextoClase -and $_.PSObject.Properties.Name -contains 'tecnico' }).Count
+  Comprueba 'y hay otros elementos' ($todos.Count -gt 1) "$($todos.Count)"
+  $ref = $tec[0].ref -split '#'
+  $ficha = @(Fichas $e | Where-Object { $_.id -eq $ref[0] })[0]
+  $dato = $ficha.datos[[int]$ref[1]]
+  Comprueba 'la ficha de clase no cambia: mismo texto y sin el campo tecnico' ($dato.texto -ceq $TextoClase -and $dato.PSObject.Properties.Name -notcontains 'tecnico') ($dato | ConvertTo-Json -Compress)
+  Comprueba 'el primer paso cita ese dato (la prueba pasa por los pasos)' (@($j.pasos[0].refs) -contains $tec[0].ref) ($j.pasos[0] | ConvertTo-Json -Compress)
+  $o = Pagina $e.Out '1-batch-original.html'
+  $a = Articulo $o 'cargaJob'
+  Comprueba 'la pagina de negocio no lleva el texto del dato en ninguna parte' (-not $o.Contains($TextoClase) -and -not $o.Contains([System.Net.WebUtility]::HtmlEncode($TextoClase))) (Cola $c.R.Salida)
+  $faltan = @($todos | Where-Object { $_.texto -cne $TextoClase -and -not $a.Contains([System.Net.WebUtility]::HtmlEncode($_.texto)) })
+  Comprueba 'el job lleva todos los demas hechos' ($a.Length -gt 0 -and $faltan.Count -eq 0) (($faltan | ForEach-Object { $_.texto }) -join ' | ')
+  $cifras = [regex]::Match($a, '(\d+) pasos, (\d+) datos que citan los pasos y (\d+) m')
+  Comprueba 'las cifras del job no cuentan el dato tecnico' ($cifras.Success -and ([int]$cifras.Groups[2].Value + [int]$cifras.Groups[3].Value) -eq ($todos.Count - 1)) "$($cifras.Value) y $($todos.Count) elementos"
+  $i = Pagina $e.Out 'index.html'
+  $toca = Toca-De $i
+  $grupo = [regex]::Match($toca, '(?s)<h3>Datos con nombres de clase \(1\)</h3>.*?</div>').Value
+  Comprueba 'la portada tiene el grupo Datos con nombres de clase (1)' ($grupo.Length -gt 0) $toca
+  Comprueba 'el grupo lleva el job, el texto del dato y fichero:linea' ($grupo.Contains('cargaJob') -and $grupo.Contains($TextoClase) -and $grupo.Contains('CargaReader.java:' + $tec[0].linea)) $grupo
+  Comprueba 'el grupo explica donde estan los datos y va como Sin comprobar' ($grupo.Contains('datos/jobs/') -and $grupo.Contains('tecnico: true') -and $grupo -match 'Sin comprobar') $grupo
+  $tf = @(Tareas $e 'ficha-job' | Where-Object { $_.entradas.job -eq 'cargaJob' })[0]
+  Comprueba 'el prompt de ficha-job sigue llevando el dato' ((Prompt-De $e $tf).Contains($TextoClase))
+  $tp = @(Tareas $e 'prueba-pre' | Where-Object { $_.entradas.job -eq 'cargaJob' })[0]
+  Comprueba 'el prompt de prueba-pre sigue llevando el dato' ((Prompt-De $e $tp).Contains($TextoClase))
+  # sin datos tecnicos, ni grupo ni mencion
+  $b = Corrida-Dos $GuionBase
+  Comprueba 'sin datos tecnicos la portada no tiene el grupo' ((Toca-De (Pagina $b.E.Out 'index.html')) -notmatch 'nombres de clase \(')
+  $n = Nuevo-Escenario 'sin-tecnicos' @('Clase1')
+  [void](Migra $n (Basicos $n))
+  $toca = Toca-De (Pagina $n.Out 'index.html')
+  Comprueba 'sin nada que revisar, la portada lo dice y nombra los datos con clases' ($toca -match 'Nada que revisar' -and $toca -match 'ning.n dato con nombres de clase') $toca
+}
+
+$Pruebas['58 dato con nombre de clase: el guion minimo del script no lo usa'] = {
+  $c = Corrida-Dos ($GuionClase + ';prueba-ref-mala:^prueba-pre:cargaJob$')
+  $e = $c.E
+  $j = Job-De $e 'cargaJob'
+  $x = Pruebas-De $e 'cargaJob'
+  Comprueba 'hay ficha de job y guion de prueba' ($null -ne $j -and $null -ne $x) (Cola $c.R.Salida)
+  if ($null -eq $j -or $null -eq $x) { return }
+  Igual 'la prueba en pre de cargaJob queda atascada (guion minimo)' 'atascada' $x.redaccion
+  Comprueba 'la ficha del job sigue teniendo el dato tecnico' (@(Elementos-De $j | Where-Object { $_.texto -ceq $TextoClase -and $_.tecnico -eq $true }).Count -eq 1)
+  Comprueba 'el guion minimo no lleva el texto del dato' (-not (Lee $e.Out 'datos/pruebas/cargaJob.json').Contains($TextoClase))
+  $reglas = @($j.reglas | Where-Object { $_.tecnico -ne $true })
+  Comprueba 'lleva un caso por cada regla que no es tecnica' ($reglas.Count -gt 0 -and @($x.casos).Count -eq $reglas.Count) "$(@($x.casos).Count) casos y $($reglas.Count) reglas"
+}
+
+$Pruebas['59 dato con nombre de clase: tampoco sale por otra ref con el mismo texto ni como regla sin caso'] = {
+  $c = Corrida-Dos $GuionClase
+  $s = Copia-Salida $c.E 'tecnico-ref'
+  $d = Join-Path $s 'datos'
+  $j = Lee-Json (Join-Path $d 'jobs/cargaJob.json')
+  $tec = @(Elementos-De $j | Where-Object { $_.texto -ceq $TextoClase })[0]
+  $otro = @(Elementos-De $j | Where-Object { $_.texto -cne $TextoClase })[0]
+  # otra ficha de clase con el mismo dato (mismo tipo y texto), citada por el segundo paso con su propia ref
+  $copia = @(Fichas $c.E | Where-Object { $_.id -ne ($tec.ref -split '#')[0] })[0]
+  $copia.datos[0].texto = $TextoClase
+  Guarda-Json (Join-Path $d ('fichas/' + $copia.id + '.json')) $copia
+  $j.pasos[1].refs = @($copia.id + '#0')
+  Guarda-Json (Join-Path $d 'jobs/cargaJob.json') $j
+  $x = Lee-Json (Join-Path $d 'pruebas/cargaJob.json')
+  $x.sinCaso = @([ordered]@{ ref = $tec.ref; tipo = 'regla'; texto = $TextoClase }, [ordered]@{ ref = $otro.ref; tipo = 'regla'; texto = $otro.texto })
+  Guarda-Json (Join-Path $d 'pruebas/cargaJob.json') $x
+  $g = Genera-Informes $s
+  Comprueba 'Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $a = Articulo (Pagina $s '1-batch-original.html') 'cargaJob'
+  Comprueba 'la pagina no lleva el texto del dato, ni por la ref de la otra ficha ni como regla sin caso' ($a.Length -gt 0 -and -not $a.Contains($TextoClase)) (Cola $g.Salida)
+  $sin = [regex]::Match($a, '(?s)<div class="job-sec sincaso">.*?</div>').Value
+  Comprueba 'la otra regla sin caso si sale, y es la unica' ($sin.Contains([System.Net.WebUtility]::HtmlEncode($otro.texto)) -and ([regex]::Matches($sin, '<li>').Count -eq 1)) $sin
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

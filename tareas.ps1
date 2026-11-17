@@ -894,7 +894,8 @@ function Get-TareasJob($Mapa, [bool]$ConservarAtascadas) {
 }
 
 # Las listas de un job que monta el script con los datos de las fichas de sus clases (ListasJob: a que lista va
-# cada tipo de dato), sin repetir: mismo tipo y mismo texto sin contar espacios ni mayusculas.
+# cada tipo de dato), sin repetir: mismo tipo y mismo texto sin contar espacios ni mayusculas. Un dato cuyo texto no
+# pasa Test-LenguajeNegocio lleva tecnico = $true: sigue en la lista, pero las paginas de negocio no lo pintan.
 function Get-ListasJob($JobMapa) {
   $listas = [ordered]@{}
   foreach ($k in $Cfg.ListasJob.Keys) { $listas[$k] = @() }
@@ -908,7 +909,9 @@ function Get-ListasJob($JobMapa) {
       foreach ($k in $Cfg.ListasJob.Keys) {
         if ($Cfg.ListasJob[$k] -ccontains $d.tipo) {
           $vistos[$clave] = $true
-          $listas[$k] += [ordered]@{ tipo = $d.tipo; texto = $d.texto; ref = "$($f.id)#$n"; clase = $f.clase; fichero = $f.fichero; linea = $d.linea; cita = $d.cita; probado = $d.probado }
+          $x = [ordered]@{ tipo = $d.tipo; texto = $d.texto; ref = "$($f.id)#$n"; clase = $f.clase; fichero = $f.fichero; linea = $d.linea; cita = $d.cita; probado = $d.probado }
+          if (Test-LenguajeNegocio @{ texto = $d.texto }) { $x['tecnico'] = $true }
+          $listas[$k] += $x
         }
       }
     }
@@ -1035,8 +1038,10 @@ function Get-TareasPrueba($Mapa, [bool]$ConservarAtascadas) {
 
 # El guion que monta el script sin IA, de las listas del job: "Antes de lanzarlo" con lo que necesita, "Que mirar al
 # acabar" con lo que produce y, con $ConCasos, un caso por regla (su texto de titulo; entrada y esperado, vacios).
+# Es texto para negocio: no usa los datos tecnicos de las listas.
 function Get-GuionMinimo($JobMapa, [bool]$ConCasos) {
   $l = Get-ListasJob $JobMapa
+  foreach ($k in @($l.Keys)) { $l[$k] = @($l[$k] | Where-Object { -not $_.tecnico }) }
   $casos = @()
   if ($ConCasos) { $casos = @($l['reglas'] | ForEach-Object { [ordered]@{ titulo = $_.texto; entrada = ''; esperado = ''; refs = @($_.ref) } }) }
   return [ordered]@{
