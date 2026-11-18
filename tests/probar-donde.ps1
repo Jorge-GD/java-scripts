@@ -460,5 +460,37 @@ $Pruebas['j) cabecera y forma del script: ASCII, USO con ejemplos, sin sintaxis 
   Comprueba 'carga comun.ps1 e informe.ps1 con un punto y no carga rescate.ps1' ($t -match "\.\s+\(Join-Path \`$PSScriptRoot 'comun\.ps1'\)" -and $t -match "\.\s+\(Join-Path \`$PSScriptRoot 'informe\.ps1'\)" -and $t -notmatch "\.\s+\(Join-Path \`$PSScriptRoot 'rescate\.ps1'\)")
 }
 
+$Pruebas['k) la ayuda de una parada: con parada.ayuda sale debajo del comando para pegar en Copilot; sin ella, nada'] = {
+  $E = Nuevo-Escenario 'k'
+  $ayuda = "Estoy ejecutando migracion.ps1 y se ha parado. Motivo: fallo-raro. Detalle: <nada> & ""otra"" cosa.`nEl registro esta en: registros/correccion.log`n`nDime que hago."
+  $pOtro = [ordered]@{ motivo = 'fallo-raro'; detalle = 'algo inesperado'; registro = 'registros/correccion.log'; ayuda = $ayuda }
+  $pCop = [ordered]@{ motivo = 'copilot-no-responde'; detalle = '6 llamadas seguidas'; registro = 'registros/x.log'; ayuda = 'Pega esto y dime si Copilot responde.' }
+  $pSin = [ordered]@{ motivo = 'fallo-raro'; detalle = 'algo inesperado'; registro = 'registros/correccion.log' }
+  $pVacia = [ordered]@{ motivo = 'fallo-raro'; detalle = 'algo inesperado'; registro = 'registros/correccion.log'; ayuda = '' }
+  foreach ($x in @(@('k-otro', $pOtro), @('k-copilot', $pCop), @('k-sin-ayuda', $pSin), @('k-ayuda-vacia', $pVacia))) {
+    [void](Nuevo-Batch $E $x[0] (Estado-Base $x[0] (Join-Path $E.Raiz $x[0]) @{ fase = 'correccion'; parada = $x[1] }))
+  }
+  [void](Nuevo-Batch $E 'k-corriendo' (Estado-Base 'k-corriendo' (Join-Path $E.Raiz 'k-corriendo') @{ fin = ''; fase = 'correccion'; parada = $pOtro }))
+  [void](Nuevo-Batch $E 'k-hecho' (Estado-Base 'k-hecho' (Join-Path $E.Raiz 'k-hecho')))
+  $r = Donde $E
+  Igual 'sale con 0' 0 $r.Codigo
+  $bl = Bloques $r.Salida
+  $l = @($bl['k-otro'])
+  $i = [array]::IndexOf($l, 'Para pegar en Copilot:')
+  Comprueba 'parada otro: sale la linea "Para pegar en Copilot:"' ($i -ge 0) (Cola $r.Salida)
+  $s = Campo-De $l 'Siguiente'
+  Comprueba 'va justo debajo del comando de Siguiente' ($i -ge 0 -and $s -and $s.Comando.Count -eq 1 -and $l[$i - 1] -ceq ('    ' + $s.Comando[0])) (Cola $r.Salida)
+  $esperado = @($ayuda -split "`n" | ForEach-Object { ('    ' + $_).TrimEnd() })
+  $real = @()
+  if ($i -ge 0) { $real = @($l[($i + 1)..($i + $esperado.Count)]) }
+  Igual 'el texto de la ayuda, sangrado con 4 espacios y con sus saltos de linea (los signos < > & " tal cual)' ($esperado -join '|') ($real -join '|')
+  Comprueba 'despues de la ayuda no queda nada mas que lineas en blanco' ($i -ge 0 -and @($l[($i + 1 + $esperado.Count)..($l.Count - 1)] | Where-Object { $_.Trim() }).Count -eq 0) (Cola $r.Salida)
+  Comprueba 'parada de Copilot: tambien la lleva' (@($bl['k-copilot']) -contains 'Para pegar en Copilot:' -and @($bl['k-copilot']) -contains '    Pega esto y dime si Copilot responde.') (Cola $r.Salida)
+  Comprueba 'parada otro sin ayuda: no sale nada' (@($bl['k-sin-ayuda']) -notcontains 'Para pegar en Copilot:' -and $null -ne (Campo-De $bl['k-sin-ayuda'] 'Siguiente'))
+  Comprueba 'parada otro con ayuda vacia: no sale nada' (@($bl['k-ayuda-vacia']) -notcontains 'Para pegar en Copilot:')
+  Comprueba 'una pasada que ya corre de nuevo (fin vacio) no la ensena aunque quede la parada vieja' (@($bl['k-corriendo']) -notcontains 'Para pegar en Copilot:')
+  Comprueba 'un batch sin parada no la lleva' (@($bl['k-hecho']) -notcontains 'Para pegar en Copilot:')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
