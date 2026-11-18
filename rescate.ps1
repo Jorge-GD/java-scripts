@@ -74,9 +74,9 @@ USO
   # decidir una persona, se apunta en .rescate/atascados.md (y .json) y sigue.
   # La pasada siguiente no vuelve a intentar un atascado si su fichero no ha
   # cambiado y no hay commits tuyos desde entonces (-Reintentar lo fuerza).
-  # Con "Reflexionar": true en .rescate/config.json (apagado por defecto), tras
-  # cada intento que no pasa el modelo de las dudas reflexiona (por que no paso,
-  # que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del plan
+  # Con "Reflexionar" (encendido por defecto; "Reflexionar": false en
+  # .rescate/config.json lo apaga), tras cada intento que no pasa el modelo de las
+  # dudas reflexiona (por que no paso, que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del plan
   # tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
   # Todo queda en .rescate/decisiones.md; lo que le toca a una persona sale al
   # final en "Te toca decidir".
@@ -208,10 +208,11 @@ $Cfg += @{
   # El modelo de reserva si no se pasa -ModeloB (migracion.ps1 lanza el fix sin el). Vacio = sin reserva.
   ModeloB               = ''
   # Tras cada intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
-  # Apagado: en la medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no bajo ni los atascados
-  # ni los lotes deshechos (0 y 0 con y sin ella, dos pasadas de cada), y la pasada tardo de 3 a 4 veces mas y costo
-  # de 5 a 8 veces mas.
-  Reflexionar           = $false
+  # Encendida por decision del usuario el 18-11, al ver atascos reales con las mismas cuentas en los tres intentos. La
+  # medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no tuvo ningun atasco en ninguno de sus
+  # brazos (0 y 0 con y sin ella, dos pasadas de cada), y con ella la pasada tardo de 3 a 4 veces mas y costo de 5 a 8
+  # veces mas. Se apaga con "Reflexionar": false.
+  Reflexionar           = $true
   LineasDiff            = 300   # lineas del diff del intento que recibe la reflexion
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
@@ -948,6 +949,31 @@ function Get-LineaHallazgo($x) {
   return "- $donde - $($x.Detalle)"
 }
 
+# La clave con la que se reconoce un hallazgo aunque el intento cambie el fichero de paquete: categoria, nombre del fichero
+# (sin su ruta) y detalle.
+function Get-ClaveHallazgo($x) { return ($x.Cat + '|' + $x.Fichero.Split('/')[-1] + '|' + $x.Detalle) }
+
+# Los errores de estas categorias que no estaban antes del intento ($Antes: las claves de los de antes).
+function Get-HallazgosNuevos($Hall, [string[]]$Cats, $Antes) {
+  return @($Hall | Where-Object { $_.Sev -eq 'error' -and $Cats -contains $_.Cat -and -not $Antes.ContainsKey((Get-ClaveHallazgo $_)) })
+}
+
+# Las lineas de un detalle para pantalla (y para atascados.md): hasta 8, con sangria, y si hay mas, cuantas faltan y en que
+# fichero estan todas ($Ruta: la correccion completa del intento).
+function Get-LineasDetalle([string[]]$Detalle, [string]$Ruta) {
+  $l = @(@($Detalle) | Select-Object -First 8 | ForEach-Object { '    ' + "$_".Trim() })
+  if (@($Detalle).Count -gt 8) { $l += "    ($(@($Detalle).Count - 8) mas en $Ruta)" }
+  return $l
+}
+
+# La correccion completa de un intento que no paso (la que recibe el siguiente, con su detalle) en
+# .rescate/intento-<paso>-<lote>-<i>.md. Devuelve su ruta relativa a la raiz.
+function Save-CorreccionIntento([string]$PasoId, [int]$N, [int]$I, [string[]]$Sel, [string]$Correccion) {
+  $cab = @("# Paso '$PasoId', lote $N, intento ${I}: no paso", ('Ficheros: ' + ($Sel -join ', ')), '')
+  [System.IO.File]::WriteAllText((Join-Path $Work "intento-$PasoId-$N-$I.md"), ((($cab + $Correccion) -join "`n") + "`n"))
+  return ".rescate/intento-$PasoId-$N-$I.md"
+}
+
 # La opcion que ha elegido el consejo en una duda.
 function Get-Elegida($Duda) { return "$(@($Duda.opciones)[[int]$Duda.elegida - 1])" }
 
@@ -1062,6 +1088,16 @@ function Test-Copilot {
   if (-not $script:Copilot.Ruta -and $Modo -ne 'pre') { Fallo $script:Copilot.Mensaje; exit 1 }
 }
 
+# Lo ultimo que dijo Copilot al salir con un codigo distinto de 0 (hasta 5 lineas no vacias), para ver el motivo sin abrir
+# el registro.
+function Write-FinCopilot($R) {
+  foreach ($x in @(@($R.Salida) | Where-Object { "$_".Trim() } | Select-Object -Last 5)) {
+    $t = "$x".TrimEnd()
+    if ($t.Length -gt 200) { $t = $t.Substring(0, 200) + '...' }
+    Aviso "    $t"
+  }
+}
+
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
@@ -1138,6 +1174,38 @@ function Get-SeccionPlan([string]$Texto, [string]$Titulo) {
   foreach ($x in ($Texto -split "`r?`n")) {
     $t = Get-TituloPlan $x
     if ($null -ne $t) { $dentro = ($t -eq $Titulo); continue }
+    if ($dentro) { $sal += $x }
+  }
+  return $sal
+}
+
+# Las cuatro secciones de una reflexion, con el titulo con el que se comparan (como Get-TituloPlan).
+$TitulosReflexion = @('Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer')
+
+# El titulo de una linea de la reflexion tal como esta escrito, sin adornos: una linea '#' a '####' o una linea entera en
+# negrita, con o sin numero delante ('1.', '1)'), sin '*', sin signos de pregunta y sin ':' ni '.' al final. $null si la
+# linea no es un titulo.
+function Get-TituloEscrito([string]$Linea) {
+  $t = $null
+  if ($Linea -match '^\s*#{1,4}\s+(\S.*)$') { $t = $Matches[1] }
+  elseif ($Linea -match '^\s*(?:\d+[.)]\s*)?(\*\*[^*]+\*\*[:.]?)\s*$') { $t = $Matches[1] }
+  if ($null -eq $t) { return $null }
+  $t = ($t -replace '[*\u00BF?]', '').Trim()
+  $t = ($t -replace '^\d+[.)]\s*', '' -replace '\s*#+$', '' -replace '\s*[:.]+$', '' -replace '\s+', ' ').Trim()
+  if (-not $t) { return $null }
+  return $t
+}
+
+# Las lineas de una seccion de la reflexion, o @() si no esta. Un titulo que no es de los cuatro es texto de la seccion en
+# la que esta.
+function Get-SeccionReflexion([string]$Texto, [string]$Titulo) {
+  $sal = @(); $dentro = $false
+  foreach ($x in ($Texto -split "`r?`n")) {
+    $t = Get-TituloEscrito $x
+    if ($null -ne $t) {
+      $k = Get-TituloPlan "## $t"
+      if ($TitulosReflexion -contains $k) { $dentro = ($k -eq $Titulo); continue }
+    }
     if ($dentro) { $sal += $x }
   }
   return $sal
@@ -1324,7 +1392,7 @@ function Invoke-Consejo([string[]]$Contexto, [bool]$Una, [string]$Que) {
     Info "  Pido consejo al modelo de las dudas ($Que)..."
     $r = Invoke-Fuerte (Join-Path $Work "consejo-$n.log") $ruta "Copilot (consejo, $Que)"
     if (-not (Test-Path -LiteralPath $ruta)) {
-      if ($r.Codigo -ne 0) { Aviso "  Copilot ha fallado (codigo $($r.Codigo), ver .rescate/consejo-$n.log): sigo sin consejo."; return $null }
+      if ($r.Codigo -ne 0) { Aviso "  Copilot ha fallado (codigo $($r.Codigo), ver .rescate/consejo-$n.log): sigo sin consejo."; Write-FinCopilot $r; return $null }
       $motivo = "no has escrito .rescate/consejo-$n.json"
       continue
     }
@@ -1424,8 +1492,14 @@ function Invoke-Reflexion([string]$PasoId, [int]$N, [int]$I, $LoteH, [string[]]$
   [void](Invoke-Fuerte (Join-Path $Work "reflexion-$id.log") $ruta "Copilot (reflexion, paso $PasoId, lote $N, intento $I)")
   if (-not (Test-Path -LiteralPath $ruta)) { Aviso "  No hay reflexion (ver .rescate/reflexion-$id.log): sigo sin ella."; return }
   $texto = [System.IO.File]::ReadAllText($ruta)
-  $falta = @('Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer' | Where-Object { @(Get-SeccionPlan $texto $_ | Where-Object { $_.Trim() }).Count -eq 0 })
-  if ($falta.Count -gt 0) { Aviso ("  A la reflexion le falta '" + ($falta -join "', '") + "': sigo sin ella."); return }
+  $falta = @($TitulosReflexion | Where-Object { @(Get-SeccionReflexion $texto $_ | Where-Object { $_.Trim() }).Count -eq 0 })
+  if ($falta.Count -gt 0) {
+    $trae = @($texto -split "`r?`n" | ForEach-Object { Get-TituloEscrito $_ } | Where-Object { $_ } | Select-Object -First 8)
+    $queTrae = 'No trae ningun titulo'
+    if ($trae.Count -gt 0) { $queTrae = "Trae los titulos '" + ($trae -join "', '") + "'" }
+    Aviso ("  A la reflexion le falta '" + ($falta -join "', '") + "': sigo sin ella. $queTrae (ver .rescate/reflexion-$id.md).")
+    return
+  }
   Add-Decisiones (@("## Reflexion: paso '$PasoId', lote $N, intento $I ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))", ('Ficheros: ' + ($Sel -join ', ')), "Esfuerzo: $($script:EsfDudas) | fichero: .rescate/reflexion-$id.md", '') + (Convert-Titulos $texto '### $1'))
   return [pscustomobject]@{ Titulo = "Lote $N, intento $I"; Texto = $texto; Ficheros = $Sel }
 }
@@ -1577,6 +1651,41 @@ function Show-SinPasos([string]$Pie) {
   else { Bien "No quedan errores. $Pie" }
 }
 
+# ============================ INTENTO EN CURSO ============================
+# Mientras un lote puede dejar cambios sin commit en el arbol, .rescate/intento-en-curso.json apunta su paso, su lote y el
+# commit del que parte (.rescate no se versiona: la marca no entra en ningun commit). Si el script se corta (Ctrl+C, la
+# ventana, la luz), esos cambios a medias no son de nadie: el arranque siguiente los deshace en vez de guardarlos en la foto.
+function Get-RutaIntento { return (Join-Path $Work 'intento-en-curso.json') }
+
+function Save-Intento([string]$PasoId, [int]$N, [string]$Commit) {
+  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit })))
+}
+
+function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
+
+# Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y
+# lo creado van antes a un git stash (el usuario pudo cortar la pasada y tocar algo a mano). Si la rama ya no esta en ese
+# commit, el usuario hizo el suyo: no se deshace nada.
+function Undo-IntentoCortado([string]$Rama) {
+  $p = Get-RutaIntento
+  if (-not (Test-Path -LiteralPath $p)) { return }
+  try { $m = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { $m = $null }
+  Remove-Intento
+  $c = "$($m.commit)"
+  if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
+  $donde = "paso $($m.paso), lote $($m.lote)"
+  $head = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
+  if ($head -ne $c) { Aviso "Habia un intento cortado ($donde), pero la rama ha avanzado desde entonces: no deshago nada."; return }
+  Info "Habia un intento cortado ($donde): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
+  $cambios = @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ -and $_ -notmatch '^.. "?(target|\.rescate)/' })
+  if ($cambios.Count -gt 0) {
+    $r = Invoke-Git $RepoRoot @('stash', 'push', '--include-untracked', '-m', "rescate: intento cortado ($donde)")
+    if ($r.Codigo -eq 0) { Aviso 'Lo he guardado en git stash (recuperalo con: git stash list / git stash pop).' }
+    else { Aviso ('No he podido guardarlo en un git stash (' + ($r.Salida -join ' ') + '): lo deshago sin guardarlo.') }
+  }
+  Undo-Lote $Rama $c
+}
+
 function Invoke-Fix {
   if (-not $PlantillaRoot) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
@@ -1584,7 +1693,8 @@ function Invoke-Fix {
   # Con worktree ya estamos en su rama rescate/. Solo con -SinWorktree se crea aqui.
   $rama = Get-Rama $RepoRoot
   if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
-  if (-not $rama.StartsWith('rescate/')) {
+  if ($rama.StartsWith('rescate/')) { Undo-IntentoCortado $rama }   # antes de la foto: lo de un intento cortado no es del usuario
+  else {
     $nueva = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
     if (-not (Confirmar "Creo la rama '$nueva' desde '$rama' ('$rama' no se toca). Seguir?")) { exit 0 }
     $r = Invoke-Git $RepoRoot @('checkout', '-q', '-b', $nueva)
@@ -1662,9 +1772,9 @@ function Invoke-Fix {
     $antes = @{}
     foreach ($c in $Cfg.Orden) { $antes[$c] = Get-Cuenta $hall $c }
     $antes['calidad'] = Get-Cuenta $hall 'calidad'
-    # faltas de calidad que ya habia (por clase, para reconocerlas si se mueve)
-    $calAntes = @{}
-    foreach ($x in @($hall | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' })) { $calAntes[($x.Fichero.Split('/')[-1] + '|' + $x.Detalle)] = $true }
+    # los errores que ya habia, para reconocerlos si el intento mueve su fichero
+    $hallAntes = @{}
+    foreach ($x in @($hall | Where-Object { $_.Sev -eq 'error' })) { $hallAntes[(Get-ClaveHallazgo $x)] = $true }
     $antesCompila = $script:Build.Compila
     $check = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
     Info ''
@@ -1672,18 +1782,22 @@ function Invoke-Fix {
     $sel | ForEach-Object { Info "  $_" }
 
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
+    $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
+    Save-Intento $paso $n $check   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
     for ($i = 1; $i -le $intentos; $i++) {
+      $detalle = @(); $rutaCorr = ''
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
       Info "  Copilot trabajando (intento $i de $intentos)..."
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod '' "Copilot (paso $paso, lote $n, intento $i)"
-      if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)" }
+      if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc }
 
       # -- guardas duras: si saltan, no hay reintento --
       $g1 = Get-Guardas
       if ($g1.Plantilla -ne $g0.Plantilla -or $g1.Legacy -ne $g0.Legacy) {
         Undo-Lote $rama $check
+        Remove-Intento
         Fallo 'ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL. He deshecho el lote en este repo.'
         Fallo 'Revisa esas carpetas con git status y restauralas antes de seguir.'
         exit 4
@@ -1697,6 +1811,7 @@ function Invoke-Fix {
       if ($cambios.Count -eq 0) {
         $problemas = @('No has cambiado ningun fichero.')
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
+        $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
         if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
         continue
       }
@@ -1722,39 +1837,47 @@ function Invoke-Fix {
       $d = Get-Cuenta $hall2 $paso
       if (-not $script:Build.Compila -and ($paso -ne 'build' -or $antesCompila)) { $problemas += 'El proyecto no compila.' }
       if ($d -ge $antes[$paso]) { $problemas += "Los hallazgos de '$paso' no han bajado ($($antes[$paso]) -> $d)." }
+      $empeorados = @()   # los pasos que el intento ha empeorado: sus hallazgos nuevos salen en el detalle
       foreach ($c in $Cfg.Orden) {
         if ($c -eq $paso) { break }
         $q = Get-Cuenta $hall2 $c
-        if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)." }
+        if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)."; $empeorados += $c }
       }
       $ft = Get-Cuenta $hall2 'tests'
       # sin 'tests' en Orden no hay cuenta de antes: no se compara
       if ($conTests -and $paso -ne 'tests' -and $antes.ContainsKey('tests') -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
       # el codigo nuevo sale ya con Javadoc y sin malas practicas: la cuenta de calidad no sube
-      $calNuevos = @()
       $qc = Get-Cuenta $hall2 'calidad'
       if ($paso -ne 'calidad' -and $qc -gt $antes['calidad']) {
         $problemas += "Tu codigo anade hallazgos de calidad ($($antes['calidad']) -> $qc). Lo que escribas lleva Javadoc y sigue las reglas de calidad."
-        $calNuevos = @($hall2 | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' -and -not $calAntes.ContainsKey(($_.Fichero.Split('/')[-1] + '|' + $_.Detalle)) } | Select-Object -First 20)
+        $empeorados += 'calidad'
       }
+      $nuevos = @(Get-HallazgosNuevos $hall2 $empeorados $hallAntes | Select-Object -First 20)
 
       if ($problemas.Count -eq 0) { $ok = $true; break }
       $problemas | ForEach-Object { Aviso "  NO PASA: $_" }
-      # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva)
-      $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
+      # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva),
+      # y lo nuevo de los pasos que ha empeorado (y de calidad)
+      $detalle = @((@($nuevos) + @($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) }) + $catchMenos
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20)) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
+      # por pantalla, lo que se ha roto primero; el resto, y la correccion completa, en el fichero del intento
+      $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
+      @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
       if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }
 
     if (-not $ok) {
       # Nada se queda a medias: se deshace y se prueba algo mas facil.
       Undo-Lote $rama $check
+      Remove-Intento   # la marca se va cuando el lote ya esta deshecho, no antes
       $script:Build = $buildAntes
       Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $intentos intento(s)."
       $problemas | ForEach-Object { Aviso "  - $_" }
+      @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
+      if ($rutaCorr) { Aviso "  Correccion completa del ultimo intento: $rutaCorr" }
       $conMod = ''
       if ($mod) { $conMod = ", con $mod" }
       foreach ($f in $sel) {
@@ -1791,6 +1914,7 @@ function Invoke-Fix {
       Fallo "ATASCADO en '$paso': $f. Lo apunto y sigo con el resto."
       $d0 = $null
       $nota = "- [$paso] ${f}: " + ($problemas -join ' ') + " (registro: .rescate/lote-$paso-$n-*.log)"
+      if ($rutaCorr) { $nota += "`n  Ultimo intento (correccion completa en ${rutaCorr}):`n" + (@(Get-LineasDetalle $detalle $rutaCorr) -join "`n") }
       if ($con) {
         $d0 = $con.Dudas[0]
         $nota += "`n  Consejo (.rescate/consejo-$($con.N).json): $($d0.duda)"
@@ -1806,6 +1930,7 @@ function Invoke-Fix {
     [void](Invoke-Git $RepoRoot @('add', '-A'))
     $d = Get-Cuenta $hall2 $paso
     $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', "rescate($paso): lote $n, hallazgos $($antes[$paso]) a $d") + $Cfg.CommitArgs)
+    Remove-Intento   # la marca se va cuando el lote ya esta commiteado (o ha fallado el commit y los cambios son del usuario), no antes
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado; los cambios siguen en el arbol de trabajo: ' + ($r.Salida -join ' ')); exit 3 }
     if ($conIntento) {
       Write-Consejo $consejoDe[$sel[0]] "atascado en '$paso': $($sel[0])" @('si, commit ' + ((Invoke-Git $RepoRoot @('log', '-1', '--format=%h')).Salida -join '').Trim())

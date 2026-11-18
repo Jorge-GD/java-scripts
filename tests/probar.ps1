@@ -1651,13 +1651,6 @@ $Pruebas['m6 reflexion: sin las cuatro secciones se sigue sin ella; con Reflexio
   $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion'
   Igual 'con Reflexionar en false sale con 0' 0 $r2.Codigo
   Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e2 'reflexion').Count
-  # sin Reflexionar en la config: apagada (en la medida del M6 no bajo ni atascados ni lotes deshechos)
-  $e3 = Escenario-M6 'm6-reflexion-defecto'
-  Escribe $e3.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
-  $r3 = Fix-M6 $e3 'estructura' 2 @() 'nada-sin-correccion'
-  Igual 'sin decir nada en la config sale con 0' 0 $r3.Codigo
-  Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e3 'reflexion').Count
-  Comprueba 'la cabecera dice que va sin reflexion' ($r3.Salida -match '\(sin reflexion\)') (Cola $r3.Salida)
 }
 
 # ============= M7: UN LOTE NO CAMBIA COMO SE TRATAN LOS ERRORES =============
@@ -1745,6 +1738,259 @@ $Pruebas['m7 orden sin tests: la puerta de tests solo compara si hay cuenta de a
   $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
   Comprueba 'sale con 0' ($r.Codigo -eq 0) ("$($r.Codigo) | " + (Cola $r.Salida))
   Comprueba 'no dice que hay mas tests fallando' ($r.Salida -notmatch 'Hay mas tests fallando') (Cola $r.Salida)
+}
+
+# ===== M8: EL MODELO VE LO QUE HA ROTO Y UN INTENTO CORTADO NO ENTRA EN LA FOTO =====
+# Con 'estructura' antes de 'ficheros', el lote de 'ficheros' del guion mueve-a-util lleva LeerFichero a un subpaquete que
+# la plantilla no tiene: estructura pasa de 2 hallazgos (Suelta y PolizaService, que ya estaban) a 3.
+$LeerM8 = 'src/main/java/com/acme/life/application/usecases/LeerFichero.java'
+$LeerMovidoM8 = 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java'
+
+# La CORRECCION de un prompt: desde su titulo hasta el final.
+function Correccion-De([string]$Prompt) { return ([regex]::Match($Prompt, '(?s)## CORRECCION.*$')).Value }
+
+# Lo que ha visto el Copilot del M6 en .rescate/intento-en-curso.json en cada lote (guion ve-marca), una linea por llamada.
+function Marcas-Vistas($E) { return @([System.IO.File]::ReadAllLines((Get-Ruta $E.Wt '.rescate/marca-vista.log'))) }
+
+$Pruebas['m8 detalle: lo que el intento ha roto en un paso anterior sale en la correccion; lo que ya estaba, no'] = {
+  $e = Escenario-M6 'm8-detalle' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'mueve-a-util'
+  Comprueba 'el primer intento no pasa por haber empeorado estructura' ($r.Salida -match "NO PASA: Has empeorado el paso anterior 'estructura' \(2 -> 3 hallazgos\)\.") (Cola $r.Salida)
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un segundo intento' ($lotes.Count -ge 2) (Cola $r.Salida)
+  if ($lotes.Count -lt 2) { return }
+  $c = Correccion-De (Prompt-M6 $e $lotes[1])
+  Comprueba 'la correccion cuenta lo que ha empeorado' ($c -match "Has empeorado el paso anterior 'estructura' \(2 -> 3 hallazgos\)") $c
+  Comprueba 'y lista el hallazgo nuevo de estructura con su fichero' ($c -match ('(?m)^  - ' + [regex]::Escape($LeerMovidoM8) + " - subpaquete 'infrastructure/util' no existe en la plantilla")) $c
+  Comprueba 'sin los de estructura que ya estaban antes del intento' ($c -notmatch 'Suelta\.java' -and $c -notmatch 'PolizaService\.java') $c
+}
+
+$Pruebas['m8 detalle: si ningun paso anterior empeora, el detalle no lleva hallazgos de otros pasos'] = {
+  $e = Escenario-M6 'm8-detalle-nada' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'nada-sin-correccion'
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un segundo intento' ($lotes.Count -ge 2) (Cola $r.Salida)
+  if ($lotes.Count -lt 2) { return }
+  $c = Correccion-De (Prompt-M6 $e $lotes[1])
+  Comprueba 'la correccion no dice que un paso anterior haya empeorado' ($c -notmatch 'Has empeorado') $c
+  Comprueba 'ni lista hallazgos de estructura' ($c -notmatch 'Suelta\.java|PolizaService\.java') $c
+}
+
+$Pruebas['m8 marca: cada intento tiene su marca con el commit de partida y, al acabar el lote, pase o no, ya no esta'] = {
+  $e = Escenario-M6 'm8-marca'
+  $r = Fix-M6 $e 'estructura' 2 @() 've-marca;nada-sin-correccion'
+  Igual 'sale con 0' 0 $r.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD~1')
+  $v = @(Marcas-Vistas $e)
+  Igual 'los dos intentos ven la marca' 2 $v.Count
+  foreach ($linea in $v) {
+    $m = $null
+    try { $m = $linea | ConvertFrom-Json } catch { }
+    Comprueba 'la marca dice el paso, el lote y el commit de partida' ($m -and $m.paso -eq 'estructura' -and $m.lote -eq 1 -and $m.commit -eq $partida) $linea
+  }
+  Comprueba 'el lote pasa: la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json'))) (Cola $r.Salida)
+  $e2 = Escenario-M6 'm8-marca-no-pasa'
+  $r2 = Fix-M6 $e2 'estructura' 1 @() 'atasca-siempre;ve-marca;consejo-nada'
+  Igual 'con un atascado sale con 2' 2 $r2.Codigo
+  Comprueba 'hubo un lote deshecho' ($r2.Salida -match 'DESHECHO') (Cola $r2.Salida)
+  Comprueba 'todos los intentos vieron una marca' (@(Marcas-Vistas $e2 | Where-Object { $_ -match '"commit"' }).Count -eq @(Marcas-Vistas $e2).Count) ((Marcas-Vistas $e2) -join ' / ')
+  Comprueba 'el lote no pasa: la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e2.Wt '.rescate/intento-en-curso.json'))) (Cola $r2.Salida)
+}
+
+$Pruebas['m8 cortado: un intento a medias (con marca) se deshace al arrancar con -Todo y no entra en la foto'] = {
+  $e = Escenario-M6 'm8-cortado'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $texto = Lee $e.Wt $LeerM8
+  # el corte: el intento dejo un fichero tocado y otro nuevo, sin commit, y su marca
+  Escribe $e.Wt $LeerM8 ($texto + "// a medias`n")
+  Escribe $e.Wt 'src/main/java/com/acme/life/application/usecases/AMedias.java' "class AMedias {}`n"
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $partida + '"}')
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que habia un intento cortado, con su paso, su lote y su commit' ($r.Salida -match ('Habia un intento cortado \(paso estructura, lote 7\): lo deshago y sigo desde ' + $partida.Substring(0, 7))) (Cola $r.Salida)
+  Comprueba 'no pregunta por una foto' ($r.Salida -notmatch 'Hay \d+ cambios sin commit') (Cola $r.Salida)
+  Igual 'la rama sigue en el commit apuntado' $partida (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Comprueba 'no hay commit foto' ((GitEn $e.Wt @('log', '--format=%s')) -notmatch 'foto') (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'el fichero tocado vuelve a como estaba' $texto (Lee $e.Wt $LeerM8)
+  Comprueba 'el fichero nuevo ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/main/java/com/acme/life/application/usecases/AMedias.java')))
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+$Pruebas['m8 cortado: sin marca, los cambios sin commit siguen yendo a la foto'] = {
+  $e = Escenario-M6 'm8-sin-marca'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $texto = Lee $e.Wt $LeerM8
+  Escribe $e.Wt $LeerM8 ($texto + "// del usuario`n")
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no habla de un intento cortado' ($r.Salida -notmatch 'intento cortado') (Cola $r.Salida)
+  Igual 'el ultimo commit es la foto' 'rescate: foto del estado antes de empezar' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Comprueba 'la foto lleva el cambio' ((Lee $e.Wt $LeerM8) -match 'del usuario') (Cola $r.Salida)
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m8 cortado: si la rama ha avanzado desde la marca (un commit del usuario), no se deshace nada y la marca se borra'] = {
+  $e = Escenario-M6 'm8-cortado-avanzado'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $texto = Lee $e.Wt $LeerM8
+  $suyo = 'src/main/java/com/acme/life/application/usecases/DelUsuario.java'
+  # el usuario corta la pasada, arregla a mano con su commit en la rama de rescate y deja algo sin commit; la marca queda vieja
+  Escribe $e.Wt $suyo "class DelUsuario {}`n"
+  [void](GitEn $e.Wt @('add', '--', $suyo))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano del usuario'))
+  Escribe $e.Wt $LeerM8 ($texto + "// sin commit del usuario`n")
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $partida + '"}')
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice en una linea que no deshace nada' ($r.Salida -match 'Habia un intento cortado \(paso estructura, lote 7\), pero la rama ha avanzado desde entonces: no deshago nada\.') (Cola $r.Salida)
+  Comprueba 'el commit del usuario sigue en la rama' ((GitEn $e.Wt @('log', '--format=%s')) -match 'arreglo a mano del usuario') (GitEn $e.Wt @('log', '--format=%s'))
+  Comprueba 'y su fichero' (Test-Path -LiteralPath (Get-Ruta $e.Wt $suyo))
+  Comprueba 'lo que dejo sin commit no se pierde: va a la foto, como sin marca' ((GitEn $e.Wt @('log', '--format=%s')) -match 'foto' -and (Lee $e.Wt $LeerM8) -match 'sin commit del usuario') (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+$Pruebas['m8 cortado: con la marca al dia y cambios, van a un stash y el arbol queda limpio en el commit de la marca'] = {
+  $e = Escenario-M6 'm8-cortado-stash'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $texto = Lee $e.Wt $LeerM8
+  $nuevo = 'src/main/java/com/acme/life/application/usecases/AMedias.java'
+  Escribe $e.Wt $LeerM8 ($texto + "// a medias`n")
+  Escribe $e.Wt $nuevo "class AMedias {}`n"
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $partida + '"}')
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  $st = @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Igual 'hay un stash' 1 $st.Count
+  Comprueba 'con el paso y el lote en su nombre' ($st.Count -eq 1 -and $st[0] -match 'rescate: intento cortado \(paso estructura, lote 7\)') ($st -join ' / ')
+  Comprueba 'el aviso dice como recuperarlo' ($r.Salida -match 'Lo he guardado en git stash \(recuperalo con: git stash list / git stash pop\)\.') (Cola $r.Salida)
+  Comprueba 'el stash lleva el cambio del fichero tocado' ((GitEn $e.Wt @('show', 'stash@{0}')) -match '// a medias')
+  Comprueba 'y el fichero nuevo' ((GitEn $e.Wt @('show', ('stash@{0}^3:' + $nuevo))) -match 'class AMedias')
+  Igual 'el arbol queda en el commit de la marca' $partida (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'no hay commit foto' ((GitEn $e.Wt @('log', '--format=%s')) -notmatch 'foto')
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+$Pruebas['m8 marca: el commit del lote se hace con la marca puesta y se borra despues'] = {
+  $e = Escenario-M6 'm8-marca-commit'
+  # un hook de commit apunta si la marca esta cuando se commitea (los worktrees usan los hooks del repo)
+  $hook = Get-Ruta $e.Repo '.git/hooks/pre-commit'
+  [void](GitEn $e.Repo @('config', 'core.hooksPath', (Get-Ruta $e.Repo '.git/hooks')))   # por si la maquina trae los suyos
+  Escribe $e.Repo '.git/hooks/pre-commit' "#!/bin/sh`nif [ -f .rescate/intento-en-curso.json ]; then echo con >> .rescate/hook-marca.log; else echo sin >> .rescate/hook-marca.log; fi`n"
+  if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x $hook }
+  $r = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'sale con 0' 0 $r.Codigo
+  $log = Get-Ruta $e.Wt '.rescate/hook-marca.log'
+  if (-not (Test-Path -LiteralPath $log)) { Comprueba 'el hook se ejecuto en el commit del lote' $false (Cola $r.Salida); return }
+  $v = @([System.IO.File]::ReadAllLines($log) | Where-Object { $_ })
+  Comprueba 'el commit del lote vio la marca' ($v.Count -ge 1 -and @($v | Where-Object { $_ -ne 'con' }).Count -eq 0) ($v -join ',')
+  Comprueba 'despues no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+# ===== M8 (parte 6): DESCRIPTIVO POR CONSOLA Y EN LOS LOGS =====
+# Lo que sale por consola en el intento $I de un lote: desde su 'Copilot trabajando (intento I de N)' hasta el siguiente
+# intento, el siguiente lote o el final (el aviso del lote deshecho va dentro del ultimo intento).
+function Consola-Del-Intento([string]$Salida, [int]$I) {
+  return ([regex]::Match($Salida, "(?s)Copilot trabajando \(intento $I de \d+\)\.\.\.(.*?)(?=Copilot trabajando \(intento|--- Lote \d|\z)")).Groups[1].Value
+}
+
+# Las lineas del detalle de un texto de consola: con 4 espacios y '- '.
+function Detalle-De-Consola([string]$Texto) { return @($Texto -split "`r?`n" | Where-Object { $_ -match '^    - ' }) }
+
+$Pruebas['m8 consola: tras los NO PASA salen las lineas del detalle (lo roto primero) y la correccion completa queda en .rescate/intento-*.md'] = {
+  $e = Escenario-M6 'm8-consola' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'mueve-a-util'
+  $c1 = Consola-Del-Intento $r.Salida 1
+  $det = Detalle-De-Consola $c1
+  $nuevoL = '    - ' + $LeerMovidoM8 + " - subpaquete 'infrastructure/util' no existe en la plantilla"
+  Comprueba 'tras los NO PASA sale el detalle del intento' ($det.Count -gt 0 -and $c1.IndexOf('NO PASA') -ge 0 -and $c1.IndexOf('NO PASA') -lt $c1.IndexOf($det[0])) $c1
+  Comprueba 'su primera linea es lo nuevo de estructura, con fichero y regla' ($det.Count -gt 0 -and $det[0].StartsWith($nuevoL)) (($det | Select-Object -First 2) -join ' / ')
+  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales' }).Count -eq 1) $c1
+  Comprueba 'con tan pocas lineas no dice que falten' ($c1 -notmatch ' mas en ') $c1
+  $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
+  if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
+  $f1 = Lee $e.Wt '.rescate/intento-ficheros-1-1.md'
+  Comprueba 'el fichero lleva los motivos y el detalle completo' ($f1 -match "Has empeorado el paso anterior 'estructura' \(2 -> 3 hallazgos\)" -and $f1 -match 'Detalle:' -and $f1.Contains($LeerMovidoM8) -and $f1 -match '\(repo\) - no hay adaptador SFTP') $f1
+  Comprueba 'el intento 2 tiene el suyo' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-ficheros-1-2.md'))
+  $lotes = @(Llamadas-M6 $e 'lote')
+  if ($lotes.Count -ge 2) {
+    $c = Correccion-De (Prompt-M6 $e $lotes[1])
+    $detalle = $f1.Substring($f1.IndexOf('Detalle:')).Trim()
+    Comprueba 'es la misma correccion que recibe el intento siguiente' ($c.Contains($detalle)) $c
+  }
+}
+
+$Pruebas['m8 consola: con mas de 8 lineas salen 8 y dice cuantas faltan; el lote deshecho y el atascado traen su detalle'] = {
+  $e = Escenario-M6 'm8-consola-8' @{ Orden = @('ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'muchos-ficheros'
+  $c1 = Consola-Del-Intento $r.Salida 1
+  $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
+  if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
+  $total = @((Lee $e.Wt '.rescate/intento-ficheros-1-1.md') -split "`r?`n" | Where-Object { $_ -match '^  - ' }).Count
+  Comprueba 'el fichero del intento lleva mas de 8 lineas de detalle' ($total -gt 8) "$total"
+  Igual 'por consola salen 8 lineas del detalle' 8 (Detalle-De-Consola $c1).Count
+  $mas = [regex]::Match($c1, '(?m)^    \((\d+) mas en \.rescate/intento-ficheros-1-1\.md\)\s*$')
+  Comprueba 'y dice cuantas faltan y donde estan' ($mas.Success -and [int]$mas.Groups[1].Value -eq ($total - 8)) "$($mas.Value) / total $total"
+  # el lote deshecho: sus motivos, 8 lineas del detalle del ultimo intento y donde esta su correccion completa
+  $c2 = Consola-Del-Intento $r.Salida 2
+  $i = $c2.IndexOf('Lote 1 DESHECHO')
+  if ($i -lt 0) { Comprueba 'el lote 1 se deshace' $false (Cola $r.Salida); return }
+  $des = $c2.Substring($i)
+  Igual 'el aviso del lote deshecho trae 8 lineas del detalle del ultimo intento' 8 (Detalle-De-Consola $des).Count
+  Comprueba 'con cuantas faltan' ($des -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-1-2\.md\)') $des
+  Comprueba 'y la ruta de la correccion completa del ultimo intento' ($des -match 'Correccion completa del ultimo intento: \.rescate/intento-ficheros-1-2\.md') $des
+  # el atascado: su nota lleva las lineas del detalle del ultimo intento
+  $at = Lee $e.Wt '.rescate/atascados.md'
+  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
+}
+
+$Pruebas['m8 consola: si Copilot sale con un codigo distinto de 0 salen las ultimas 5 lineas no vacias de su salida'] = {
+  $e = Escenario-M6 'm8-copilot-rc' @{ Orden = @('estructura') }
+  $r = Fix-M6 $e 'estructura' 1 @() 'falla-copilot'
+  $c1 = Consola-Del-Intento $r.Salida 1
+  Comprueba 'dice el codigo y el registro, como antes' ($c1 -match 'Copilot termino con codigo 1 \(ver \.rescate/lote-estructura-1-1\.log\)') $c1
+  $salen = @('SALIDA-C', 'SALIDA-D', 'SALIDA-E', 'SALIDA-F', 'SALIDA-G ultima' | Where-Object { $c1 -match ('(?m)^    ' + [regex]::Escape($_) + '\s*$') })
+  Igual 'salen sus ultimas 5 lineas no vacias, con sangria' 5 $salen.Count
+  Comprueba 'y no las anteriores' ($c1 -notmatch 'SALIDA-A|SALIDA-B') $c1
+}
+
+$Pruebas['m8 reflexion: el lector acepta titulos con # a ####, numerados, en negrita y con signos de pregunta'] = {
+  $e = Escenario-M6 'm8-reflexion-formato' @{ Reflexionar = $true }
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion;reflexion-formato'
+  Comprueba 'no dice que falte ninguna seccion' ($r.Salida -notmatch 'A la reflexion le falta') (Cola $r.Salida)
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -lt 2) { Comprueba 'dos intentos' $false ($l -join ' / '); return }
+  Comprueba 'y el segundo intento lleva la reflexion' ((Prompt-M6 $e $l[1]) -match 'REFLEXION-MARCA-estructura-1-1') (Cola $r.Salida)
+}
+
+$Pruebas['m8 reflexion: si aun falta una seccion, el aviso dice que titulos trae y la ruta del fichero'] = {
+  $e = Escenario-M6 'm8-reflexion-trae' @{ Reflexionar = $true }
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion;reflexion-mala'
+  Comprueba 'dice lo que falta, los titulos que trae y el fichero' ($r.Salida -match "(?m)^  A la reflexion le falta 'Que hacer ahora', 'Que no hacer': sigo sin ella\. Trae los titulos 'Que se intento', 'Por que no paso' \(ver \.rescate/reflexion-estructura-1-1\.md\)\.") (Cola $r.Salida)
+  $e2 = Escenario-M6 'm8-reflexion-sin-titulos' @{ Reflexionar = $true }
+  $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion;reflexion-sin-titulos'
+  Comprueba 'sin titulos dice que no trae ninguno' ($r2.Salida -match "(?m)^  A la reflexion le falta 'Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer': sigo sin ella\. No trae ningun titulo \(ver \.rescate/reflexion-estructura-1-1\.md\)\.") (Cola $r2.Salida)
+}
+
+$Pruebas['m8 reflexion: sin decir nada en la config, corre tras un intento que no pasa y el siguiente la lleva'] = {
+  $e = Escenario-M6 'm8-reflexion-defecto'
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'hay una reflexion, tras el primer intento' 1 (Llamadas-M6 $e 'reflexion').Count
+  $l = @(Llamadas-M6 $e 'lote')
+  Igual 'dos intentos' 2 $l.Count
+  if ($l.Count -eq 2) { Comprueba 'el segundo lleva la reflexion en la CORRECCION' ((Correccion-De (Prompt-M6 $e $l[1])) -match 'REFLEXION-MARCA-estructura-1-1') (Prompt-M6 $e $l[1]) }
+  Comprueba 'la cabecera no dice que va sin reflexion' ($r.Salida -notmatch '\(sin reflexion\)') (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================

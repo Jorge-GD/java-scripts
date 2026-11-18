@@ -11,6 +11,9 @@
 #   consejo-elegida-4  el consejo elige la opcion 4; en el reintento (con CORRECCION), bien y de codigo
 #   consejo-nada       no escribe el consejo y sale con 0
 #   reflexion-mala     la reflexion trae solo dos de las cuatro secciones
+#   reflexion-formato  la reflexion trae las cuatro secciones con otros titulos: ###, numerado, en negrita, con signos de
+#                      pregunta y con acentos
+#   reflexion-sin-titulos  la reflexion es un parrafo sin ningun titulo
 #   sin-max            con --effort=max sale con 1 sin escribir nada (un Copilot que no admite ese esfuerzo)
 #   atasca             un lote que lleva Suelta.java no cambia nada, salvo que el prompt traiga el consejo
 #   atasca-siempre     un lote que lleva Suelta.java no cambia nada nunca
@@ -20,6 +23,13 @@
 #                      con CORRECCION lo deja como estaba
 #   mueve-catch        un lote quita ese catch y lo lleva, igual, a una clase nueva (TamanoSeguro)
 #   catch-en-comentario  como quita-catch, y deja 'catch (' en un comentario y en un texto
+#   mueve-a-util       un lote sin CORRECCION mueve LeerFichero a infrastructure/util, un subpaquete que la plantilla
+#                      no tiene (el paso 'estructura' gana un hallazgo en la ruta nueva); con CORRECCION no cambia nada
+#   muchos-ficheros    un lote que lleva LeerFichero.java: sin CORRECCION crea 10 clases mas que abren ficheros (LeerOtro1..10:
+#                      el paso 'ficheros' pasa de 3 hallazgos a 13) y con CORRECCION no cambia nada; los demas lotes, como siempre
+#   falla-copilot      un lote sale con 1 tras escribir nueve lineas (dos de ellas vacias o en blanco) y sin cambiar nada
+#   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
+#                      ('sin marca' si no estaba)
 $todos = $args
 $guiones = @("$env:RESCATE_FALSO" -split ';' | Where-Object { $_ })
 $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
@@ -77,7 +87,13 @@ if ($titulo -match 'reflexion') {
   Apunta 'reflexion' $m.Groups[2].Value
   $marca = 'REFLEXION-MARCA-' + $m.Groups[2].Value
   $t = @('## Que se intento', "$marca mover las clases.", '', '## Por que no paso', 'No cambio nada.')
-  if ($guiones -notcontains 'reflexion-mala') { $t += @('', '## Que hacer ahora', 'Mover la clase a application/usecases.', '', '## Que no hacer', 'No tocar el pom.xml.') }
+  if ($guiones -contains 'reflexion-sin-titulos') { $t = @("$marca No cambio nada y hay que mover las clases a otro paquete.") }
+  if ($guiones -contains 'reflexion-formato') {
+    $e = [char]0xE9; $o = [char]0xF3; $q = [char]0xBF
+    $t = @("### 1. Qu$e se intent$o", "$marca mover las clases.", '', "## 2) Por qu$e no pas$o", 'No cambio nada.', '',
+      "## **Qu$e hacer ahora**", 'Mover la clase a application/usecases.', '', "#### ${q}Qu$e no hacer?", 'No tocar el pom.xml.')
+  }
+  elseif ($guiones -notcontains 'reflexion-mala' -and $guiones -notcontains 'reflexion-sin-titulos') { $t += @('', '## Que hacer ahora', 'Mover la clase a application/usecases.', '', '## Que no hacer', 'No tocar el pom.xml.') }
   Escribir ".rescate/$($m.Groups[1].Value)" ($t -join "`n")
   'reflexion escrita'
   exit 0
@@ -113,6 +129,28 @@ foreach ($l in ($prompt -split "`r?`n")) {
 }
 $fichs = @($fichs | Select-Object -Unique)
 Apunta 'lote' ($fichs -join ',')
+if ($guiones -contains 've-marca') {
+  $marca = Join-Path $rescate 'intento-en-curso.json'
+  $texto = 'sin marca'
+  if (Test-Path -LiteralPath $marca) { $texto = [System.IO.File]::ReadAllText($marca).Trim() }
+  [System.IO.File]::AppendAllText((Join-Path $rescate 'marca-vista.log'), "$texto`n")
+}
+if ($guiones -contains 'falla-copilot') {
+  'SALIDA-A primera'; 'SALIDA-B'; ''; 'SALIDA-C'; 'SALIDA-D'; '   '; 'SALIDA-E'; 'SALIDA-F'; 'SALIDA-G ultima'
+  exit 1
+}
+if ($guiones -contains 'muchos-ficheros' -and @($fichs | Where-Object { $_ -match 'LeerFichero\.java$' }).Count -gt 0) {
+  if ($prompt -notmatch '## CORRECCION') {
+    foreach ($k in 1..10) {
+      Escribir "src/main/java/com/acme/life/application/usecases/LeerOtro$k.java" (@(
+          'package com.acme.life.application.usecases;', '', 'import java.io.File;', '', "/** Caso de uso $k que lee un fichero de entrada. */",
+          "public class LeerOtro$k {", '', '    /**', '     * Dice si el fichero existe.', '     *', '     * @param ruta ruta del fichero',
+          '     * @return true si existe', '     */', '    public boolean existe(String ruta) {', '        return new File(ruta).exists();',
+          '    }', '}', '') -join "`n")
+    }
+  }
+  exit 0
+}
 $conSuelta = (@($fichs | Where-Object { $_ -match 'Suelta\.java$' }).Count -gt 0)
 if ($guiones -contains 'atasca-siempre' -and $conSuelta) { 'no hago nada'; exit 0 }
 if ($guiones -contains 'atasca' -and $conSuelta -and $prompt -notmatch '## Consejo') { 'no hago nada'; exit 0 }
@@ -120,6 +158,14 @@ if ($guiones -contains 'nada-sin-correccion' -and $prompt -notmatch '## CORRECCI
 if ($guiones -contains 'crea-fichero') { Escribir 'output/de-la-ia.csv' "id;nota`n1;de la IA`n" }
 & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
 $codigo = $LASTEXITCODE
+if ($guiones -contains 'mueve-a-util' -and $prompt -notmatch '## CORRECCION') {
+  $ruta = Join-Path $raiz 'src/main/java/com/acme/life/application/usecases/LeerFichero.java'
+  if (Test-Path -LiteralPath $ruta) {
+    $t = [System.IO.File]::ReadAllText($ruta) -replace '(?m)^package [^;]*;', 'package com.acme.life.infrastructure.util;'
+    Remove-Item -LiteralPath $ruta -Force
+    Escribir 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java' $t
+  }
+}
 $deCatch = @($guiones | Where-Object { @('quita-catch', 'mueve-catch', 'catch-en-comentario') -contains $_ })
 if ($deCatch.Count -gt 0) {
   $cm = 'src/main/java/com/acme/life/application/usecases/CalidadMuestra.java'
