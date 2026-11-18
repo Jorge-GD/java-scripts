@@ -152,6 +152,12 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
+# Las reglas del paso sonar (prompt, recetas, mensajes que no se automatizan y puertas del diff) estan en sonar-reglas.ps1, junto a este script.
+# Sin ese fichero rescate.ps1 sigue funcionando; solo -Sonar lo necesita.
+$ReglasSonar = Join-Path $PSScriptRoot 'sonar-reglas.ps1'
+$HayReglasSonar = Test-Path -LiteralPath $ReglasSonar
+if ($HayReglasSonar) { . $ReglasSonar }
+else { $SonarPromptReal = ''; $SonarRecetasReal = @(); $SonarNoAutomatizarReal = @(); $SonarProhibidoReal = @() }
 
 # ============================ CONFIGURACION ============================
 # Los flags de Copilot, la ruta de Maven y las carpetas ignoradas estan en comun.ps1.
@@ -245,33 +251,14 @@ $Cfg += @{
     'Tags'        = @('Tags', 'Etiquetas')
     'Language'    = @('Language', 'Lenguaje', 'Idioma')
   }
-  # Lo que se le pide al modelo en cada lote de Sonar (antes de las incidencias y de las recetas).
-  SonarPrompt           = @'
-Corrige cada incidencia de Sonar listada SIN cambiar el comportamiento: mismos calculos, mismas salidas, mismos nombres publicos y mismas propiedades.
-Lee el metodo entero antes de tocar. Si para corregirla tendrias que cambiar el comportamiento o una API publica, no la toques y dilo.
-Para complejidad, extrae metodos privados con nombre claro, sin cambiar el orden de las operaciones.
-No anadas tests nuevos salvo que la incidencia sea de un test.
-Lo que no corrijas, dejalo como esta y apuntalo: anade una linea al final de .rescate/sonar-sin-arreglar.txt (crealo si no existe; no borres lo que tenga) con la ruta y la linea de la lista y el motivo en una frase: <ruta>:<linea> | <motivo>. Despues arregla las demas.
-'@
-  # Recetas por regla: si el Rx casa con el mensaje de alguna incidencia del lote, el prompt lleva el Texto (una vez) con las incidencias a las que se aplica.
-  # Avisar = $true: lo arreglado asi se lista al final para que alguien lo revise (la receta cambia el resultado a proposito).
-  SonarRecetas          = @(
-    @{ Rx = 'Cognitive Complexity|Cyclomatic Complexity'; Avisar = $false; Texto = 'Extrae a metodos private bloques completos con un solo proposito (el cuerpo de un bucle, una rama larga, un case), con nombre de verbo y sin cambiar el orden de las llamadas ni las condiciones.' },
-    @{ Rx = 'Define a constant instead of duplicating'; Avisar = $false; Texto = 'Crea una constante private static final del mismo tipo y valor en la misma clase y usala donde el valor significa lo mismo. El nombre dice que significa, no el valor.' }
-  )
-  # Mensajes que no se mandan al modelo: salen en la lista final con su Motivo.
-  SonarNoAutomatizar    = @(
-    @{ Rx = 'serialVersionUID'; Motivo = 'cambiar serialVersionUID cambia la compatibilidad de lo ya serializado: lo decide una persona' }
-  )
-  # Lo que un intento no puede hacer, mirado en el diff entero del lote (sumado, no por fichero). Rx sobre el texto de la linea sin su + o -.
-  # Modo: 'anadida' (falla si alguna linea + casa), 'neto+' (casan mas + que -), 'neto-' (menos), 'neto0' (distinto). Si lleva Si (un regex),
-  # solo cuenta cuando algun mensaje del lote lo cumple. El Motivo va al intento siguiente.
-  SonarProhibido        = @(
-    @{ Modo = 'anadida'; Rx = 'NOSONAR|@SuppressWarnings'; Motivo = 'no se vale silenciar a Sonar (NOSONAR, @SuppressWarnings): corrige el codigo o apunta la incidencia' },
-    @{ Modo = 'anadida'; Rx = '^\s*@(Disabled|Ignore)\b'; Motivo = 'no se vale desactivar tests' },
-    @{ Modo = 'neto-'; Rx = '^\s*@(Test|ParameterizedTest)\b'; Motivo = 'no se vale quitar tests' },
-    @{ Modo = 'neto+'; Rx = '\bcatch\s*\(\s*(?:final\s+)?(Exception|Throwable)\b'; Motivo = 'no anadas catch genericos: cambian que errores se recogen' }
-  )
+  # Lo que se le pide al modelo en cada lote de Sonar, las recetas por regla (SonarRecetas; con Avisar = $true lo arreglado asi se lista al final),
+  # los mensajes que no se mandan al modelo (SonarNoAutomatizar) y lo que un intento no puede hacer, mirado en el diff entero del lote
+  # (SonarProhibido; Modo anadida, neto+, neto- o neto0; Si y Salvo condicionan la entrada a los mensajes del lote): los valores por defecto
+  # salen de sonar-reglas.ps1. Las Rx se aplican a la linea sin su + o - y sin distinguir mayusculas.
+  SonarPrompt           = $SonarPromptReal
+  SonarRecetas          = $SonarRecetasReal
+  SonarNoAutomatizar    = $SonarNoAutomatizarReal
+  SonarProhibido        = $SonarProhibidoReal
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
   MvnTests              = @('-q', '-B', 'test')
@@ -630,7 +617,7 @@ function Get-Calidad($Hechos) {
     }
     # Practicas que se ven en el texto
     foreach ($m in $script:RxInyeccion.Matches($limpio)) {
-      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final")
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final; sin estado mutable en el componente: si un campo guarda estado entre llamadas, no lo conviertas en final ni lo inicialices en el constructor; dilo")
     }
     foreach ($m in $script:RxConsola.Matches($limpio)) {
       Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'salida-consola' 'System.out, System.err o printStackTrace: usa el logger'
@@ -1090,8 +1077,8 @@ function Get-SonarProhibidas([string]$Diff, $Entradas, [string[]]$Mensajes = @()
       foreach ($m in @($Mensajes)) { if ([regex]::IsMatch("$m", "$($e.Salvo)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $exenta = $true; break } }
       if ($exenta) { continue }
     }
-    $a = @($mas | Where-Object { [regex]::IsMatch($_, "$($e.Rx)") }).Count
-    $b = @($menos | Where-Object { [regex]::IsMatch($_, "$($e.Rx)") }).Count
+    $a = @($mas | Where-Object { [regex]::IsMatch($_, "$($e.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }).Count
+    $b = @($menos | Where-Object { [regex]::IsMatch($_, "$($e.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }).Count
     $modo = "$($e.Modo)"
     if (-not $modo) { $modo = 'anadida' }
     $falla = $false
@@ -3062,7 +3049,10 @@ function Invoke-Fix {
       $empeorados = @()   # los pasos que el intento ha empeorado: sus hallazgos nuevos salen en el detalle
       foreach ($c in $Cfg.Orden) {
         if ($c -eq $paso) { break }
-        if ($esSonar -and @('build', 'tests') -notcontains $c) { continue }   # sonar vale para cualquier repo Java: la estructura de la migracion no le pone limites (crear una clase nueva vale)
+        # sonar vale para cualquier repo Java: build, tests, hexagonal (reglas del codigo) y calidad (la comprueba despues, con su propio aviso) cuentan siempre;
+        # la colocacion (estructura, ficheros, config, paridad, e2e) solo si hay plantilla
+        if ($esSonar -and $c -eq 'calidad') { continue }
+        if ($esSonar -and -not $PlantillaRoot -and @('estructura', 'ficheros', 'config', 'paridad', 'e2e') -contains $c) { continue }
         $q = Get-Cuenta $hall2 $c
         if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)."; $empeorados += $c }
       }
@@ -3272,6 +3262,7 @@ if ($Paso -eq 'sonar' -and -not $Sonar) { Fallo "El paso 'sonar' necesita -Sonar
 if ($Sonar) {
   $Sonar = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Sonar)
   if (-not (Test-Path -LiteralPath $Sonar -PathType Leaf)) { Fallo "No existe el informe de Sonar: $Sonar"; exit 1 }
+  if (-not $HayReglasSonar) { Fallo "Falta sonar-reglas.ps1 junto a rescate.ps1 ($ReglasSonar): lleva las reglas del paso sonar."; exit 1 }
 }
 $RepoRoot = Resolve-Dir $Repo
 $PlantillaRoot = Resolve-Dir $Plantilla
