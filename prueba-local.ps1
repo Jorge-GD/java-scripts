@@ -82,6 +82,8 @@ $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cad
 # Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
 # de un parrafo y cada tarea elige una. Ninguna otra linea de las plantillas empieza asi.
 $MarcaNo = '<!--no-->'
+# El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
+$MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
@@ -293,7 +295,16 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = '' }
   $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
   $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
+  $guardada = Join-Path (Join-Path $Datos 'tareas') ('arnes-' + $Repo + '.json')
+  $antes = $null
+  if (Test-Path -LiteralPath $guardada) { try { $antes = Read-Json $guardada } catch { } }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
+  # Un arnes invalidado (Stop-Vacios, o un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
+  # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas.
+  if ($t.estado -eq 'pendiente' -and $antes -and $antes.estado -eq 'pendiente' -and $antes.intentos -gt 0 -and $antes.motivo -and $antes.entradas.huella -eq $huella) {
+    $t.intentos = $antes.intentos; $t.motivo = $antes.motivo; $t.ultimoEstado = $antes.ultimoEstado
+    Save-Tarea $t
+  }
   $t.entradas.copia = $Dir   # la de ahora, aunque la tarea venga de otro lanzamiento
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
 }
@@ -699,7 +710,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
   $o.resultado = 'igual'
   $vacio = Join-Ruta $Local "salidas/vacio/$j"
-  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio).Count -eq 0) { $o.motivo = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.' }
+  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio).Count -eq 0) { $o.motivo = $MotivoVacio }
   return $o
 }
 
@@ -885,6 +896,34 @@ function Test-MismaHuella([string]$Dir, [string]$Antes, [string]$Despues) {
 }
 
 # ================================ RESULTADO ================================
+# Los jobs donde ningun caso deja nada distinto del caso vacio del arnes (el aviso de Get-Resultado) y ninguno sale distinto ni no
+# determinista: el test no le pasa las entradas al job y lo que sale igual no se ha probado. Los casos sin probar o sin preparar
+# no cuentan. Si solo algunos casos del job salen como el vacio, el job no esta aqui: sigue como siempre, con el aviso en cada uno.
+function Get-JobsVacios($Res) {
+  $vacios = @()
+  foreach ($j in @($Res | ForEach-Object { $_.job } | Select-Object -Unique)) {
+    $comparados = @($Res | Where-Object { $_.job -ceq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
+    if ($comparados.Count -gt 0 -and @($comparados | Where-Object { $_.resultado -ne 'igual' -or $_.motivo -ne $MotivoVacio }).Count -eq 0) { $vacios += $j }
+  }
+  return $vacios
+}
+
+# Es un fallo, no un igual: invalida los dos arneses guardados (se vuelven a escribir en el siguiente lanzamiento, y la IA recibe
+# este motivo por el mismo camino que el de un intento rechazado: la tarea queda pendiente, con su intento y su motivo), borra un
+# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. migracion.ps1
+# apunta como detalle las ultimas lineas de esta salida.
+function Stop-Vacios([string[]]$Jobs) {
+  $detalles = @($Jobs | ForEach-Object { "En $_, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job." })
+  foreach ($t in @($ArnesOrig, $ArnesMig)) {
+    Remove-Carpeta (Join-Ruta $Local "arnes/$($t.entradas.repo)")
+    $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = ($detalles -join ' ')
+    Save-Tarea $t
+  }
+  $json = Join-Path $DatosMig 'prueba-local.json'
+  if (Test-Path -LiteralPath $json) { Remove-Item -LiteralPath $json -Force }
+  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n"))
+}
+
 function Get-PorJob($Res) {
   $porJob = @()
   foreach ($p in $pruebas) {
@@ -1052,6 +1091,8 @@ try {
 
   # 5. Comparar y contar
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
+  $vacios = @(Get-JobsVacios $res)
+  if ($vacios.Count -gt 0) { Stop-Vacios $vacios }
   $o = Save-Resultado $res @()
   Show-Resultado $res $o.jobs
 
