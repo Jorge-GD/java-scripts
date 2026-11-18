@@ -14,6 +14,10 @@ FUNCION PUBLICA
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
 
+  Read-Diagnostico -Datos <carpeta datos>
+    Los problemas del migrado (hallazgos-antes.json y diagnostico-antes.md): por area, en el orden de la tabla del .md, con
+    Errores y Avisos (las listas y sus cuentas), el Estado del build y lo que Incumple la referencia. $null si falta un fichero.
+
 PLANTILLAS
   {{X}} lleva un valor de los datos (se escapa); {{{X}}} lleva un trozo de HTML que viene de una plantilla.
   Los trozos que se repiten (un job, un paso, un caso) estan dentro de cada plantilla, entre <!--TROZO nombre--> y
@@ -190,6 +194,31 @@ function Get-VistaJob($D, $J) {
     Job = $J.job; Id = $id; Ficha = $ficha; Pruebas = $pruebas; Hecha = $hecha; Titulo = $titulo; ParaQue = $paraQue; Motivo = $motivo
     Pasos = $pasos; Citados = $citados; Otros = $otros; Necesita = $necesita; Produce = $produce; Dudas = $dudas; SinFicha = $sinFicha
     DatosTecnicos = $datosTecnicos; SinCaso = $sinCaso
+  }
+}
+
+# Los problemas del migrado que dejo la fase diagnostico: hallazgos-antes.json y diagnostico-antes.md. El orden de las areas es el
+# de la tabla del .md (las que solo salen en los hallazgos, al final). $null si falta alguno de los dos o el .json no se lee.
+function Read-Diagnostico([string]$Datos) {
+  $rj = Join-Path $Datos 'hallazgos-antes.json'
+  $rm = Join-Path $Datos 'diagnostico-antes.md'
+  if (-not (Test-Path -LiteralPath $rj) -or -not (Test-Path -LiteralPath $rm)) { return $null }
+  try { $hall = @(Read-Json $rj | Where-Object { $null -ne $_ }) } catch { return $null }
+  $md = [System.IO.File]::ReadAllText($rm, $Utf8) -replace "`r`n", "`n"
+  $orden = @([regex]::Matches($md, '(?m)^\| (\w+) \| [0-9]+ \| [0-9]+ \|[ \t]*$') | ForEach-Object { $_.Groups[1].Value })
+  foreach ($h in $hall) { if ($orden -cnotcontains [string]$h.Cat) { $orden += [string]$h.Cat } }
+  $areas = @()
+  foreach ($c in $orden) {
+    $de = @($hall | Where-Object { [string]$_.Cat -ceq $c })
+    $areas += [pscustomobject]@{ Id = $c; Errores = @($de | Where-Object { $_.Sev -ceq 'error' }); Avisos = @($de | Where-Object { $_.Sev -cne 'error' }) }
+  }
+  $estado = [regex]::Match($md, '(?m)^- Estado: (.*)$').Groups[1].Value.Trim()
+  $incumple = $null
+  $m = [regex]::Match($md, '(?m)^- La plantilla incumple: capas ([0-9]+) \| ficheros ([0-9]+) \| calidad ([0-9]+) \| secretos ([0-9]+)[ \t]*$')
+  if ($m.Success) { $incumple = [pscustomobject]@{ Capas = $m.Groups[1].Value; Ficheros = $m.Groups[2].Value; Calidad = $m.Groups[3].Value; Secretos = $m.Groups[4].Value } }
+  return [pscustomobject]@{
+    Areas = $areas; Estado = $estado; Incumple = $incumple
+    Errores = @($hall | Where-Object { $_.Sev -ceq 'error' }).Count; Avisos = @($hall | Where-Object { $_.Sev -cne 'error' }).Count
   }
 }
 

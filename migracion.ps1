@@ -13,6 +13,8 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
   Arranque: herramientas y repos, batch de referencia (-Plantilla, o el guardado
   en %USERPROFILE%\.rescate\ajustes.json, o se pregunta), modelo, prueba de
   aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree.
+  Diagnostico (sin IA, la primera fase): rescate.ps1 -Modo diagnostico mide el migrado y deja datos\hallazgos-antes.json y
+  datos\diagnostico-antes.md; su pagina es 2-problemas.html. Se hace una vez: relanzar no repite Maven.
   Lectura: una ficha por clase del original, hasta 4 llamadas a la vez. Tras
   cada ronda el worktree tiene que estar limpio y el original y la referencia sin
   cambios. Una salida invalida se repite una vez, con el motivo y esfuerzo alto;
@@ -143,6 +145,36 @@ function Select-Modelo {
 }
 
 # ================================= FASES =================================
+# La fase diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y deja sus hallazgos, que se copian a
+# datos\ para la pagina de problemas. Se salta si ya estan (relanzar no repite Maven). Si el motor falla, parada 'motor'.
+function Invoke-FaseDiagnostico {
+  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-antes.json')) { return }
+  $Estado['fase'] = 'diagnostico'
+  Save-Estado
+  [void](Get-JobsContrato)
+  $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
+  $mMotor = Join-Ruta $RepoRoot '.rescate/diagnostico.md'
+  if (Test-Path -LiteralPath $hMotor) { Remove-Item -LiteralPath $hMotor -Force }
+  $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'diagnostico', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Si')
+  $registro = Join-Path $Registros 'diagnostico-antes.log'
+  [System.IO.File]::WriteAllText($registro, ((@($r.Salida | ForEach-Object { [regex]::Replace($_, '\x1b\[[0-9;]*m', '') }) -join "`n") + "`n"), $Utf8)
+  if ($r.Codigo -ne 0 -or -not (Test-Path -LiteralPath $hMotor) -or -not (Test-Path -LiteralPath $mMotor)) {
+    $ultimas = (@($r.Salida | Where-Object { "$_".Trim() } | Select-Object -Last 3) -join ' / ')
+    Set-Parada 'motor' "el diagnostico (rescate.ps1 -Modo diagnostico) ha salido con codigo $($r.Codigo): $ultimas" $registro
+    $script:Parada = $true
+    return
+  }
+  # el .json el ultimo: es el que dice que la fase esta hecha
+  foreach ($par in @(@($mMotor, 'diagnostico-antes.md'), @($hMotor, 'hallazgos-antes.json'))) {
+    $destino = Join-Path $Datos $par[1]
+    Copy-Item -LiteralPath $par[0] -Destination ($destino + '.tmp') -Force
+    Move-Item -LiteralPath ($destino + '.tmp') -Destination $destino -Force
+  }
+  Save-Informes
+  $d = Read-Diagnostico $Datos
+  Info "Diagnostico: $($d.Errores) errores y $($d.Avisos) avisos. Detalle: $(Join-Path $Salida '2-problemas.html')"
+}
+
 # Una fase: rondas de hasta Paralelo llamadas hasta que no quedan tareas pendientes, hay una parada o se llega
 # al -Limite (que cuenta tareas de todas las fases). Tras cada ronda: worktree limpio y original y referencia
 # sin cambios. Los contadores son del script ($script:Parada, Racha, Rondas e Iniciadas): las fases los comparten.
@@ -359,7 +391,9 @@ try {
   $script:Iniciadas = @{}
   $todas = @()
   $quedan = 0
+  Invoke-FaseDiagnostico
   foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')) {
+    if ($script:Parada) { break }
     $Estado['fase'] = $fase
     Save-Estado
     $tareas = @(Get-TareasFase $fase $conservar)

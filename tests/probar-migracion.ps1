@@ -26,9 +26,10 @@ $falsos = Join-Path $aqui 'falsos'
 
 # ============================== UTILIDADES ==============================
 # Lanza migracion.ps1 con RESCATE_HOME en la carpeta del escenario: nunca toca los ajustes reales.
-function Migra($E, [string[]]$A, [string]$Guion = '', [string[]]$Entrada = @('')) {
+function Migra($E, [string[]]$A, [string]$Guion = '', [string[]]$Entrada = @(''), [string]$Programa = '') {
+  if (-not $Programa) { $Programa = $Script }
   $env:RESCATE_HOME = $E.Home
-  try { return Lanzar $Script $A $Guion $Entrada }
+  try { return Lanzar $Programa $A $Guion $Entrada }
   finally { $env:RESCATE_HOME = '' }
 }
 
@@ -149,6 +150,8 @@ function Nuevo-Escenario([string]$Nombre, [string[]]$Clases = @('Clase1', 'Clase
   }
   foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
   Escribe $casa 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  # rescate.ps1 (el diagnostico que lanza migracion.ps1) lee el Maven y el Copilot de .rescate/config.json del repo, no de ajustes.json
+  Escribe $mig '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = $aj['CopilotExe']; MvnExe = $aj['MvnExe'] }))
   return [pscustomobject]@{
     Raiz = $raiz; Legacy = $leg; Plantilla = $pl; Migrado = $mig; Home = $casa
     Wt = ($mig + '-rescate'); Out = (Join-Path $mig 'migracion-batch')
@@ -780,7 +783,7 @@ $Pruebas['29 contrato que ya existe: se respeta y no se llama al motor'] = {
   $e = Escenario-Dos 'contrato'
   $r = Migra $e ((Basicos $e) + @('-Limite', '1'))
   Igual 'el primer lanzamiento (corto) sale con 0' 0 $r.Codigo
-  Comprueba 'todavia no hay contrato' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/contrato.json')))
+  Comprueba 'el contrato ya lo dejo la fase diagnostico (la primera)' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/contrato.json'))
   $mio = '{ "generado": "a mano", "original": "x", "jobs": [ { "nombre": "trabajoManual", "origen": "confirmado", "definidoEn": "' + $DirJava + '/JobsConfig.java", "entrada": "", "salida": "" } ] }'
   Escribe $e.Wt '.rescate/contrato.json' $mio
   $r = Migra $e (Basicos $e)
@@ -1577,6 +1580,90 @@ $Pruebas['59 dato con nombre de clase: tampoco sale por otra ref con el mismo te
   Comprueba 'la pagina no lleva el texto del dato, ni por la ref de la otra ficha ni como regla sin caso' ($a.Length -gt 0 -and -not $a.Contains($TextoClase)) (Cola $g.Salida)
   $sin = [regex]::Match($a, '(?s)<div class="job-sec sincaso">.*?</div>').Value
   Comprueba 'la otra regla sin caso si sale, y es la unica' ($sin.Contains([System.Net.WebUtility]::HtmlEncode($otro.texto)) -and ([regex]::Matches($sin, '<li>').Count -eq 1)) $sin
+}
+
+# ============================ DIAGNOSTICO: LA FASE Y LA PAGINA DE PROBLEMAS ============================
+
+$Pruebas['60 diagnostico: la corrida deja hallazgos-antes.json igual al del motor, diagnostico-antes.md, el registro y 2-problemas.html'] = {
+  $c = Corrida-Dos $GuionBase
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $h = Get-Ruta $e.Out 'datos/hallazgos-antes.json'
+  Comprueba 'existe datos/hallazgos-antes.json' (Test-Path -LiteralPath $h) (Cola $c.R.Salida)
+  if (-not (Test-Path -LiteralPath $h)) { return }
+  Igual 'es el hallazgos.json del motor, tal cual' (Lee $e.Wt '.rescate/hallazgos.json') (Lee $e.Out 'datos/hallazgos-antes.json')
+  Igual 'diagnostico-antes.md es el diagnostico.md del motor' (Lee $e.Wt '.rescate/diagnostico.md') (Lee $e.Out 'datos/diagnostico-antes.md')
+  $log = Get-Ruta $e.Out 'registros/diagnostico-antes.log'
+  Comprueba 'existe el registro' (Test-Path -LiteralPath $log)
+  $texto = ''
+  if (Test-Path -LiteralPath $log) { $texto = [System.IO.File]::ReadAllText($log) }
+  Comprueba 'el registro lleva lo que dijo el motor y ningun codigo de color' ($texto -match 'Diagnostico' -and $texto -notmatch '\x1b\[') $texto
+  $hall = @(Lee-Json $h)
+  $n = @($hall | Where-Object { $_.Sev -eq 'error' }).Count
+  $m = @($hall | Where-Object { $_.Sev -ne 'error' }).Count
+  $l = [regex]::Match($c.R.Salida, 'Diagnostico: (\d+) errores y (\d+) avisos\. Detalle: (\S*2-problemas\.html)')
+  Comprueba 'la consola dice cuantos errores y avisos y donde esta el detalle' ($l.Success -and [int]$l.Groups[1].Value -eq $n -and [int]$l.Groups[2].Value -eq $m -and $l.Groups[3].Value -eq (Get-Ruta $e.Out '2-problemas.html')) (Cola $c.R.Salida)
+  Comprueba 'no deja temporales en datos' (@(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos') -File -Filter '*.tmp').Count -eq 0)
+}
+
+$Pruebas['61 diagnostico: es la primera fase: con -Limite 1 ya estan los hallazgos y la pagina, y se cuenta antes de la lectura'] = {
+  $e = Nuevo-Escenario 'diag-primero' @('Clase1', 'Clase2', 'Clase3')
+  $r = Migra $e ((Basicos $e) + @('-Limite', '1'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'estan los hallazgos' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json')) (Cola $r.Salida)
+  Igual 'la lectura sigue limitada a una tarea' 1 (Cuenta-Estado (Tareas $e) 'hecha')
+  $d = $r.Salida.IndexOf('Diagnostico: ')
+  Comprueba 'la consola cuenta el diagnostico antes que las tareas de lectura' ($d -ge 0 -and $d -lt $r.Salida.IndexOf('Tareas de lectura')) (Cola $r.Salida)
+}
+
+$Pruebas['62 diagnostico: relanzar no lo repite'] = {
+  $e = Nuevo-Escenario 'diag-relanza' @('Clase1')
+  $r = Migra $e (Basicos $e)
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $h = Get-Ruta $e.Out 'datos/hallazgos-antes.json'
+  Comprueba 'deja los hallazgos' (Test-Path -LiteralPath $h) (Cola $r.Salida)
+  if (-not (Test-Path -LiteralPath $h)) { return }
+  $antes = Hash-De $h
+  $log = Hash-De (Get-Ruta $e.Out 'registros/diagnostico-antes.log')
+  Remove-Item -LiteralPath (Get-Ruta $e.Wt '.rescate/hallazgos.json') -Force
+  $r = Migra $e (Basicos $e)
+  Igual 'el segundo sale con 0' 0 $r.Codigo
+  Comprueba 'el motor no vuelve a escribir hallazgos.json en el worktree' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/hallazgos.json')))
+  Igual 'datos/hallazgos-antes.json no cambia' $antes (Hash-De $h)
+  Igual 'el registro no cambia' $log (Hash-De (Get-Ruta $e.Out 'registros/diagnostico-antes.log'))
+  Comprueba 'la consola no cuenta otro diagnostico' ($r.Salida -notmatch 'Diagnostico: ') (Cola $r.Salida)
+}
+
+$Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y el registro, y la portada lo ensena'] = {
+  $e = Nuevo-Escenario 'diag-motor' @('Clase1', 'Clase2')
+  # copia del sistema con un rescate.ps1 de mentira: en -Modo pre deja un contrato vacio; el diagnostico escribe una linea y sale con 3
+  $sis = Join-Path $Dir 'sistema-falso'
+  $raiz = Split-Path -Parent $Script
+  [void](New-Item -ItemType Directory -Path $sis -Force)
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  Escribe $sis 'rescate.ps1' @'
+param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
+if ($Modo -eq 'pre') {
+  New-Item -ItemType Directory -Path (Join-Path $Repo '.rescate') -Force | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path (Join-Path $Repo '.rescate') 'contrato.json'), '{ "jobs": [] }')
+  exit 0
+}
+Write-Host 'el motor de mentira se niega a diagnosticar'
+exit 3
+'@
+  $r = Migra $e (Basicos $e) '' @('') (Join-Path $sis 'migracion.ps1')
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'hay estado.json' ($null -ne $s) (Cola $r.Salida)
+  if ($null -eq $s) { return }
+  Igual 'parada: motivo motor' 'motor' $s.parada.motivo
+  Comprueba 'parada: el detalle lleva el codigo 3 y la ultima linea del motor' ($s.parada.detalle -match 'codigo 3' -and $s.parada.detalle -match 'se niega a diagnosticar') "$($s.parada.detalle)"
+  Igual 'parada: el registro es registros/diagnostico-antes.log' (Get-Ruta $e.Out 'registros/diagnostico-antes.log') $s.parada.registro
+  Comprueba 'el registro lleva lo que escribio el motor' ((Lee $e.Out 'registros/diagnostico-antes.log') -match 'se niega a diagnosticar')
+  Igual 'la fase en que se paro es diagnostico' 'diagnostico' $s.fase
+  Comprueba 'no hay hallazgos-antes.json ni se empezo a leer' ((-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json'))) -and @(Tareas $e).Count -eq 0)
+  $i = Pagina $e.Out 'index.html'
+  Comprueba 'la portada ensena la parada con su motivo y la ayuda' ($i -match 'Por qu. se ha parado' -and $i -match '<code>motor</code>' -and $i -match 'Estoy ejecutando migracion\.ps1') (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
