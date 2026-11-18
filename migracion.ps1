@@ -21,7 +21,7 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
   si falla otra vez la tarea queda atascada y se sigue.
   Orden de las fases (datos\estado.json lleva la fase en que va; cada tarea hecha se salta al relanzar, y una fase se
   hace aunque la anterior tenga atascadas). Con la respuesta "corregir":
-    fichas-clase, mapa, fichas-job, resumen, pruebas-pre, lectura-hecha, correccion, comparar y prueba-local.
+    fichas-clase, mapa, fichas-job, resumen, pruebas-pre, casos-pre, lectura-hecha, correccion, comparar y prueba-local.
   Con "parar" (o -SoloInforme): las mismas fases de lectura, comparar, lectura-hecha y prueba-local. Si la correccion
   se para, o hay tareas pendientes (-Limite), no se sigue con nada mas. Al acabar todo, sin parada ni pendientes, la
   fase es hecha, y estado.json lleva fin (vacio mientras corre; la hora al salir, de cualquier forma).
@@ -34,6 +34,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
     resumen     una tarea con todos los jobs: datos\resumen.json
     pruebas-pre una tarea por job con reglas o errores (sin leer codigo): el guion de prueba en pre,
                 datos\pruebas\<job>.json; los jobs sin reglas ni errores lo llevan montado por el script
+    casos-pre   una tarea por cada regla o error que pruebas-pre dejo en sinCaso: un caso de prueba para esa regla. Si vale, entra
+                en datos\pruebas\<job>.json y la regla sale de sinCaso; si no, se queda ahi. Va despues de pruebas-pre y se hace
+                tambien en un batch que ya paso por ella; las tareas hechas no se repiten
     lectura-hecha
     correccion  si contestaste "corregir": rescate.ps1 -Modo fix -Todo arregla el worktree (registros\correccion.log), se vuelve a
                 diagnosticar (datos\hallazgos-despues.json) y datos\correcciones.json cuenta que se ha corregido y que no.

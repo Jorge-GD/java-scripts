@@ -3005,10 +3005,10 @@ $Pruebas['97 portada y marco: navegacion a Original frente a migrado, Diferencia
   Comprueba 'los sin pieza no salen: InformeWriter no esta' (-not $gd.Contains('InformeWriter'))
   $fases = [regex]::Match($i, '(?s)<ol class="fases">.*?</ol>').Value
   $lis = @([regex]::Matches($fases, '(?s)<li>.*?</li>') | ForEach-Object { $_.Value })
-  $ip = @($lis | Where-Object { $_ -match 'Guion de prueba en pre' })[0]
+  $ip = @($lis | Where-Object { $_ -match 'Casos de las reglas sin caso' })[0]
   $ic = @($lis | Where-Object { $_ -match 'Comparaci.n con el original' })[0]
   $ir = @($lis | Where-Object { $_ -match 'Correcci.n del migrado' })[0]
-  Comprueba 'Que ha hecho el script: la fase va entre el guion de prueba y la correccion' ($ic -and ([array]::IndexOf($lis, $ip) + 1) -eq [array]::IndexOf($lis, $ic) -and ([array]::IndexOf($lis, $ic) + 1) -eq [array]::IndexOf($lis, $ir)) $fases
+  Comprueba 'Que ha hecho el script: la fase va entre los casos de las reglas sin caso (que siguen al guion de prueba) y la correccion' ($ic -and ([array]::IndexOf($lis, $ip) + 1) -eq [array]::IndexOf($lis, $ic) -and ([array]::IndexOf($lis, $ic) + 1) -eq [array]::IndexOf($lis, $ir)) $fases
   $nt = @(Tareas $m.E 'comparar-pieza').Count
   Comprueba 'con su cuenta de tareas' ($ic -match "hechas: $nt, atascadas: 0, pendientes: 0") $ic
   $f = [regex]::Match($i, '(?s)<ul class="ficheros">.*?</ul>').Value
@@ -3676,7 +3676,7 @@ $Pruebas['117 (P2) portada, Lo que te toca: el grupo de distintos va el primero,
 # Las lineas de Que ha hecho el script de una portada: la clave de la fase, su estado, su texto y su cuenta, en su orden.
 function Clave-Fase([string]$Nombre) {
   foreach ($k in @(@('diagnostico', 'Diagn.stico'), @('clases', 'Lectura de las clases'), @('mapa', 'Mapa de jobs'), @('jobs', 'Redacci.n de cada job'), @('resumen', 'Resumen y glosario'),
-      @('pre', 'Guion de prueba'), @('correccion', 'Correcci.n del migrado'), @('comparar', 'Comparaci.n con el original'), @('local', 'Prueba en local'))) {
+      @('pre', 'Guion de prueba'), @('casos', 'Casos de las reglas sin caso'), @('correccion', 'Correcci.n del migrado'), @('comparar', 'Comparaci.n con el original'), @('local', 'Prueba en local'))) {
     if ($Nombre -match $k[1]) { return $k[0] }
   }
   return $Nombre
@@ -3692,8 +3692,8 @@ $Pruebas['118 (P2) portada, Que ha hecho el script: el orden segun la respuesta,
   $d = Datos-Pagina4
   $con = (Correccion-Con (Corrida-Dos $GuionBase).E 'p2-fases-con' $d.Antes $d.Despues $d.Corr).Dir
   $sin = Local-Salida 'p2-fases-sin'
-  $corregir = 'diagnostico clases mapa jobs resumen pre correccion comparar local'
-  $parar = 'diagnostico clases mapa jobs resumen pre comparar correccion local'
+  $corregir = 'diagnostico clases mapa jobs resumen pre casos correccion comparar local'
+  $parar = 'diagnostico clases mapa jobs resumen pre casos comparar correccion local'
   $antes = 'diagnostico=hecha clases=hecha mapa=hecha jobs=hecha resumen=hecha pre=hecha'
   $parada = [ordered]@{ motivo = 'tope-de-tiempo'; detalle = 'detalle'; registro = 'registro'; ayuda = 'ayuda' }
   $filas = @(
