@@ -1663,7 +1663,9 @@ function Save-Intento([string]$PasoId, [int]$N, [string]$Commit) {
 
 function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
 
-# Si hay marca, vuelve al commit de partida (lo cambiado sin commit y lo creado se va) y la borra.
+# Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y
+# lo creado van antes a un git stash (el usuario pudo cortar la pasada y tocar algo a mano). Si la rama ya no esta en ese
+# commit, el usuario hizo el suyo: no se deshace nada.
 function Undo-IntentoCortado([string]$Rama) {
   $p = Get-RutaIntento
   if (-not (Test-Path -LiteralPath $p)) { return }
@@ -1671,7 +1673,16 @@ function Undo-IntentoCortado([string]$Rama) {
   Remove-Intento
   $c = "$($m.commit)"
   if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
-  Info "Habia un intento cortado (paso $($m.paso), lote $($m.lote)): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
+  $donde = "paso $($m.paso), lote $($m.lote)"
+  $head = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
+  if ($head -ne $c) { Aviso "Habia un intento cortado ($donde), pero la rama ha avanzado desde entonces: no deshago nada."; return }
+  Info "Habia un intento cortado ($donde): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
+  $cambios = @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ -and $_ -notmatch '^.. "?(target|\.rescate)/' })
+  if ($cambios.Count -gt 0) {
+    $r = Invoke-Git $RepoRoot @('stash', 'push', '--include-untracked', '-m', "rescate: intento cortado ($donde)")
+    if ($r.Codigo -eq 0) { Aviso 'Lo he guardado en git stash (recuperalo con: git stash list / git stash pop).' }
+    else { Aviso ('No he podido guardarlo en un git stash (' + ($r.Salida -join ' ') + '): lo deshago sin guardarlo.') }
+  }
   Undo-Lote $Rama $c
 }
 
@@ -1857,11 +1868,11 @@ function Invoke-Fix {
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
       if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }
-    Remove-Intento   # pase o no, ya se commitea o se deshace
 
     if (-not $ok) {
       # Nada se queda a medias: se deshace y se prueba algo mas facil.
       Undo-Lote $rama $check
+      Remove-Intento   # la marca se va cuando el lote ya esta deshecho, no antes
       $script:Build = $buildAntes
       Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $intentos intento(s)."
       $problemas | ForEach-Object { Aviso "  - $_" }
@@ -1919,6 +1930,7 @@ function Invoke-Fix {
     [void](Invoke-Git $RepoRoot @('add', '-A'))
     $d = Get-Cuenta $hall2 $paso
     $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', "rescate($paso): lote $n, hallazgos $($antes[$paso]) a $d") + $Cfg.CommitArgs)
+    Remove-Intento   # la marca se va cuando el lote ya esta commiteado (o ha fallado el commit y los cambios son del usuario), no antes
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado; los cambios siguen en el arbol de trabajo: ' + ($r.Salida -join ' ')); exit 3 }
     if ($conIntento) {
       Write-Consejo $consejoDe[$sel[0]] "atascado en '$paso': $($sel[0])" @('si, commit ' + ((Invoke-Git $RepoRoot @('log', '-1', '--format=%h')).Salida -join '').Trim())

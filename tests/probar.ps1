@@ -1833,6 +1833,69 @@ $Pruebas['m8 cortado: sin marca, los cambios sin commit siguen yendo a la foto']
   Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
 }
 
+$Pruebas['m8 cortado: si la rama ha avanzado desde la marca (un commit del usuario), no se deshace nada y la marca se borra'] = {
+  $e = Escenario-M6 'm8-cortado-avanzado'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $texto = Lee $e.Wt $LeerM8
+  $suyo = 'src/main/java/com/acme/life/application/usecases/DelUsuario.java'
+  # el usuario corta la pasada, arregla a mano con su commit en la rama de rescate y deja algo sin commit; la marca queda vieja
+  Escribe $e.Wt $suyo "class DelUsuario {}`n"
+  [void](GitEn $e.Wt @('add', '--', $suyo))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano del usuario'))
+  Escribe $e.Wt $LeerM8 ($texto + "// sin commit del usuario`n")
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $partida + '"}')
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice en una linea que no deshace nada' ($r.Salida -match 'Habia un intento cortado \(paso estructura, lote 7\), pero la rama ha avanzado desde entonces: no deshago nada\.') (Cola $r.Salida)
+  Comprueba 'el commit del usuario sigue en la rama' ((GitEn $e.Wt @('log', '--format=%s')) -match 'arreglo a mano del usuario') (GitEn $e.Wt @('log', '--format=%s'))
+  Comprueba 'y su fichero' (Test-Path -LiteralPath (Get-Ruta $e.Wt $suyo))
+  Comprueba 'lo que dejo sin commit no se pierde: va a la foto, como sin marca' ((GitEn $e.Wt @('log', '--format=%s')) -match 'foto' -and (Lee $e.Wt $LeerM8) -match 'sin commit del usuario') (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+$Pruebas['m8 cortado: con la marca al dia y cambios, van a un stash y el arbol queda limpio en el commit de la marca'] = {
+  $e = Escenario-M6 'm8-cortado-stash'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $texto = Lee $e.Wt $LeerM8
+  $nuevo = 'src/main/java/com/acme/life/application/usecases/AMedias.java'
+  Escribe $e.Wt $LeerM8 ($texto + "// a medias`n")
+  Escribe $e.Wt $nuevo "class AMedias {}`n"
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $partida + '"}')
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  $st = @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Igual 'hay un stash' 1 $st.Count
+  Comprueba 'con el paso y el lote en su nombre' ($st.Count -eq 1 -and $st[0] -match 'rescate: intento cortado \(paso estructura, lote 7\)') ($st -join ' / ')
+  Comprueba 'el aviso dice como recuperarlo' ($r.Salida -match 'Lo he guardado en git stash \(recuperalo con: git stash list / git stash pop\)\.') (Cola $r.Salida)
+  Comprueba 'el stash lleva el cambio del fichero tocado' ((GitEn $e.Wt @('show', 'stash@{0}')) -match '// a medias')
+  Comprueba 'y el fichero nuevo' ((GitEn $e.Wt @('show', ('stash@{0}^3:' + $nuevo))) -match 'class AMedias')
+  Igual 'el arbol queda en el commit de la marca' $partida (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'no hay commit foto' ((GitEn $e.Wt @('log', '--format=%s')) -notmatch 'foto')
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+$Pruebas['m8 marca: el commit del lote se hace con la marca puesta y se borra despues'] = {
+  $e = Escenario-M6 'm8-marca-commit'
+  # un hook de commit apunta si la marca esta cuando se commitea (los worktrees usan los hooks del repo)
+  $hook = Get-Ruta $e.Repo '.git/hooks/pre-commit'
+  [void](GitEn $e.Repo @('config', 'core.hooksPath', (Get-Ruta $e.Repo '.git/hooks')))   # por si la maquina trae los suyos
+  Escribe $e.Repo '.git/hooks/pre-commit' "#!/bin/sh`nif [ -f .rescate/intento-en-curso.json ]; then echo con >> .rescate/hook-marca.log; else echo sin >> .rescate/hook-marca.log; fi`n"
+  if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x $hook }
+  $r = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'sale con 0' 0 $r.Codigo
+  $log = Get-Ruta $e.Wt '.rescate/hook-marca.log'
+  if (-not (Test-Path -LiteralPath $log)) { Comprueba 'el hook se ejecuto en el commit del lote' $false (Cola $r.Salida); return }
+  $v = @([System.IO.File]::ReadAllLines($log) | Where-Object { $_ })
+  Comprueba 'el commit del lote vio la marca' ($v.Count -ge 1 -and @($v | Where-Object { $_ -ne 'con' }).Count -eq 0) ($v -join ',')
+  Comprueba 'despues no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
 # ===== M8 (parte 6): DESCRIPTIVO POR CONSOLA Y EN LOS LOGS =====
 # Lo que sale por consola en el intento $I de un lote: desde su 'Copilot trabajando (intento I de N)' hasta el siguiente
 # intento, el siguiente lote o el final (el aviso del lote deshecho va dentro del ultimo intento).
