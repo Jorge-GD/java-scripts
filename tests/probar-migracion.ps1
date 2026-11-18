@@ -4813,5 +4813,194 @@ $y = @($l | Where-Object { $_.rel -like '*importar.sh' })[0]
   Comprueba 'el id es sh- y ocho cifras hex, y es el mismo en otra pasada (sale de la ruta relativa)' ($v['ID'] -match '^sh-[0-9a-f]{8}$' -and $v['MISMOS'] -eq 'True') "$($v['ID']) $($v['MISMOS'])"
 }
 
+# ---- (c) ficha-sh: la tarea que cuenta lo que hace cada .sh ----
+# Un original con los scripts de las formas A y B y el yml que enlaza al segundo, y su lanzador para las pruebas de la ficha.
+function Original-Fichas([string]$Nombre, [string[]]$Scripts = @('cargas.ksh', 'recibos.sh')) {
+  $d = Join-Path $Dir $Nombre
+  Escribe $d 'src/main/resources/application-exportar_recibos.yml' "spring:`n  batch:`n    job:`n      name: exportarRecibosJob`n"
+  if ($Scripts -contains 'cargas.ksh') { Escribe $d 'bin/cargas.ksh' $FormaA }
+  if ($Scripts -contains 'recibos.sh') { Escribe $d 'bin/recibos.sh' $FormaB }
+  return $d
+}
+$script:PreludioFicha = @'
+$Datos = '{{DIR}}/datos'
+$Fuentes = @('CargarReader', 'GestorRecibos') | ForEach-Object { [pscustomobject]@{ BaseName = $_ } }
+$jobs = @(
+  [pscustomobject]@{ nombre = 'cargarCuotasJob'; definidoEn = 'src/main/java/com/acme/old/CargarCuotasConfig.java' },
+  [pscustomobject]@{ nombre = 'exportarRecibosJob'; definidoEn = 'src/main/java/com/acme/old/ExportarRecibosConfig.java' })
+$l = @(Get-Lanzadores '{{LEG}}' '' $jobs)
+'@
+
+$Pruebas['m17 lanzadores: una tarea ficha-sh por script, con el texto numerado, el inventario, las lineas obligatorias y el job enlazado; la huella sigue al script; uno demasiado largo nace atascado'] = {
+  $d = Original-Fichas 'ficha-tareas'
+  $codigo = $script:PreludioFicha + @'
+$t = @(Get-TareasFichaSh $l $false)
+'N=' + $t.Count
+$a = @($t | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0]
+$b = @($t | Where-Object { $_.entradas.script -eq 'bin/recibos.sh' })[0]
+'A=' + $a.id + '|' + $a.tipo + '|' + $a.estado + '|' + $a.salida + '|' + $a.entradas.lineas + '|' + $a.entradas.ruta
+'B=' + $b.id + '|' + $b.estado + '|' + $b.salida
+'REQ_A=' + ((@($a.entradas.requeridas | ForEach-Object { $_.tipo }) | Group-Object | Sort-Object Name | ForEach-Object { $_.Name + ':' + $_.Count }) -join ' ')
+'REQ_B=' + (@($b.entradas.requeridas | ForEach-Object { '' + $_.linea + $_.tipo }) -join ',')
+'JOB_A=' + $a.entradas.job
+'JOB_B=' + $b.entradas.job
+[System.IO.File]::WriteAllText('{{DIR}}/prompt-a.txt', (Get-Prompt $a '' ''))
+[System.IO.File]::WriteAllText('{{DIR}}/prompt-b-reintento.txt', (Get-Prompt $b '' 'MOTIVO-DE-PRUEBA'))
+$h0 = $a.entradas.huella
+$a.estado = 'hecha'; $a.resultado = [pscustomobject]@{ x = 1 }; Save-Tarea $a
+$t2 = @(Get-TareasFichaSh $l $false)
+'REUSA=' + @($t2 | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0].estado + '|' + @($t2 | Where-Object { $_.entradas.script -eq 'bin/recibos.sh' })[0].estado
+[System.IO.File]::AppendAllText('{{LEG}}/bin/cargas.ksh', "# una linea mas`n")
+$l3 = @(Get-Lanzadores '{{LEG}}' '' $jobs)
+$a3 = @(Get-TareasFichaSh $l3 $false | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0]
+'CAMBIA=' + ($a3.entradas.huella -ne $h0) + '|' + $a3.estado
+$Cfg.LineasPorTarea = 10
+$t4 = @(Get-TareasFichaSh $l3 $false)
+'LARGO_A=' + @($t4 | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0].estado + '|' + @($t4 | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0].motivo
+'LARGO_B=' + @($t4 | Where-Object { $_.entradas.script -eq 'bin/recibos.sh' })[0].estado
+'FIN'
+'@
+  $r = En-Biblioteca 'ficha-tareas' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'ficha-tareas-datos')).Replace('{{LEG}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  $dd = Join-Path $Dir 'ficha-tareas-datos'
+  Igual 'dos scripts, dos tareas' '2' $v['N']
+  $ha = ($v['A'] -split '\|')
+  Comprueba 'la de cargas.ksh: id fichash-<hash>, tipo ficha-sh, pendiente, su salida en datos/fichas-sh, sus lineas y su ruta' ($ha[0] -match '^fichash-[0-9a-f]{8}$' -and $ha[1] -eq 'ficha-sh' -and $ha[2] -eq 'pendiente' -and $ha[3] -eq ('datos/fichas-sh/sh-' + $ha[0].Substring(8) + '.json') -and $ha[4] -eq ('' + @($FormaA -split "`r?`n").Count) -and $ha[5] -eq (Join-Path $d 'bin/cargas.ksh')) $v['A']
+  Igual 'las lineas obligatorias de la forma A: cinco de fichero (los mv, el cp y el find; sin los cd ni el ls) y tres de salida' 'fichero:5 salida:3' $v['REQ_A']
+  Igual 'las de la forma B: el perfil y nada mas (el cd no obliga y el java no es una accion)' ('3perfil') $v['REQ_B']
+  Comprueba 'el job de la A: sin enlazar; el de la B: el del yml, con su fichero y linea' ($v['JOB_A'] -match '^ninguno' -and $v['JOB_B'] -match 'exportarRecibosJob' -and $v['JOB_B'] -match 'application-exportar_recibos\.yml:4') "$($v['JOB_A']) // $($v['JOB_B'])"
+  $p = ''
+  if (Test-Path -LiteralPath (Join-Path $dd 'prompt-a.txt')) { $p = [System.IO.File]::ReadAllText((Join-Path $dd 'prompt-a.txt')) }
+  Comprueba 'el prompt: TIPO, SCRIPT y ESCRIBIR, sin LEER ni nada que leer en disco' ($p -match '(?m)^TIPO: ficha-sh\r?$' -and $p -match '(?m)^SCRIPT: bin/cargas\.ksh\r?$' -and $p -match '(?m)^ESCRIBIR: \.rescate/tareas/fichash-[0-9a-f]{8}\.json\r?$' -and $p -notmatch '(?m)^LEER:') ($p.Substring(0, [Math]::Min(300, $p.Length)))
+  Comprueba 'el prompt lleva el script entero con el numero de cada linea' ($p -match '(?m)^\s+1\| #!/bin/ksh\r?$' -and $p -match ('(?m)^\s+' + (Linea-Con $FormaA '^exit 0') + '\| exit 0\r?$') -and $p.Contains('java -jar ./jar/cargas-acme.jar ${MODO} ${FECHA}')) ''
+  Comprueba 'el inventario con su linea y su tipo, las lineas obligatorias y el job' ($p -match ('(?m)^' + (Linea-Con $FormaA '^java -jar') + ' \[java\] \./jar/cargas-acme\.jar\r?$') -and $p -match '(?m)^OBLIGATORIAS: \d+(, \d+)+\r?$' -and $p -match '(?m)^JOB ENLAZADO: ninguno') ''
+  Comprueba 'lleva la lista de frases de relleno y el maximo de la cita' ($p.Contains('"de forma clara"') -and $p.Contains('como mucho 120 caracteres')) ''
+  $q = ''
+  if (Test-Path -LiteralPath (Join-Path $dd 'prompt-b-reintento.txt')) { $q = [System.IO.File]::ReadAllText((Join-Path $dd 'prompt-b-reintento.txt')) }
+  Comprueba 'el reintento lleva la correccion con el motivo' ($q -match '(?s)## CORRECCI.*MOTIVO-DE-PRUEBA') ''
+  Igual 'una tarea hecha con la misma huella se reutiliza y la otra sigue pendiente' 'hecha|pendiente' $v['REUSA']
+  Igual 'con una linea mas en el script la huella cambia y la tarea vuelve a pendiente' 'True|pendiente' $v['CAMBIA']
+  Comprueba 'un script de mas de 3 * LineasPorTarea lineas nace atascado, con el motivo; el corto no' ($v['LARGO_A'] -match '^atascada\|' -and $v['LARGO_A'] -match 'pasa de 30 lineas' -and $v['LARGO_A'] -match 'bin/cargas\.ksh' -and $v['LARGO_B'] -eq 'pendiente') "$($v['LARGO_A']) // $($v['LARGO_B'])"
+}
+
+$Pruebas['m17 lanzadores: Test-FichaSh - una salida buena vale; una cita inventada no; si faltan las lineas de un mv y un exit 1 el motivo las nombra y en el ultimo intento quedan en sinExplicar'] = {
+  $d = Original-Fichas 'ficha-valida' @('cargas.ksh')
+  $codigo = $script:PreludioFicha + @'
+$t = @(Get-TareasFichaSh $l $false)[0]
+$lin = [System.IO.File]::ReadAllLines($t.entradas.ruta)
+$base = Join-Path '{{DIR}}' 'w'
+function Cita([int]$N) { $x = $lin[$N - 1].Trim(); return $x.Substring(0, [Math]::Min(100, $x.Length)) }
+$nf = @(1..$lin.Count | Where-Object { $lin[$_ - 1] -match '-f \| --fecha' })[0]
+function Buena {
+  $acc = @(); $sal = @()
+  foreach ($r in $t.entradas.requeridas) {
+    if ($r.tipo -eq 'salida') { $sal += [ordered]@{ codigo = [int]$r.detalle; cuando = 'Cuando acaba la carga o la llamada esta mal.'; linea = $r.linea; cita = (Cita $r.linea) } }
+    else { $acc += [ordered]@{ cuando = 'antes'; condicion = ''; que = 'mueve'; detalle = 'Aparta los ficheros que dejo la carga anterior.'; linea = $r.linea; cita = (Cita $r.linea) } }
+  }
+  return [ordered]@{ paraQue = 'Lanza la carga de cuotas del dia.'; parametros = @([ordered]@{ nombre = '--fecha'; obligatorio = $true; valores = 'una fecha'; formato = 'dd/MM/yyyy'; linea = $nf; cita = (Cita $nf) }); acciones = $acc; salidas = $sal }
+}
+function Prueba([string]$Nombre, $Ficha, [int]$Intentos = 0) {
+  $dir = Join-Path $base $Nombre
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  [System.IO.File]::WriteAllText((Join-Path $dir ('.rescate/tareas/' + $t.id + '.json')), (ConvertTo-Json -InputObject $Ficha -Depth 6))
+  $t.intentos = $Intentos
+  $r = Test-FichaSh $t $dir
+  if ($r.Ok) { return ('BIEN acc=' + @($r.Ficha.acciones).Count + ' sal=' + @($r.Ficha.salidas).Count + ' par=' + @($r.Ficha.parametros).Count + ' probados=' + @(@($r.Ficha.acciones) + @($r.Ficha.salidas) + @($r.Ficha.parametros) | Where-Object { $_.probado }).Count + ' sin=' + (@($r.Ficha.sinExplicar | ForEach-Object { '' + $_.linea + ':' + $_.tipo }) -join '+') + ' paraQue=' + $r.Ficha.paraQue + ' script=' + $r.Ficha.script) }
+  return ('MAL ' + $r.Motivo)
+}
+function Sin-Esas($Ficha) {
+  $mv = @($t.entradas.requeridas | Where-Object { $_.tipo -eq 'fichero' -and $_.detalle -match 'mv' })[0].linea
+  $ex = @($t.entradas.requeridas | Where-Object { $_.tipo -eq 'salida' -and $_.detalle -eq '1' })[0].linea
+  $Ficha.acciones = @($Ficha.acciones | Where-Object { $_.linea -ne $mv })
+  $Ficha.salidas = @($Ficha.salidas | Where-Object { $_.linea -ne $ex })
+  return $Ficha
+}
+'V1=' + (Prueba 'v1' (Buena))
+$f = Buena; foreach ($x in @($f.acciones) + @($f.salidas) + @($f.parametros)) { $x.cita = 'esta cita no sale en el script ' + $x.linea }
+'V2=' + (Prueba 'v2' $f)
+'V3=' + (Prueba 'v3' (Sin-Esas (Buena)))
+'V4=' + (Prueba 'v4' (Sin-Esas (Buena)) 1)
+$f = Buena; $cp = @($f.acciones | Where-Object { $_.cita -like 'cp *' })[0]; $cp.cita = 'cp esto-no-esta-en-el-script x y'
+'V5=' + (Prueba 'v5' $f)
+'V5B=' + (Prueba 'v5b' $f 1)
+$f = Buena; $f.acciones[0].detalle = 'Mueve lo que deja GestorRecibos.'
+'V6=' + (Prueba 'v6' $f)
+$f = Buena; $f.acciones[0].cuando = 'nunca'
+'V7=' + (Prueba 'v7' $f)
+$f = Buena; $f.acciones[0].que = 'inventado'
+'V8=' + (Prueba 'v8' $f)
+$f = Buena; $f.parametros[0].obligatorio = 'si'
+'V9=' + (Prueba 'v9' $f)
+$f = Buena; $f.salidas[0].codigo = 'uno'
+'V10=' + (Prueba 'v10' $f)
+$f = Buena; $f.parametros = 'fecha'
+'V11=' + (Prueba 'v11' $f)
+$f = Buena; $f.paraQue = '   '
+'V12=' + (Prueba 'v12' $f)
+$f = Buena; $f.acciones[0].linea = 0
+'V13=' + (Prueba 'v13' $f)
+$f = Buena; $f.Remove('salidas')
+'V14=' + (Prueba 'v14' $f)
+$f = Buena; $f.salidas[0].codigo = 0; $f.acciones[1].condicion = 'Si el modo es ALTA.'
+'V15=' + (Prueba 'v15' $f)
+'FIN'
+'@
+  $r = En-Biblioteca 'ficha-valida' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'ficha-valida-datos')).Replace('{{LEG}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  $mv = Linea-Con $FormaA '^\s+ALTA \) for'
+  $ex = Linea-Con $FormaA '^\s+exit 1$'
+  Igual 'una salida buena vale: las ocho lineas obligatorias contadas (5 acciones y 3 salidas), el parametro, todo con su cita comprobada, y trae el script y el paraQue' 'BIEN acc=5 sal=3 par=1 probados=9 sin= paraQue=Lanza la carga de cuotas del dia. script=bin/cargas.ksh' $v['V1']
+  Comprueba 'con todas las citas inventadas se rechaza y el motivo dice que son las citas' ($v['V2'] -match '^MAL ' -and $v['V2'] -match 'citas' -and $v['V2'] -match 'no salen') $v['V2']
+  Comprueba 'sin las lineas de un mv y de un exit 1 se rechaza y el motivo nombra las dos lineas, con su texto' ($v['V3'] -match '^MAL Te faltan las lineas' -and $v['V3'] -match "\b$mv\b" -and $v['V3'] -match "\b$ex\b" -and $v['V3'] -match 'mv' -and $v['V3'] -match 'exit 1') $v['V3']
+  $esperadas = (@([pscustomobject]@{ L = $mv; T = 'fichero' }, [pscustomobject]@{ L = $ex; T = 'salida' }) | Sort-Object L | ForEach-Object { '' + $_.L + ':' + $_.T }) -join '+'
+  Igual 'en el ultimo intento vale y las dos lineas quedan en sinExplicar, por orden de linea (la del mv como fichero y la del exit como salida)' "BIEN acc=4 sal=2 par=1 probados=7 sin=$esperadas paraQue=Lanza la carga de cuotas del dia. script=bin/cargas.ksh" $v['V4']
+  Comprueba 'una sola cita inventada (de nueve) no tumba la ficha, pero esa linea no cuenta como explicada: el motivo la nombra' ($v['V5'] -match '^MAL Te faltan las lineas' -and $v['V5'] -match ('\b' + (Linea-Con $FormaA '^cp ') + '\b')) $v['V5']
+  Comprueba 'y en el ultimo intento queda en sinExplicar y esa accion se guarda sin probar' ($v['V5B'] -match 'probados=8 ' -and $v['V5B'] -match ('sin=' + (Linea-Con $FormaA '^cp ') + ':fichero ')) $v['V5B']
+  Comprueba 'un nombre de clase en un detalle no vale y el motivo lo nombra' ($v['V6'] -match '^MAL ' -and $v['V6'] -match 'GestorRecibos') $v['V6']
+  Comprueba 'cuando fuera de la lista: el motivo lo dice' ($v['V7'] -match '^MAL ' -and $v['V7'] -match 'cuando' -and $v['V7'] -match 'antes') $v['V7']
+  Comprueba 'que fuera de la lista: el motivo lo dice' ($v['V8'] -match '^MAL ' -and $v['V8'] -match 'que' -and $v['V8'] -match 'mueve') $v['V8']
+  Comprueba 'obligatorio que no es true ni false' ($v['V9'] -match '^MAL ' -and $v['V9'] -match 'obligatorio') $v['V9']
+  Comprueba 'codigo de salida que no es un numero' ($v['V10'] -match '^MAL ' -and $v['V10'] -match 'codigo') $v['V10']
+  Comprueba 'parametros que no es una lista' ($v['V11'] -match '^MAL ' -and $v['V11'] -match 'parametros') $v['V11']
+  Comprueba 'paraQue en blanco' ($v['V12'] -match '^MAL ' -and $v['V12'] -match 'paraQue') $v['V12']
+  Comprueba 'una linea que no es un entero desde 1' ($v['V13'] -match '^MAL ' -and $v['V13'] -match 'acciones\[0\]\.linea') $v['V13']
+  Comprueba 'sin el campo salidas' ($v['V14'] -match '^MAL ' -and $v['V14'] -match 'salidas') $v['V14']
+  Comprueba 'un codigo de salida 0 y una condicion con texto valen' ($v['V15'] -match '^BIEN ') $v['V15']
+}
+
+$Pruebas['m17 lanzadores: Save-Lanzadores escribe datos/lanzadores.json y Save-FichasSh la ficha de cada tarea hecha en datos/fichas-sh'] = {
+  $d = Original-Fichas 'ficha-guardar'
+  $codigo = $script:PreludioFicha + @'
+Save-Lanzadores $l
+$j = Read-Json (Join-Path $Datos 'lanzadores.json')
+'N=' + @($j.lanzadores).Count
+$x = @($j.lanzadores | Where-Object { $_.rel -eq 'bin/recibos.sh' })[0]
+'X=' + $x.id + '|' + $x.interprete + '|' + $x.lineas + '|' + (@($x.jobs) -join '+') + '|' + $x.enlace.como + '|' + $x.enlace.fichero + '|' + $x.enlace.linea + '|' + @($x.inventario).Count + '|' + $x.ruta
+$java = @($x.inventario | Where-Object { $_.tipo -eq 'java' })[0]
+'JAVA=' + $java.jar + '|' + @($java.argumentos).Count + '|' + @($java.propiedades).Count
+'LEIDOS=' + @(Read-Lanzadores).Count + '|' + @(Read-Lanzadores)[0].rel
+$t = @(Get-TareasFichaSh $l $false)
+$t[0].estado = 'hecha'
+$t[0].resultado = [ordered]@{ id = $t[0].ficha; script = $t[0].entradas.script; paraQue = 'Algo.'; parametros = @(); acciones = @(); salidas = @(); sinExplicar = @() }
+Save-FichasSh $t
+'FICHAS=' + (@(Get-ChildItem (Join-Path $Datos 'fichas-sh') -Filter '*.json' | ForEach-Object { $_.Name }) -join ',')
+'ID0=' + $t[0].ficha
+'F0=' + (Read-Json (Join-Path $Datos ('fichas-sh/' + $t[0].ficha + '.json'))).script
+'FIN'
+'@
+  $r = En-Biblioteca 'ficha-guardar' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'ficha-guardar-datos')).Replace('{{LEG}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  Igual 'dos lanzadores en lanzadores.json' '2' $v['N']
+  Igual 'el de recibos: id, interprete, lineas, jobs, como, fichero y linea del enlace, cuantas lineas de inventario y su ruta' ('' + ($v['X'] -split '\|')[0] + '|bash|4|exportarRecibosJob|yml|src/main/resources/application-exportar_recibos.yml|4|3|' + (Join-Path $d 'bin/recibos.sh')) $v['X']
+  Comprueba 'el id empieza por sh-' (($v['X'] -split '\|')[0] -match '^sh-[0-9a-f]{8}$') $v['X']
+  Igual 'el java del inventario lleva su jar, sin argumentos ni -D' './jar/batch-recibos.jar|0|0' $v['JAVA']
+  Igual 'Read-Lanzadores lee lo guardado' '2|bin/cargas.ksh' $v['LEIDOS']
+  Igual 'solo la ficha de la tarea hecha, con el id de la ficha' ($v['ID0'] + '.json') $v['FICHAS']
+  Igual 'y es la de ese script' 'bin/cargas.ksh' $v['F0']
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
