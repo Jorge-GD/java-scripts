@@ -150,3 +150,38 @@ Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 20
 - Proyectos Maven de un solo módulo.
 - Las comprobaciones son por imports y texto: avisan de lo evidente. No sustituyen la revisión de una persona.
 - El worktree no trae los ficheros que git ignora (configuración local, `.env`). El script los lista al crearlo.
+
+## prueba-local.ps1
+
+Prueba en local, caso a caso, que el batch migrado hace lo mismo que el original. Se lanza **después** de `migracion.ps1`, que deja los casos de cada job (el camino feliz y los límites) en `<Migrado>\migracion-<batch>\datos\pruebas\<job>.json`. Si no están, para y dice que se lance antes `migracion.ps1`. Necesita `comun.ps1`, `tareas.ps1` y `tareas\` junto al script, `git`, Maven y Copilot CLI.
+
+```powershell
+.\prueba-local.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado
+.\prueba-local.ps1 ... -JavaLegacy C:\jdk8      # si el original no compila con el JDK de Maven
+.\prueba-local.ps1 ... -Job cargaRecibosJob     # solo los casos de ese job
+.\prueba-local.ps1 ... -Modelo <id> -Si         # otro modelo que el de migracion.ps1; sin preguntar
+```
+
+Lo que tiene que salir lo da el **original** al ejecutarse. La IA solo fabrica las entradas y escribe el test que ejecuta los casos; compara el script.
+
+1. **Copias desechables.** `<Legacy>-prueba-local` (en el HEAD del original) y `<Migrado>-prueba-local` (en el último commit de la rama de rescate, si está el worktree `<Migrado>-rescate`; si no, en el de tu rama). Son worktrees de git sin rama y se rehacen en cada lanzamiento. Tus carpetas y tus ramas no se tocan: el script lo comprueba al acabar.
+2. **Arnés.** Una tarea de IA por copia (las dos a la vez, esfuerzo `high`) escribe `PruebaLocalTest` junto a la clase con `@SpringBootApplication` y, si le hace falta, `src\test\resources\application-prueba-local.yml`. En el original puede añadir dependencias al `pom.xml`, solo con `<scope>test</scope>`. El script comprueba que no toca nada más, que compila y que, con un caso vacío, cada job deja su `estado.txt`. Si falla, lo repite una vez con el motivo. Si vuelve a fallar, para y da un texto para pegar en Copilot.
+3. **Entradas.** Una tarea de IA por caso (hasta 4 a la vez, esfuerzo `medium`) escribe en la copia del original `src\test\resources\prueba-local\<job>\<caso>\`: `ficheros\<carpeta>\`, `datos.sql` y `parametros.properties`. Si el caso pide cambiar la configuración (encender el correo, otro tope) o lanzar el job dos veces, escribe `no-aplica.txt` y el caso queda **sin probar en local**. El script comprueba que solo escribe en su carpeta y que el caso corre en el original.
+4. **Ejecución, sin IA.** El original dos veces y el migrado una (`mvn test -Dtest=PruebaLocalTest -Dprueba.local.job=<job>`).
+5. **Comparación.** Por cada caso compara `estado.txt`, `ficheros\`, `tablas\` (una por tabla, filas ordenadas) y `envios\` (lo que habría salido del equipo, simulado). No cuentan las horas, la fecha de hoy ni los saltos de línea `\r\n`.
+
+| Resultado | Qué quiere decir |
+|---|---|
+| `igual` | El migrado deja lo mismo que el original. |
+| `distinto` | Algo cambia. Dice el fichero, cuántas líneas y la primera de cada lado. Si solo cambia la codificación (JEP 400) o el formato de números o fechas (JEP 252), lo apunta como **posible diferencia del JDK**, sin esconderlo. |
+| `no determinista` | El original da dos salidas distintas con la misma entrada. No cuenta como distinto. |
+| `no se pudo preparar` | La IA no consiguió unas entradas válidas, el caso no corre en el original o falta el arnés del migrado. |
+| `sin probar en local` | El caso trae `no-aplica.txt`, con el motivo. |
+
+Por consola saca una tabla por job (casos, iguales, distintos, sin probar) y el detalle de lo que no es igual. El resultado queda en `migracion-<batch>\datos\prueba-local.json`. Sale con 0 si todo lo comparado es igual, con 2 si hay casos distintos y con 1 si no ha podido (o no ha podido comparar ninguno).
+
+Lo de la IA queda en `migracion-<batch>\prueba-local\`: `arnes\`, `casos\`, `tareas\`, las salidas (`salidas\original`, `original-2` y `migrado`) y los registros de cada llamada y de cada Maven. Al relanzar no repite lo hecho, si no han cambiado sus entradas: solo vuelve a ejecutar y a comparar. Para rehacer un caso, borra su carpeta de `prueba-local\casos\`.
+
+**Lo que no promete.** Las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) está simulado. La conexión de verdad se prueba en pre, con el guion de cada job que deja `migracion.ps1`.
+
+Banco de pruebas: `tests\probar-local.ps1`, con un Copilot y un Maven de mentira. Solo necesita `git`.
