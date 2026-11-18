@@ -606,9 +606,10 @@ $Pruebas['puertas: un lote que no cambia nada se deshace y queda apuntado'] = {
   Comprueba 'apunta los atascados' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/atascados.md'))
   Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
   Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
-  $ll = Lee $e.Wt '.rescate/llamadas.log'
+  # las llamadas de los lotes (las de consejo y reflexion van aparte, con su esfuerzo)
+  $ll = (@((Lee $e.Wt '.rescate/llamadas.log') -split "`n" | Where-Object { $_ -match "paso 'estructura'" }) -join "`n")
   Comprueba 'lo intenta con el lote entero y despues fichero a fichero' (@($ll -split "`n" | Where-Object { $_ }).Count -eq 3) $ll
-  Comprueba 'a Copilot no le llega ni modelo ni esfuerzo' ($ll -notmatch '--(model|effort)=') $ll
+  Comprueba 'a los lotes no les llega ni modelo ni esfuerzo' ($ll -notmatch '--(model|effort)=') $ll
 }
 
 $Pruebas['puertas: si la IA toca la plantilla, se para y se deshace'] = {
@@ -1311,6 +1312,278 @@ $Pruebas['final: con un paso atascado no dice que no quedan errores; con la pasa
   Igual 'la pasada limpia sale con 0' 0 $r2.Codigo
   Comprueba 'la pasada limpia dice que no quedan errores' ($r2.Salida -match 'No quedan errores') (Cola $r2.Salida)
   Comprueba 'y no habla de pasos sin arreglar' ($r2.Salida -notmatch 'No quedan pasos|Se ha quedado sin arreglar') (Cola $r2.Salida)
+}
+
+# ============= M6: ATASCADOS, RUIDO DE MAVEN, CONSEJO, REFLEXION Y -Todo =============
+# Escenario con el Copilot del M6 (tests/falsos/copilot-m6.ps1), solo los pasos estructura y tests y sin reflexion,
+# mas estos ajustes (nombre -> valor).
+function Escenario-M6([string]$Nombre, [hashtable]$Mas = @{}) {
+  $e = Nuevo-Escenario $Nombre
+  $cfg = @{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); Orden = @('estructura', 'tests'); Reflexionar = $false }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Pon-Config $e $cfg
+  return $e
+}
+
+# Lanza el fix de un paso con -SinPlan, -Auto y -Si, con estos intentos por lote y estos argumentos de mas.
+function Fix-M6($E, [string]$PasoId, [int]$Intentos, [string[]]$Mas, [string]$Guion) {
+  return (Rescate (@('-Modo', 'fix', '-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-Paso', $PasoId, '-SinPlan', '-Auto', '-Si', '-MaxIntentos', "$Intentos") + $Mas) $Guion)
+}
+
+# Las llamadas de un tipo que ha recibido el Copilot del M6 (lineas de .rescate/llamadas-m6.log del worktree).
+function Llamadas-M6($E, [string]$Tipo) {
+  $p = Get-Ruta $E.Wt '.rescate/llamadas-m6.log'
+  if (-not (Test-Path -LiteralPath $p)) { return @() }
+  return @([System.IO.File]::ReadAllLines($p) | Where-Object { $_ -match "^\d+ \| $Tipo \|" })
+}
+
+# Los lotes del Copilot del M6 que llevan Suelta.java.
+function Lotes-Suelta($E) { return @(Llamadas-M6 $E 'lote' | Where-Object { $_ -match 'Suelta\.java' }) }
+
+# El prompt que recibio una llamada del Copilot del M6 (por su linea de llamadas-m6.log).
+function Prompt-M6($E, [string]$Linea) { return (Lee $E.Wt ('.rescate/falso-m6/' + ($Linea -split ' ')[0] + '.md')) }
+
+# Desde 'Te toca decidir' hasta el final de la consola.
+function Te-Toca([string]$Salida) { return ([regex]::Match($Salida, '(?s)Te toca decidir.*$')).Value }
+
+$SueltaM6 = 'src/main/java/com/acme/life/Suelta.java'
+
+$Pruebas['m6 atascados: se recuerdan entre pasadas; -Reintentar o un cambio del fichero los vuelven a intentar'] = {
+  $e = Escenario-M6 'm6-atascados'
+  $r = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
+  Igual 'la primera pasada sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/atascados.json'))) { Comprueba 'hay atascados.json' $false (Cola $r.Salida); return }
+  $j = @((Lee $e.Wt '.rescate/atascados.json') | ConvertFrom-Json | ForEach-Object { $_ })
+  Igual 'atascados.json tiene un atascado' 1 $j.Count
+  Comprueba 'con su paso, su fichero, el motivo y la huella del fichero' ($j[0].paso -eq 'estructura' -and $j[0].fichero -eq $SueltaM6 -and "$($j[0].motivo)" -match 'No has cambiado' -and "$($j[0].huella)".Length -ge 16) (ConvertTo-Json -InputObject $j -Compress)
+  $n1 = (Lotes-Suelta $e).Count
+  $r2 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
+  Igual 'la segunda pasada sale con 2' 2 $r2.Codigo
+  Igual 'no llama a Copilot para el atascado' $n1 (Lotes-Suelta $e).Count
+  Igual 'lo dice una vez' 1 ([regex]::Matches($r2.Salida, '1 ficheros atascados de antes: no los reintento \(usa -Reintentar\)')).Count
+  Comprueba 'y sigue en la lista del final' ($r2.Salida -match ('\[estructura\] ' + [regex]::Escape($SueltaM6))) (Cola $r2.Salida)
+  $r3 = Fix-M6 $e 'estructura' 1 @('-Reintentar') 'atasca;consejo-nada'
+  $n3 = (Lotes-Suelta $e).Count
+  Comprueba 'con -Reintentar se vuelve a intentar' ($n3 -gt $n1) "$n1 -> $n3"
+  Comprueba 'y no dice que no lo reintenta' ($r3.Salida -notmatch 'no los reintento') (Cola $r3.Salida)
+  Escribe $e.Wt $SueltaM6 ((Lee $e.Wt $SueltaM6) + "// arreglado a mano`n")
+  $r4 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
+  Comprueba 'si el fichero ha cambiado, se intenta' ((Lotes-Suelta $e).Count -gt $n3) (Cola $r4.Salida)
+}
+
+$Pruebas['m6 ruido: lo que deja Maven fuera de target no entra en los commits; lo que crea la IA, si'] = {
+  $e = Escenario-M6 'm6-ruido' @{ MvnExe = (Join-Path $falsos 'mvn-m6.ps1') }
+  $r = Fix-M6 $e 'estructura' 1 @() 'crea-fichero'
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $todos = GitEn $e.Wt @('log', '--name-only', '--format=')
+  Comprueba 'ningun commit lleva output/x.csv' ($todos -notmatch 'output/x\.csv') $todos
+  Comprueba 'el commit del lote lleva lo que ha creado la IA' ((GitEn $e.Wt @('show', '--name-only', '--format=', 'HEAD')) -match 'output/de-la-ia\.csv') $todos
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'y sin output/x.csv' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'output/x.csv')))
+}
+
+$Pruebas['m6 consejo del plan: la duda de codigo va al plan en ## Decisiones y la de persona a Te toca decidir'] = {
+  $e = Escenario-M6 'm6-plan-dudas'
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-Auto', '-Si', '-MaxIntentos', '1', '-Modelo', 'modelo-x', '-ModeloDudas', 'modelo-fuerte') 'duda-plan;consejo-mixto'
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = @(Llamadas-M6 $e 'consejo')
+  Igual 'una llamada de consejo' 1 $c.Count
+  if ($c.Count -ne 1) { return }
+  Comprueba 'con el modelo de las dudas y esfuerzo max' ($c[0] -match '--model=modelo-fuerte --effort=max') $c[0]
+  Comprueba 'que nombra el fichero de la duda' ($c[0] -match 'Suelta\.java') $c[0]
+  $pc = Prompt-M6 $e $c[0]
+  Comprueba 'el consejo recibe las dudas y el plan' ($pc -match 'DUDA-PLAN-MARCA' -and $pc -match 'plan-estructura\.md') $pc
+  $plan = Lee $e.Wt '.rescate/plan-estructura.md'
+  $dec = ([regex]::Match($plan, '(?s)## Decisiones(.*)$')).Groups[1].Value
+  Comprueba 'el plan lleva ## Decisiones con la elegida y su porque' ($dec -match 'OPCION-B-MARCA' -and $dec -match 'PORQUE-MARCA') $plan
+  Comprueba 'y no la duda de persona' ($dec -notmatch 'OPCION-F-MARCA|DUDA-PERSONA-MARCA') $dec
+  $l = @(Llamadas-M6 $e 'lote')
+  Comprueba 'el lote recibe la decision' ($l.Count -ge 1 -and (Prompt-M6 $e $l[0]) -match 'OPCION-B-MARCA') ($l -join ' / ')
+  $d = Lee $e.Wt '.rescate/decisiones.md'
+  Comprueba 'decisiones.md: la duda, las 3 opciones, la elegida, el porque, el tipo y donde se aplico' ($d -match 'DUDA-MARCA' -and $d -match 'OPCION-A-MARCA' -and $d -match '2\. OPCION-B-MARCA[^\r\n]*\(elegida\)' -and $d -match 'OPCION-C-MARCA' -and $d -match 'PORQUE-MARCA' -and $d -match 'Tipo: codigo' -and $d -match 'Aplicada: en el plan') $d
+  Comprueba 'y la de persona' ($d -match 'DUDA-PERSONA-MARCA' -and $d -match 'Tipo: persona' -and $d -match 'Aplicada: no, la decide una persona') $d
+  $toca = Te-Toca $r.Salida
+  Comprueba 'Te toca decidir: la duda de persona con la recomendada y su porque' ($toca -match 'DUDA-PERSONA-MARCA' -and $toca -match 'OPCION-F-MARCA' -and $toca -match 'PORQUE-PERSONA-MARCA') (Cola $r.Salida)
+  Comprueba 'con la ruta de decisiones.md' ($toca -match 'decisiones\.md') $toca
+  Comprueba 'la de codigo no sale ahi' ($toca -notmatch 'OPCION-B-MARCA') $toca
+}
+
+$Pruebas['m6 consejo del atascado: si es de codigo, un intento mas con la instruccion y, si pasa, commit'] = {
+  $e = Escenario-M6 'm6-atascado-codigo'
+  $r = Fix-M6 $e 'estructura' 1 @('-Modelo', 'modelo-x', '-ModeloB', 'modelo-b', '-ModeloDudas', 'modelo-fuerte') 'atasca;consejo-codigo'
+  Igual 'sale con 0: el consejo lo desatasca' 0 $r.Codigo
+  $s = Lotes-Suelta $e
+  Igual 'Suelta va en el lote, solo, con el de reserva y con el consejo' 4 $s.Count
+  if ($s.Count -ne 4) { return }
+  Comprueba 'el de reserva va antes del consejo' ($s[2] -match '--model=modelo-b') $s[2]
+  Comprueba 'el intento del consejo va con -Modelo' ($s[3] -match '--model=modelo-x') $s[3]
+  $p = Prompt-M6 $e $s[3]
+  Comprueba 'y lleva la instruccion en el prompt' ($p -match '## Consejo' -and $p -match 'OPCION-B-MARCA' -and $p -match 'PORQUE-MARCA') $p
+  $c = @(Llamadas-M6 $e 'consejo')
+  Igual 'una llamada de consejo' 1 $c.Count
+  if ($c.Count -eq 1) {
+    $pc = Prompt-M6 $e $c[0]
+    Comprueba 'el consejo recibe el fichero, el paso, los hallazgos y los motivos' ($c[0] -match '--model=modelo-fuerte' -and $pc -match 'Suelta\.java' -and $pc -match "paso 'estructura'" -and $pc -match 'No has cambiado ningun fichero') $pc
+  }
+  Igual 'estructura queda a 0' 0 (Cuenta (Hallazgos $e.Wt) 'estructura')
+  $log = GitEn $e.Wt @('log', '--format=%s')
+  Igual 'dos commits de lote' 2 @($log -split "`n" | Where-Object { $_ -match '^rescate\(estructura\)' }).Count
+  $h = GitEn $e.Wt @('log', '-1', '--format=%h', '--', 'src/main/java/com/acme/life/application/usecases/Suelta.java')
+  $d = Lee $e.Wt '.rescate/decisiones.md'
+  Comprueba 'decisiones.md dice que se aplico y en que commit' ($d -match ('Aplicada: si, commit ' + $h)) $d
+  Comprueba 'no queda nada atascado' ($r.Salida -notmatch 'Se ha quedado sin arreglar') (Cola $r.Salida)
+}
+
+$Pruebas['m6 consejo del atascado: si es de persona, o si su intento no pasa, queda atascado con las 3 opciones'] = {
+  $e = Escenario-M6 'm6-atascado-persona'
+  $r = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-persona'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'no hay intento con el consejo' 2 (Lotes-Suelta $e).Count
+  $a = Lee $e.Wt '.rescate/atascados.md'
+  Comprueba 'atascados.md lleva las 3 opciones y la recomendada con su porque' ($a -match 'OPCION-A-MARCA' -and $a -match 'OPCION-B-MARCA' -and $a -match 'OPCION-C-MARCA' -and $a -match 'recomendada: 3' -and $a -match 'PORQUE-MARCA') $a
+  $j = @((Lee $e.Wt '.rescate/atascados.json') | ConvertFrom-Json | ForEach-Object { $_ })
+  Comprueba 'atascados.json tambien' ($j.Count -eq 1 -and $j[0].consejo.elegida -eq 3 -and $j[0].consejo.tipo -eq 'persona' -and @($j[0].consejo.opciones).Count -eq 3) (ConvertTo-Json -InputObject $j -Compress -Depth 5)
+  $toca = Te-Toca $r.Salida
+  Comprueba 'y sale en Te toca decidir' ($toca -match 'DUDA-MARCA' -and $toca -match 'OPCION-C-MARCA') (Cola $r.Salida)
+  $e2 = Escenario-M6 'm6-atascado-consejo-falla'
+  $r2 = Fix-M6 $e2 'estructura' 1 @() 'atasca-siempre;consejo-codigo'
+  Igual 'si el intento del consejo no pasa, sale con 2' 2 $r2.Codigo
+  Igual 'hay un intento con el consejo' 3 (Lotes-Suelta $e2).Count
+  Comprueba 'queda atascado con las opciones' ((Lee $e2.Wt '.rescate/atascados.md') -match 'OPCION-B-MARCA') (Cola $r2.Salida)
+  Comprueba 'y decisiones.md dice que no paso' ((Lee $e2.Wt '.rescate/decisiones.md') -match 'Aplicada: se intento y no paso') (Cola $r2.Salida)
+}
+
+$Pruebas['m6 consejo que no vale: se repite una vez con el motivo y, si sigue mal, se sigue sin consejo'] = {
+  $e = Escenario-M6 'm6-consejo-dos'
+  $r = Fix-M6 $e 'estructura' 1 @('-Modelo', 'modelo-x') 'atasca;consejo-dos'
+  Igual 'sale con 2, como sin consejo' 2 $r.Codigo
+  $c = @(Llamadas-M6 $e 'consejo')
+  Igual 'dos llamadas de consejo' 2 $c.Count
+  if ($c.Count -eq 2) {
+    Comprueba 'el modelo de las dudas es por defecto el de -Modelo' ($c[0] -match '--model=modelo-x --effort=max') $c[0]
+    $p2 = Prompt-M6 $e $c[1]
+    Comprueba 'la segunda lleva el motivo' ($p2 -match '## CORRECCION' -and $p2 -match 'exactamente 3 opciones') $p2
+  }
+  Comprueba 'dice que sigue sin consejo' ($r.Salida -match 'sin consejo') (Cola $r.Salida)
+  Igual 'sin intento con el consejo' 2 (Lotes-Suelta $e).Count
+  $e2 = Escenario-M6 'm6-consejo-elegida'
+  $r2 = Fix-M6 $e2 'estructura' 1 @() 'atasca;consejo-elegida-4'
+  Igual 'con elegida 4 el reintento vale y lo desatasca: sale con 0' 0 $r2.Codigo
+  $c2 = @(Llamadas-M6 $e2 'consejo')
+  Igual 'dos llamadas de consejo' 2 $c2.Count
+  if ($c2.Count -eq 2) { Comprueba 'el motivo dice que elegida va de 1 a 3' ((Prompt-M6 $e2 $c2[1]) -match 'elegida tiene que ser 1, 2 o 3') }
+}
+
+$Pruebas['m6 esfuerzo: si Copilot no admite max, baja a xhigh; ModeloDudas y EsfuerzoDudas tambien en config.json'] = {
+  $e = Escenario-M6 'm6-sin-max'
+  $r = Fix-M6 $e 'estructura' 1 @('-ModeloDudas', 'modelo-fuerte') 'atasca;consejo-codigo;sin-max'
+  Igual 'sale con 0' 0 $r.Codigo
+  $x = @(Llamadas-M6 $e 'rechazo')
+  $c = @(Llamadas-M6 $e 'consejo')
+  Comprueba 'max se rechaza una vez' ($x.Count -eq 1 -and $x[0] -match '--effort=max') ($x -join ' / ')
+  Comprueba 'y el consejo va con xhigh' ($c.Count -eq 1 -and $c[0] -match '--model=modelo-fuerte --effort=xhigh') ($c -join ' / ')
+  Comprueba 'lo dice' ($r.Salida -match "esfuerzo 'max'.*'xhigh'") (Cola $r.Salida)
+  $e2 = Escenario-M6 'm6-dudas-config' @{ ModeloDudas = 'modelo-de-config'; EsfuerzoDudas = 'high' }
+  $r2 = Fix-M6 $e2 'estructura' 1 @() 'atasca;consejo-codigo'
+  $c2 = @(Llamadas-M6 $e2 'consejo')
+  Comprueba 'config.json manda el modelo y el esfuerzo del consejo' ($c2.Count -eq 1 -and $c2[0] -match '--model=modelo-de-config --effort=high') (($c2 -join ' / ') + ' | ' + (Cola $r2.Salida))
+}
+
+$Pruebas['m6 todo: -Todo sin contrato hace primero el pre y sigue; con contrato, no'] = {
+  $orig = Join-Path (Join-Path $Dir 'm6-todo-original') 'original'
+  Escribe $orig 'src/main/java/com/acme/CargaJob.java' "package com.acme;`n`npublic class CargaJob {`n    Object job() { return new JobBuilder(`"cargaPolizas`", null); }`n}`n"
+  $args3 = { param($E) @('-Modo', 'fix', '-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-Legacy', $orig, '-Paso', 'estructura', '-SinPlan', '-Todo', '-Si', '-MaxIntentos', '1') }
+  $e = Escenario-M6 'm6-todo'
+  $r = Rescate (& $args3 $e) ''
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'hace el pre en el worktree' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/contrato.json')) (Cola $r.Salida)
+  Igual 'con IA: una llamada del pre' 1 (Llamadas-M6 $e 'pre').Count
+  if (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/contrato.json')) { Comprueba 'el contrato lleva el job del original' ((Lee $e.Wt '.rescate/contrato.json') -match 'cargaPolizas') }
+  Comprueba 'dice que la lista de jobs no la ha revisado nadie y donde esta' ($r.Salida -match 'no la ha revisado nadie' -and $r.Salida -match 'contrato\.json') (Cola $r.Salida)
+  Comprueba 'y sigue con el arreglo' (Hay-Commit-Del-Lote $e) (Cola $r.Salida)
+  $e2 = Escenario-M6 'm6-todo-con-contrato'
+  $hecho = '{ "generado": "a mano", "jobs": [] }'
+  Escribe $e2.Repo '.rescate/contrato.json' $hecho
+  $r2 = Rescate (& $args3 $e2) ''
+  Igual 'con contrato sale con 0' 0 $r2.Codigo
+  Igual 'y no hay pre' 0 (Llamadas-M6 $e2 'pre').Count
+  if (Test-Path -LiteralPath (Get-Ruta $e2.Wt '.rescate/contrato.json')) { Igual 'el contrato no cambia' $hecho (Lee $e2.Wt '.rescate/contrato.json') }
+  Comprueba 'ni habla de la lista de jobs' ($r2.Salida -notmatch 'no la ha revisado nadie') (Cola $r2.Salida)
+  $e3 = Escenario-M6 'm6-todo-sinia'
+  $r3 = Rescate ((& $args3 $e3) + '-SinIA') ''
+  Comprueba 'con -SinIA el pre se hace sin Copilot' ($r3.Codigo -eq 0 -and (Test-Path -LiteralPath (Get-Ruta $e3.Wt '.rescate/contrato.json')) -and (Llamadas-M6 $e3 'pre').Count -eq 0) (Cola $r3.Salida)
+}
+
+$Pruebas['m6 sin -Auto: las dudas del plan se preguntan como hoy, sin consejo'] = {
+  $e = Escenario-M6 'm6-sin-auto'
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-Si', '-MaxIntentos', '1') 'duda-plan;consejo-codigo'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ninguna llamada de consejo' 0 (Llamadas-M6 $e 'consejo').Count
+  if (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/plan-estructura.md')) { Comprueba 'el plan no lleva ## Decisiones' ((Lee $e.Wt '.rescate/plan-estructura.md') -notmatch '## Decisiones') }
+  else { Comprueba 'hay plan' $false (Cola $r.Salida) }
+}
+
+$Pruebas['m6 reflexion: tras un intento que no pasa hay una reflexion y el siguiente la lleva en la CORRECCION'] = {
+  $e = Escenario-M6 'm6-reflexion' @{ Reflexionar = $true; Orden = @('hexagonal', 'tests') }
+  # el primer intento crea un puerto sin Javadoc (no pasa por calidad) y el segundo, con la correccion, pasa
+  $r = Fix-M6 $e 'hexagonal' 2 @('-ModeloDudas', 'modelo-fuerte') 'sin-javadoc'
+  Igual 'sale con 0' 0 $r.Codigo
+  $rf = @(Llamadas-M6 $e 'reflexion')
+  Igual 'una reflexion' 1 $rf.Count
+  if ($rf.Count -ne 1) { return }
+  Comprueba 'con el modelo de las dudas y max' ($rf[0] -match '--model=modelo-fuerte --effort=max') $rf[0]
+  $pr = Prompt-M6 $e $rf[0]
+  Comprueba 'recibe el objetivo, los hallazgos, los NO PASA, el diff y lo nuevo' ($pr -match 'Elimina las dependencias prohibidas' -and $pr -match 'Cliente\.java' -and $pr -match 'anade hallazgos de calidad' -and $pr -match '(?m)^-import org\.springframework' -and $pr -match 'ClientePort\.java') $pr
+  Comprueba 'deja su fichero' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/reflexion-hexagonal-1-1.md'))
+  $l = @(Llamadas-M6 $e 'lote')
+  Igual 'dos intentos' 2 $l.Count
+  if ($l.Count -eq 2) {
+    $corr = ([regex]::Match((Prompt-M6 $e $l[1]), '(?s)## CORRECCION.*$')).Value
+    Comprueba 'el segundo lleva la reflexion en la CORRECCION, con los NO PASA' ($corr -match 'REFLEXION-MARCA-hexagonal-1-1' -and $corr -match 'anade hallazgos de calidad') $corr
+    Comprueba 'el primero no lleva ninguna' ((Prompt-M6 $e $l[0]) -notmatch 'REFLEXION-MARCA')
+  }
+  Comprueba 'decisiones.md apunta la reflexion' ((Lee $e.Wt '.rescate/decisiones.md') -match 'REFLEXION-MARCA-hexagonal-1-1')
+}
+
+$Pruebas['m6 reflexion: las reflexiones viajan con el fichero al modelo de reserva y al consejo final'] = {
+  $e = Escenario-M6 'm6-reflexion-reserva' @{ Reflexionar = $true }
+  $r = Fix-M6 $e 'estructura' 1 @('-ModeloB', 'modelo-b') 'atasca;consejo-nada'
+  Igual 'sale con 2' 2 $r.Codigo
+  $b = @(Lotes-Suelta $e | Where-Object { $_ -match '--model=modelo-b' })
+  Igual 'un intento con el de reserva' 1 $b.Count
+  if ($b.Count -ne 1) { return }
+  $kb = [int](($b[0] -split ' ')[0])
+  $rf = @(Llamadas-M6 $e 'reflexion')
+  $antes = @($rf | Where-Object { [int](($_ -split ' ')[0]) -lt $kb } | ForEach-Object { ($_ -split ' \| ')[-1].Trim() })
+  Igual 'dos reflexiones antes: la del lote entero y la de Suelta sola' 2 $antes.Count
+  $pb = Prompt-M6 $e $b[0]
+  Comprueba 'el de reserva las lleva' ($pb -match 'Lo que ya se intento y por que fallo' -and @($antes | Where-Object { $pb -notmatch ('REFLEXION-MARCA-' + $_) }).Count -eq 0) $pb
+  $c = @(Llamadas-M6 $e 'consejo')
+  if ($c.Count -ge 1) {
+    $pc = Prompt-M6 $e $c[0]
+    $todas = @($rf | ForEach-Object { ($_ -split ' \| ')[-1].Trim() })
+    Comprueba 'el consejo final lleva todas las del fichero' ($todas.Count -eq 3 -and $pc -match 'Lo que ya se intento y por que fallo' -and @($todas | Where-Object { $pc -notmatch ('REFLEXION-MARCA-' + $_) }).Count -eq 0) $pc
+  }
+  else { Comprueba 'hay consejo final' $false (Cola $r.Salida) }
+}
+
+$Pruebas['m6 reflexion: sin las cuatro secciones se sigue sin ella; con Reflexionar en false no hay llamada'] = {
+  $e = Escenario-M6 'm6-reflexion-mala' @{ Reflexionar = $true }
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion;reflexion-mala'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'una reflexion' 1 (Llamadas-M6 $e 'reflexion').Count
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -eq 2) {
+    $p2 = Prompt-M6 $e $l[1]
+    Comprueba 'el segundo intento va con la CORRECCION y sin la reflexion' ($p2 -match '## CORRECCION' -and $p2 -notmatch 'REFLEXION-MARCA') $p2
+  }
+  else { Comprueba 'dos intentos' $false ($l -join ' / ') }
+  Comprueba 'lo dice' ($r.Salida -match 'sigo sin ella') (Cola $r.Salida)
+  $e2 = Escenario-M6 'm6-sin-reflexion' @{ Reflexionar = $false }
+  $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion'
+  Igual 'con Reflexionar en false sale con 0' 0 $r2.Codigo
+  Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e2 'reflexion').Count
 }
 
 # ================================ LANZADOR ================================
