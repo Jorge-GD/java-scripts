@@ -443,12 +443,14 @@ function Commit-En([string]$D, [string]$Rel, [string]$Texto, [string]$Asunto) {
 
 # $N commits en la rama de rescate del escenario, uno detras de otro: el numero $Rompe (si es > 0) pone minimo=5.01 en regla.txt
 # y los demas solo apuntan una nota. Devuelve Desde (el HEAD de antes) y Commits (los hashes, del mas viejo al mas nuevo).
-function Historia($E, [int]$Rompe, [int]$N = 5) {
-  $desde = GitEn $E.Wt @('rev-parse', 'HEAD')
+# Los commits van a la rama de rescate ($E.Wt) o, si se da $D, a esa carpeta.
+function Historia($E, [int]$Rompe, [int]$N = 5, [string]$D = '') {
+  if (-not $D) { $D = $E.Wt }
+  $desde = GitEn $D @('rev-parse', 'HEAD')
   $cs = @()
   for ($i = 1; $i -le $N; $i++) {
-    if ($i -eq $Rompe) { $cs += (Commit-En $E.Wt 'regla.txt' "minimo=5.01`n" "cambia el limite del paso $i") }
-    else { $cs += (Commit-En $E.Wt "notas/paso-$i.txt" "nota $i`n" "nota del paso $i") }
+    if ($i -eq $Rompe) { $cs += (Commit-En $D 'regla.txt' "minimo=5.01`n" "cambia el limite del paso $i") }
+    else { $cs += (Commit-En $D "notas/paso-$i.txt" "nota $i`n" "nota del paso $i") }
   }
   return [pscustomobject]@{ Desde = $desde; Commits = $cs }
 }
@@ -652,8 +654,40 @@ $Pruebas['28 culpable (j): el culpable es un merge: no se deshace y se dice'] = 
   $r = Prueba $e @('-Desde', $desde, '-Deshacer')
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'el culpable es el merge' ($r.Salida.Contains("se rompe en $(Corto $merge) (une la rama lado)")) (Cola $r.Salida)
-  Comprueba 'dice que no lo deshace por ser un merge' ($r.Salida -match 'No deshago' -and $r.Salida -match 'merge') (Cola $r.Salida)
+  Comprueba 'dice que no lo deshace por ser un merge' ($r.Salida -match 'No deshago' -and $r.Salida -match 'es un commit de merge') (Cola $r.Salida)
   Igual 'el HEAD queda en el merge' $merge (GitEn $e.Wt @('rev-parse', 'HEAD'))
+}
+
+$Pruebas['29 culpable (l): sin worktree de rescate se busca y se deshace en la carpeta del migrado, y la huella lo admite'] = {
+  $e = Nuevo-Escenario 'culpable-l' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  [void](GitEn $e.Migrado @('worktree', 'remove', '--force', $e.Wt))
+  $h = Historia $e 3 5 $e.Migrado
+  $r = Prueba $e @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el culpable es el 3.o de main' ($r.Salida.Contains("se rompe en $(Corto $h.Commits[2]) (cambia el limite del paso 3)")) (Cola $r.Salida)
+  Igual 'un solo commit nuevo en la carpeta del migrado, encima del ultimo' $h.Commits[4] (GitEn $e.Migrado @('rev-parse', 'HEAD~1'))
+  Comprueba 'que es el Revert' ((GitEn $e.Migrado @('log', '-1', '--format=%s')) -like 'Revert *') (GitEn $e.Migrado @('log', '-1', '--format=%s'))
+  Igual 'sin cambios sin commit' '' (GitEn $e.Migrado @('status', '--porcelain'))
+  Comprueba 'y la prueba no dice que han cambiado las carpetas' ($r.Salida -notmatch 'Ha cambiado durante la prueba') (Cola $r.Salida)
+}
+
+$Pruebas['31 culpable (m): dos casos rotos por commits distintos: se deshacen del mas nuevo al mas viejo (al reves daria conflicto)'] = {
+  $e = Nuevo-Escenario 'culpable-m' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00 LATIN') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'regla.txt' "minimo=5.01`n" 'cambia el limite'
+  $c3 = Commit-En $e.Wt 'notas/paso-3.txt' "nota 3`n" 'nota del paso 3'
+  $c4 = Commit-En $e.Wt 'regla.txt' "minimo=5.01`nmayus=si`n" 'pasa la enie a mayuscula'
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = @(Culpables $e)
+  Igual 'el caso 1 lo rompe el 2.o commit y el caso 2, el 4.o' "$c2,$c4" ((@($c | ForEach-Object { $_.commit })) -join ',')
+  Igual 'los dos deshechos' 'True,True' ((@($c | ForEach-Object { "$($_.deshecho)" })) -join ',')
+  Igual 'dos commits nuevos, encima del ultimo' 2 (GitEn $e.Wt @('rev-list', '--count', "$c5..HEAD"))
+  Igual 'el primero deshecho es el mas nuevo' 'Revert "pasa la enie a mayuscula"' (GitEn $e.Wt @('log', '-1', '--format=%s', 'HEAD~1'))
+  Igual 'y el ultimo, el mas viejo' 'Revert "cambia el limite"' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Igual 'los dos casos quedan iguales' 'igual,igual' ((Resultados $e) -join ',')
 }
 
 # Prueba con el Maven falso de culpable-mvn.ps1, que toca la carpeta de rescate ($Modo: ver ese fichero) en medio de la prueba.
@@ -665,7 +699,7 @@ function Prueba-Con-Toque($E, [string]$Modo, [string[]]$A) {
   finally { $env:RESCATE_TOCA = '' }
 }
 
-$Pruebas['29 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, o un fichero ajeno despues del revert): la huella los ve'] = {
+$Pruebas['30 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, o un fichero ajeno despues del revert): la huella los ve'] = {
   $e = Nuevo-Escenario 'culpable-k1' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $h = Historia $e 3
   $r = Prueba-Con-Toque $e 'commit' @('-Desde', $h.Desde, '-Deshacer')

@@ -10,7 +10,8 @@ QUE HACE
   ejecutarse: la IA solo fabrica las entradas y escribe el test que ejecuta los casos; compara el script.
   1. Copias desechables (worktrees de git sin rama, que se rehacen en cada lanzamiento): <Legacy>-prueba-local, en el
      HEAD del original, y <Migrado>-prueba-local, en el HEAD de la rama de rescate (si esta su worktree
-     <Migrado>-rescate) o en el de la rama del migrado. Tus carpetas y tus ramas no se tocan.
+     <Migrado>-rescate) o en el de la rama del migrado. Tus carpetas y tus ramas no se tocan (la unica excepcion es
+     -Deshacer, mas abajo).
   2. Arnes: una tarea de IA por copia (las dos a la vez, esfuerzo alto) escribe el test PruebaLocalTest junto a la clase
      con @SpringBootApplication y, si le hace falta, src\test\resources\application-prueba-local.yml (en el original,
      tambien dependencias de test en el pom.xml). El script comprueba que no toca nada mas, que compila y que, con un
@@ -23,6 +24,14 @@ QUE HACE
      igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar o sin
      probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
      diferencia del JDK, sin esconderlo.
+  6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
+     <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
+     cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
+     lo compara con lo que dejo el original, con las mismas reglas del paso 5. Un commit donde el caso no se puede
+     ejecutar (no compila...) cuenta como malo, y se dice. Con -Deshacer, ademas, revierte esos commits con git revert
+     (del mas nuevo al mas viejo) en la carpeta de la rama que se prueba y vuelve a ejecutar los casos: ahora igual o
+     sigue distinto. No deshace si esa carpeta tiene cambios sin commit, si el commit es un merge o si el revert da
+     conflicto (lo aborta y no deja nada a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -33,8 +42,11 @@ USO
   .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven
   .\prueba-local.ps1 ... -Job cargaRecibosJob  # solo los casos de ese job
   .\prueba-local.ps1 ... -Si                   # no pregunta antes de llamar a Copilot
+  .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
+  .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
 
   Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno).
+  Con -Deshacer, la salida es la del estado de despues de deshacer.
   Antes de darlo por bueno, pasa tests\probar-local.ps1.
 #>
 [CmdletBinding()]
@@ -44,6 +56,8 @@ param(
   [string]$Modelo = '',       # id del modelo de Copilot; sin esto, el de migracion.ps1 ('' = el que tenga Copilot)
   [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original
   [string]$Job = '',          # solo los casos de este job
+  [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
+  [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -595,13 +609,14 @@ function Compare-Caso([string]$A, [string]$B) {
 # local, con su motivo. Los ficheros que cambian entre las dos ejecuciones del original no se comparan; el resto, si.
 # Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
-function Get-Resultado($T) {
+# $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde).
+function Get-Resultado($T, [string]$Nombre = 'migrado') {
   $j = $T.entradas.job
   $c = $T.entradas.caso
   $o = [ordered]@{ job = $j; caso = $c; titulo = $T.entradas.titulo; resultado = 'no se pudo preparar'; motivo = ''; diferencias = @() }
   $s1 = Join-Ruta $Local "salidas/original/$j/$c"
   $noAplica = Join-Ruta $Local "casos/$j/$c/no-aplica.txt"
-  $parado = @(@('original', 'original-2', 'migrado') | ForEach-Object { $script:Maven["$_|$j|$c"] } | Where-Object { $_ -and $_.Tope })
+  $parado = @(@('original', 'original-2', $Nombre) | ForEach-Object { $script:Maven["$_|$j|$c"] } | Where-Object { $_ -and $_.Tope })
   if ($parado.Count -gt 0) { $o.motivo = $parado[0].Tope; return $o }
   if ($T.estado -ne 'hecha') { $o.motivo = "La IA no ha podido preparar sus entradas: $($T.motivo)"; return $o }
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
@@ -610,7 +625,7 @@ function Get-Resultado($T) {
   $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c"))
   $sinContar = @($azar | ForEach-Object { Get-Normal $_.fichero })
   if ($azar.Count -gt 0) { $o.motivo = 'No se comparan, porque el original da dos salidas distintas: ' + (@($azar | Select-Object -First 3 | ForEach-Object { $_.fichero }) -join ', ') + '.' }
-  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/migrado/$j/$c") | Where-Object { $sinContar -notcontains (Get-Normal $_.fichero) })
+  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") | Where-Object { $sinContar -notcontains (Get-Normal $_.fichero) })
   if ($d.Count -gt 0) { $o.resultado = 'distinto'; $o.diferencias = $d; return $o }
   if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
   $o.resultado = 'igual'
@@ -642,10 +657,194 @@ function Show-Resultado($Res, $PorJob) {
   }
 }
 
+# ======================== CULPABLES (-Desde y -Deshacer) ========================
+# De cada caso distinto, el primer commit de la rama que se prueba donde deja de ser igual (con -Desde) y, si se pide, su
+# git revert (con -Deshacer). Todo se ejecuta en <Migrado>-prueba-local, rehecha en cada commit, con el arnes y el caso ya
+# guardados, y se compara con salidas\original: nunca se llama a Copilot.
+# Lo que usan, del main: $DirRama (la carpeta de la rama que se prueba), $DesdeCommit, $headMig, $tareasCasos y $pruebas.
+
+# El asunto (primera linea del mensaje) de un commit del migrado.
+function Get-Asunto([string]$Commit) { return ((Invoke-Git $MigradoRoot @('log', '-1', '--format=%s', $Commit)).Salida -join ' ').Trim() }
+
+# Las primeras lineas con texto de $Texto, en una sola linea.
+function Get-Resumen([string]$Texto) {
+  return ((@($Texto -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 3) -join ' ') -replace '\s+', ' ').Trim()
+}
+
+function Get-TareaCaso([string]$Job, [string]$Caso) {
+  return @($tareasCasos | Where-Object { $_.entradas.job -ceq $Job -and $_.entradas.caso -ceq $Caso })[0]
+}
+
+# Como esta el caso $T en el migrado de $Commit: Malo ($true si sale distinto o no se puede ejecutar), Motivo (por que no se
+# pudo ejecutar, o '') y Resultado (lo de Get-Resultado, comparado con salidas\original). Igual y no determinista son buenos.
+# Lo ya visto de un (commit, job, caso) se guarda en $script:Estados y no se vuelve a ejecutar.
+function Get-EstadoEn([string]$Commit, $T) {
+  $j = $T.entradas.job
+  $c = $T.entradas.caso
+  $clave = "$Commit|$j|$c"
+  if ($script:Estados.ContainsKey($clave)) { return $script:Estados[$clave] }
+  Info "  Probando $j/$c en $($Commit.Substring(0, 7))..."
+  $m = New-Copia $MigradoRoot $Commit $CopiaMig
+  if ($m) { Stop-Arranque $m }
+  Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
+  Copy-Carpeta (Join-Ruta $Local 'arnes/migrado') $CopiaMig
+  Copy-Carpeta (Join-Ruta $Local "casos/$j/$c") (Join-Ruta $CopiaMig $T.entradas.carpeta)
+  $nombre = 'culpable/' + $Commit.Substring(0, 12)
+  $dest = Join-Ruta $Local "salidas/$nombre/$j/$c"
+  Remove-Carpeta $dest
+  $mvn = Invoke-Job $CopiaMig $false $j $c "$nombre $j $c"
+  $script:Maven["$nombre|$j|$c"] = $mvn
+  Copy-Carpeta (Join-Ruta $CopiaMig "target/prueba-local/$j/$c") $dest
+  $res = Get-Resultado $T $nombre
+  $malo = ($res.resultado -ne 'igual' -and $res.resultado -ne 'no determinista')
+  $motivo = ''
+  if ($malo -and -not (Test-Path -LiteralPath (Join-Path $dest 'estado.txt'))) { $motivo = Get-Resumen (Get-Porque $dest $mvn) }
+  elseif ($malo -and $res.resultado -ne 'distinto') { $motivo = Get-Resumen $res.motivo }
+  $e = [pscustomobject]@{ Malo = $malo; Motivo = $motivo; Resultado = $res }
+  $script:Estados[$clave] = $e
+  return $e
+}
+
+# El commit que rompe el caso $T, buscado por biseccion en $Commits (los de la rama despues de -Desde, del mas viejo al mas
+# nuevo; el ultimo, el HEAD, ya se sabe que es malo). $null si el caso ya era distinto en -Desde.
+function Find-Culpable($T, [string[]]$Commits) {
+  $j = $T.entradas.job
+  $c = $T.entradas.caso
+  $e0 = Get-EstadoEn $DesdeCommit $T
+  if ($e0.Malo) {
+    $m = "El caso $j/$c ya era distinto en $($DesdeCommit.Substring(0, 7))."
+    if ($e0.Motivo) { $m += " (En ese commit no se pudo ejecutar: $($e0.Motivo))" }
+    Aviso $m
+    return $null
+  }
+  $lo = 0
+  $hi = $Commits.Count - 1
+  while ($lo -lt $hi) {
+    $mid = [int][Math]::Floor(($lo + $hi) / 2)
+    if ((Get-EstadoEn $Commits[$mid] $T).Malo) { $hi = $mid } else { $lo = $mid + 1 }
+  }
+  $e = Get-EstadoEn $Commits[$lo] $T
+  $asunto = Get-Asunto $Commits[$lo]
+  $m = "El caso $j/$c era igual en $($DesdeCommit.Substring(0, 7)) y se rompe en $($Commits[$lo].Substring(0, 7)) ($asunto)."
+  if ($e.Motivo) { $m += " En ese commit el caso no se pudo ejecutar: $($e.Motivo)" }
+  Fallo $m
+  return [pscustomobject]@{ job = $j; caso = $c; commit = $Commits[$lo]; asunto = $asunto; deshecho = $false; indice = $lo }
+}
+
+# Los commits que rompen cada caso distinto de $Res (uno por caso, con su posicion en la rama).
+function Find-Culpables($Res) {
+  $distintos = @($Res | Where-Object { $_.resultado -eq 'distinto' })
+  Info ''
+  if ($distintos.Count -eq 0) { Info 'Con -Desde: no hay casos distintos que buscar.'; return @() }
+  $commits = @((Invoke-Git $DirRama @('rev-list', '--first-parent', '--reverse', ($DesdeCommit + '..' + $headMig))).Salida | Where-Object { $_ })
+  Remove-Carpeta (Join-Ruta $Local 'salidas/culpable')
+  Info "Buscando que commit rompe cada caso distinto ($($commits.Count) commits despues de $($DesdeCommit.Substring(0, 7)))..."
+  $culpables = @()
+  foreach ($r in $distintos) {
+    $script:Estados["$headMig|$($r.job)|$($r.caso)"] = [pscustomobject]@{ Malo = $true; Motivo = ''; Resultado = $r }   # el HEAD ya se ha comparado
+    $x = Find-Culpable (Get-TareaCaso $r.job $r.caso) $commits
+    if ($x) { $culpables += $x }
+  }
+  return $culpables
+}
+
+# Por que no se puede deshacer $Commit en $DirRama, o '' si se puede.
+function Get-NoDeshacer([string]$Commit) {
+  if (@((Invoke-Git $DirRama @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -gt 0) {
+    return "$DirRama tiene cambios sin commit (git status): guardalos o descartalos y vuelve a lanzar con -Deshacer."
+  }
+  $linea = ((Invoke-Git $DirRama @('rev-list', '--parents', '-n', '1', $Commit)).Salida -join '').Trim()
+  if (@($linea -split '\s+').Count -gt 2) { return 'es un commit de merge: deshazlo a mano (git revert -m 1).' }
+  return ''
+}
+
+# git revert --no-edit de $Commit en $DirRama (nunca un reset). Si falla, lo aborta y la carpeta queda como estaba.
+# Devuelve '' o el motivo.
+function Invoke-Revert([string]$Commit) {
+  $r = Invoke-Git $DirRama @('revert', '--no-edit', $Commit)
+  if ($r.Codigo -eq 0) { return '' }
+  $que = 'git revert ha fallado'
+  if (@((Invoke-Git $DirRama @('ls-files', '--unmerged')).Salida | Where-Object { $_ }).Count -gt 0) { $que = 'el revert da conflicto' }   # ficheros sin fusionar: no depende del idioma de git
+  [void](Invoke-Git $DirRama @('revert', '--abort'))
+  return ($que + ' y lo he abortado (el HEAD queda como estaba): ' + (Get-Resumen ($r.Salida -join "`n")))
+}
+
+# Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar sus casos en el nuevo HEAD.
+# Apunta en cada culpable si se ha deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por
+# buenos en la carpeta). Devuelve $Res con el resultado de ahora de esos casos.
+function Undo-Culpables($Culpables, $Res) {
+  $commits = @($Culpables | Sort-Object -Property indice -Descending | ForEach-Object { $_.commit } | Select-Object -Unique)
+  if ($commits.Count -eq 0) { return $Res }
+  Info ''
+  Info "Deshaciendo con git revert en ${DirRama}: $($commits.Count) commit(s), del mas nuevo al mas viejo..."
+  foreach ($commit in $commits) {
+    $suyos = @($Culpables | Where-Object { $_.commit -eq $commit })
+    $m = Get-NoDeshacer $commit
+    if (-not $m) { $m = Invoke-Revert $commit }
+    if ($m) { Aviso "No deshago $($commit.Substring(0, 7)) ($($suyos[0].asunto)): $m"; continue }
+    $nuevo = Get-Head $DirRama
+    $script:Reverts += $nuevo
+    foreach ($x in $suyos) { $x.deshecho = $true }
+    Bien "Deshecho $($commit.Substring(0, 7)) ($($suyos[0].asunto)) con el commit $($nuevo.Substring(0, 7))."
+  }
+  $hechos = @($Culpables | Where-Object { $_.deshecho })
+  if ($hechos.Count -eq 0) { return $Res }
+  $script:headMig = Get-Head $DirRama
+  foreach ($x in $hechos) {
+    $e = Get-EstadoEn $script:headMig (Get-TareaCaso $x.job $x.caso)
+    for ($i = 0; $i -lt $Res.Count; $i++) { if ($Res[$i].job -ceq $x.job -and $Res[$i].caso -ceq $x.caso) { $Res[$i] = $e.Resultado } }
+    if ($e.Malo) {
+      Fallo "El caso $($x.job)/$($x.caso): sigue distinto tras deshacer $($x.commit.Substring(0, 7))."
+      if ($e.Motivo) { Aviso "  $($e.Motivo)" }
+    }
+    else { Bien "El caso $($x.job)/$($x.caso): ahora igual tras deshacer $($x.commit.Substring(0, 7))." }
+  }
+  return $Res
+}
+
+# Es la huella de $Dir de ahora la de antes? Solo se admite una diferencia: en la carpeta donde -Deshacer ha hecho sus commits
+# de revert, el HEAD de ahora puede ser el de antes con encima exactamente esos commits (y nada mas: lo demas de la huella, los
+# cambios sin commit, tiene que ser igual).
+function Test-MismaHuella([string]$Dir, [string]$Antes, [string]$Despues) {
+  if ($Antes -ceq $Despues) { return $true }
+  if ($Dir -ne $DirRama -or @($script:Reverts).Count -eq 0) { return $false }
+  $a = $Antes -split "`n", 2
+  $d = $Despues -split "`n", 2
+  if ($a.Count -ne 2 -or $d.Count -ne 2 -or $a[1] -cne $d[1]) { return $false }
+  if ((Invoke-Git $Dir @('merge-base', '--is-ancestor', $a[0], $d[0])).Codigo -ne 0) { return $false }
+  $nuevos = @((Invoke-Git $Dir @('rev-list', ($a[0] + '..' + $d[0]))).Salida | Where-Object { $_ })
+  return ($nuevos.Count -eq @($script:Reverts).Count -and @($nuevos | Where-Object { $script:Reverts -notcontains $_ }).Count -eq 0)
+}
+
+# ================================ RESULTADO ================================
+function Get-PorJob($Res) {
+  $porJob = @()
+  foreach ($p in $pruebas) {
+    $rs = @($Res | Where-Object { $_.job -ceq $p.job })
+    $ig = @($rs | Where-Object { $_.resultado -eq 'igual' }).Count
+    $di = @($rs | Where-Object { $_.resultado -eq 'distinto' }).Count
+    $porJob += [ordered]@{ job = $p.job; casos = $rs.Count; iguales = $ig; distintos = $di; sinProbar = ($rs.Count - $ig - $di) }
+  }
+  return $porJob
+}
+
+# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables) y devuelve lo escrito.
+function Save-Resultado($Res, $Culpables) {
+  $o = [ordered]@{
+    version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig
+    modelo = $ModeloElegido; inicio = $Inicio.ToString('s'); fin = (Get-Date).ToString('s'); minutos = [Math]::Round($reloj.Elapsed.TotalMinutes, 1); llamadas = $script:Llamadas
+    arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = @(Get-PorJob $Res); casos = $Res; noPromete = $NoPromete
+  }
+  if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
+  Write-Json (Join-Path $DatosMig 'prueba-local.json') $o
+  return $o
+}
+
 # ================================= MAIN =================================
 $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original.' }
+if ($Deshacer -and -not $Desde) { Stop-Arranque '-Deshacer solo vale con -Desde <commit>: dime desde que commit tengo que buscar lo que rompe.' }
 $ajustes = Read-CfgFile (Get-RutaAjustes) @('Plantilla') $false
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro git en el PATH." }
 foreach ($x in @(@('-Legacy', $Legacy), @('-Migrado', $Migrado))) {
@@ -687,12 +886,15 @@ $ModeloElegido = $Modelo
 if (-not $PSBoundParameters.ContainsKey('Modelo') -and (Test-Path -LiteralPath (Join-Path $DatosMig 'estado.json'))) { $ModeloElegido = [string](Read-Json (Join-Path $DatosMig 'estado.json')).modelo }
 if ($ModeloElegido) { Info "Modelo: $ModeloElegido" } else { Info 'Modelo: el que tenga Copilot' }
 
-# Huellas de lo que no se puede tocar: el original, el migrado, su worktree de rescate y la referencia
+# Huellas de lo que no se puede tocar: el original, el migrado, su worktree de rescate y la referencia. La unica excepcion: con
+# -Deshacer, la carpeta de la rama que se prueba puede acabar con sus commits de revert nuevos encima (Test-MismaHuella).
 $Worktree = ''
 $OrigenRoot = $MigradoRoot
 Set-Excluidos $MigradoRoot   # migracion-*/ fuera de git, como hace migracion.ps1
 $dirRescate = Get-DirRescate
 $hayRescate = Test-WorktreeRescate $dirRescate
+$DirRama = $MigradoRoot   # la carpeta de la rama que se prueba (la de rescate, si hay): donde se busca con -Desde y se deshace con -Deshacer
+if ($hayRescate) { $DirRama = $dirRescate }
 $intocables = @($LegacyRoot, $MigradoRoot)
 if ($hayRescate) { $intocables += $dirRescate }
 if ($PlantillaRoot) { $intocables += $PlantillaRoot }
@@ -702,6 +904,8 @@ $script:Llamadas = 0
 $script:Racha = 0
 $script:Mavens = 0
 $script:Maven = @{}
+$script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
+$script:Reverts = @()   # -Deshacer: los commits de revert que ha hecho
 $Hoy = @($Inicio.Date)
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
@@ -711,6 +915,12 @@ try {
   $HeadOrig = Get-Head $LegacyRoot
   $headMig = Get-Head $MigradoRoot
   if ($hayRescate) { $headMig = Get-Head $dirRescate; Info "El migrado se prueba en el ultimo commit de su rama de rescate ($(Get-Rama $dirRescate))." }
+  $DesdeCommit = ''
+  if ($Desde) {
+    $DesdeCommit = ((Invoke-Git $DirRama @('rev-parse', '--verify', '-q', ($Desde + '^{commit}'))).Salida -join '').Trim()
+    if (-not $DesdeCommit) { Stop-Arranque "-Desde ${Desde}: no es un commit de $DirRama." }
+    if ((Invoke-Git $DirRama @('merge-base', '--is-ancestor', $DesdeCommit, $headMig)).Codigo -ne 0) { Stop-Arranque "-Desde ${Desde}: no esta en la historia de la rama que se prueba ($(Get-Rama $DirRama), que acaba en $($headMig.Substring(0, 7)))." }
+  }
   foreach ($x in @(@($LegacyRoot, $HeadOrig, $CopiaOrig), @($MigradoRoot, $headMig, $CopiaMig))) {
     $m = New-Copia $x[0] $x[1] $x[2]
     if ($m) { Stop-Arranque $m }
@@ -776,27 +986,23 @@ try {
   # 5. Comparar y contar
   $Hoy = @(@($Inicio.Date, (Get-Date).Date) | Select-Object -Unique)
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
-  $porJob = @()
-  foreach ($p in $pruebas) {
-    $rs = @($res | Where-Object { $_.job -ceq $p.job })
-    $ig = @($rs | Where-Object { $_.resultado -eq 'igual' }).Count
-    $di = @($rs | Where-Object { $_.resultado -eq 'distinto' }).Count
-    $porJob += [ordered]@{ job = $p.job; casos = $rs.Count; iguales = $ig; distintos = $di; sinProbar = ($rs.Count - $ig - $di) }
+  $o = Save-Resultado $res @()
+  Show-Resultado $res $o.jobs
+
+  # 6. Con -Desde: el commit que rompe cada caso distinto y, con -Deshacer, su git revert; el resultado y la salida son los de despues
+  if ($Desde) {
+    $culpables = @(Find-Culpables $res)
+    if ($Deshacer) { $res = @(Undo-Culpables $culpables $res) }
+    $o = Save-Resultado $res $culpables
+    if ($Deshacer -and @($culpables | Where-Object { $_.deshecho }).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
   }
-  $o = [ordered]@{
-    version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig
-    modelo = $ModeloElegido; inicio = $Inicio.ToString('s'); fin = (Get-Date).ToString('s'); minutos = [Math]::Round($reloj.Elapsed.TotalMinutes, 1); llamadas = $script:Llamadas
-    arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = $porJob; casos = $res; noPromete = $NoPromete
-  }
-  Write-Json (Join-Path $DatosMig 'prueba-local.json') $o
-  Show-Resultado $res $porJob
   Info ''
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
   Info $NoPromete
 
   # Lo que no se podia tocar sigue igual
   $H1 = @($intocables | ForEach-Object { Get-Huella $_ })
-  if (($H0 -join "`n") -ne ($H1 -join "`n")) { Stop-Arranque ('Ha cambiado durante la prueba alguna de estas carpetas: ' + ($intocables -join ', ') + '. Miralo con git status y git diff.') }
+  if (@(0..($intocables.Count - 1) | Where-Object { -not (Test-MismaHuella $intocables[$_] $H0[$_] $H1[$_]) }).Count -gt 0) { Stop-Arranque ('Ha cambiado durante la prueba alguna de estas carpetas: ' + ($intocables -join ', ') + '. Miralo con git status y git diff.') }
   if (@($res | Where-Object { $_.resultado -eq 'distinto' }).Count -gt 0) { exit 2 }
   if ($ArnesMig.estado -ne 'hecha' -or @($res | Where-Object { $_.resultado -eq 'igual' }).Count -eq 0) { exit 1 }
   exit 0
