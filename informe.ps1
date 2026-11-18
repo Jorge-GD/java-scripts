@@ -1006,7 +1006,9 @@ function Get-DuranteHtml($T, $A) {
   if ($x.Count -eq 0) { return '' }
   $antes = @($A.Antes.Errores).Count
   $dif = ''
-  if ($x[0] -gt $antes) { $dif = Format-Trozo $T 'durante-aparecieron' @{ N = "$($x[0] - $antes)" } }
+  if ($x[0] - $antes -eq 1) { $dif = Format-Trozo $T 'durante-aparecio' }
+  elseif ($x[0] -gt $antes) { $dif = Format-Trozo $T 'durante-aparecieron' @{ N = "$($x[0] - $antes)" } }
+  elseif ($antes - $x[0] -eq 1) { $dif = Format-Trozo $T 'durante-se-fue' }
   elseif ($x[0] -lt $antes) { $dif = Format-Trozo $T 'durante-se-fueron' @{ N = "$($antes - $x[0])" } }
   $commits = Format-Trozo $T 'durante-commit-otros' @{ N = "$($A.Commits.Count)" }
   if ($A.Commits.Count -eq 1) { $commits = Format-Trozo $T 'durante-commit-uno' }

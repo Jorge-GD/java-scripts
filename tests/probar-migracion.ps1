@@ -3719,6 +3719,22 @@ $Pruebas['121 (P2) pagina 4: cada area con commits dice con cuantos hallazgos em
   Comprueba 'config (asuntos que no casan): sin linea' ($c.Length -gt 0 -and $c -notmatch 'Durante la correcci') $c
 }
 
+$Pruebas['122 (P2) pagina 4: con uno solo que aparecio o se fue, la frase va en singular'] = {
+  $antes = @((Hallazgo 'estructura' 'error' 'src/main/java/A.java' 1 'A suelta'), (Hallazgo 'estructura' 'error' 'src/main/java/B.java' 2 'B suelta'))
+  $despues = @(Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests')
+  function Commit([string]$Paso, [string]$Asunto) { return [ordered]@{ hash = 'abc1234'; paso = $Paso; asunto = $Asunto } }
+  $corr = [ordered]@{
+    completa = $true; codigo = 0; rama = 'rescate/main-20260101-0000'; base = 'main'
+    commits = @((Commit 'hexagonal' 'rescate(hexagonal): lote 1, hallazgos 1 a 0'), (Commit 'estructura' 'rescate(estructura): lote 1, hallazgos 1 a 0'))
+    atascados = @(); resueltos = @(); variablesNuevas = @()
+  }
+  $x = Correccion-Con (Corrida-Dos $GuionBase).E 'p2-durante-uno' $antes $despues $corr
+  $h = Texto-De (Grupo-De $x.P4 'hexagonal')
+  Comprueba 'hexagonal (0 antes, empezo con 1): 1 aparecio' ($h -match 'en 1 commit\. 1 apareci. con los arreglos de otros pasos\.') $h
+  $e = Texto-De (Grupo-De $x.P4 'estructura')
+  Comprueba 'estructura (2 antes, empezo con 1): 1 se fue antes' ($e -match 'en 1 commit\. 1 se fue antes, con los arreglos de otros pasos\.') $e
+}
+
 $Pruebas['112 (E2) el banco nunca ejecuta el prueba-local.ps1 de verdad: ninguna carpeta *-prueba-local en el banco ni debajo de los escenarios'] = {
   $c = @(Get-ChildItem -LiteralPath $Dir -Directory -Recurse -Depth 2 -Filter '*-prueba-local')
   Igual 'ninguna carpeta *-prueba-local' '' ($c | ForEach-Object { $_.FullName }) 
