@@ -790,9 +790,19 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
     if ($cal -and $cal.TieneSftp) { $donde = 'la plantilla lo tiene en infrastructure/adapters/output/sftp' } else { $donde = 'va en infrastructure/adapters/output/sftp' }
     Add-Hallazgo 'ficheros' 'error' '' 0 "no hay adaptador SFTP ($donde)"
   }
-  if ($usaFicheros -and ($h.Yml -notmatch 'sftp') -and ($Cfg.ExigirSftp -or ($cal -and $cal.YmlSftp))) {
+  $ymlSinSftp = ($usaFicheros -and ($h.Yml -notmatch 'sftp') -and ($Cfg.ExigirSftp -or ($cal -and $cal.YmlSftp)))
+  if ($ymlSinSftp) {
+    # la configuracion tambien cuenta si entra por una clase de src/main/java: un @ConfigurationProperties con prefijo sftp
+    # o un @Value con una clave sftp (Spring une SFTP_HOST con sftp.host sin tocar el yml). Sin comentarios, con las cadenas.
+    $sinComent = [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('/')) { return '' } else { return $m.Value } }
+    $rxSftpJava = '(?i)@ConfigurationProperties\s*\([^)]*"[^"]*sftp|@Value\s*\(\s*"[^"]*\$\{[^}"]*sftp'
+    foreach ($f in @($h.Ficheros | Where-Object { $_.Texto -match '(?i)sftp' })) {
+      if ($script:RxLexico.Replace($f.Texto, $sinComent) -match $rxSftpJava) { $ymlSinSftp = $false; break }
+    }
+  }
+  if ($ymlSinSftp) {
     if ($cal -and $cal.YmlSftp) { $deLaPlantilla = ' (la plantilla si)' } else { $deLaPlantilla = '' }
-    Add-Hallazgo 'ficheros' 'error' 'src/main/resources' 0 ('application.yml no tiene configuracion sftp' + $deLaPlantilla)
+    Add-Hallazgo 'ficheros' 'error' 'src/main/resources' 0 ('application.yml no tiene configuracion sftp: anade un bloque ''sftp:'' (host, port, username, password, remote-dir) que lea variables de entorno, por ejemplo host: ${SFTP_HOST}; ningun valor real' + $deLaPlantilla)
   }
 
   # ---------- config ----------
