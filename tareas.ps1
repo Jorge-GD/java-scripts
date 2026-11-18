@@ -1028,10 +1028,21 @@ function Get-TareasResumen($Mapa, [bool]$ConservarAtascadas) {
 }
 
 # ============================== VARIABLES ==============================
+# Algun nombre de $Nombres (el de una variable, el ultimo trozo de una clave) ACABA en una palabra de $PalabrasSecreto (comun.ps1), sin
+# distinguir mayusculas: la misma regla que Get-SecretosEnClaro de rescate.ps1.
+function Test-NombreSecreto([string[]]$Nombres) {
+  foreach ($n in $Nombres) {
+    foreach ($p in $PalabrasSecreto) { if ($p -and $n.EndsWith([string]$p, [System.StringComparison]::OrdinalIgnoreCase)) { return $true } }
+  }
+  return $false
+}
+
 # Cada ${NOMBRE} y ${NOMBRE:valor} de los application*.yml, .yaml y .properties de src/main/resources y de
 # src/main/resources/config del worktree, en ese orden y cada carpeta por nombre (sin las lineas de comentario):
-# variable, porDefecto (null si no lleva), fichero (la ruta real) y linea.
+# variable, porDefecto (null si no lleva), fichero (la ruta real) y linea. Si el valor por defecto es de un secreto no se guarda:
+# porDefecto es null y la variable lleva secreto = $true (la pagina 1 dice que tiene valor pero no lo ensena).
 function Get-Variables {
+  $rxClave = '^\s*(?:-\s+)?["'']?([^\s:="''$]+)["'']?\s*[=:]'
   $res = @()
   foreach ($rel in @('src/main/resources', 'src/main/resources/config')) {
     $dir = Join-Ruta $RepoRoot $rel
@@ -1040,10 +1051,14 @@ function Get-Variables {
       $lineas = [System.IO.File]::ReadAllLines($f.FullName)
       for ($i = 0; $i -lt $lineas.Count; $i++) {
         if ($lineas[$i].TrimStart().StartsWith('#')) { continue }
+        $clave = ''
+        if ($lineas[$i] -match $rxClave) { $clave = ($Matches[1] -split '\.')[-1] }
         foreach ($m in [regex]::Matches($lineas[$i], '\$\{([\w\.\-]+)(?::([^}]*))?\}')) {
           $defecto = $null
           if ($m.Groups[2].Success) { $defecto = $m.Groups[2].Value }
-          $res += [ordered]@{ variable = $m.Groups[1].Value; porDefecto = $defecto; fichero = ($rel + '/' + $f.Name); linea = ($i + 1) }
+          $v = [ordered]@{ variable = $m.Groups[1].Value; porDefecto = $defecto; fichero = ($rel + '/' + $f.Name); linea = ($i + 1) }
+          if ($null -ne $defecto -and (Test-NombreSecreto @($v.variable, $clave))) { $v.porDefecto = $null; $v.secreto = $true }
+          $res += $v
         }
       }
     }

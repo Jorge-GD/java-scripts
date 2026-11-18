@@ -460,7 +460,7 @@ function Get-VariablesNuevas {
   if (Test-Path -LiteralPath $f) { $conocidas = @(Read-Json $f | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.variable }) }
   $res = @()
   foreach ($v in @(Get-Variables)) {
-    if ($null -ne $v.porDefecto) { continue }
+    if ($null -ne $v.porDefecto -or $v.secreto -eq $true) { continue }
     if (($conocidas -ccontains [string]$v.variable) -or (@($res | Where-Object { $_.variable -ceq $v.variable }).Count -gt 0)) { continue }
     $res += [ordered]@{ variable = $v.variable; fichero = $v.fichero; linea = $v.linea }
   }

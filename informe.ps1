@@ -339,7 +339,9 @@ function Get-PreHtml($D, $T, $V) {
   if ($D.Variables.Count -gt 0) {
     $items = Format-Lista $T 'var' $D.Variables {
       param($x)
-      if ($null -ne $x.porDefecto) { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-defecto' @{ VALOR = $x.porDefecto }) } }
+      # un secreto con valor por defecto no se ensena (un variables.json de antes no lleva la marca: vale el nombre de la variable)
+      if ($x.secreto -eq $true -or ($null -ne $x.porDefecto -and (Test-NombreSecreto @($x.variable)))) { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-secreto') } }
+      elseif ($null -ne $x.porDefecto) { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-defecto' @{ VALOR = $x.porDefecto }) } }
       else { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-sin-defecto') } }
     }
     $vars = Format-Trozo $T 'vars' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); ITEMS = $items }
