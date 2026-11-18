@@ -22,6 +22,7 @@ $ErrorActionPreference = 'Stop'
 $aqui = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $Script) { $Script = Join-Path (Split-Path -Parent $aqui) 'donde-estoy.ps1' }
 $origen = Split-Path -Parent $Script
+$EsteBanco = $MyInvocation.MyCommand.Path
 . (Join-Path $aqui 'comun-banco.ps1')
 $e_ = [string][char]0xE9   # la e con tilde: el script no lleva tildes en el codigo, pero si en lo que dice
 $a_ = [string][char]0xE1
@@ -247,6 +248,11 @@ $Pruebas['b) cada caso: el texto y el comando son los de la portada (Get-Siguien
   Comprueba 'corriendo: dice la fase y el comando de la pasada' ($c.Texto -cmatch '^Sigue trabajando: va por la fase mapa\.' -and $c.Comando.Count -eq 1 -and $c.Comando[0] -ceq ('.\migracion.ps1 -Legacy "' + (Join-Path $E.Raiz 'original-acme') + '" -Migrado "' + (Join-Path $E.Raiz 'b-corriendo') + '" -Plantilla "' + (Join-Path $E.Raiz 'referencia-acme') + '" -Modelo claude-sonnet-5.5 -SoloInforme')) ($c.Texto + ' // ' + ($c.Comando -join ' / '))
   $c = Campo-De $bl['b-parada'] 'Siguiente'
   Comprueba 'parada: Copilot no responde' ($c.Texto -cmatch '^Se ha parado porque Copilot no responde') $c.Texto
+  # el punto: la fase y como va (corriendo, parada, cortada) o terminado, con la fecha del fin (o la del fichero si sigue corriendo)
+  Comprueba 'punto de corriendo: fase mapa, corriendo' ((Campo-De $bl['b-corriendo'] 'Punto').Texto -cmatch '^fase mapa, corriendo \(\d\d-\d\d-\d{4} \d\d:\d\d\)$') (Campo-De $bl['b-corriendo'] 'Punto').Texto
+  Igual 'punto de parada: fase, motivo y fecha del fin' 'fase correccion, parada: copilot-no-responde (18-11-2026 10:00)' (Campo-De $bl['b-parada'] 'Punto').Texto
+  Igual 'punto de cortada: fase y fecha del fin' 'fase comparar, cortada (18-11-2026 10:00)' (Campo-De $bl['b-cortada'] 'Punto').Texto
+  Igual 'punto de un batch hecho: terminado y fecha del fin' 'terminado (18-11-2026 10:00)' (Campo-De $bl['b-pre'] 'Punto').Texto
   $c = Campo-De $bl['b-corregido'] 'Siguiente'
   Igual 'corregido: tres comandos de git, cada uno en su linea' 3 $c.Comando.Count
   Comprueba 'corregido: el ultimo es el merge de la rama de rescate' ($c.Comando.Count -eq 3 -and $c.Comando[2] -ceq ('git -C "' + (Join-Path $E.Raiz 'b-corregido') + '" merge rescate/feat-recibos-20261118-0900')) ($c.Comando -join ' / ')
@@ -266,6 +272,7 @@ $Pruebas['c) cobertura: por debajo del minimo sale Despues con -Cobertura; por e
   [void](Nuevo-Batch $E 'cob-ninguna' (Estado-Base 'cob-ninguna' (Join-Path $E.Raiz 'cob-ninguna')) @{ })
   [void](Nuevo-Batch $E 'cob-despues-sube' (Estado-Base 'cob-despues-sube' (Join-Path $E.Raiz 'cob-despues-sube')) @{ 'cobertura-antes.json' = (Cobertura-Datos 70); 'cobertura-despues.json' = (Cobertura-Datos 85) })
   [void](Nuevo-Batch $E 'cob-despues-baja' (Estado-Base 'cob-despues-baja' (Join-Path $E.Raiz 'cob-despues-baja')) @{ 'cobertura-antes.json' = (Cobertura-Datos 90); 'cobertura-despues.json' = (Cobertura-Datos 60) })
+  [void](Nuevo-Batch $E 'cob-80' (Estado-Base 'cob-80' (Join-Path $E.Raiz 'cob-80')) @{ 'cobertura-antes.json' = (Cobertura-Datos 80) })
   [void](Nuevo-Batch $E 'cob-decimal' (Estado-Base 'cob-decimal' (Join-Path $E.Raiz 'cob-decimal')) @{ 'cobertura-antes.json' = (Cobertura-Datos 79.5) })
   $r = Donde $E
   Igual 'sale con 0' 0 $r.Codigo
@@ -274,6 +281,7 @@ $Pruebas['c) cobertura: por debajo del minimo sale Despues con -Cobertura; por e
   Comprueba 'al 70 %: La cobertura es 70 % (minimo 80 %)' ($d -and $d.Texto -cmatch ('^La cobertura es 70 % \(m' + $i_ + 'nimo 80 %\)')) (Cola $r.Salida)
   Comprueba 'al 70 %: el comando es rescate.ps1 -Repo con la ruta entre comillas y -Cobertura' ($d -and $d.Comando.Count -eq 1 -and $d.Comando[0] -ceq ('.\rescate.ps1 -Repo "' + (Join-Path $E.Raiz 'cob-70') + '" -Cobertura')) (Cola $r.Salida)
   Comprueba 'al 85 %: no sale Despues' ($null -eq (Campo-De $bl['cob-85'] $Despues_))
+  Comprueba 'justo en el minimo (80 %): no sale Despues, solo cuenta lo que esta por debajo' ($null -eq (Campo-De $bl['cob-80'] $Despues_))
   Comprueba 'sin medir (con su motivo): no sale Despues' ($null -eq (Campo-De $bl['cob-sin-medir'] $Despues_))
   Comprueba 'sin fichero de cobertura: no sale Despues' ($null -eq (Campo-De $bl['cob-ninguna'] $Despues_))
   Comprueba 'antes 70 y despues 85: manda la de despues, no sale' ($null -eq (Campo-De $bl['cob-despues-sube'] $Despues_))
@@ -352,6 +360,7 @@ $Pruebas['f) solo lectura: ni un fichero de migracion-* ni el repo cambian'] = {
   $b2 = Nuevo-Batch $E 'batch-dos' (Estado-Base 'batch-dos' (Join-Path $E.Raiz 'batch-dos') @{ fin = ''; fase = 'mapa' })
   $b3 = Nuevo-Batch $E 'batch-tres' $null
   Escribe $b1.Salida 'index.html' '<html>portada</html>'
+  Escribe $b3.Salida 'registros/nota.log' 'sin estado.json'
   Escribe $b1.Salida 'registros/correccion.log' 'linea'
   $todos = @($b1, $b2, $b3)
   foreach ($b in $todos) { Envejece $b.Dir }
@@ -442,7 +451,7 @@ $Pruebas['j) cabecera y forma del script: ASCII, USO con ejemplos, sin sintaxis 
   if (-not (Test-Path -LiteralPath $Script)) { return }
   $bytes = [System.IO.File]::ReadAllBytes($Script)
   Comprueba 'donde-estoy.ps1 es ASCII puro' (@($bytes | Where-Object { $_ -gt 127 }).Count -eq 0)
-  Comprueba 'este banco tambien' (@([System.IO.File]::ReadAllBytes($MyInvocation.MyCommand.Path) | Where-Object { $_ -gt 127 }).Count -eq 0)
+  Comprueba 'este banco tambien' (@([System.IO.File]::ReadAllBytes($EsteBanco) | Where-Object { $_ -gt 127 }).Count -eq 0)
   $t = [System.IO.File]::ReadAllText($Script)
   Comprueba 'empieza por un bloque de ayuda con USO' ($t -match '(?s)^<#.*\bUSO\b.*#>')
   Comprueba 'la cabecera da ejemplos con y sin -Migrado' ($t -match '(?m)^\s+\.\\donde-estoy\.ps1\s*(#.*)?$' -and $t -match '(?m)^\s+\.\\donde-estoy\.ps1 -Migrado ')
