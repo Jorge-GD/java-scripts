@@ -609,7 +609,9 @@ $Pruebas['puertas: un lote que no cambia nada se deshace y queda apuntado'] = {
   # las llamadas de los lotes (las de consejo y reflexion van aparte, con su esfuerzo)
   $ll = (@((Lee $e.Wt '.rescate/llamadas.log') -split "`n" | Where-Object { $_ -match "paso 'estructura'" }) -join "`n")
   Comprueba 'lo intenta con el lote entero y despues fichero a fichero' (@($ll -split "`n" | Where-Object { $_ }).Count -eq 3) $ll
-  Comprueba 'a los lotes no les llega ni modelo ni esfuerzo' ($ll -notmatch '--(model|effort)=') $ll
+  # el primer intento va sin modelo ni esfuerzo; los escalones, solo con el esfuerzo de los reintentos (high, el defecto), sin modelo
+  $fl = @($ll -split "`n" | Where-Object { $_ })
+  Comprueba 'al lote entero no le llega ni modelo ni esfuerzo, y a cada reintento solo el esfuerzo high' ($fl.Count -eq 3 -and $fl[0] -notmatch '--(model|effort)=' -and @($fl | Select-Object -Skip 1 | Where-Object { $_ -match '--effort=high' -and $_ -notmatch '--model=' }).Count -eq 2) $ll
 }
 
 $Pruebas['puertas: si la IA toca la plantilla, se para y se deshace'] = {
@@ -1981,15 +1983,18 @@ $Pruebas['m8 reflexion: si aun falta una seccion, el aviso dice que titulos trae
   Comprueba 'sin titulos dice que no trae ninguno' ($r2.Salida -match "(?m)^  A la reflexion le falta 'Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer': sigo sin ella\. No trae ningun titulo \(ver \.rescate/reflexion-estructura-1-1\.md\)\.") (Cola $r2.Salida)
 }
 
-$Pruebas['m8 reflexion: sin decir nada en la config, corre tras un intento que no pasa y el siguiente la lleva'] = {
+$Pruebas['m8 reflexion: sin decir nada en la config, corre cuando el fallo se repite y el siguiente la lleva'] = {
   $e = Escenario-M6 'm8-reflexion-defecto'
   Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
-  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion'
+  $r = Fix-M6 $e 'estructura' 3 @() 'nada-hasta-reflexion'
   Igual 'sale con 0' 0 $r.Codigo
-  Igual 'hay una reflexion, tras el primer intento' 1 (Llamadas-M6 $e 'reflexion').Count
+  Igual 'hay una reflexion, tras el segundo intento (el primero no tenia otro con el que compararse)' 1 (Llamadas-M6 $e 'reflexion').Count
   $l = @(Llamadas-M6 $e 'lote')
-  Igual 'dos intentos' 2 $l.Count
-  if ($l.Count -eq 2) { Comprueba 'el segundo lleva la reflexion en la CORRECCION' ((Correccion-De (Prompt-M6 $e $l[1])) -match 'REFLEXION-MARCA-estructura-1-1') (Prompt-M6 $e $l[1]) }
+  Igual 'tres intentos' 3 $l.Count
+  if ($l.Count -eq 3) {
+    Comprueba 'el segundo no lleva reflexion' ((Prompt-M6 $e $l[1]) -notmatch 'REFLEXION-MARCA') (Prompt-M6 $e $l[1])
+    Comprueba 'el tercero lleva la del intento 2 en la CORRECCION' ((Correccion-De (Prompt-M6 $e $l[2])) -match 'REFLEXION-MARCA-estructura-1-2') (Prompt-M6 $e $l[2])
+  }
   Comprueba 'la cabecera no dice que va sin reflexion' ($r.Salida -notmatch '\(sin reflexion\)') (Cola $r.Salida)
 }
 
@@ -2049,6 +2054,75 @@ $Pruebas['m9 copilot: si sale con error sin cambiar nada se repite una vez sin g
   $l2 = @(Llamadas-M6 $e2 'lote')
   Comprueba 'si vuelve a salir igual, el lote se deshace con su unico intento' ($r2.Salida -match 'Lote 1 DESHECHO: no paso las comprobaciones tras 1 intento\(s\)') (Cola $r2.Salida)
   Comprueba 'tras repetir una vez, no mas' ($l2.Count -ge 2 -and ((Ficheros-Del-Lote $l2[0]) -join ',') -eq ((Ficheros-Del-Lote $l2[1]) -join ',') -and ((Ficheros-Del-Lote $l2[2]) -join ',') -ne ((Ficheros-Del-Lote $l2[0]) -join ',')) ($l2 -join ' / ')
+}
+
+# ----- A.4: la reflexion, solo cuando el fallo se repite -----
+# Los intentos tras los que se reflexiono, de llamadas-m6.log ('estructura-1-2' = paso, lote, intento).
+function Reflexiones-De($E) { return @(Llamadas-M6 $E 'reflexion' | ForEach-Object { ($_ -split ' \| ')[3].Trim() }) }
+
+$Pruebas['m9 reflexion: con fallos distintos en los intentos 1 y 2 no se reflexiona (repetido, el defecto)'] = {
+  $e = Escenario-M6 'm9-refl-distintos'
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
+  $r = Fix-M6 $e 'estructura' 3 @('-Lote', '1', '-Saltar', '1') 'fallos-distintos'
+  Igual 'sale con 0' 0 $r.Codigo
+  $c1 = Lee $e.Wt '.rescate/intento-estructura-1-1.md'; $c2 = Lee $e.Wt '.rescate/intento-estructura-1-2.md'
+  Comprueba 'el intento 1 no cambia nada y el 2 no baja los hallazgos: son fallos distintos' ($c1 -match 'No has cambiado' -and $c2 -match 'no han bajado' -and $c2 -notmatch 'No has cambiado') ($c1 + ' // ' + $c2)
+  Comprueba 'el lote pasa en el tercero' ($r.Salida -match "Lote 1 OK: 'estructura'") (Cola $r.Salida)
+  Igual 'no se reflexiona nunca' 0 (Reflexiones-De $e).Count
+}
+
+$Pruebas['m9 reflexion: siempre y true reflexionan tras cada intento que no pasa; nunca y false, ninguno; un valor raro, como repetido'] = {
+  foreach ($q in @(@('true', $true, 'estructura-1-1,estructura-1-2'), @('siempre', 'siempre', 'estructura-1-1,estructura-1-2'), @('false', $false, ''), @('nunca', 'nunca', ''), @('repetido', 'repetido', 'estructura-1-2'))) {
+    $e = Escenario-M6 ('m9-refl-' + $q[0]) @{ Reflexionar = $q[1] }
+    $r = Fix-M6 $e 'estructura' 2 @() 'atasca-siempre;consejo-nada'
+    Igual "Reflexionar $($q[0]): las reflexiones del primer lote" $q[2] ((Reflexiones-De $e | Where-Object { $_ -match '^estructura-1-' }) -join ',')
+  }
+  $e = Escenario-M6 'm9-refl-raro' @{ Reflexionar = 'quizas' }
+  $r = Fix-M6 $e 'estructura' 2 @() 'atasca-siempre;consejo-nada'
+  Comprueba 'avisa de que el valor no vale' ($r.Salida -match "Reflexionar 'quizas' no vale") (Cola $r.Salida)
+  Igual 'y reflexiona como repetido' 'estructura-1-2' ((Reflexiones-De $e | Where-Object { $_ -match '^estructura-1-' }) -join ',')
+}
+
+# ----- A.5: los reintentos suben el esfuerzo -----
+# El esfuerzo (--effort=) de cada llamada de lote, en orden.
+function Esfuerzos-De-Lotes($E) { return @(Llamadas-M6 $E 'lote' | ForEach-Object { ([regex]::Match($_, '--effort=(\w+)')).Groups[1].Value }) }
+
+$Pruebas['m9 esfuerzo: el intento 1 va con el de -Esfuerzo y los siguientes con EsfuerzoReintento (high), si es mayor'] = {
+  $e = Escenario-M6 'm9-esf-defecto'
+  $r = Fix-M6 $e 'estructura' 2 @('-Lote', '1', '-Saltar', '1', '-Esfuerzo', 'medium') 'nada-sin-correccion'
+  Igual 'el intento 1 con medium y el 2 con high' 'medium,high' ((Esfuerzos-De-Lotes $e) -join ',')
+  $e2 = Escenario-M6 'm9-esf-igual' @{ EsfuerzoReintento = 'high' }
+  [void](Fix-M6 $e2 'estructura' 2 @('-Lote', '1', '-Saltar', '1', '-Esfuerzo', 'high') 'nada-sin-correccion')
+  Igual 'con -Esfuerzo high, todo va con high' 'high,high' ((Esfuerzos-De-Lotes $e2) -join ',')
+  $e3 = Escenario-M6 'm9-esf-mayor'
+  [void](Fix-M6 $e3 'estructura' 2 @('-Lote', '1', '-Saltar', '1', '-Esfuerzo', 'xhigh') 'nada-sin-correccion')
+  Igual 'con -Esfuerzo xhigh (mayor), el reintento no lo baja' 'xhigh,xhigh' ((Esfuerzos-De-Lotes $e3) -join ',')
+  $e4 = Escenario-M6 'm9-esf-vacio' @{ EsfuerzoReintento = '' }
+  [void](Fix-M6 $e4 'estructura' 2 @('-Lote', '1', '-Saltar', '1', '-Esfuerzo', 'medium') 'nada-sin-correccion')
+  Igual 'con EsfuerzoReintento vacio, como hasta ahora' 'medium,medium' ((Esfuerzos-De-Lotes $e4) -join ',')
+  $e5 = Escenario-M6 'm9-esf-sin-esfuerzo'
+  [void](Fix-M6 $e5 'estructura' 2 @('-Lote', '1', '-Saltar', '1') 'nada-sin-correccion')
+  Igual 'sin -Esfuerzo (el de Copilot), el intento 1 no pide ninguno y el 2 pide high' ',high' ((Esfuerzos-De-Lotes $e5) -join ',')
+}
+
+$Pruebas['m9 esfuerzo: los escalones (de uno en uno, reserva y consejo) van con el esfuerzo de reintento'] = {
+  $e = Escenario-M6 'm9-esf-escalones'
+  $r = Fix-M6 $e 'estructura' 1 @('-Lote', '2', '-Esfuerzo', 'medium', '-ModeloB', 'modelo-b') 'atasca-siempre;consejo-codigo'
+  $es = @(Esfuerzos-De-Lotes $e)
+  Comprueba 'hay el lote de dos, uno de uno en uno, la reserva y el consejo' ($es.Count -ge 4) ($es -join ',')
+  if ($es.Count -ge 4) {
+    Igual 'el primer lote, con medium' 'medium' $es[0]
+    Igual 'todos los escalones, con high' 'high' (($es | Select-Object -Skip 1 | Select-Object -Unique) -join ',')
+  }
+}
+
+$Pruebas['m9 esfuerzo: si Copilot no admite el esfuerzo del reintento, se baja con la regla de siempre y se queda'] = {
+  $e = Escenario-M6 'm9-esf-baja' @{ EsfuerzoReintento = 'max' }
+  $r = Fix-M6 $e 'estructura' 2 @('-Lote', '1', '-Esfuerzo', 'medium') 'nada-sin-correccion;sin-max'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'dos lotes: el intento 2 pide max, se rechaza y se repite con xhigh; en el lote siguiente el 2 ya pide xhigh' 'medium,xhigh,medium,xhigh' ((Esfuerzos-De-Lotes $e) -join ',')
+  Igual 'un solo rechazo' 1 @(Llamadas-M6 $e 'rechazo').Count
+  Comprueba 'lo dice' ($r.Salida -match "esfuerzo 'max'.*'xhigh'") (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
