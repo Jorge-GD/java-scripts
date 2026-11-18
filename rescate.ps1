@@ -74,9 +74,10 @@ USO
   # decidir una persona, se apunta en .rescate/atascados.md (y .json) y sigue.
   # La pasada siguiente no vuelve a intentar un atascado si su fichero no ha
   # cambiado y no hay commits tuyos desde entonces (-Reintentar lo fuerza).
-  # Con "Reflexionar" (encendido por defecto; "Reflexionar": false en
-  # .rescate/config.json lo apaga), tras cada intento que no pasa el modelo de las
-  # dudas reflexiona (por que no paso, que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del plan
+  # Con "Reflexionar" (por defecto "repetido"; "siempre" o "nunca" en
+  # .rescate/config.json; true y false valen como siempre y nunca), el modelo de las
+  # dudas reflexiona (por que no paso, que hacer) tras un intento que falla con los mismos
+  # NO PASA que el anterior del lote, y el siguiente intento lo lleva. Con -Auto, las dudas del plan
   # tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
   # Todo queda en .rescate/decisiones.md; lo que le toca a una persona sale al
   # final en "Te toca decidir".
@@ -200,19 +201,24 @@ $Cfg += @{
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
-  MaxFallosSeguidos     = 6     # lotes deshechos seguidos antes de parar (no gastar llamadas en balde)
+  MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
   # El modelo de las dudas (consejo y reflexion). Vacio = el de -Modelo. Su esfuerzo: si Copilot no admite max, baja
   # a xhigh y luego a high.
   ModeloDudas           = ''
   EsfuerzoDudas         = 'max'
   # El modelo de reserva si no se pasa -ModeloB (migracion.ps1 lanza el fix sin el). Vacio = sin reserva.
   ModeloB               = ''
-  # Tras cada intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
-  # Encendida por decision del usuario el 18-11, al ver atascos reales con las mismas cuentas en los tres intentos. La
-  # medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no tuvo ningun atasco en ninguno de sus
-  # brazos (0 y 0 con y sin ella, dos pasadas de cada), y con ella la pasada tardo de 3 a 4 veces mas y costo de 5 a 8
-  # veces mas. Se apaga con "Reflexionar": false.
-  Reflexionar           = $true
+  # Tras un intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
+  # 'repetido' (por defecto, decision del usuario del 18-11): solo cuando el intento falla con los mismos NO PASA que el
+  # anterior del mismo lote (la misma lista sin las cifras, o los mismos hallazgos nuevos); asi no se paga una reflexion
+  # por un fallo que el siguiente intento arregla solo (la medida del M6, el caso de dos ficheros que necesitan la misma
+  # pieza comun, no tuvo ningun atasco y con reflexion la pasada tardo de 3 a 4 veces mas y costo de 5 a 8 veces mas).
+  # 'siempre' (o true) reflexiona tras cada intento que no pasa; 'nunca' (o false), nunca.
+  Reflexionar           = 'repetido'
+  # Esfuerzo de los reintentos (decision del usuario del 18-11): los intentos 2 y siguientes de un lote y los escalones
+  # (de uno en uno, modelo de reserva, consejo) van con este si es mayor que el de -Esfuerzo; si no, con el de -Esfuerzo.
+  # Vacio = como hasta ahora. Si Copilot no admite el esfuerzo, baja con Get-EsfuerzosMenores (max -> xhigh -> high).
+  EsfuerzoReintento     = 'high'
   LineasDiff            = 300   # lineas del diff del intento que recibe la reflexion
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
@@ -1113,6 +1119,39 @@ function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [str
   return $r
 }
 
+# Reflexionar ('repetido', 'siempre' o 'nunca'; true y false valen como siempre y nunca) y EsfuerzoReintento (low a max, o vacio):
+# normaliza los dos valores de la config y avisa de los que no valen.
+function Initialize-ConfigReintentos {
+  $modos = @{ 'true' = 'siempre'; 'false' = 'nunca'; 'siempre' = 'siempre'; 'nunca' = 'nunca'; 'repetido' = 'repetido' }
+  $modo = $modos["$($Cfg.Reflexionar)".Trim().ToLowerInvariant()]
+  if (-not $modo) { Aviso "Reflexionar '$($Cfg.Reflexionar)' no vale (repetido, siempre, nunca, true o false): uso 'repetido'."; $modo = 'repetido' }
+  $Cfg.Reflexionar = $modo
+  $e = "$($Cfg.EsfuerzoReintento)".Trim()
+  if ($e -and @('low', 'medium', 'high', 'xhigh', 'max') -cnotcontains $e) { Aviso "EsfuerzoReintento '$e' no vale (low, medium, high, xhigh o max): lo dejo vacio."; $e = '' }
+  $script:EsfReintento = $e
+}
+
+# El esfuerzo de un reintento (intento 2 o siguiente, o un escalon): el de EsfuerzoReintento si es mayor que el de -Esfuerzo; si no,
+# vacio (el de -Esfuerzo).
+function Get-EsfuerzoReintento {
+  $r = $script:EsfReintento
+  if (-not $r) { return '' }
+  $niveles = @('low', 'medium', 'high', 'xhigh', 'max')
+  if ($Esfuerzo -and [array]::IndexOf($niveles, $r) -le [array]::IndexOf($niveles, $Esfuerzo)) { return '' }
+  return $r
+}
+
+# La forma de un fallo, para compararlo con el del intento anterior: sus NO PASA sin las cifras y las claves de sus hallazgos nuevos.
+function Get-ClaveFallo([string[]]$Problemas, $Nuevos) {
+  return [pscustomobject]@{
+    Problemas = (@($Problemas | ForEach-Object { $_ -replace '\d+', '#' } | Sort-Object) -join '|')
+    Nuevos    = (@($Nuevos | ForEach-Object { Get-ClaveHallazgo $_ } | Sort-Object) -join '|')
+  }
+}
+
+# Es el mismo fallo? Los mismos NO PASA (sin cifras) o, si los hay, los mismos hallazgos nuevos.
+function Test-FalloRepetido($A, $B) { return [bool]($A.Problemas -ceq $B.Problemas -or ($A.Nuevos -and $A.Nuevos -ceq $B.Nuevos)) }
+
 # Para pantalla: con que modelo y que esfuerzo se va a llamar a Copilot.
 function Get-TextoModelo {
   $m = $Modelo; $e = $Esfuerzo; $p = $EsfuerzoPlan
@@ -1124,7 +1163,10 @@ function Get-TextoModelo {
   $md = $script:ModDudas
   if (-not $md) { $md = $m }
   $t += " | modelo de las dudas (consejo y reflexion): $md, esfuerzo $($script:EsfDudas)"
-  if (-not $Cfg.Reflexionar) { $t += ' (sin reflexion)' }
+  $er = Get-EsfuerzoReintento
+  if ($er) { $t += " | en los reintentos: $er" }
+  if ($Cfg.Reflexionar -eq 'nunca') { $t += ' (sin reflexion)' }
+  elseif ($Cfg.Reflexionar -eq 'repetido') { $t += ' (reflexion solo si el fallo se repite)' }
   return $t
 }
 
@@ -1713,8 +1755,18 @@ function Invoke-Fix {
   if (-not $script:AtascadosLeidos) { Read-Atascados; $script:AtascadosLeidos = $true }
 
   # --- diagnostico inicial ---
-  Info 'Diagnostico inicial (compilando)...'
-  $hall = @(Invoke-Diagnostico $true (-not $SinTests))
+  # Si es el mismo commit del ultimo diagnostico con Maven (el del ultimo lote del paso anterior) y el arbol esta limpio, sirven sus hallazgos.
+  $head0 = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
+  $cache = $script:HallCache
+  if ($cache -and $cache.Commit -eq $head0 -and @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -eq 0) {
+    Info 'Diagnostico inicial: mismo commit y arbol limpio que en el ultimo diagnostico con Maven: reutilizo sus hallazgos.'
+    $hall = @($cache.Hall)
+    $script:Build = $cache.Build
+  }
+  else {
+    Info 'Diagnostico inicial (compilando)...'
+    $hall = @(Invoke-Diagnostico $true (-not $SinTests))
+  }
   $script:Hall = $hall
   Write-Informe $hall
   Show-Resumen $hall
@@ -1749,6 +1801,7 @@ function Invoke-Fix {
     }
   }
 
+  $unoAUno = @{}       # ficheros de un lote deshecho que se reintentan de uno en uno: los demas vuelven al tamano del paso
   $planB = @{}
   $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
   $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
@@ -1759,14 +1812,19 @@ function Invoke-Fix {
     $stuck = @()
     if ($script:Atascados.ContainsKey($paso)) { $stuck = @($script:Atascados[$paso]) }
     $fichs = @($pend | ForEach-Object { $_.Fichero } | Select-Object -Unique | Where-Object { $stuck -notcontains $_ })
-    $sel = @($fichs | Select-Object -Skip $Saltar -First $loteEf)
+    $cand = @($fichs | Select-Object -Skip $Saltar)
+    $tam = $loteEf
+    if ($cand.Count -gt 0 -and $unoAUno.ContainsKey($cand[0])) { $tam = 1 }
+    $sel = @($cand | Select-Object -First $tam)
     if ($sel.Count -eq 0) { break }
     # el intento con el consejo va con -Modelo, una sola vez y sin reflexion (despues no hay otro)
     $conIntento = ($sel.Count -eq 1 -and $consejoDe.ContainsKey($sel[0]))
     $mod = ''; $duda = $null; $intentos = $MaxIntentos
     if ($conIntento) { $duda = $consejoDe[$sel[0]].Dudas[0]; $intentos = 1 }
     elseif ($sel.Count -eq 1 -and $planB.ContainsKey($sel[0])) { $mod = $ModeloB }
-    $reflexionar = ($Cfg.Reflexionar -and -not $conIntento)
+    $reflexionar = ($Cfg.Reflexionar -ne 'nunca' -and -not $conIntento)
+    $escalon = ($sel.Count -eq 1 -and ($unoAUno.ContainsKey($sel[0]) -or $planB.ContainsKey($sel[0]) -or $conIntento))   # de uno en uno, reserva o consejo
+    $falloAntes = $null   # la forma del fallo del intento anterior de este lote
     $buildAntes = $script:Build
     $loteH = @($pend | Where-Object { $sel -contains $_.Fichero })
     $antes = @{}
@@ -1790,8 +1848,25 @@ function Invoke-Fix {
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
       Info "  Copilot trabajando (intento $i de $intentos)..."
-      $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod '' "Copilot (paso $paso, lote $n, intento $i)"
-      if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc }
+      $esf = ''
+      if ($i -ge 2 -or $escalon) { $esf = Get-EsfuerzoReintento }
+      $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i)"
+      if ($rc.Codigo -ne 0) {
+        Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc
+        # un fallo de Copilot sin tocar nada no es un intento del modelo: se repite la llamada una vez
+        $nada = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check -and @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ }).Count -eq 0
+        if ($nada) {
+          Aviso '  No ha cambiado nada: repito la llamada una vez (no cuenta como intento).'
+          # si iba con el esfuerzo de los reintentos, puede que el modelo no lo admita: se prueba el siguiente (la regla de siempre) y se queda
+          $menor = @(); if ($esf) { $menor = @(Get-EsfuerzosMenores $esf) }
+          if ($menor.Count -gt 0) {
+            Aviso "  Copilot ha fallado con el esfuerzo '$esf' de los reintentos (puede que el modelo no lo admita): pruebo '$($menor[0])'."
+            $esf = $menor[0]; $script:EsfReintento = $esf
+          }
+          $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i-repeticion.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i, repeticion)"
+          if ($rc.Codigo -ne 0) { Aviso "  Copilot termino otra vez con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i-repeticion.log)"; Write-FinCopilot $rc }
+        }
+      }
 
       # -- guardas duras: si saltan, no hay reintento --
       $g1 = Get-Guardas
@@ -1812,7 +1887,9 @@ function Invoke-Fix {
         $problemas = @('No has cambiado ningun fichero.')
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
         $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
-        if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
+        $falloAhora = Get-ClaveFallo $problemas @()
+        if ($reflexionar -and ($Cfg.Reflexionar -eq 'siempre' -or ($falloAntes -and (Test-FalloRepetido $falloAntes $falloAhora)))) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
+        $falloAntes = $falloAhora
         continue
       }
 
@@ -1866,7 +1943,9 @@ function Invoke-Fix {
       # por pantalla, lo que se ha roto primero; el resto, y la correccion completa, en el fichero del intento
       $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
-      if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
+      $falloAhora = Get-ClaveFallo $problemas $nuevos
+      if ($reflexionar -and ($Cfg.Reflexionar -eq 'siempre' -or ($falloAntes -and (Test-FalloRepetido $falloAntes $falloAhora)))) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
+      $falloAntes = $falloAhora
     }
 
     if (-not $ok) {
@@ -1884,16 +1963,7 @@ function Invoke-Fix {
         if (-not $motivos.ContainsKey($f)) { $motivos[$f] = @() }
         $motivos[$f] += "lote $n ($($sel.Count) fichero(s)$conMod): " + ($problemas -join ' ')
       }
-      if (-not $conIntento) {   # el intento del consejo no cuenta como lote deshecho seguido
-        $script:Fallos++
-        if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
-          Fallo "PARO: $($script:Fallos) lotes deshechos seguidos. Puede ser un problema de Copilot, de Maven o de un flag, no del codigo."
-          Info "Ultimas lineas de Copilot (.rescate/lote-$paso-$n-*.log):"
-          $rc.Salida | Select-Object -Last 8 | ForEach-Object { Info "  $_" }
-          exit 2
-        }
-      }
-      if ($sel.Count -gt 1) { Info '  -> lo reintento de uno en uno.'; $loteEf = 1; continue }
+      if ($sel.Count -gt 1) { Info '  -> lo reintento de uno en uno.'; foreach ($f in $sel) { $unoAUno[$f] = $true }; continue }
       $f = $sel[0]
       if ($ModeloB -and -not $planB.ContainsKey($f)) { Info "  -> lo reintento con el modelo de reserva ($ModeloB)."; $planB[$f] = $true; continue }
       # consejo del modelo de las dudas: si es de codigo, un intento mas con el; si no, o si ese intento no pasa, atascado
@@ -1924,6 +1994,15 @@ function Invoke-Fix {
       Add-Atascado $paso $f ($problemas -join ' ') $d0
       Save-Atascados
       [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota + "`n")
+      foreach ($x in $sel) { $unoAUno.Remove($x) }
+      # la cascada de un fichero (de uno en uno, reserva, consejo) cuenta una vez, al quedar atascado, no una por escalon
+      $script:Fallos++
+      if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
+        Fallo "PARO: $($script:Fallos) ficheros atascados seguidos, sin ningun lote bueno entre medias. Puede ser un problema de Copilot, de Maven o de un flag, no del codigo."
+        Info "Ultimas lineas de Copilot (.rescate/lote-$paso-$n-*.log):"
+        $rc.Salida | Select-Object -Last 8 | ForEach-Object { Info "  $_" }
+        exit 2
+      }
       continue
     }
 
@@ -1938,6 +2017,7 @@ function Invoke-Fix {
     }
     $hall = $hall2
     $script:Fallos = 0
+    foreach ($f in $sel) { $unoAUno.Remove($f) }
     Write-Informe $hall
     Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho."
     (Invoke-Git $RepoRoot @('show', '--stat', '--oneline', '--format=%h %s', 'HEAD')).Salida | Select-Object -First 25 | ForEach-Object { Info "  $_" }
@@ -1951,6 +2031,7 @@ function Invoke-Fix {
   }
 
   $script:Hall = $hall
+  $script:HallCache = @{ Commit = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim(); Hall = $hall; Build = $script:Build }
   Show-Resumen $hall
   $sig = Get-SiguientePaso $hall
   $script:Siguiente = $sig
@@ -1991,6 +2072,7 @@ if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -
 $script:Atascados = @{}   # paso -> ficheros que la IA no ha sabido arreglar
 $script:AtascadosInfo = [ordered]@{}   # 'paso|fichero' -> lo que se guarda en atascados.json
 $script:Hall = $null      # los hallazgos del ultimo estado bueno del fix
+$script:HallCache = $null # el ultimo diagnostico con Maven y el commit al que corresponde (el siguiente paso lo reutiliza si nada ha cambiado)
 $script:Decidir = @()     # dudas de persona de los consejos del plan (las de los atascados van en AtascadosInfo)
 # El modelo de las dudas: -ModeloDudas, si no el de la config, si no el de -Modelo. Su esfuerzo: -EsfuerzoDudas o el de
 # la config (Invoke-Fuerte lo baja si Copilot no lo admite).
@@ -2000,7 +2082,8 @@ if (-not $script:ModDudas) { $script:ModDudas = "$($Cfg.ModeloDudas)" }
 if (-not $script:ModDudas) { $script:ModDudas = $Modelo }
 $script:EsfDudas = $EsfuerzoDudas
 if (-not $script:EsfDudas) { $script:EsfDudas = "$($Cfg.EsfuerzoDudas)" }
-$script:Fallos = 0        # lotes deshechos seguidos
+$script:Fallos = 0        # ficheros atascados seguidos
+Initialize-ConfigReintentos
 $script:H = $null
 $script:Build = $null
 $script:BasePkg = ''

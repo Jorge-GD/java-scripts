@@ -28,6 +28,11 @@
 #   muchos-ficheros    un lote que lleva LeerFichero.java: sin CORRECCION crea 10 clases mas que abren ficheros (LeerOtro1..10:
 #                      el paso 'ficheros' pasa de 3 hallazgos a 13) y con CORRECCION no cambia nada; los demas lotes, como siempre
 #   falla-copilot      un lote sale con 1 tras escribir nueve lineas (dos de ellas vacias o en blanco) y sin cambiar nada
+#   primer-lote-falla  el primer lote de la pasada no cambia nada; los demas, como siempre
+#   falla-una-vez      el primer lote de la pasada sale con 1 sin cambiar nada (escribe SALIDA-UNICA); los demas, como siempre
+#   nada-hasta-reflexion  un lote no cambia nada mientras su prompt no lleve una reflexion (REFLEXION-MARCA)
+#   fallos-distintos   un lote sin CORRECCION no cambia nada; con la CORRECCION 'No has cambiado ningun fichero' mueve LeerFichero a
+#                      infrastructure/util (el paso 'estructura' no baja); con cualquier otra la deja donde estaba y arregla como siempre
 #   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
 #                      ('sin marca' si no estaba)
 $todos = $args
@@ -135,6 +140,9 @@ if ($guiones -contains 've-marca') {
   if (Test-Path -LiteralPath $marca) { $texto = [System.IO.File]::ReadAllText($marca).Trim() }
   [System.IO.File]::AppendAllText((Join-Path $rescate 'marca-vista.log'), "$texto`n")
 }
+$primero = (@([System.IO.File]::ReadAllLines($log) | Where-Object { $_ -match '^\d+ \| lote \|' }).Count -eq 1)
+if ($guiones -contains 'primer-lote-falla' -and $primero) { 'no hago nada'; exit 0 }
+if ($guiones -contains 'falla-una-vez' -and $primero) { 'SALIDA-UNICA'; exit 1 }
 if ($guiones -contains 'falla-copilot') {
   'SALIDA-A primera'; 'SALIDA-B'; ''; 'SALIDA-C'; 'SALIDA-D'; '   '; 'SALIDA-E'; 'SALIDA-F'; 'SALIDA-G ultima'
   exit 1
@@ -155,6 +163,19 @@ $conSuelta = (@($fichs | Where-Object { $_ -match 'Suelta\.java$' }).Count -gt 0
 if ($guiones -contains 'atasca-siempre' -and $conSuelta) { 'no hago nada'; exit 0 }
 if ($guiones -contains 'atasca' -and $conSuelta -and $prompt -notmatch '## Consejo') { 'no hago nada'; exit 0 }
 if ($guiones -contains 'nada-sin-correccion' -and $prompt -notmatch '## CORRECCION') { 'no hago nada'; exit 0 }
+if ($guiones -contains 'nada-hasta-reflexion' -and $prompt -notmatch 'REFLEXION-MARCA') { 'no hago nada'; exit 0 }
+if ($guiones -contains 'fallos-distintos') {
+  $orig = Join-Path $raiz 'src/main/java/com/acme/life/application/usecases/LeerFichero.java'
+  $util = Join-Path $raiz 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java'
+  if ($prompt -notmatch '## CORRECCION') { 'no hago nada'; exit 0 }
+  if ($prompt -match 'No has cambiado ningun fichero') {
+    $texto = [System.IO.File]::ReadAllText($orig) -replace '(?m)^package [^;]*;', 'package com.acme.life.infrastructure.util;'
+    Remove-Item -LiteralPath $orig -Force
+    Escribir 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java' $texto
+    'lo muevo a util'; exit 0
+  }
+  if (Test-Path -LiteralPath $util) { Remove-Item -LiteralPath $util -Force; [void](& git checkout -q HEAD -- $orig) }
+}
 if ($guiones -contains 'crea-fichero') { Escribir 'output/de-la-ia.csv' "id;nota`n1;de la IA`n" }
 & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
 $codigo = $LASTEXITCODE
