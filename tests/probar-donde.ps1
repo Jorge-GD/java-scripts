@@ -170,6 +170,13 @@ function Local-Datos([int]$Distintos) {
   return [ordered]@{ jobs = @([ordered]@{ job = 'cargaJob'; casos = $casos.Count; iguales = 1; distintos = $Distintos; sinProbar = 0 }); casos = $casos }
 }
 
+# La prueba en local con un caso igual y $SinPreparar que no se pudieron preparar.
+function Local-Incompleta([int]$SinPreparar) {
+  $casos = @([ordered]@{ job = 'cargaJob'; caso = 'caso-01'; titulo = 'Recibo correcto'; resultado = 'igual' })
+  for ($i = 1; $i -le $SinPreparar; $i++) { $casos += [ordered]@{ job = 'cargaJob'; caso = "caso-s$i"; titulo = "Sin preparar $i"; resultado = 'no se pudo preparar'; motivo = 'La IA no ha podido preparar sus entradas.' } }
+  return [ordered]@{ jobs = @([ordered]@{ job = 'cargaJob'; casos = $casos.Count; iguales = 1; distintos = 0; sinProbar = $SinPreparar }); casos = $casos }
+}
+
 function Cobertura-Datos([double]$Pct, [bool]$Medida = $true) {
   if ($Medida) { return [ordered]@{ medida = $true; porcentaje = $Pct; cubiertas = [int]($Pct * 10); total = 1000; minima = 80; motivo = '' } }
   return [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = 80; motivo = 'el migrado no compila' }
@@ -215,6 +222,7 @@ function Casos-Siguiente([string]$Raiz) {
   $c['b-distinto-corregido'] = @{ Estado = @{ respuesta = 'corregir' }; Datos = @{ 'prueba-local.json' = (Local-Datos 2); 'correcciones.json' = (Correccion-Datos $true) } }
   $c['b-local-fallo'] = @{ Estado = @{ pruebaLocal = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'Maven no arranca'; registro = 'registros/prueba-local.log' } }; Datos = @{ } }
   $c['b-parar-con-problemas'] = @{ Estado = @{ respuesta = 'parar' }; Datos = (Diag-Error 'b-parar-con-problemas' 2) }
+  $c['b-local-incompleta'] = @{ Estado = @{ respuesta = 'parar' }; Datos = @{ 'prueba-local.json' = (Local-Incompleta 3) } }
   $c['b-corregido'] = @{ Estado = @{ respuesta = 'corregir' }; Datos = @{ 'correcciones.json' = (Correccion-Datos $true) } }
   $c['b-pre'] = @{ Estado = @{ respuesta = 'parar' }; Datos = @{ } }
   return $c
@@ -262,6 +270,8 @@ $Pruebas['b) cada caso: el texto y el comando son los de la portada (Get-Siguien
   Comprueba 'parar-con-problemas: cuenta los 2 problemas y manda a corregir con -Si' ($c.Texto -cmatch 'corregir los 2 problemas' -and $c.Comando.Count -eq 1 -and $c.Comando[0].EndsWith(' -Si')) ($c.Texto + ' // ' + ($c.Comando -join ' / '))
   $c = Campo-De $bl['b-local-fallo'] 'Siguiente'
   Comprueba 'local-fallo: dice el detalle' ($c.Texto -match 'Maven no arranca') $c.Texto
+  $c = Campo-De $bl['b-local-incompleta'] 'Siguiente'
+  Comprueba 'local-incompleta: cuenta 3 de 4, no dice que da lo mismo y manda a relanzar el comando de la pasada' ($c.Texto -cmatch '^3 de 4 casos no se han podido probar\.' -and $c.Texto -cnotmatch 'da lo mismo' -and $c.Comando.Count -eq 1 -and $c.Comando[0].StartsWith('.\migracion.ps1 -Legacy ') -and $c.Comando[0].EndsWith(' -SoloInforme')) ($c.Texto + ' // ' + ($c.Comando -join ' / '))
 }
 
 $Pruebas['c) cobertura: por debajo del minimo sale Despues con -Cobertura; por encima o sin medida, no'] = {

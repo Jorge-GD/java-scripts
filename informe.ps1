@@ -339,7 +339,9 @@ function Get-PreHtml($D, $T, $V) {
   if ($D.Variables.Count -gt 0) {
     $items = Format-Lista $T 'var' $D.Variables {
       param($x)
-      if ($null -ne $x.porDefecto) { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-defecto' @{ VALOR = $x.porDefecto }) } }
+      # un secreto con valor por defecto no se ensena (un variables.json de antes no lleva la marca: vale el nombre de la variable)
+      if ($x.secreto -eq $true -or ($null -ne $x.porDefecto -and (Test-NombreSecreto @($x.variable)))) { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-secreto') } }
+      elseif ($null -ne $x.porDefecto) { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-defecto' @{ VALOR = $x.porDefecto }) } }
       else { @{ NOMBRE = $x.variable; VALOR = (Format-Trozo $T 'var-sin-defecto') } }
     }
     $vars = Format-Trozo $T 'vars' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); ITEMS = $items }
@@ -512,6 +514,11 @@ function Get-ResultadoLocal($D) {
 # Los casos que dio por distintos el original ejecutado frente al migrado ejecutado (datos\prueba-local.json).
 function Get-CasosDistintos($PL) {
   return @($PL.casos | Where-Object { $null -ne $_ -and $_.resultado -ceq 'distinto' })
+}
+
+# Los casos que no se pudieron preparar ni ejecutar: de esos no se sabe si dan lo mismo.
+function Get-CasosSinPreparar($PL) {
+  return @($PL.casos | Where-Object { $null -ne $_ -and $_.resultado -ceq 'no se pudo preparar' })
 }
 
 # Las cuentas de todos los jobs de prueba-local.json.
@@ -723,6 +730,12 @@ function Get-TocaHtml($D, $T) {
   elseif (-not $D.PruebaLocal -and (Get-ResultadoLocal $D) -ceq 'fallo') {
     $e = $D.Estado.pruebaLocal
     $grupos += (Get-GrupoToca $T 'localfallo' @(Format-Trozo $T 'toca-localfallo' @{ CODIGO = "$($e.codigo)"; DETALLE = $e.detalle }) '1')
+  }
+  $sinPreparar = @()
+  if ($D.PruebaLocal) { $sinPreparar = @(Get-CasosSinPreparar $D.PruebaLocal) }
+  if ($sinPreparar.Count -gt 0) {
+    $items = @($sinPreparar | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-caso' @{ JOB = $_.job; CASO = $_.caso }); TEXTO = ($_.titulo + '. ' + (Get-PrimeraLinea ([string]$_.motivo))) } })
+    $grupos += (Get-GrupoToca $T 'sinprobar' $items "$($sinPreparar.Count)")
   }
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
   if ($atascadas.Count -gt 0) {
@@ -1117,14 +1130,14 @@ function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java) {
 }
 
 # Lo que hay que hacer ahora: la primera de estas situaciones que se cumple. Devuelve Caso (corriendo, parada, cortada, distinto-corregido,
-# distinto, local-jdk, local-fallo, local-saltada, parar-con-problemas, corregido o pre), Comando ('' si no hay), y lo que dicen los textos: Fase, Motivo,
-# Detalle, Registro, Worktree y N. $Est es estado.json; $D, los datos del informe (Correccion, PruebaLocal y Diag.Errores).
+# distinto, local-jdk, local-fallo, local-incompleta, local-saltada, parar-con-problemas, corregido o pre), Comando ('' si no hay), y lo que dicen los textos: Fase, Motivo,
+# Detalle, Registro, Worktree, N y M (con local-incompleta, los casos sin preparar y el total de casos). $Est es estado.json; $D, los datos del informe (Correccion, PruebaLocal y Diag.Errores).
 #   1 fin vacio: sigue corriendo        2 parada      (extra: fin escrito pero la fase sin acabar, por -Limite: cortada)
 #   3 distintos y hubo correccion       4 distintos sin correccion
-#   5 la prueba en local fallo o se salto (con el JDK del original: local-jdk)
+#   5 la prueba en local fallo (con el JDK del original: local-jdk), o tiene casos que no se pudieron preparar y ninguno distinto (local-incompleta), o se salto
 #   6 respuesta parar y quedan errores en la pagina 2        7 correccion completa con commits        8 lo demas: pre
 function Get-SiguientePaso($Est, $D) {
-  $r = [ordered]@{ Caso = ''; Fase = [string]$Est.fase; Motivo = ''; Detalle = ''; Registro = ''; Worktree = [string]$Est.worktree; N = 0; Comando = '' }
+  $r = [ordered]@{ Caso = ''; Fase = [string]$Est.fase; Motivo = ''; Detalle = ''; Registro = ''; Worktree = [string]$Est.worktree; N = 0; M = 0; Comando = '' }
   $respuesta = [string]$Est.respuesta
   $java = [string]$Est.javaLegacy
   $pasada = Get-ComandoPasada $Est $respuesta $java
@@ -1133,6 +1146,9 @@ function Get-SiguientePaso($Est, $D) {
   if (-not $origen) { $origen = '<tu-rama>' }
   $distintos = 0
   if ($D.PruebaLocal) { $distintos = @(Get-CasosDistintos $D.PruebaLocal).Count }
+  $sinPreparar = 0
+  $casos = 0
+  if ($D.PruebaLocal) { $sinPreparar = @(Get-CasosSinPreparar $D.PruebaLocal).Count; $casos = @($D.PruebaLocal.casos | Where-Object { $null -ne $_ }).Count }
   $corregido = [bool]($D.Correccion -and @($D.Correccion.commits | Where-Object { $null -ne $_ }).Count -gt 0)
   $errores = 0
   if ($D.Diag) { $errores = [int]$D.Diag.Errores }
@@ -1154,6 +1170,7 @@ function Get-SiguientePaso($Est, $D) {
     $r.Comando = Get-ComandoPasada $Est $respuesta 'C:\ruta\jdk-del-original'
   }
   elseif ($local -ceq 'fallo') { $r.Caso = 'local-fallo'; $r.Detalle = [string]$Est.pruebaLocal.detalle; $r.Comando = $pasada }
+  elseif ($sinPreparar -gt 0) { $r.Caso = 'local-incompleta'; $r.N = $sinPreparar; $r.M = $casos; $r.Comando = $pasada }
   elseif ($local -ceq 'saltada') { $r.Caso = 'local-saltada'; $r.Comando = $pasada }
   elseif ($respuesta -ceq 'parar' -and $errores -gt 0) { $r.Caso = 'parar-con-problemas'; $r.N = $errores; $r.Comando = Get-ComandoPasada $Est 'corregir' $java }
   elseif ($corregido -and $D.Correccion.completa -eq $true) {
@@ -1178,7 +1195,7 @@ function Get-SiguienteHtml($D, $T) {
     if (-not $T.ContainsKey($nombre)) { $nombre = 'siguiente-parada-otro' }
   }
   if ($s.N -eq 1 -and $T.ContainsKey("$nombre-uno")) { $nombre += '-uno' }
-  $texto = Format-Trozo $T $nombre @{ FASE = $s.Fase; MOTIVO = $s.Motivo; DETALLE = $s.Detalle; REGISTRO = $s.Registro; WORKTREE = $s.Worktree; N = "$($s.N)" }
+  $texto = Format-Trozo $T $nombre @{ FASE = $s.Fase; MOTIVO = $s.Motivo; DETALLE = $s.Detalle; REGISTRO = $s.Registro; WORKTREE = $s.Worktree; N = "$($s.N)"; M = "$($s.M)" }
   $comando = ''
   if ($s.Comando) { $comando = Format-Trozo $T 'siguiente-comando' @{ COMANDO = $s.Comando } }
   return (Format-Trozo $T 'siguiente' @{ TEXTO = $texto; COMANDO = $comando })

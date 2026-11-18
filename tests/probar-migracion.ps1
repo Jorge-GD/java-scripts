@@ -4475,5 +4475,199 @@ Save-Casos $mapa @((Hecha 'avisosJob' (Caso 'Dos' 'clase-cccccccc#1')), (Hecha '
   Igual 'con 1 caso y CasosMax 2: entra el primero, el segundo no y su regla sigue en sinCaso' 'Uno|Dos / clase-cccccccc#2' $v['C']
 }
 
+# ===================== M20c: LA PORTADA NO PROMETE DE MAS, SIN CONTRASENAS EN LA PAGINA 1 Y SIN COMMITS DE LA IA =====================
+# Los datos del informe con una prueba en local de $Iguales casos iguales, $Distintos distintos, $SinPreparar que no se pudieron preparar (con su
+# motivo) y uno por cada resultado de $Otros (no determinista, sin probar en local...), mas la correccion (o $null) y los errores del diagnostico.
+function Datos-Incompleta([int]$SinPreparar, [int]$Iguales = 1, [int]$Distintos = 0, $Correccion = $null, [int]$Errores = 0, [string[]]$Otros = @()) {
+  $casos = @()
+  for ($i = 1; $i -le $Iguales; $i++) { $casos += (Caso-Local 'cargaJob' ('caso-i' + $i) ('Igual ' + $i) 'igual') }
+  for ($i = 1; $i -le $Distintos; $i++) { $casos += (Caso-Local 'cargaJob' ('caso-d' + $i) ('Distinto ' + $i) 'distinto') }
+  for ($i = 1; $i -le $SinPreparar; $i++) { $casos += (Caso-Local 'cargaJob' ('caso-s' + $i) ('Sin preparar ' + $i) 'no se pudo preparar' 'La IA no ha podido preparar sus entradas: atascada.') }
+  for ($i = 0; $i -lt $Otros.Count; $i++) { $casos += (Caso-Local 'cargaJob' ('caso-o' + $i) ('Otro ' + $i) $Otros[$i]) }
+  return [ordered]@{
+    Correccion = $Correccion
+    PruebaLocal = [ordered]@{ jobs = @([ordered]@{ job = 'cargaJob'; casos = $casos.Count; iguales = $Iguales; distintos = $Distintos; sinProbar = ($casos.Count - $Iguales - $Distintos) }); casos = $casos }
+    Diag = [ordered]@{ Errores = $Errores; Avisos = 0 }
+  }
+}
+
+$Pruebas['m20c siguiente (a): casos sin preparar y ninguno distinto: local-incompleta con N y M y el comando de la pasada; gana a parar-con-problemas, a corregido y a local-saltada; pierde con local-fallo y local-jdk'] = {
+  $s = Siguiente (Estado-Siguiente) (Datos-Incompleta 3 1)
+  Igual 'caso local-incompleta' 'local-incompleta' $s.Caso
+  Igual 'N es lo que no se pudo preparar' 3 $s.N
+  Igual 'M es el total de casos' 4 $s.M
+  Igual 'el comando es el de la pasada' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Incompleta 3 1)
+  Igual 'con la respuesta corregir, el de la pasada con -Si' ($ComandoSiguiente + ' -Si') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ javaLegacy = 'C:\jdk8' }) (Datos-Incompleta 3 1)
+  Igual 'con -JavaLegacy, el de la pasada con -JavaLegacy' ($ComandoSiguiente + ' -SoloInforme -JavaLegacy "C:\jdk8"') $s.Comando
+  $s = Siguiente (Estado-Siguiente) (Datos-Incompleta 2 1 0 $null 5)
+  Igual 'con problemas en la pagina 2 y respuesta parar: gana local-incompleta, no parar-con-problemas' 'local-incompleta' $s.Caso
+  Igual 'y el comando sigue siendo el de la pasada (no pasa a -Si)' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Incompleta 2 1 0 (Correccion-Siguiente))
+  Igual 'con la correccion completa y commits: gana local-incompleta, no el git merge de corregido' 'local-incompleta' $s.Caso
+  $salto = [ordered]@{ resultado = 'saltada'; codigo = $null; minutos = 0; detalle = ''; registro = '' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $salto }) (Datos-Incompleta 2 1)
+  Igual 'va antes de local-saltada' 'local-incompleta' $s.Caso
+  $fallo = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'dos / tres'; registro = 'registros/prueba-local.log' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $fallo }) (Datos-Incompleta 2 1)
+  Igual 'va despues de local-fallo' 'local-fallo' $s.Caso
+  $jdk = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'no compila'; jdkOriginal = $true; registro = 'registros/prueba-local.log' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $jdk }) (Datos-Incompleta 2 1)
+  Igual 'va despues de local-jdk' 'local-jdk' $s.Caso
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; fase = 'prueba-local' }) (Datos-Incompleta 2 1)
+  Igual 'va despues de corriendo' 'corriendo' $s.Caso
+}
+
+$Pruebas['m20c siguiente (c, d): lo demas sigue como hoy: todo igual o con otros resultados (no determinista, sin probar en local) no es local-incompleta, y los distintos ganan a lo sin preparar'] = {
+  $s = Siguiente (Estado-Siguiente) (Datos-Incompleta 0 3 0 $null 2)
+  Igual '(c) todo igual y problemas en la pagina 2: sigue parar-con-problemas' 'parar-con-problemas' $s.Caso
+  $s = Siguiente (Estado-Siguiente) (Datos-Incompleta 0 3)
+  Igual '(c) todo igual y nada que corregir: sigue pre' 'pre' $s.Caso
+  $s = Siguiente (Estado-Siguiente) (Datos-Incompleta 0 2 0 $null 1 @('no determinista', 'sin probar en local'))
+  Igual '(c) no determinista y sin probar en local no son no se pudo preparar: sigue parar-con-problemas' 'parar-con-problemas' $s.Caso
+  $s = Siguiente (Estado-Siguiente) (Datos-Incompleta 2 1 1)
+  Igual '(d) un distinto y dos sin preparar: gana distinto' 'distinto' $s.Caso
+  Igual '(d) y N cuenta solo los distintos' 1 $s.N
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Incompleta 2 1 2 (Correccion-Siguiente))
+  Igual '(d) con correccion: gana distinto-corregido' 'distinto-corregido' $s.Caso
+  Igual '(d) y N cuenta solo los distintos' 2 $s.N
+}
+
+$Pruebas['m20c portada (a, b): local-incompleta no dice que el codigo da lo mismo; dice cuantos casos faltan, que relances el mismo comando y, con uno solo, su variante'] = {
+  $i = Salida-Siguiente 'm20c-incompleta' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Incompleta 3 1).PruebaLocal }
+  $sec = Panel-De $i 'siguiente-paso'
+  $t = Texto-Plano $sec
+  Comprueba '3 de 4 casos no se han podido probar' ($t -match '3 de 4 casos no se han podido probar\.') $t
+  Comprueba 'hasta que se prueben no se puede asegurar que haga lo mismo' ($t -match 'Hasta que se prueben, no se puede asegurar que tu c.digo haga lo mismo que el original\.') $t
+  Comprueba 'dice que relances el mismo comando y que lo hecho no se repite' ($t -match 'Relanza el mismo comando: lo hecho no se repite') $t
+  Comprueba 'la frase da lo mismo no sale en la portada' ($i -notmatch 'da lo mismo') ([regex]::Match($i, '.{60}da lo mismo.{60}').Value)
+  $cmd = [regex]::Match($sec, '(?s)<pre class="cmd">(.*?)</pre>').Groups[1].Value
+  Igual 'el comando es el de la pasada, con -SoloInforme' ('.\migracion.ps1 -Legacy &quot;C:\ruta\original&quot; -Migrado &quot;C:\ruta\migrado&quot; -Plantilla &quot;C:\ruta\referencia&quot; -Modelo claude-sonnet-5.5 -SoloInforme') $cmd
+  Comprueba 'enlaza a la pagina 3' ($sec -match 'href="3-original-vs-migrado\.html"')
+  $i = Salida-Siguiente 'm20c-incompleta-uno' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Incompleta 1 3).PruebaLocal }
+  $t = Texto-Plano (Panel-De $i 'siguiente-paso')
+  Comprueba '(b) con uno solo, la variante en singular: 1 de 4 casos no se ha podido probar' ($t -match '1 de 4 casos no se ha podido probar\.' -and $t -match 'Hasta que se pruebe, no se puede asegurar') $t
+  Comprueba '(b) y tampoco dice da lo mismo' ($i -notmatch 'da lo mismo')
+  # lo que ya decia, igual: con todo igual y problemas por corregir, la portada de siempre
+  $i = Salida-Siguiente 'm20c-incompleta-igual' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Incompleta 0 3).PruebaLocal; 'hallazgos-antes.json' = @((Hallazgo 'estructura' 'error' 'src/main/java/A.java' 3 'clase suelta A')); 'diagnostico-antes.md' = (Md-Diagnostico 'compila: SI | tests: OK') }
+  Comprueba '(c) con todo igual y un problema, la portada dice lo de siempre' ((Texto-Plano (Panel-De $i 'siguiente-paso')) -match 'Tu c.digo da lo mismo que el original\. Para corregir el problema') (Texto-Plano (Panel-De $i 'siguiente-paso'))
+}
+
+$Pruebas['m20c portada: la frase da lo mismo que el original solo esta en los trozos de parar-con-problemas, que local-incompleta deja atras; y Lo que te toca lista los casos que no se pudieron preparar'] = {
+  $raiz = Split-Path -Parent $Script
+  foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $raiz 'informe') -File -Filter '*.html')) {
+    $l = @([System.IO.File]::ReadAllLines($f.FullName, (New-Object System.Text.UTF8Encoding($false))) | Where-Object { $_ -match 'da lo mismo' -and $_ -notmatch '^<!--TROZO siguiente-parar-con-problemas(-uno)?-->' })
+    Comprueba ($f.Name + ': no promete que da lo mismo fuera de parar-con-problemas') ($l.Count -eq 0) ($l -join ' / ')
+  }
+  $i = Salida-Siguiente 'm20c-toca' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Incompleta 3 1).PruebaLocal }
+  $toca = Toca-De $i
+  Comprueba 'Lo que te toca tiene el grupo de casos sin probar, con su cuenta' ((Texto-De $toca) -match 'Casos sin probar en local \(3\)') (Texto-De $toca)
+  Comprueba 'con un item por caso: job, caso, titulo y el motivo' ([regex]::Matches($toca, 'caso-s\d').Count -eq 3 -and (Texto-De $toca) -match 'Sin preparar 1\. La IA no ha podido preparar sus entradas: atascada\.') (Texto-De $toca)
+  Comprueba 'y ya no dice Nada que revisar' ($toca -notmatch 'Nada que revisar')
+  $i = Salida-Siguiente 'm20c-toca-nada' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Incompleta 0 3).PruebaLocal }
+  $toca = Toca-De $i
+  Comprueba 'con todo igual no hay grupo de casos sin probar' ($toca -notmatch 'Casos sin probar' -and $toca -match 'Nada que revisar') (Texto-De $toca)
+}
+
+# El migrado con tres secretos con valor por defecto (en un yml anidado, en un yml con la clave plana y en un .properties) y tres variables normales.
+function Escenario-Secretos([string]$Nombre) {
+  $e = Escenario-Dos $Nombre
+  Escribe $e.Migrado 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL:jdbc:h2:mem:batch}`n    password: `${DB_PASSWORD:Dev2024!}`nbatch:`n  chunk: `${CHUNK:100}`n  ttl: `${PASSWORD_TTL:300}`n"
+  Escribe $e.Migrado 'src/main/resources/application-pre.yml' "spring.datasource.password: `${DB_PASS:x-valor-2}`n"
+  Escribe $e.Migrado 'src/main/resources/application-pre.properties' "api.token=`${API_VALOR:tkn-3}`nsftp.port=`${SFTP_PORT:22}`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'recursos'))
+  return $e
+}
+
+$Pruebas['m20c secretos (e, f): el valor por defecto de un secreto no esta en variables.json ni en la pagina 1, que dice que no se ensena; una variable normal sigue con su valor'] = {
+  $e = Escenario-Secretos 'm20c-secretos'
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'sale con 0' 0 $r.Codigo
+  $crudo = Lee $e.Out 'datos/variables.json'
+  foreach ($valor in @('Dev2024!', 'x-valor-2', 'tkn-3')) { Comprueba "variables.json no lleva $valor" (-not $crudo.Contains($valor)) }
+  $v = @(Lee-Json (Get-Ruta $e.Out 'datos/variables.json'))
+  Igual 'estan las 7 variables' 7 $v.Count
+  foreach ($n in @('DB_PASSWORD', 'DB_PASS', 'API_VALOR')) {
+    $x = @($v | Where-Object { $_.variable -eq $n })[0]
+    Comprueba "$n : secreto true y sin valor por defecto" ($null -ne $x -and $x.secreto -eq $true -and $null -eq $x.porDefecto) ($x | ConvertTo-Json -Compress)
+    Comprueba "$n : conserva su fichero y su linea" ($x.fichero -match '^src/main/resources/application' -and [int]$x.linea -ge 1) ($x | ConvertTo-Json -Compress)
+  }
+  Igual 'DB_PASSWORD por el nombre de la variable, en application.yml' 'src/main/resources/application.yml 4' (@($v | Where-Object { $_.variable -eq 'DB_PASSWORD' })[0].fichero + ' ' + @($v | Where-Object { $_.variable -eq 'DB_PASSWORD' })[0].linea)
+  Igual 'CHUNK sigue con su 100 y sin marca de secreto' '100|False' (@($v | Where-Object { $_.variable -eq 'CHUNK' })[0].porDefecto + '|' + ($null -ne @($v | Where-Object { $_.variable -eq 'CHUNK' })[0].secreto))
+  Igual 'PASSWORD_TTL (empieza por password, no acaba) sigue con su 300' '300' @($v | Where-Object { $_.variable -eq 'PASSWORD_TTL' })[0].porDefecto
+  Igual 'DB_URL sigue con su valor' 'jdbc:h2:mem:batch' @($v | Where-Object { $_.variable -eq 'DB_URL' })[0].porDefecto
+  Igual 'SFTP_PORT (properties) sigue con su 22' '22' @($v | Where-Object { $_.variable -eq 'SFTP_PORT' })[0].porDefecto
+  $o = Pagina $e.Out '1-batch-original.html'
+  foreach ($valor in @('Dev2024!', 'x-valor-2', 'tkn-3')) { Comprueba "la pagina 1 no lleva $valor" (-not $o.Contains($valor)) }
+  foreach ($n in @('DB_PASSWORD', 'DB_PASS', 'API_VALOR')) {
+    Comprueba "la pagina 1 dice de $n que no se ensena" ((Texto-Plano $o) -match ($n + ' con valor por defecto \(no se ense.a: parece una contrase.a\)')) (Texto-Plano $o)
+  }
+  Comprueba '(f) CHUNK: con valor por defecto 100 en la pagina 1' ($o -match '<code>CHUNK</code> con valor por defecto <code>100</code>')
+  Comprueba 'PASSWORD_TTL: con valor por defecto 300' ($o -match '<code>PASSWORD_TTL</code> con valor por defecto <code>300</code>')
+  Comprueba 'DB_URL y SFTP_PORT, igual' ($o -match '<code>DB_URL</code> con valor por defecto <code>jdbc:h2:mem:batch</code>' -and $o -match '<code>SFTP_PORT</code> con valor por defecto <code>22</code>')
+  $todas = (@('index.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html') | ForEach-Object { Pagina $e.Out $_ }) -join "`n"
+  Comprueba 'ninguna otra pagina lleva un valor secreto' ($todas -notmatch 'Dev2024|x-valor-2|tkn-3')
+}
+
+$Pruebas['m20c secretos: un variables.json de antes (con el valor y sin la marca secreto) se limpia al montar la pagina 1, por el nombre de la variable'] = {
+  $e = Escenario-Secretos 'm20c-secretos-viejo'
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Copia-Salida $e 'm20c-secretos-viejo-copia'
+  Guarda-Json (Join-Path $s 'datos/variables.json') @(
+    [ordered]@{ variable = 'DB_PASSWORD'; porDefecto = 'Dev2024!'; fichero = 'src/main/resources/application.yml'; linea = 4 },
+    [ordered]@{ variable = 'CHUNK'; porDefecto = '100'; fichero = 'src/main/resources/application.yml'; linea = 6 },
+    [ordered]@{ variable = 'DB_USER'; porDefecto = $null; fichero = 'src/main/resources/application.yml'; linea = 3 })
+  $g = Genera-Informes $s
+  Comprueba 'Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $o = Pagina $s '1-batch-original.html'
+  Comprueba 'la pagina 1 no lleva el valor de un variables.json de antes' (-not $o.Contains('Dev2024!'))
+  Comprueba 'dice que no se ensena' ((Texto-Plano $o) -match 'DB_PASSWORD con valor por defecto \(no se ense.a: parece una contrase.a\)') (Texto-Plano $o)
+  Comprueba 'CHUNK sigue con su 100 y DB_USER sin valor' ($o -match '<code>CHUNK</code> con valor por defecto <code>100</code>' -and $o -match '<code>DB_USER</code> sin valor por defecto')
+}
+
+$Pruebas['m20c secretos: una variable nueva de la correccion que es un secreto con valor por defecto no sale como variable que falta dar'] = {
+  $e = Nuevo-Escenario 'm20c-nuevas' @('Clase1')
+  Escribe $e.Migrado 'src/main/resources/application.yml' "batch:`n  vieja: `${CLAVE_VIEJA}`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'recursos'))
+  $o = Orden-Base
+  $o.ficheros = [ordered]@{ 'src/main/resources/application.yml' = "batch:`n  vieja: `${CLAVE_VIEJA}`n  nueva: `${CLAVE_NUEVA}`n  pwd: `${NUEVA_PASSWORD:dev-pw}`n  otra: `${CON_DEFECTO:x}`n" }
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  Comprueba 'hay correcciones.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'variablesNuevas: solo la que no tiene valor por defecto; la contrasena con valor por defecto no cuenta como sin valor' 'CLAVE_NUEVA' (@($c.variablesNuevas | ForEach-Object { $_.variable }) -join '|')
+}
+
+$Pruebas['m20c commit de la IA (g): una lectura que hace git commit se deshace, el HEAD vuelve al de antes y la tarea queda invalida con su motivo'] = {
+  $e = Nuevo-Escenario 'm20c-commit' @('Clase1', 'Clase2') @{ CopilotExe = (Join-Path $falsos 'm20c-copilot-commit.ps1') }
+  $antes = GitEn $e.Migrado @('rev-parse', 'HEAD')
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el HEAD del worktree es el de antes de las rondas' $antes (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'el fichero del commit ya no esta' (@(Get-ChildItem -LiteralPath $e.Wt -Recurse -File -Filter 'commit-de-la-ia-*.txt' -ErrorAction SilentlyContinue).Count -eq 0)
+  Igual 'sigue en la rama de rescate' ((Estado $e).rama) (GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD'))
+  $t = Tareas $e
+  Igual 'las dos tareas quedan atascadas tras sus dos intentos' 2 (Cuenta-Estado $t 'atascada')
+  Comprueba 'su ultimo intento es invalida' (@($t | Where-Object { $_.ultimoEstado -eq 'invalida' }).Count -eq 2) (($t | ForEach-Object { $_.ultimoEstado }) -join ' ')
+  Comprueba 'con el motivo del commit' (@($t | Where-Object { $_.motivo -ceq 'La lectura hizo un commit en el repositorio. Lee sin cambiar nada: solo escribes el fichero de salida.' }).Count -eq 2) $t[0].motivo
+  Igual 'no hay fichas (la ronda cuenta como fallida)' 0 (Fichas $e).Count
+  # el commit en una rama nueva: el worktree vuelve a la rama y al HEAD de antes
+  $e2 = Nuevo-Escenario 'm20c-commit-rama' @('Clase1') @{ CopilotExe = (Join-Path $falsos 'm20c-copilot-commit.ps1') }
+  $antes2 = GitEn $e2.Migrado @('rev-parse', 'HEAD')
+  $r2 = Con-Entorno @{ M20C_COMMIT = 'rama' } { Migra $e2 (Basicos $e2) }
+  Igual 'rama nueva: sale con 0' 0 $r2.Codigo
+  Igual 'rama nueva: vuelve a la rama de rescate' ((Estado $e2).rama) (GitEn $e2.Wt @('rev-parse', '--abbrev-ref', 'HEAD'))
+  Igual 'rama nueva: el HEAD es el de antes' $antes2 (GitEn $e2.Wt @('rev-parse', 'HEAD'))
+  Igual 'rama nueva: la tarea queda invalida con el motivo del commit' '1|invalida' ((Cuenta-Estado (Tareas $e2) 'atascada').ToString() + '|' + (Tareas $e2)[0].ultimoEstado)
+  Comprueba 'rama nueva: con el motivo' ((Tareas $e2)[0].motivo -match 'hizo un commit')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

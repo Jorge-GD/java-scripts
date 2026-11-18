@@ -83,6 +83,8 @@
 <!--TROZO siguiente-local-jdk--><p class="lede">La prueba en local no se ha podido hacer: el original no compila con el JDK de Maven. Relanza con <code>-JavaLegacy</code> y la ruta del JDK del original (8 u 11):</p><!--FIN-->
 <!--TROZO siguiente-local-fallo--><p class="lede">La prueba en local no se ha podido hacer: {{DETALLE}}. Sin ella, la página 3 solo tiene lo que la IA ha leído. Arregla la causa y relanza el mismo comando:</p><!--FIN-->
 <!--TROZO siguiente-local-saltada--><p class="lede">La prueba en local no se ha hecho: lanzaste con <code>-SinPruebaLocal</code>. Para ejecutar el original y el migrado con las mismas entradas, relanza el mismo comando (sin esa opción):</p><!--FIN-->
+<!--TROZO siguiente-local-incompleta--><p class="lede">{{N}} de {{M}} casos no se han podido probar. Hasta que se prueben, no se puede asegurar que tu código haga lo mismo que el original. El motivo de cada uno está en la <a href="3-original-vs-migrado.html">página 3</a>; mientras tanto, puedes probarlos en pre con el guion de la <a href="1-batch-original.html">página 1</a>. Relanza el mismo comando: lo hecho no se repite y estos casos se intentan otra vez:</p><!--FIN-->
+<!--TROZO siguiente-local-incompleta-uno--><p class="lede">1 de {{M}} casos no se ha podido probar. Hasta que se pruebe, no se puede asegurar que tu código haga lo mismo que el original. El motivo está en la <a href="3-original-vs-migrado.html">página 3</a>; mientras tanto, puedes probarlo en pre con el guion de la <a href="1-batch-original.html">página 1</a>. Relanza el mismo comando: lo hecho no se repite y este caso se intenta otra vez:</p><!--FIN-->
 <!--TROZO siguiente-parar-con-problemas--><p class="lede">Tu código da lo mismo que el original. Para corregir los {{N}} problemas de la <a href="2-problemas.html">página 2</a>:</p><!--FIN-->
 <!--TROZO siguiente-parar-con-problemas-uno--><p class="lede">Tu código da lo mismo que el original. Para corregir el problema de la <a href="2-problemas.html">página 2</a>:</p><!--FIN-->
 <!--TROZO siguiente-corregido--><p class="lede">Revisa los cambios y tráelos a tu rama:</p><!--FIN-->
@@ -112,6 +114,8 @@
 <!--TROZO toca-distinto-->    <li>{{{CABECERA}}}<span class="motivo">{{TITULO}}. {{FICHERO}}: original «{{ORIGINAL}}», migrado «{{MIGRADO}}»</span></li><!--FIN-->
 <!--TROZO toca-localfallo-titulo-->Prueba en local sin hacer ({{N}})<!--FIN-->
 <!--TROZO toca-localfallo-texto-->No se ha podido ejecutar el original frente al migrado. Sin esa prueba, lo único que compara el informe es la lectura de la IA. El detalle está en la página Original frente a migrado.<!--FIN-->
+<!--TROZO toca-sinprobar-titulo-->Casos sin probar en local ({{N}})<!--FIN-->
+<!--TROZO toca-sinprobar-texto-->Estos casos no se han podido preparar ni ejecutar, así que no se sabe si el migrado deja lo mismo que el original. Relanza el mismo comando para que se intenten otra vez; si siguen sin salir, pruébalos en pre. El motivo de cada uno está en la página Original frente a migrado.<!--FIN-->
 <!--TROZO toca-localfallo-->    <li><span class="motivo">prueba-local.ps1 ha salido con código {{CODIGO}}: {{DETALLE}}</span></li><!--FIN-->
 <!--TROZO cab-caso--><code>{{JOB}}</code> <code>{{CASO}}</code> <!--FIN-->
 <!--TROZO toca-diferencias-titulo-->Diferencias con el original ({{N}})<!--FIN-->
