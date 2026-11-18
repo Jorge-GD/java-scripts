@@ -4502,7 +4502,7 @@ $Pruebas['m14 cobertura: el diagnostico sin -Cobertura no cambia: ni fila, ni ha
 }
 
 $Pruebas['m14 cobertura: diagnostico - por encima del objetivo ningun hallazgo; por debajo, uno por clase con lineas sin cubrir, de mas a menos, sin las excluidas'] = {
-  $e = Escenario-Cob-Varias 'm14-diag' @{ CoberturaObjetivo = 80 }
+  $e = Escenario-Cob-Varias 'm14-diag' @{ CoberturaMinima = 80 }
   $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura')
   Igual 'sale con 0' 0 $r.Codigo
   $h = @(Hallazgos-Cob $e.Repo)
@@ -4517,12 +4517,12 @@ $Pruebas['m14 cobertura: diagnostico - por encima del objetivo ningun hallazgo; 
   Comprueba 'la tabla lleva la fila cobertura con 4 errores' ($r.Salida -match '(?m)^cobertura\s+4\s') (Cola $r.Salida)
   Comprueba 'Maven midio con JaCoCo una sola vez' ((@([System.IO.File]::ReadAllLines((Get-Ruta $e.Repo '.rescate/cobertura-mvn.log')) | Where-Object { $_ -match 'jacoco' })).Count -eq 1)
   # por encima del objetivo: 38,2 % con un objetivo de 38
-  Config-Cob $e @{ CoberturaObjetivo = 38 }
+  Config-Cob $e @{ CoberturaMinima = 38 }
   $r2 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura')
   Igual 'con el objetivo alcanzado sale con 0' 0 $r2.Codigo
   Igual 'ningun hallazgo, ni aviso' 0 (Hallazgos-Cob $e.Repo).Count
   # una clase interna cuenta en el fichero de la externa: un solo hallazgo, con las lineas de las dos
-  Config-Cob $e @{ CoberturaObjetivo = 80 }
+  Config-Cob $e @{ CoberturaMinima = 80 }
   $csv = Join-Path $e.Raiz 'interna.csv'
   [System.IO.File]::WriteAllText($csv, (@($CabJacoco, (Fila-Jacoco 'com.acme.plantillabatch.service' 'AltaService' 6 2), (Fila-Jacoco 'com.acme.plantillabatch.service' 'AltaService$Linea' 2 0)) -join "`n") + "`n")
   $env:RESCATE_JACOCO_CSV = $csv
@@ -4671,7 +4671,7 @@ $Pruebas['m14 cobertura: un test que falla (TEST_FALLA) no vale: no hay mas test
 
 $Pruebas['m14 cobertura: al llegar al objetivo para: con 5 clases y el objetivo alcanzado tras la 2.a no hay 3.er lote'] = {
   $cl = @(@('service/AaService', 10, 0), @('service/BbService', 10, 0), @('service/CcService', 10, 0), @('service/DdService', 10, 0), @('service/EeService', 10, 0))
-  $e = Escenario-Cob 'm14-para' $cl @{ CoberturaObjetivo = 40 } @{} $false
+  $e = Escenario-Cob 'm14-para' $cl @{ CoberturaMinima = 40 } @{} $false
   $r = Cob-Fix $e
   Igual 'sale con 0' 0 $r.Codigo
   if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
@@ -4693,7 +4693,7 @@ $Pruebas['m14 cobertura: CoberturaClasesMax limita las clases de la pasada y el 
 
 $Pruebas['m14 cobertura: el final dice X % -> Y %, las clases que faltan con su motivo, las excluidas y los OJO; todo tambien en cobertura-faltan.md'] = {
   $cl = @(@('service/AltaService', 10, 0), @('service/BajaService', 10, 2), @('service/CobroService', 10, 5), @('config/AjusteConfig', 10, 0))
-  $e = Escenario-Cob 'm14-final' $cl @{ CoberturaObjetivo = 95 } @{} $false
+  $e = Escenario-Cob 'm14-final' $cl @{ CoberturaMinima = 95 } @{} $false
   $r = Cob-Fix $e 'cob-parcial:Alta;cob-ojo:Baja;cob-no-sube:Cobro'
   Igual 'sale con 2: una clase atascada' 2 $r.Codigo
   if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }

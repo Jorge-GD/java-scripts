@@ -21,9 +21,8 @@ $Cfg = @{
   MinutosMaven   = 30     # tope de cada llamada a Maven, en minutos (admite decimales); pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida
   MinutosCopilot = 20     # tope de cada llamada a Copilot de rescate.ps1, en minutos (admite decimales); pasado, se para Copilot con sus procesos hijos
   JacocoPlugin   = 'org.jacoco:jacoco-maven-plugin:0.8.16'   # el preflight prueba en el equipo estas mismas coordenadas
-  CoberturaMinima = 80    # por ciento de lineas cubiertas por los tests por debajo del cual la cobertura se marca como baja
-  # El paso 'cobertura' de rescate.ps1 (-Cobertura). CoberturaObjetivo es el umbral de Sonar way para el codigo nuevo; CoberturaMinima, el del informe.
-  CoberturaObjetivo     = 80    # por ciento de lineas cubiertas con el que el paso da la cobertura por buena y para
+  CoberturaMinima = 80    # por ciento de lineas cubiertas (Sonar way: 80): por debajo, el informe la marca como baja y el paso 'cobertura' sube hasta aqui
+  # El paso 'cobertura' de rescate.ps1 (-Cobertura) escribe tests hasta llegar a CoberturaMinima.
   CoberturaRepeticiones = 3     # veces seguidas que han de pasar los tests de la clase de un lote (si una falla, son inestables)
   CoberturaClasesMax    = 40    # clases como mucho por pasada (tope de gasto)
   # Lo que el paso no propone: una regex sobre la ruta del .java (con /); 'texto:<regex>' mira dentro del fichero; 'records-sin-metodos' es el

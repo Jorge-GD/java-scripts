@@ -66,7 +66,7 @@ USO
   # Solo con -Repo y -Sonar: -Modo fix, -Paso sonar y -Auto. Deja .rescate\sonar-faltan.md con lo que no ha podido arreglar.
   .\rescate.ps1 -Repo C:\ruta\batch -Sonar C:\ruta\informe.xlsx
 
-  # Con -Cobertura: paso 'cobertura' el ultimo. Escribe solo tests (nada fuera de src/test), una clase por lote, hasta CoberturaObjetivo (80 %).
+  # Con -Cobertura: paso 'cobertura' el ultimo. Escribe solo tests (nada fuera de src/test), una clase por lote, hasta CoberturaMinima (80 %).
   # Solo con -Repo y -Cobertura: -Modo fix, -Paso cobertura y -Auto. Deja .rescate\cobertura-faltan.md con lo que falta y los // OJO.
   .\rescate.ps1 -Repo C:\ruta\batch -Cobertura
 
@@ -130,7 +130,7 @@ param(
   [string]$Plantilla = '',
   [string]$Legacy = '',
   [string]$Sonar = '',       # informe de Sonar (.xlsx, hoja Issues Breakdown): anade el paso 'sonar' al final y arregla sus incidencias; sin -Modo hace el fix entero
-  [switch]$Cobertura,        # anade el paso 'cobertura' al final: escribe tests, clase a clase, hasta llegar a CoberturaObjetivo; sin -Modo hace el fix entero
+  [switch]$Cobertura,        # anade el paso 'cobertura' al final: escribe tests, clase a clase, hasta llegar a CoberturaMinima; sin -Modo hace el fix entero
   [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar', 'cobertura')][string]$Paso = '',
   [string]$Modelo = '',
   [string]$ModeloB = '',     # modelo de reserva cuando el principal se atasca con un fichero (vacio = ModeloB de la config)
@@ -1481,7 +1481,7 @@ function Write-SonarFaltan {
 }
 
 # =============================== COBERTURA ===============================
-# El paso 'cobertura' (-Cobertura) escribe tests, una clase por lote, hasta que la cobertura de lineas llega a $Cfg.CoberturaObjetivo. La medida
+# El paso 'cobertura' (-Cobertura) escribe tests, una clase por lote, hasta que la cobertura de lineas llega a $Cfg.CoberturaMinima. La medida
 # es Get-Cobertura (comun.ps1, JaCoCo por coordenadas, sin tocar el pom); $script:Cob guarda la ultima (con sinCubrir: fichero -> lineas sin
 # cubrir, del jacoco.xml). Solo se mide en el paso cobertura (o en el diagnostico con -Cobertura): $script:MedirCobertura.
 
@@ -1597,7 +1597,7 @@ function Add-CoberturaHallazgos([bool]$PuedeMedir) {
     $filas.Add([pscustomobject]@{ Fichero = $g.Name; Faltan = $faltan; Cubiertas = $cubiertas })
   }
   $script:CobExcluidas = @($excluidas | Sort-Object)
-  if ($c.porcentaje -ge [double]$Cfg.CoberturaObjetivo) { return }
+  if ($c.porcentaje -ge [double]$Cfg.CoberturaMinima) { return }
   foreach ($f in @($filas | Sort-Object @{ Expression = 'Faltan'; Descending = $true }, Fichero)) {
     $total = $f.Faltan + $f.Cubiertas
     Add-Hallazgo 'cobertura' 'error' $f.Fichero 0 ("$($f.Cubiertas)/$total lineas (" + (Format-Pct (100.0 * $f.Cubiertas / $total)) + ' %)')
@@ -1777,7 +1777,7 @@ function Get-CoberturaLineasFaltan([int]$Tope) {
   $l = New-Object System.Collections.Generic.List[string]
   $c = $script:Cob
   $pend = @($script:Hall | Where-Object { $_.Cat -eq 'cobertura' -and $_.Sev -eq 'error' })
-  if ($c -and $c.medida -and $c.porcentaje -lt [double]$Cfg.CoberturaObjetivo) {
+  if ($c -and $c.medida -and $c.porcentaje -lt [double]$Cfg.CoberturaMinima) {
     if ($pend.Count -eq 0) { $l.Add('Lo que falta esta en clases que CoberturaExcluir no propone: no hay clase que probar.') }
     else {
       $l.Add("Faltan estas clases ($($pend.Count)):")
@@ -1819,7 +1819,7 @@ function Get-CoberturaLineasFaltan([int]$Tope) {
 # .rescate/cobertura-faltan.md.
 function Write-CoberturaFaltan {
   $c = $script:Cob
-  $obj = [double]$Cfg.CoberturaObjetivo
+  $obj = [double]$Cfg.CoberturaMinima
   if (-not $c -or -not $c.medida) {
     $motivo = 'los tests no pasan o el proyecto no compila'
     if ($c) { $motivo = "$($c.motivo)" }
@@ -3266,7 +3266,7 @@ function Invoke-Fix {
     if (-not $script:Build.TestsOk) { Fallo 'Los tests no pasan: sin ellos no se puede medir la cobertura. Primero -Paso tests.'; exit 2 }
     if (-not $script:Cob -or -not $script:Cob.medida) { Fallo "No se ha podido medir la cobertura: $($script:Cob.motivo)"; exit 2 }
     if ($null -eq $script:CobInicial) { $script:CobInicial = $script:Cob.porcentaje }
-    Info "Cobertura de partida: $(Format-Pct $script:Cob.porcentaje) % (objetivo $(Format-Pct ([double]$Cfg.CoberturaObjetivo)) %)."
+    Info "Cobertura de partida: $(Format-Pct $script:Cob.porcentaje) % (objetivo $(Format-Pct ([double]$Cfg.CoberturaMinima)) %)."
   }
   # En cada lote se ejecutan los tests (salvo -SinTests); en 'tests', 'e2e' y 'cobertura', siempre.
   $conTests = (Get-ConTests $paso)

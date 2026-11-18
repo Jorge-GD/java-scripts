@@ -165,7 +165,7 @@ El ciclo: pasada con `-Sonar`, push, Sonar en tu CI, xlsx nuevo, otra pasada.
 
 ### El paso `cobertura`
 
-Opcional y para cualquier proyecto Maven de Java con tests que pasan: no necesita `-Plantilla` ni `-Legacy`. Sin `-Cobertura` el paso no existe. Sonar pide un 80 % de cobertura en el código nuevo y una migración cambia casi todo: este paso escribe **solo tests**, una clase por lote, hasta llegar a `CoberturaObjetivo` (80). La lógica de negocio no se toca.
+Opcional y para cualquier proyecto Maven de Java con tests que pasan: no necesita `-Plantilla` ni `-Legacy`. Sin `-Cobertura` el paso no existe. Sonar pide un 80 % de cobertura en el código nuevo y una migración cambia casi todo: este paso escribe **solo tests**, una clase por lote, hasta llegar a `CoberturaMinima` (80). La lógica de negocio no se toca.
 
 | Parámetro | Para qué |
 |---|---|
