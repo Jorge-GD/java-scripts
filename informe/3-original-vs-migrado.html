@@ -12,6 +12,8 @@
   <p>Para cada dato que se leyó del original, dice si el migrado lo hace igual, distinto o no lo hace. El script comprueba que las citas existen en los ficheros.</p>
 {{{JOBS}}}
 </section>
+
+{{{LANZADORES}}}
 <!--TROZO titulo-comparar-->El original frente al migrado {{BATCH}}<!--FIN-->
 <!--TROZO comp-job--><section class="prob-grupo comp-grupo" id="comp-{{ID}}" aria-labelledby="g-comp-{{ID}}">
   <header class="pg-cab"><h3 id="g-comp-{{ID}}">{{JOB}}</h3><span class="pg-num">{{{CUENTA}}}</span></header>
@@ -80,3 +82,15 @@
 <!--TROZO pl-fallo-linea--><p class="aviso">prueba-local.ps1 ha salido con código {{CODIGO}}: {{DETALLE}}. Registro: {{REGISTRO}}.</p><!--FIN-->
 <!--TROZO pl-sin-fallo--><div class="parada-info"><p>No se ha podido hacer la prueba en local (código {{CODIGO}}): {{DETALLE}}. Registro: {{REGISTRO}}.</p></div><!--FIN-->
 <!--TROZO pl-saltada--><p class="sin-datos">{{{ETIQUETA}}}<span>No se ha hecho: la pasada se lanzó con -SinPruebaLocal.</span></p><!--FIN-->
+<!--TROZO lanz-seccion--><section class="panel" id="lanzadores" aria-labelledby="t-lanzadores">
+  <h2 id="t-lanzadores">Lanzadores</h2>
+  <p>Lo que hacían los scripts de shell (.sh, .ksh) del original, acción a acción, frente al código del migrado. La prueba en local lanza los dos jar directamente: no pasa por los .sh.</p>
+{{{CUERPO}}}
+</section><!--FIN-->
+<!--TROZO lanz-grupo--><article class="prob-grupo comp-grupo" id="lanz-{{ID}}" aria-labelledby="g-lanz-{{ID}}">
+  <header class="pg-cab"><h3 id="g-lanz-{{ID}}"><code>{{SCRIPT}}</code></h3><span class="pg-num">{{{CUENTA}}}</span></header>
+{{{CUERPO}}}
+</article><!--FIN-->
+<!--TROZO lanz-cuenta-->igual {{IGUAL}} · distinto {{DISTINTO}} · falta {{FALTA}} · no lo sé {{NOLOSE}} · sin comparar {{SINCOMPARAR}}<!--FIN-->
+<!--TROZO lanz-grupo-vacio--><p class="pg-como">Este script no hace nada más que lanzar el job.</p><!--FIN-->
+<!--TROZO lanz-sin-explicar--><p class="pg-como">La IA no explicó estas líneas del script: {{LINEAS}}.</p><!--FIN-->

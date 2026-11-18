@@ -116,6 +116,10 @@
 <!--TROZO cab-caso--><code>{{JOB}}</code> <code>{{CASO}}</code> <!--FIN-->
 <!--TROZO toca-diferencias-titulo-->Diferencias con el original ({{N}})<!--FIN-->
 <!--TROZO toca-diferencias-texto-->Datos del original que, según la IA, el migrado hace distinto o no hace. Están uno a uno en la página Original frente a migrado, con las citas de los dos lados.<!--FIN-->
+<!--TROZO toca-lanzadores-titulo-->Cosas que hacían los .sh y no están en el migrado ({{N}})<!--FIN-->
+<!--TROZO toca-lanzadores-texto-->Acciones de los scripts de shell del original que el migrado hace distinto o no hace, y líneas que la IA no supo explicar. Si lo hace la plataforma (la planificación o el configmap), no sale en el código: compruébalo allí. Están una a una en la página Original frente a migrado.<!--FIN-->
+<!--TROZO cab-lanzador--><code>{{SCRIPT}}</code> {{{ESTADO}}} <!--FIN-->
+<!--TROZO cab-lanzador-sin--><code>{{SCRIPT}}:{{LINEA}}</code> <span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Sin explicar</span> <!--FIN-->
 <!--TROZO toca-arreglos-titulo-->Arreglos atascados ({{N}})<!--FIN-->
 <!--TROZO toca-arreglos-texto-->El motor de arreglos no ha podido con esto y queda sin corregir. El motivo está en cada línea; el resto, en la página Correcciones.<!--FIN-->
 <!--TROZO toca-variables-titulo-->Variables que tienes que dar al lanzar ({{N}})<!--FIN-->
@@ -130,6 +134,7 @@
 <!--TROZO fase-diagnostico-->Diagnóstico del migrado<!--FIN-->
 <!--TROZO fase-fichas-clase-->Lectura de las clases<!--FIN-->
 <!--TROZO fase-mapa-->Mapa de jobs, pasos y variables<!--FIN-->
+<!--TROZO fase-lanzadores-->Cómo se lanza cada job<!--FIN-->
 <!--TROZO fase-fichas-job-->Redacción de cada job<!--FIN-->
 <!--TROZO fase-resumen-->Resumen y glosario<!--FIN-->
 <!--TROZO fase-pruebas-pre-->Guion de prueba en pre<!--FIN-->
@@ -182,6 +187,9 @@
 <!--TROZO f-pruebas-->Un guion de prueba en pre por job.<!--FIN-->
 <!--TROZO f-comparacion-->Una comparación por clase del original: cada dato, si el migrado lo hace igual, distinto o no lo hace, con su cita.<!--FIN-->
 <!--TROZO f-fichas-->Una ficha por clase del original, con cada dato y la cita de donde sale.<!--FIN-->
+<!--TROZO f-lanzadores-json-->Los scripts de shell del original, el job al que lanza cada uno y cómo se supo.<!--FIN-->
+<!--TROZO f-fichas-sh-->Una ficha por script de shell: parámetros, lo que hace antes y después del java y con qué códigos acaba.<!--FIN-->
+<!--TROZO f-comparacion-sh-->Una comparación por script de shell: cada acción, si el migrado la hace igual, distinta o no la hace, con su cita.<!--FIN-->
 <!--TROZO f-tareas-->Cada tarea que se le pidió a la IA, con su estado y su motivo si se atascó.<!--FIN-->
 <!--TROZO f-registros-->Lo que contestó la IA en cada tarea. Para mirar si algo falla.<!--FIN-->
 <!--TROZO prob-datos--><p>{{{ETIQUETA_BUILD}}}</p>

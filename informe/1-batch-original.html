@@ -13,6 +13,12 @@
   {{{RECORRIDO}}}
 </section>
 
+<section class="bloque" id="lanzadores" aria-labelledby="t-lanzadores">
+  <h2 id="t-lanzadores">Cómo se lanzan los jobs</h2>
+  <p class="nota">Los scripts de shell (.sh, .ksh) que lanzan el batch en el original. Lo que hacen antes y después del java no está en el código del batch y es fácil que se pierda al migrar.</p>
+  {{{LANZADORES}}}
+</section>
+
 <section class="bloque" aria-labelledby="t-jobs">
   <h2 id="t-jobs">Cada job, por dentro</h2>
   <p class="nota">De izquierda a derecha: lo que necesita, lo que hace y lo que deja.</p>
@@ -77,6 +83,7 @@
   {{{DUDAS}}}
   {{{DONDE}}}
   {{{OTROS}}}
+  {{{LANZA}}}
   <section class="pre" id="pre-{{ID}}">
     <h4>Cómo probarlo en pre</h4>
     {{{PRE}}}
@@ -90,6 +97,7 @@
     </div>
   </header>
   {{{SINDATOS}}}
+  {{{LANZA}}}
 </article><!--FIN-->
 <!--TROZO titulo-original-->Qué hace el batch {{BATCH}}<!--FIN-->
 <!--TROZO job-aviso--><p class="aviso">No se ha podido redactar este job: la IA no pasó la comprobación. Abajo salen los datos tal como los leyó el script.</p><!--FIN-->
@@ -201,3 +209,62 @@
 <!--TROZO tipo-regla-->Regla<!--FIN-->
 <!--TROZO tipo-error-->Si falla<!--FIN-->
 <!--TROZO tipo-externo-->Sistema externo<!--FIN-->
+<!--TROZO lanz-tabla--><p>{{{ETIQUETA}}} <span class="muted">Qué job lanza cada script y cómo se supo.</span></p>
+<table class="tabla-lanz">
+  <thead><tr><th>Script</th><th>Job</th><th>Cómo se enlazó</th></tr></thead>
+  <tbody>
+{{{FILAS}}}
+  </tbody>
+</table>
+{{{SUELTOS}}}<!--FIN-->
+<!--TROZO lanz-fila-->    <tr><td><code>{{SCRIPT}}</code></td><td>{{{JOBS}}}</td><td>{{{COMO}}}</td></tr><!--FIN-->
+<!--TROZO lanz-job--><code>{{JOB}}</code><!--FIN-->
+<!--TROZO lanz-marca-unico--><span class="marca-lanz">Único job</span><!--FIN-->
+<!--TROZO lanz-marca-sin-enlazar--><span class="marca-lanz marca-lanz-sin">Sin enlazar</span><!--FIN-->
+<!--TROZO lanz-como-argumento-->Lo dice el propio script, en la línea {{LINEA}}.<!--FIN-->
+<!--TROZO lanz-como-yml-->Lo dice {{DONDE}}, la configuración del perfil que lanza el script.<!--FIN-->
+<!--TROZO lanz-como-profile-->Lo define {{DONDE}}, el fichero que lleva el perfil que lanza el script.<!--FIN-->
+<!--TROZO lanz-como-unico-->{{{MARCA}}} No lo dice el script: se enlazó porque el batch solo tiene un job.<!--FIN-->
+<!--TROZO lanz-como-sin-enlazar-->No se pudo saber a qué job lanza.<!--FIN-->
+<!--TROZO lanza-sueltos--><h3>Lanzadores sin job</h3>
+<p class="nota">Scripts que no se pudieron enlazar con ningún job. Lo que cuentan sale aquí, no dentro de un job.</p>
+<div class="lanza-sueltos">
+{{{SCRIPTS}}}
+</div><!--FIN-->
+<!--TROZO lanza--><div class="job-sec lanza">
+  <h4>Cómo se lanza</h4>
+{{{SCRIPTS}}}
+</div><!--FIN-->
+<!--TROZO lanza-script--><h5 class="lanza-nombre"><code>{{SCRIPT}}</code> {{{ENLACE}}}</h5>
+{{{CUERPO}}}<!--FIN-->
+<!--TROZO lanza-atascada--><p class="aviso">No se ha podido leer este script: la IA no pasó la comprobación. {{MOTIVO}}</p><!--FIN-->
+<!--TROZO lanza-cuerpo--><p class="lanza-para">{{PARAQUE}}</p>
+{{{PARAMETROS}}}
+{{{ACCIONES}}}
+{{{SALIDAS}}}<!--FIN-->
+<!--TROZO lanza-sin-params--><p class="lanza-p">No recibe parámetros.</p><!--FIN-->
+<!--TROZO lanza-params--><h6>Qué hay que darle</h6>
+<ul class="lanza-lista">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO lanza-param-->  <li><code>{{NOMBRE}}</code> {{{OBLIGATORIO}}}{{{VALORES}}}{{{FORMATO}}}{{{MARCA}}}</li><!--FIN-->
+<!--TROZO lanza-obligatorio--><b>obligatorio</b><!--FIN-->
+<!--TROZO lanza-opcional-->opcional<!--FIN-->
+<!--TROZO lanza-valores--> · valores: {{VALORES}}<!--FIN-->
+<!--TROZO lanza-formato--> · formato <code>{{FORMATO}}</code><!--FIN-->
+<!--TROZO lanza-acciones--><h6>{{{TITULO}}}</h6>
+<ul class="lanza-lista">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO lanza-cuando-antes-->Antes de lanzar el job<!--FIN-->
+<!--TROZO lanza-cuando-despues-->Después de lanzar el job<!--FIN-->
+<!--TROZO lanza-cuando-siempre-->Siempre, pase lo que pase<!--FIN-->
+<!--TROZO lanza-cuando-si-falla-->Si el job falla<!--FIN-->
+<!--TROZO lanza-accion-->  <li>{{{CONDICION}}}{{DETALLE}}{{{MARCA}}} <code class="donde-sh">{{DONDE}}</code></li><!--FIN-->
+<!--TROZO lanza-condicion--><b>{{TEXTO}}</b> <!--FIN-->
+<!--TROZO lanza-salidas--><h6>Cómo acaba</h6>
+<ul class="lanza-lista">
+{{{ITEMS}}}
+</ul><!--FIN-->
+<!--TROZO lanza-salida-->  <li><code>{{CODIGO}}</code> {{CUANDO}}{{{MARCA}}}</li><!--FIN-->
+<!--TROZO lanza-salida-variable-->  <li>Según el caso: {{CUANDO}}{{{MARCA}}}</li><!--FIN-->

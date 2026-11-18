@@ -293,3 +293,14 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
   a{color:var(--ink)}
 }
+.lanza h5,.lanza-sueltos h5{margin-top:16px;font-size:16px}
+.lanza h6,.lanza-sueltos h6{margin:12px 0 4px;font-size:15px}
+.lanza-lista{display:grid;gap:8px}
+.lanza-lista li{padding:8px 12px;border-left:4px solid var(--edge);overflow-wrap:anywhere}
+.lanza-para{max-width:66ch}
+.donde-sh{margin-left:4px;color:var(--muted)}
+.marca-lanz{display:inline-block;padding:0 8px;border:2px solid var(--ink);font-weight:700}
+.marca-lanz-sin{border-style:dashed}
+.tabla-lanz{width:100%;margin-top:16px;border-collapse:collapse}
+.tabla-lanz th,.tabla-lanz td{padding:8px 16px;border-bottom:2px solid var(--edge);text-align:left;vertical-align:top}
+.tabla-lanz th{font-weight:800}

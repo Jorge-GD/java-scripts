@@ -1715,7 +1715,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1947,7 +1947,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
@@ -5278,7 +5278,7 @@ $Pruebas['m17 lanzadores: pagina 1 - la tabla lanzador a job con unico y sin-enl
   $filas = @([regex]::Matches($pan, '(?s)<tr><td>.*?</tr>') | ForEach-Object { Texto-De $_.Value })
   Igual 'la tabla tiene una fila por lanzador' 3 $filas.Count
   Comprueba 'cargas.ksh -> cargaJob, enlazado por su propio argumento' ($filas.Count -ge 1 -and $filas[0] -match '^bin/cargas\.ksh cargaJob ' -and $filas[0] -match 'dice el propio script') ($filas -join ' | ')
-  Comprueba 'informe.sh -> informeJob, marcado como unico job' ($filas.Count -ge 2 -and $filas[1] -match '^bin/informe\.sh informeJob .*\.nico job') ($filas -join ' | ')
+  Comprueba 'informe.sh -> informeJob, marcado como unico job' ($filas.Count -ge 2 -and $filas[1] -match '^bin/informe\.sh informeJob .*.nico job') ($filas -join ' | ')
   Comprueba 'raro.sh sin job, marcado como sin enlazar' ($filas.Count -ge 3 -and $filas[2] -match '^bin/raro\.sh .*Sin enlazar') ($filas -join ' | ')
   $j = [regex]::Match($p, '(?s)<article class="job" id="job-cargaJob">.*?</article>').Value
   $l = [regex]::Match($j, '(?s)<div class="job-sec lanza">.*?</div>').Value
