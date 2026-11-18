@@ -179,6 +179,10 @@ function Get-VariablesPrompt($T, [string]$Leer) {
     'prueba-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.VARIABLES = $e.variables; $v.CASOS_MAX = "$($Cfg.CasosMax)" }
     'caso-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.REGLA = $e.regla; $v.REGLA_REF = $e.ref; $v.GUION = $e.guion }
     'resumen' { $v.JOBS = $e.datos; $v.GLOSARIO_MAX = "$($Cfg.GlosarioMax)"; $v.RELLENO = Get-TextoRelleno }
+    'ficha-sh' {
+      $v.SCRIPT = $e.script; $v.TEXTO = $e.texto; $v.INVENTARIO = $e.inventario; $v.OBLIGATORIAS = $e.obligatorias; $v.JOB = $e.job
+      $v.RELLENO = Get-TextoRelleno
+    }
     'comparar-pieza' {
       $v.FICHERO = $Leer; $v.CLASE = $e.clase; $v.DATOS = $e.datos
       $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
@@ -578,6 +582,7 @@ function Test-Salida($T, [string]$Dir, [string]$Leer) {
     'prueba-pre' { return (Test-PruebaPre $T $Dir) }
     'caso-pre' { return (Test-CasoPre $T $Dir) }
     'comparar-pieza' { return (Test-Comparar $T $Dir) }
+    'ficha-sh' { return (Test-FichaSh $T $Dir) }
     default { return (Test-Ficha $T $Dir $Leer) }
   }
 }

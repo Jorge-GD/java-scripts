@@ -23,6 +23,8 @@ tareas.ps1 (Get-Hash8, Read-Json, Write-Json, Find-Cita, Test-Citas...).
 $Cfg += @{
   LanzadorSaltar    = @('.git', 'target', 'node_modules')   # carpetas en las que no se entra
   LanzadorNoScripts = @('mvnw', 'gradlew')                   # los scripts de la herramienta de construccion no lanzan el batch
+  FichaShCuando     = @('antes', 'despues', 'siempre', 'si-falla')
+  FichaShQue        = @('mueve', 'copia', 'borra', 'comprime', 'envia', 'avisa', 'comprueba', 'lanza', 'elige-job', 'otro')
 }
 
 # ================================ FICHEROS ================================
@@ -296,4 +298,183 @@ function Get-Lanzadores([string]$Raiz, [string]$Extra, $Jobs) {
     }
   }
   return $res
+}
+
+# ================================= FICHA-SH =================================
+# Las lineas del inventario que la ficha tiene que explicar: las de fichero (menos las que solo hacen cd o ls), envio, salida, lanza,
+# cerrojo, perfil y job. Cada una con su linea, su fin, su tipo, su detalle y el texto de la linea.
+function Get-LineasObligatorias($Inventario, $Lineas) {
+  $res = @()
+  foreach ($i in @($Inventario)) {
+    if (@('envio', 'salida', 'lanza', 'cerrojo', 'perfil', 'job') -cnotcontains $i.tipo -and $i.tipo -cne 'fichero') { continue }
+    if ($i.tipo -ceq 'fichero' -and @($i.detalle -split ',' | Where-Object { @('cd', 'ls') -cnotcontains $_ }).Count -eq 0) { continue }
+    $texto = ([string]$Lineas[[int]$i.linea - 1]).Trim()
+    if ($texto.Length -gt [int]$Cfg.CitaMax) { $texto = $texto.Substring(0, [int]$Cfg.CitaMax) }
+    $res += [pscustomobject]@{ linea = [int]$i.linea; fin = [int]$i.fin; tipo = $i.tipo; detalle = $i.detalle; texto = $texto }
+  }
+  return $res
+}
+
+# Lo que se dice de la obligatoria $R cuando falta: 'exit 1' o 'fichero ls,mv'.
+function Get-DescripcionObligatoria($R) {
+  if ($R.tipo -ceq 'salida') { return "exit $($R.detalle)" }
+  return "$($R.tipo) $($R.detalle)"
+}
+
+# El enlace con el job, en una frase para el prompt y para el informe: ninguno, o el job y de donde sale.
+function Get-TextoEnlace($Enlace) {
+  $jobs = (@($Enlace.jobs) -join ', ')
+  switch ([string]$Enlace.como) {
+    'argumento' { return "$jobs (lo dice el propio script, linea $($Enlace.linea))" }
+    'yml' { return "$jobs (lo dice $($Enlace.fichero):$($Enlace.linea), el del perfil de Spring que lanza el script)" }
+    'profile' { return "$jobs (lo define $($Enlace.fichero), que lleva el perfil de Spring que lanza el script, linea $($Enlace.linea))" }
+    'unico' { return "$jobs (es el unico job del batch)" }
+    default { return 'ninguno (no se ha podido enlazar con ningun job)' }
+  }
+}
+
+# Una tarea ficha-sh por lanzador: su texto con el numero de cada linea, su inventario, las lineas obligatorias y el job. Un script de mas de
+# 3 * LineasPorTarea lineas no se lee: nace atascado. Las tareas hechas de otro lanzamiento se conservan si el script y el enlace son los mismos.
+function Get-TareasFichaSh($Lanzadores, [bool]$ConservarAtascadas) {
+  $tareas = @()
+  foreach ($z in @($Lanzadores)) {
+    $lineas = @(Get-LineasShell $z.ruta)
+    $obligatorias = @(Get-LineasObligatorias $z.inventario $lineas)
+    $job = Get-TextoEnlace $z.enlace
+    $numeradas = @()
+    for ($k = 0; $k -lt $lineas.Count; $k++) { $numeradas += ('{0,5}| {1}' -f ($k + 1), $lineas[$k]) }
+    $texto = ($numeradas -join "`n")
+    $inventario = (@($z.inventario | ForEach-Object { "$($_.linea) [$($_.tipo)] $($_.detalle)" }) -join "`n")
+    if (-not $inventario) { $inventario = '(no ha encontrado nada)' }
+    $lista = 'ninguna'
+    if ($obligatorias.Count -gt 0) { $lista = (@($obligatorias | ForEach-Object { "$($_.linea)" } | Select-Object -Unique) -join ', ') }
+    $entradas = [pscustomobject]@{
+      script = $z.rel; ruta = $z.ruta; lineas = $lineas.Count; texto = $texto; inventario = $inventario
+      requeridas = @($obligatorias); obligatorias = $lista; job = $job
+      huella = (Get-Hash8 ($z.rel + '|' + $texto + '|' + $job + '|' + $lista))
+    }
+    $t = New-TareaTipo 'ficha-sh' ('fichash-' + $z.id.Substring(3)) $z.id ('datos/fichas-sh/' + $z.id + '.json') $entradas
+    $max = 3 * [int]$Cfg.LineasPorTarea
+    if ($lineas.Count -gt $max) {
+      $t.estado = 'atascada'
+      $t.motivo = "el script ($($z.rel)) pasa de $max lineas: no se lee"
+    }
+    $tareas += , (Restore-Tarea $t $ConservarAtascadas)
+  }
+  return $tareas
+}
+
+# '' si $V es un entero (el codigo de un exit, que puede ser 0 o -1); si no, el motivo de $Pre.
+function Test-Codigo($V, [string]$Pre) {
+  if (($V -is [int]) -or ($V -is [long])) { return '' }
+  return "$Pre.codigo tiene que ser un numero entero (el del exit; -1 si no es un numero fijo)."
+}
+
+# Comprueba lo que ha escrito Copilot: paraQue, parametros, acciones y salidas con sus campos y vocabularios, sin nombres de clase ni relleno, con
+# las citas en el script y con las lineas obligatorias cubiertas. En el ultimo intento las que faltan pasan a sinExplicar.
+function Test-FichaSh($T, [string]$Dir) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
+  if (-not (Test-Texto $o.paraQue)) { return (New-Resultado $false "Falta el campo 'paraQue' (o esta vacio)." $null) }
+  foreach ($c in @('parametros', 'acciones', 'salidas')) {
+    if ($o.$c -isnot [array]) { return (New-Resultado $false "Falta el campo '$c': una lista, vacia si no hay nada que contar." $null) }
+  }
+  $campos = [ordered]@{ paraQue = $o.paraQue }
+  $params = @(); $acc = @(); $sal = @()
+  $i = 0
+  foreach ($p in $o.parametros) {
+    $pre = "parametros[$i]"
+    if ($p -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con nombre, obligatorio, valores, formato, linea y cita." $null) }
+    if (-not (Test-Texto $p.nombre)) { return (New-Resultado $false "$pre.nombre falta o esta vacio." $null) }
+    if ($p.obligatorio -isnot [bool]) { return (New-Resultado $false "$pre.obligatorio tiene que ser true o false." $null) }
+    foreach ($c in @('valores', 'formato')) {
+      if ($null -ne $p.$c -and $p.$c -isnot [string]) { return (New-Resultado $false "$pre.$c tiene que ser un texto (vacio si no hay)." $null) }
+    }
+    $m = Test-LineaCita $p $pre
+    if ($m) { return (New-Resultado $false $m $null) }
+    $campos["$pre.valores"] = [string]$p.valores
+    $campos["$pre.formato"] = [string]$p.formato
+    $params += [ordered]@{ nombre = $p.nombre; obligatorio = $p.obligatorio; valores = [string]$p.valores; formato = [string]$p.formato; linea = [int]$p.linea; cita = $p.cita; probado = $false }
+    $i++
+  }
+  $i = 0
+  foreach ($a in $o.acciones) {
+    $pre = "acciones[$i]"
+    if ($a -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con cuando, condicion, que, detalle, linea y cita." $null) }
+    if ($Cfg.FichaShCuando -cnotcontains $a.cuando) { return (New-Resultado $false ("$pre.cuando vale '$($a.cuando)' y tiene que ser uno de: " + ($Cfg.FichaShCuando -join ', ') + '.') $null) }
+    if ($Cfg.FichaShQue -cnotcontains $a.que) { return (New-Resultado $false ("$pre.que vale '$($a.que)' y tiene que ser uno de: " + ($Cfg.FichaShQue -join ', ') + '.') $null) }
+    if (-not (Test-Texto $a.detalle)) { return (New-Resultado $false "$pre.detalle falta o esta vacio." $null) }
+    if ($null -ne $a.condicion -and $a.condicion -isnot [string]) { return (New-Resultado $false "$pre.condicion tiene que ser un texto (vacio si ocurre siempre)." $null) }
+    $m = Test-LineaCita $a $pre
+    if ($m) { return (New-Resultado $false $m $null) }
+    $campos["$pre.detalle"] = $a.detalle
+    $campos["$pre.condicion"] = [string]$a.condicion
+    $acc += [ordered]@{ cuando = $a.cuando; condicion = [string]$a.condicion; que = $a.que; detalle = $a.detalle; linea = [int]$a.linea; cita = $a.cita; probado = $false }
+    $i++
+  }
+  $i = 0
+  foreach ($x in $o.salidas) {
+    $pre = "salidas[$i]"
+    if ($x -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con codigo, cuando, linea y cita." $null) }
+    $m = Test-Codigo $x.codigo $pre
+    if ($m) { return (New-Resultado $false $m $null) }
+    if (-not (Test-Texto $x.cuando)) { return (New-Resultado $false "$pre.cuando falta o esta vacio." $null) }
+    $m = Test-LineaCita $x $pre
+    if ($m) { return (New-Resultado $false $m $null) }
+    $campos["$pre.cuando"] = $x.cuando
+    $sal += [ordered]@{ codigo = [int]$x.codigo; cuando = $x.cuando; linea = [int]$x.linea; cita = $x.cita; probado = $false }
+    $i++
+  }
+  $m = Test-LenguajeNegocio $campos
+  if ($m) { return (New-Resultado $false $m $null) }
+  $m = Test-Relleno $campos
+  if ($m) { return (New-Resultado $false $m $null) }
+  $m = Test-Citas @($params + $acc + $sal) $T.entradas.ruta
+  if ($m) { return (New-Resultado $false $m $null) }
+  $cubren = @($acc + $sal | Where-Object { $_.probado })
+  $faltan = @($T.entradas.requeridas | Where-Object { $r = $_; @($cubren | Where-Object { $_.linea -ge $r.linea -and $_.linea -le $r.fin }).Count -eq 0 } | Sort-Object { [int]$_.linea })
+  $sin = @()
+  if ($faltan.Count -gt 0) {
+    if (($T.intentos + 1) -lt [int]$Cfg.Intentos) {
+      $quien = (@($faltan | ForEach-Object { "$($_.linea) ($(Get-DescripcionObligatoria $_))" }) -join ', ')
+      return (New-Resultado $false "Te faltan las lineas $quien. Cada linea de OBLIGATORIAS tiene que salir en la linea (y con su cita) de una accion o de una salida; si una no hace nada que importe, cuentala como accion con que igual a otro. Escribe el JSON completo otra vez." $null)
+    }
+    $sin = @($faltan | ForEach-Object { [ordered]@{ linea = [int]$_.linea; tipo = $_.tipo; detalle = $_.detalle; texto = $_.texto } })
+  }
+  return (New-Resultado $true '' ([ordered]@{ script = $T.entradas.script; paraQue = $o.paraQue; parametros = $params; acciones = $acc; salidas = $sal; sinExplicar = $sin }))
+}
+
+# ================================== DATOS ==================================
+# datos\lanzadores.json: cada lanzador con su ruta, su interprete, sus jobs, su enlace y su inventario.
+function Save-Lanzadores($Lanzadores) {
+  $lista = @($Lanzadores | ForEach-Object {
+      [ordered]@{
+        id = $_.id; rel = $_.rel; ruta = $_.ruta; interprete = $_.interprete; lineas = $_.lineas; jobs = @($_.enlace.jobs)
+        enlace = [ordered]@{ como = $_.enlace.como; fichero = $_.enlace.fichero; linea = $_.enlace.linea }; inventario = @($_.inventario)
+      } })
+  Write-Json (Join-Path $Datos 'lanzadores.json') ([ordered]@{ lanzadores = $lista })
+}
+
+# Los lanzadores de datos\lanzadores.json (ninguno si no esta).
+function Read-Lanzadores {
+  $f = Join-Path $Datos 'lanzadores.json'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @((Read-Json $f).lanzadores | Where-Object { $null -ne $_ })
+}
+
+# datos\fichas-sh\<id>.json de cada tarea hecha; el de una que no lo esta se borra (el script cambio y la ficha de antes ya no vale).
+function Save-FichasSh($Tareas) {
+  foreach ($t in @($Tareas)) {
+    $ruta = Join-Path (Join-Path $Datos 'fichas-sh') ($t.ficha + '.json')
+    if ($t.estado -ne 'hecha') {
+      if (Test-Path -LiteralPath $ruta) { Remove-Item -LiteralPath $ruta -Force }
+      continue
+    }
+    $r = $t.resultado
+    Write-Json $ruta ([ordered]@{
+        id = $t.ficha; script = $t.entradas.script; paraQue = $r.paraQue; parametros = @($r.parametros); acciones = @($r.acciones)
+        salidas = @($r.salidas); sinExplicar = @($r.sinExplicar)
+      })
+  }
 }

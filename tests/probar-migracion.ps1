@@ -4833,7 +4833,7 @@ $l = @(Get-Lanzadores '{{LEG}}' '' $jobs)
 
 $Pruebas['m17 lanzadores: una tarea ficha-sh por script, con el texto numerado, el inventario, las lineas obligatorias y el job enlazado; la huella sigue al script; uno demasiado largo nace atascado'] = {
   $d = Original-Fichas 'ficha-tareas'
-  $codigo = $script:PreludioFicha + @'
+  $codigo = $script:PreludioFicha + "`n" + @'
 $t = @(Get-TareasFichaSh $l $false)
 'N=' + $t.Count
 $a = @($t | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0]
@@ -4875,7 +4875,7 @@ $t4 = @(Get-TareasFichaSh $l3 $false)
   Comprueba 'el prompt: TIPO, SCRIPT y ESCRIBIR, sin LEER ni nada que leer en disco' ($p -match '(?m)^TIPO: ficha-sh\r?$' -and $p -match '(?m)^SCRIPT: bin/cargas\.ksh\r?$' -and $p -match '(?m)^ESCRIBIR: \.rescate/tareas/fichash-[0-9a-f]{8}\.json\r?$' -and $p -notmatch '(?m)^LEER:') ($p.Substring(0, [Math]::Min(300, $p.Length)))
   Comprueba 'el prompt lleva el script entero con el numero de cada linea' ($p -match '(?m)^\s+1\| #!/bin/ksh\r?$' -and $p -match ('(?m)^\s+' + (Linea-Con $FormaA '^exit 0') + '\| exit 0\r?$') -and $p.Contains('java -jar ./jar/cargas-acme.jar ${MODO} ${FECHA}')) ''
   Comprueba 'el inventario con su linea y su tipo, las lineas obligatorias y el job' ($p -match ('(?m)^' + (Linea-Con $FormaA '^java -jar') + ' \[java\] \./jar/cargas-acme\.jar\r?$') -and $p -match '(?m)^OBLIGATORIAS: \d+(, \d+)+\r?$' -and $p -match '(?m)^JOB ENLAZADO: ninguno') ''
-  Comprueba 'lleva la lista de frases de relleno y el maximo de la cita' ($p.Contains('"de forma clara"') -and $p.Contains('como mucho 120 caracteres')) ''
+  Comprueba 'lleva la lista de frases de relleno y el maximo de la cita' ($p.Contains('"de forma clara"') -and $p -match 'ximo 120 caracteres') ''
   $q = ''
   if (Test-Path -LiteralPath (Join-Path $dd 'prompt-b-reintento.txt')) { $q = [System.IO.File]::ReadAllText((Join-Path $dd 'prompt-b-reintento.txt')) }
   Comprueba 'el reintento lleva la correccion con el motivo' ($q -match '(?s)## CORRECCI.*MOTIVO-DE-PRUEBA') ''
@@ -4886,7 +4886,7 @@ $t4 = @(Get-TareasFichaSh $l3 $false)
 
 $Pruebas['m17 lanzadores: Test-FichaSh - una salida buena vale; una cita inventada no; si faltan las lineas de un mv y un exit 1 el motivo las nombra y en el ultimo intento quedan en sinExplicar'] = {
   $d = Original-Fichas 'ficha-valida' @('cargas.ksh')
-  $codigo = $script:PreludioFicha + @'
+  $codigo = $script:PreludioFicha + "`n" + @'
 $t = @(Get-TareasFichaSh $l $false)[0]
 $lin = [System.IO.File]::ReadAllLines($t.entradas.ruta)
 $base = Join-Path '{{DIR}}' 'w'
@@ -4972,7 +4972,7 @@ $f = Buena; $f.salidas[0].codigo = 0; $f.acciones[1].condicion = 'Si el modo es 
 
 $Pruebas['m17 lanzadores: Save-Lanzadores escribe datos/lanzadores.json y Save-FichasSh la ficha de cada tarea hecha en datos/fichas-sh'] = {
   $d = Original-Fichas 'ficha-guardar'
-  $codigo = $script:PreludioFicha + @'
+  $codigo = $script:PreludioFicha + "`n" + @'
 Save-Lanzadores $l
 $j = Read-Json (Join-Path $Datos 'lanzadores.json')
 'N=' + @($j.lanzadores).Count
