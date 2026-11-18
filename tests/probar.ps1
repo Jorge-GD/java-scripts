@@ -1304,6 +1304,65 @@ $Pruebas['sftp fijo: application.yml sin sftp es un error con una referencia sin
   Igual 'apagado el interruptor, nada' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
 }
 
+# La configuracion SFTP tambien puede entrar por una clase de src/main/java (un @ConfigurationProperties con prefijo sftp
+# o un @Value con una clave sftp, que Spring une con SFTP_HOST sin tocar el yml): entonces el yml no tiene que traer el bloque.
+# Escenario con el adaptador SFTP, sin sftp en el yml de la referencia ni en el del migrado, y esta clase de configuracion.
+function Hallazgos-Yml-Con-Clase([string]$Nombre, [string]$Clase) {
+  $e = Escenario-Referencia-Sin-Sftp $Nombre
+  $pk = 'src/main/java/com/acme/life/infrastructure/'
+  Escribe $e.Repo ($pk + 'adapters/output/sftp/FicheroSftp.java') "package com.acme.life.infrastructure.adapters.output.sftp;`n`n/** Adaptador SFTP. */`npublic class FicheroSftp {`n}`n"
+  $ficheros = @($pk + 'adapters/output/sftp/FicheroSftp.java')
+  if ($Clase) {
+    Escribe $e.Repo ($pk + 'config/Ajustes.java') $Clase
+    $ficheros += ($pk + 'config/Ajustes.java')
+  }
+  [void](GitEn $e.Repo (@('add', '--') + $ficheros))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'adaptador y ajustes'))
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'con el adaptador no salta el del adaptador' 0 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  return @(Hallazgos-Sftp $e.Repo $SinYmlSftp)
+}
+
+$ClaseCabecera = "package com.acme.life.infrastructure.config;`n`nimport org.springframework.beans.factory.annotation.Value;`nimport org.springframework.boot.context.properties.ConfigurationProperties;`n`n"
+
+$Pruebas['sftp en java: un @ConfigurationProperties con prefijo sftp (prefix, value o directo, sin mirar mayusculas) cuenta como configuracion'] = {
+  $formas = [ordered]@{
+    'prefix'  = '@ConfigurationProperties(prefix = "sftp")'
+    'value'   = '@ConfigurationProperties(value = "app.SFTP", ignoreUnknownFields = false)'
+    'directo' = '@ConfigurationProperties("sftp.destino")'
+  }
+  foreach ($k in $formas.Keys) {
+    $clase = $ClaseCabecera + "/** Ajustes. */`n" + $formas[$k] + "`npublic class Ajustes {`n    private String host;`n}`n"
+    Igual ("forma " + $k + ': no hay hallazgo de configuracion sftp') 0 (Hallazgos-Yml-Con-Clase ('sftp-java-cp-' + $k) $clase).Count
+  }
+}
+
+$Pruebas['sftp en java: un @Value con una clave sftp cuenta como configuracion'] = {
+  $clase = $ClaseCabecera + "/** Ajustes. */`npublic class Ajustes {`n    @Value(`"`${sftp.host}`")`n    private String host;`n}`n"
+  Igual 'no hay hallazgo de configuracion sftp' 0 (Hallazgos-Yml-Con-Clase 'sftp-java-value' $clase).Count
+}
+
+$Pruebas['sftp en java: sin la configuracion en el yml ni en una clase, el error dice que escribir'] = {
+  $y = @(Hallazgos-Yml-Con-Clase 'sftp-java-nada' '')
+  Igual 'un error de configuracion sftp' 1 $y.Count
+  $d = ''
+  if ($y.Count -eq 1) { $d = $y[0].Detalle }
+  Comprueba 'lleva la instruccion del bloque' ($d -match [regex]::Escape("anade un bloque 'sftp:'")) $d
+  Comprueba 'con las claves' ($d -match [regex]::Escape('(host, port, username, password, remote-dir)')) $d
+  Comprueba 'y el ejemplo con la variable de entorno' ($d -match [regex]::Escape('por ejemplo host: ${SFTP_HOST}; ningun valor real')) $d
+  Comprueba 'el texto entero' ($d -ceq 'application.yml no tiene configuracion sftp: anade un bloque ''sftp:'' (host, port, username, password, remote-dir) que lea variables de entorno, por ejemplo host: ${SFTP_HOST}; ningun valor real') $d
+  Comprueba 'y es ASCII' ($d -cmatch '^[\x20-\x7e]*$') $d
+  # otra configuracion que no es de sftp no la salva
+  $otra = $ClaseCabecera + "/** Ajustes. */`n@ConfigurationProperties(prefix = `"batch`")`npublic class Ajustes {`n    @Value(`"`${batch.nombre}`")`n    private String nombre;`n}`n"
+  Igual 'con otra configuracion que no es de sftp, tambien salta' 1 (Hallazgos-Yml-Con-Clase 'sftp-java-otra' $otra).Count
+}
+
+$Pruebas['sftp en java: sftp en un comentario de Java no cuenta'] = {
+  $clase = $ClaseCabecera + "/**`n * Ajustes. Antes: @ConfigurationProperties(prefix = `"sftp`").`n */`n// @Value(`"`${sftp.host}`")`n/* @ConfigurationProperties(`"sftp`") y la clave sftp.host */`npublic class Ajustes {`n    private String host; // sftp`n}`n"
+  Igual 'salta el error de configuracion sftp' 1 (Hallazgos-Yml-Con-Clase 'sftp-java-comentario' $clase).Count
+}
+
 # ================ AJUSTES.JSON Y EL PROGRAMA DE COPILOT ================
 # rescate.ps1 lee ajustes.json (RESCATE_HOME o la carpeta .rescate del usuario) antes que el config.json del repo, que
 # manda. El programa de Copilot se busca una vez, con la misma regla que el preflight (Get-Lanzable), antes de tocar el repo.
