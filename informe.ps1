@@ -43,7 +43,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # De que tipo son las tareas de cada fase del script (las demas fases no tienen tareas)
-$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'comparar' = 'comparar-pieza' }
+$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'casos-pre' = 'caso-pre'; 'comparar' = 'comparar-pieza' }
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -633,7 +633,7 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
 # Las fases de la pasada en el orden en que se hacen, que depende de la respuesta: con corregir, la comparacion y la prueba en local van
 # despues de la correccion; si no, la comparacion va antes. lectura-hecha y hecha no se pintan: marcan el sitio de esos dos estados.
 function Get-OrdenFases($D) {
-  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')
+  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar', 'prueba-local', 'hecha')) }
   return @($lectura + @('comparar', 'lectura-hecha', 'correccion', 'prueba-local', 'hecha'))
 }

@@ -320,6 +320,7 @@ function Get-TareasFase([string]$Fase, [bool]$Conservar) {
     'fichas-job' { return @(Get-TareasJob (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'resumen' { return @(Get-TareasResumen (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'pruebas-pre' { return @(Get-TareasPrueba (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
+    'casos-pre' { return @(Get-TareasCaso (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'comparar' { return @(Get-TareasComparar $Conservar $RamaMigrado) }
   }
 }
@@ -333,6 +334,7 @@ function Save-Fase([string]$Fase, $Tareas) {
     'fichas-job' { Save-Jobs (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'resumen' { if (@($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count -gt 0) { Write-Json (Join-Path $Datos 'resumen.json') $Tareas[0].resultado } }
     'pruebas-pre' { Save-Pruebas (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
+    'casos-pre' { Save-Casos (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'comparar' { Save-Comparaciones $Tareas }
   }
 }
@@ -363,6 +365,12 @@ function Get-LineaFase([string]$Fase, $Tareas) {
     'pruebas-pre' {
       if (@($Tareas).Count -eq 0) { return 'Pruebas en pre: ningun job con reglas ni errores que probar con IA' }
       $l = "Pruebas en pre: $($n.hecha) hechas, $($n.atascada) atascadas"
+      if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
+      return $l
+    }
+    'casos-pre' {
+      if (@($Tareas).Count -eq 0) { return 'Casos de las reglas sin caso: ninguna regla sin caso' }
+      $l = "Casos de las reglas sin caso: $($n.hecha) hechos, $($n.atascada) atascados"
       if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
       return $l
     }
@@ -653,7 +661,7 @@ try {
   $script:Quedan = 0
   Invoke-FaseDiagnostico
   # con la respuesta corregir, comparar va despues de la correccion; con parar, antes de lectura-hecha
-  $fases = @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')
+  $fases = @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   if ($respuesta -ne 'corregir') { $fases += 'comparar' }
   $sigue = -not $script:Parada
   foreach ($fase in $fases) { if ($sigue) { $sigue = Invoke-FaseTareas $fase } }
