@@ -19,22 +19,31 @@ QUE HACE
      Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
      vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
+     Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
+     cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
   4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada).
-  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas ni la fecha de hoy:
-     igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar o sin
-     probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
-     diferencia del JDK, sin esconderlo.
+  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
+     de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
+     fecha de hoy: igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
+     o sin probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
+     diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
+     pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
+     prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
+     lanzamiento los escriba otra vez con ese motivo.
   6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
      <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
      cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
      lo compara con lo que dejo el original, con las mismas reglas del paso 5. Un commit donde el caso no se puede
-     ejecutar (no compila...) cuenta como malo, y se dice. Con -Deshacer, ademas, revierte esos commits con git revert
-     (del mas nuevo al mas viejo) en la carpeta de la rama que se prueba y vuelve a ejecutar los casos: ahora igual o
-     sigue distinto. No deshace si esa carpeta tiene cambios sin commit, si el commit es un merge o si el revert da
-     conflicto (lo aborta y no deja nada a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
+     ejecutar (no compila, Maven se pasa del tope...) ni es bueno ni es malo: se salta, como git bisect skip, y se dice. Si
+     solo quedan commits saltados antes del malo, no se da culpable y no se deshace nada. Con -Deshacer, ademas, revierte
+     esos commits con git revert (del mas nuevo al mas viejo) en la carpeta de la rama que se prueba y vuelve a ejecutar
+     TODOS los casos en el HEAD nuevo (un revert puede arreglar un caso y romper otro): ahora igual o sigue distinto. Si el
+     revert de un commit no arregla ninguno de sus casos, lo quita con otro git revert (y lo dice en rojo). No deshace si
+     esa carpeta tiene cambios sin commit, si el commit es un merge o si el revert da conflicto (lo aborta y no deja nada
+     a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -48,7 +57,8 @@ USO
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
 
-  Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno).
+  Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno, o el
+  test no le pasa las entradas a un job).
   Con -Deshacer, la salida es la del estado de despues de deshacer.
   Antes de darlo por bueno, pasa tests\probar-local.ps1.
 #>
@@ -82,11 +92,14 @@ $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cad
 # Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
 # de un parrafo y cada tarea elige una. Ninguna otra linea de las plantillas empieza asi.
 $MarcaNo = '<!--no-->'
+# El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
+$MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
 $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
 $RutasCopia = @()   # las rutas de las dos copias, en sus formas: Get-Normal las cambia por <copia>
+$Hoy = @()          # las fechas de la ejecucion (Get-Hoy): Get-Resultado las pone al dia en cada comparacion
 $script:Base = @{}  # por copia: el commit y el arbol que se dieron por buenos (Save-Copia)
 
 # ================================ COPIAS ================================
@@ -292,7 +305,16 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = '' }
   $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
   $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
+  $guardada = Join-Path (Join-Path $Datos 'tareas') ('arnes-' + $Repo + '.json')
+  $antes = $null
+  if (Test-Path -LiteralPath $guardada) { try { $antes = Read-Json $guardada } catch { } }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
+  # Un arnes invalidado (Stop-Vacios, o un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
+  # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas.
+  if ($t.estado -eq 'pendiente' -and $antes -and $antes.estado -eq 'pendiente' -and $antes.intentos -gt 0 -and $antes.motivo -and $antes.entradas.huella -eq $huella) {
+    $t.intentos = $antes.intentos; $t.motivo = $antes.motivo; $t.ultimoEstado = $antes.ultimoEstado
+    Save-Tarea $t
+  }
   $t.entradas.copia = $Dir   # la de ahora, aunque la tarea venga de otro lanzamiento
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
 }
@@ -375,13 +397,25 @@ function Save-Arnes($T) {
   Save-Copia $dir
 }
 
-# Pone en su copia el arnes hecho en otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede
-# ser otro). Si ya no la pasa, se deshace y la tarea vuelve a empezar.
+# Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
+# otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
+# atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
+# hecha vuelve a empezar (y se avisa), una que ya estaba por hacer sigue como estaba.
 function Use-ArnesGuardado($T, [string[]]$Jobs) {
+  $estabaHecha = ($T.estado -eq 'hecha')
   Copy-Carpeta (Join-Ruta $Local "arnes/$($T.entradas.repo)") $T.entradas.copia
   $m = Test-Arnes $T $Jobs
-  if (-not $m) { Save-Copia $T.entradas.copia; return }
+  if (-not $m) {
+    Save-Copia $T.entradas.copia
+    if (-not $estabaHecha) {
+      $T.estado = 'hecha'; $T.intentos = 0; $T.motivo = ''; $T.ultimoEstado = 'ok'
+      Save-Tarea $T
+      Bien "Arnes del $($T.entradas.repo): bien (el test de otro lanzamiento sigue valiendo)."
+    }
+    return
+  }
   Undo-Copia $T.entradas.copia
+  if (-not $estabaHecha) { return }
   Aviso "El test PruebaLocalTest del $($T.entradas.repo) de otro lanzamiento ya no vale en este commit ($(($m -split "`n")[0])): se vuelve a escribir."
   $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
   Save-Tarea $T
@@ -571,14 +605,35 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
   }
 }
 
+# Ejecuta en la copia del migrado, con el arnes que ya lleva, los casos de $Listas (con sus entradas guardadas) y guarda lo que
+# dejan en prueba-local\salidas\<Nombre>.
+function Invoke-Migrado([string]$Nombre, $Listas) {
+  Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
+  foreach ($t in $Listas) { Copy-Carpeta (Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)") (Join-Ruta $CopiaMig $t.entradas.carpeta) }
+  Invoke-Salidas $CopiaMig $false $Nombre $Listas
+}
+
 # ================================ COMPARAR ================================
-# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las horas
-# (las mismas reglas que comparar-salidas.py, y sus fracciones de segundo) y la fecha de hoy en sus formatos de siempre
-# (cada formato con su marca: un cambio de formato se sigue viendo), con la hora pegada detras (aaaammdd_hhmmss).
+# Las fechas de esta ejecucion: cada dia, en hora local y en UTC, desde $Desde hasta $Hasta. Un job que escribe la fecha en UTC puede
+# poner otro dia que el local (a las 00:30 en Espana, el de ayer): las dos cuentan como de hoy.
+function Get-Hoy([datetime]$Desde, [datetime]$Hasta) {
+  $dias = @()
+  foreach ($p in @(@($Desde, $Hasta), @($Desde.ToUniversalTime(), $Hasta.ToUniversalTime()))) {
+    for ($d = $p[0].Date; $d -le $p[1].Date; $d = $d.AddDays(1)) { $dias += $d }
+  }
+  return @($dias | Select-Object -Unique)
+}
+
+# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las fechas con hora de la
+# ejecucion ($Hoy: la fecha y la hora juntas pasan a <hora>), las horas sueltas (HH:mm:ss y sus fracciones, sin fecha delante: tambien
+# pasan a <hora>) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato se sigue viendo), con la
+# hora pegada detras (aaaammdd_hhmmss). Una fecha con hora que no es de $Hoy es un dato del negocio y se queda como esta, hora incluida:
+# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta.
 function Get-Normal([string]$Texto) {
   $t = $Texto
   foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
-  $t = $t -replace '\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?|\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
+  foreach ($d in $Hoy) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
+  $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
   foreach ($d in $Hoy) {
     foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
   }
@@ -665,6 +720,7 @@ function Compare-Caso([string]$A, [string]$B) {
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
 # $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde).
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
+  $script:Hoy = @(Get-Hoy $Inicio (Get-Date))   # la busqueda de -Desde puede pasar de medianoche
   $j = $T.entradas.job
   $c = $T.entradas.caso
   $o = [ordered]@{ job = $j; caso = $c; titulo = $T.entradas.titulo; resultado = 'no se pudo preparar'; motivo = ''; diferencias = @() }
@@ -684,7 +740,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
   $o.resultado = 'igual'
   $vacio = Join-Ruta $Local "salidas/vacio/$j"
-  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio).Count -eq 0) { $o.motivo = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.' }
+  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio).Count -eq 0) { $o.motivo = $MotivoVacio }
   return $o
 }
 
@@ -715,7 +771,7 @@ function Show-Resultado($Res, $PorJob) {
 # De cada caso distinto, el primer commit de la rama que se prueba donde deja de ser igual (con -Desde) y, si se pide, su
 # git revert (con -Deshacer). Todo se ejecuta en <Migrado>-prueba-local, rehecha en cada commit, con el arnes y el caso ya
 # guardados, y se compara con salidas\original: nunca se llama a Copilot.
-# Lo que usan, del main: $DirRama (la carpeta de la rama que se prueba), $DesdeCommit, $headMig, $tareasCasos y $pruebas.
+# Lo que usan, del main: $DirRama (la carpeta de la rama que se prueba), $DesdeCommit, $headMig, $tareasCasos, $listas y $pruebas.
 
 # El asunto (primera linea del mensaje) de un commit del migrado.
 function Get-Asunto([string]$Commit) { return ((Invoke-Git $MigradoRoot @('log', '-1', '--format=%s', $Commit)).Salida -join ' ').Trim() }
@@ -729,9 +785,12 @@ function Get-TareaCaso([string]$Job, [string]$Caso) {
   return @($tareasCasos | Where-Object { $_.entradas.job -ceq $Job -and $_.entradas.caso -ceq $Caso })[0]
 }
 
+# Un resultado de Get-Resultado que no es bueno: igual y no determinista son buenos; todo lo demas, no.
+function Test-Malo($Res) { return ($Res.resultado -ne 'igual' -and $Res.resultado -ne 'no determinista') }
+
 # Como esta el caso $T en el migrado de $Commit: Malo ($true si sale distinto o no se puede ejecutar), Motivo (por que no se
-# pudo ejecutar, o '') y Resultado (lo de Get-Resultado, comparado con salidas\original). Igual y no determinista son buenos.
-# Lo ya visto de un (commit, job, caso) se guarda en $script:Estados y no se vuelve a ejecutar.
+# pudo ejecutar, o '': con motivo, el commit ni es bueno ni es malo, Find-Culpable lo salta) y Resultado (lo de Get-Resultado,
+# comparado con salidas\original). Lo ya visto de un (commit, job, caso) se guarda en $script:Estados y no se vuelve a ejecutar.
 function Get-EstadoEn([string]$Commit, $T) {
   $j = $T.entradas.job
   $c = $T.entradas.caso
@@ -750,7 +809,7 @@ function Get-EstadoEn([string]$Commit, $T) {
   $script:Maven["$nombre|$j|$c"] = $mvn
   Copy-Carpeta (Join-Ruta $CopiaMig "target/prueba-local/$j/$c") $dest
   $res = Get-Resultado $T $nombre
-  $malo = ($res.resultado -ne 'igual' -and $res.resultado -ne 'no determinista')
+  $malo = (Test-Malo $res)
   $motivo = ''
   if ($malo -and -not (Test-Path -LiteralPath (Join-Path $dest 'estado.txt'))) { $motivo = Get-Resumen (Get-Porque $dest $mvn) }
   elseif ($malo -and $res.resultado -ne 'distinto') { $motivo = Get-Resumen $res.motivo }
@@ -760,7 +819,9 @@ function Get-EstadoEn([string]$Commit, $T) {
 }
 
 # El commit que rompe el caso $T, buscado por biseccion en $Commits (los de la rama despues de -Desde, del mas viejo al mas
-# nuevo; el ultimo, el HEAD, ya se sabe que es malo). $null si el caso ya era distinto en -Desde.
+# nuevo; el ultimo, el HEAD, ya se sabe que es malo). Un commit donde el caso no se pudo ejecutar (no compila, Maven se pasa del
+# tope...) ni es bueno ni es malo: se salta, como git bisect skip, y se prueba otro. $null, y sin culpable, si el caso ya era distinto
+# en -Desde o si solo quedan commits saltados antes del malo (no se puede decir cual rompe).
 function Find-Culpable($T, [string[]]$Commits) {
   $j = $T.entradas.job
   $c = $T.entradas.caso
@@ -773,15 +834,25 @@ function Find-Culpable($T, [string[]]$Commits) {
   }
   $lo = 0
   $hi = $Commits.Count - 1
+  $saltados = @{}   # indice -> por que no se pudo ejecutar el caso en ese commit
   while ($lo -lt $hi) {
-    $mid = [int][Math]::Floor(($lo + $hi) / 2)
-    if ((Get-EstadoEn $Commits[$mid] $T).Malo) { $hi = $mid } else { $lo = $mid + 1 }
+    $libres = @($lo..($hi - 1) | Where-Object { -not $saltados.ContainsKey($_) })
+    if ($libres.Count -eq 0) { break }
+    $mid = $libres[[int][Math]::Floor($libres.Count / 2)]
+    $e = Get-EstadoEn $Commits[$mid] $T
+    if ($e.Motivo) { $saltados[$mid] = $e.Motivo }
+    elseif ($e.Malo) { $hi = $mid }
+    else { $lo = $mid + 1 }
   }
-  $e = Get-EstadoEn $Commits[$lo] $T
+  if ($lo -lt $hi) {
+    $lista = (@($lo..$hi | ForEach-Object { $Commits[$_].Substring(0, 7) + ' (' + (Get-Asunto $Commits[$_]) + ')' }) -join ', ')
+    Aviso "El caso ${j}/${c}: no se puede decir que commit lo rompe, es uno de estos: $lista. Los saltados son commits donde no se pudo ejecutar el caso (como git bisect skip). No deshago nada."
+    foreach ($i in @($saltados.Keys | Sort-Object)) { Info "  En $($Commits[$i].Substring(0, 7)) no se pudo ejecutar el caso: $($saltados[$i])" }
+    return $null
+  }
   $asunto = Get-Asunto $Commits[$lo]
-  $m = "El caso $j/$c era igual en $($DesdeCommit.Substring(0, 7)) y se rompe en $($Commits[$lo].Substring(0, 7)) ($asunto)."
-  if ($e.Motivo) { $m += " En ese commit el caso no se pudo ejecutar: $($e.Motivo)" }
-  Fallo $m
+  Fallo "El caso $j/$c era igual en $($DesdeCommit.Substring(0, 7)) y se rompe en $($Commits[$lo].Substring(0, 7)) ($asunto)."
+  if ($saltados.Count -gt 0) { Aviso ('  Commits saltados (no se pudo ejecutar el caso): ' + ((@($saltados.Keys | Sort-Object | ForEach-Object { $Commits[$_].Substring(0, 7) })) -join ', ')) }
   return [pscustomobject]@{ job = $j; caso = $c; commit = $Commits[$lo]; asunto = $asunto; deshecho = $false; indice = $lo }
 }
 
@@ -792,6 +863,7 @@ function Find-Culpables($Res) {
   if ($distintos.Count -eq 0) { Info 'Con -Desde: no hay casos distintos que buscar.'; return @() }
   $commits = @((Invoke-Git $DirRama @('rev-list', '--first-parent', '--reverse', ($DesdeCommit + '..' + $headMig))).Salida | Where-Object { $_ })
   Remove-Carpeta (Join-Ruta $Local 'salidas/culpable')
+  Remove-Carpeta (Join-Ruta $Local 'salidas/despues')
   Info "Buscando que commit rompe cada caso distinto ($($commits.Count) commits despues de $($DesdeCommit.Substring(0, 7)))..."
   $culpables = @()
   foreach ($r in $distintos) {
@@ -823,14 +895,31 @@ function Invoke-Revert([string]$Commit) {
   return ($que + ' y lo he abortado (el HEAD queda como estaba): ' + (Get-Resumen ($r.Salida -join "`n")))
 }
 
-# Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar sus casos en el nuevo HEAD.
-# Apunta en cada culpable si se ha deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por
-# buenos en la carpeta). Pone en su sitio, en $Res, el resultado de ahora de esos casos.
+# Vuelve a ejecutar en el migrado de $Commit todos los casos de $listas (solo Maven, nunca Copilot) y pone en $Res, caso a caso,
+# lo que sale ahora: nada se da por medido en un commit donde no se ha ejecutado.
+function Measure-Migrado([string]$Commit, $Res) {
+  $nombre = 'despues/' + $Commit.Substring(0, 12)
+  Info "Vuelvo a ejecutar todos los casos del migrado en $($Commit.Substring(0, 7))..."
+  $m = New-Copia $MigradoRoot $Commit $CopiaMig
+  if ($m) { Stop-Arranque $m }
+  Copy-Carpeta (Join-Ruta $Local 'arnes/migrado') $CopiaMig
+  Invoke-Migrado $nombre $listas
+  for ($i = 0; $i -lt $tareasCasos.Count; $i++) { $Res[$i] = Get-Resultado $tareasCasos[$i] $nombre }
+}
+
+function Get-ResultadoDe($Res, $Culpable) { return @($Res | Where-Object { $_.job -ceq $Culpable.job -and $_.caso -ceq $Culpable.caso })[0] }
+
+# Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar TODOS los casos en el nuevo HEAD
+# (Measure-Migrado): un revert puede arreglar un caso y romper otro. Un commit cuyo revert no arregla ninguno de sus casos se
+# vuelve a dejar como estaba, con otro git revert del revert (el mas nuevo primero) y otra medida. Apunta en cada culpable si
+# queda deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por buenos en la carpeta). Pone
+# en su sitio, en $Res, el resultado de ahora.
 function Undo-Culpables($Culpables, $Res) {
   $commits = @($Culpables | Sort-Object -Property indice -Descending | ForEach-Object { $_.commit } | Select-Object -Unique)
   if ($commits.Count -eq 0) { return }
   Info ''
   Info "Deshaciendo con git revert en ${DirRama}: $($commits.Count) commit(s), del mas nuevo al mas viejo..."
+  $reverts = @{}   # commit deshecho -> su commit de revert
   foreach ($commit in $commits) {
     $suyos = @($Culpables | Where-Object { $_.commit -eq $commit })
     $m = Get-NoDeshacer $commit
@@ -838,20 +927,36 @@ function Undo-Culpables($Culpables, $Res) {
     if ($m) { Aviso "No deshago $($commit.Substring(0, 7)) ($($suyos[0].asunto)): $m"; continue }
     $nuevo = Get-Head $DirRama
     $script:Reverts += $nuevo
+    $reverts[$commit] = $nuevo
     foreach ($x in $suyos) { $x.deshecho = $true }
     Bien "Deshecho $($commit.Substring(0, 7)) ($($suyos[0].asunto)) con el commit $($nuevo.Substring(0, 7))."
   }
-  $hechos = @($Culpables | Where-Object { $_.deshecho })
-  if ($hechos.Count -eq 0) { return }
+  if ($reverts.Count -eq 0) { return }
   $script:headMig = Get-Head $DirRama
-  foreach ($x in $hechos) {
-    $e = Get-EstadoEn $script:headMig (Get-TareaCaso $x.job $x.caso)
-    for ($i = 0; $i -lt $Res.Count; $i++) { if ($Res[$i].job -ceq $x.job -and $Res[$i].caso -ceq $x.caso) { $Res[$i] = $e.Resultado } }
-    if ($e.Malo) {
-      Fallo "El caso $($x.job)/$($x.caso): sigue distinto tras deshacer $($x.commit.Substring(0, 7))."
-      if ($e.Motivo) { Aviso "  $($e.Motivo)" }
+  Measure-Migrado $script:headMig $Res
+  $quitado = $false
+  $quitar = @($commits | Where-Object { $reverts.ContainsKey($_) })
+  [array]::Reverse($quitar)   # el ultimo revert, primero
+  foreach ($commit in $quitar) {
+    $corto = $commit.Substring(0, 7)
+    $suyos = @($Culpables | Where-Object { $_.commit -eq $commit })
+    foreach ($x in $suyos) {
+      $r = Get-ResultadoDe $Res $x
+      if (-not (Test-Malo $r)) { Bien "El caso $($x.job)/$($x.caso): ahora igual tras deshacer $corto."; continue }
+      Fallo "El caso $($x.job)/$($x.caso): sigue sin ser igual tras deshacer ${corto}: $($r.resultado)."
+      if ($r.resultado -ne 'distinto' -and $r.motivo) { Aviso "  $(Get-Resumen $r.motivo)" }
     }
-    else { Bien "El caso $($x.job)/$($x.caso): ahora igual tras deshacer $($x.commit.Substring(0, 7))." }
+    if (@($suyos | Where-Object { -not (Test-Malo (Get-ResultadoDe $Res $_)) }).Count -gt 0) { continue }
+    Fallo "Deshacer $corto no arregla $((@($suyos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ', '): lo vuelvo a dejar como estaba"
+    $m = Invoke-Revert $reverts[$commit]
+    if ($m) { Aviso "No he podido quitar el revert de ${corto}: $m (el revert se queda)"; continue }
+    $script:Reverts += (Get-Head $DirRama)
+    foreach ($x in $suyos) { $x.deshecho = $false }
+    $quitado = $true
+  }
+  if ($quitado) {
+    $script:headMig = Get-Head $DirRama
+    Measure-Migrado $script:headMig $Res
   }
 }
 
@@ -870,6 +975,34 @@ function Test-MismaHuella([string]$Dir, [string]$Antes, [string]$Despues) {
 }
 
 # ================================ RESULTADO ================================
+# Los jobs donde ningun caso deja nada distinto del caso vacio del arnes (el aviso de Get-Resultado) y ninguno sale distinto ni no
+# determinista: el test no le pasa las entradas al job y lo que sale igual no se ha probado. Los casos sin probar o sin preparar
+# no cuentan. Si solo algunos casos del job salen como el vacio, el job no esta aqui: sigue como siempre, con el aviso en cada uno.
+function Get-JobsVacios($Res) {
+  $vacios = @()
+  foreach ($j in @($Res | ForEach-Object { $_.job } | Select-Object -Unique)) {
+    $comparados = @($Res | Where-Object { $_.job -ceq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
+    if ($comparados.Count -gt 0 -and @($comparados | Where-Object { $_.resultado -ne 'igual' -or $_.motivo -ne $MotivoVacio }).Count -eq 0) { $vacios += $j }
+  }
+  return $vacios
+}
+
+# Es un fallo, no un igual: invalida los dos arneses guardados (se vuelven a escribir en el siguiente lanzamiento, y la IA recibe
+# este motivo por el mismo camino que el de un intento rechazado: la tarea queda pendiente, con su intento y su motivo), borra un
+# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. migracion.ps1
+# apunta como detalle las ultimas lineas de esta salida.
+function Stop-Vacios([string[]]$Jobs) {
+  $detalles = @($Jobs | ForEach-Object { "En $_, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job." })
+  foreach ($t in @($ArnesOrig, $ArnesMig)) {
+    Remove-Carpeta (Join-Ruta $Local "arnes/$($t.entradas.repo)")
+    $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = ($detalles -join ' ')
+    Save-Tarea $t
+  }
+  $json = Join-Path $DatosMig 'prueba-local.json'
+  if (Test-Path -LiteralPath $json) { Remove-Item -LiteralPath $json -Force }
+  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n"))
+}
+
 function Get-PorJob($Res) {
   $porJob = @()
   foreach ($p in $pruebas) {
@@ -959,7 +1092,6 @@ $script:Mavens = 0
 $script:Maven = @{}
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Reverts = @()   # -Deshacer: los commits de revert que ha hecho
-$Hoy = @($Inicio.Date)
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -999,7 +1131,7 @@ try {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs
-    if ($t.estado -eq 'hecha') { Use-ArnesGuardado $t $todosJobs }
+    if (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     $arneses += , $t
   }
   $ArnesOrig = $arneses[0]
@@ -1030,15 +1162,12 @@ try {
   $listas = @($tareasCasos | Where-Object { $_.estado -eq 'hecha' -and -not (Test-Path -LiteralPath (Join-Ruta $Local "casos/$($_.entradas.job)/$($_.entradas.caso)/no-aplica.txt")) })
   Invoke-Salidas $CopiaOrig $true 'original' $listas
   Invoke-Salidas $CopiaOrig $true 'original-2' $listas
-  if ($ArnesMig.estado -eq 'hecha') {
-    Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
-    foreach ($t in $listas) { Copy-Carpeta (Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)") (Join-Ruta $CopiaMig $t.entradas.carpeta) }
-    Invoke-Salidas $CopiaMig $false 'migrado' $listas
-  }
+  if ($ArnesMig.estado -eq 'hecha') { Invoke-Migrado 'migrado' $listas }
 
   # 5. Comparar y contar
-  $Hoy = @(@($Inicio.Date, (Get-Date).Date) | Select-Object -Unique)
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
+  $vacios = @(Get-JobsVacios $res)
+  if ($vacios.Count -gt 0) { Stop-Vacios $vacios }
   $o = Save-Resultado $res @()
   Show-Resultado $res $o.jobs
 
@@ -1047,7 +1176,7 @@ try {
     $culpables = @(Find-Culpables $res)
     if ($Deshacer) { Undo-Culpables $culpables $res }
     $o = Save-Resultado $res $culpables
-    if ($Deshacer -and @($culpables | Where-Object { $_.deshecho }).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
+    if ($Deshacer -and @($script:Reverts).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
   }
   Info ''
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"

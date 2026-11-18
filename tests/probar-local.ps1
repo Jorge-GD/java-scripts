@@ -624,7 +624,9 @@ $Pruebas['26 culpable (h): la busqueda y el revert no llaman nunca a Copilot (ar
   Comprueba 'y deshizo el commit' ((GitEn $e.Wt @('log', '-1', '--format=%s')) -like 'Revert *') (GitEn $e.Wt @('log', '-1', '--format=%s'))
 }
 
-$Pruebas['27 culpable (i): un commit en el que no se puede ejecutar el caso cuenta como malo, y el mensaje lo dice'] = {
+# M20b: un commit donde el caso no se pudo ejecutar no es ni bueno ni malo: se salta, como git bisect skip. Si solo quedan commits saltados
+# antes del malo, no hay culpable claro y no se deshace nada (antes, ese commit contaba como malo y se daba por culpable).
+$Pruebas['27 culpable (i): un commit en el que no se puede ejecutar el caso se salta: si solo quedan ese y el siguiente, no se da culpable y el mensaje lo dice'] = {
   $e = Nuevo-Escenario 'culpable-i' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
   $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
@@ -634,12 +636,14 @@ $Pruebas['27 culpable (i): un commit en el que no se puede ejecutar el caso cuen
   Escribe $e.Wt 'regla.txt' "minimo=5.01`n"
   [void](GitEn $e.Wt @('add', '--', 'regla.txt'))
   [void](GitEn $e.Wt @('commit', '-q', '-m', 'quita la clase y cambia el limite'))
+  $c4 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
   $r = Prueba $e @('-Desde', $desde)
   Igual 'sale con 2' 2 $r.Codigo
-  Comprueba 'el culpable es el primero que no compila' ($r.Salida.Contains("se rompe en $(Corto $c3) (mete una clase que no compila)")) (Cola $r.Salida)
-  Comprueba 'y el mensaje dice que ahi no se pudo ejecutar el caso, con lo que dijo Maven' ($r.Salida -match 'no se pudo ejecutar' -and $r.Salida -match 'simbolo de mentira') (Cola $r.Salida)
-  Igual 'culpables: el que no compila' $c3 "$(@(Culpables $e)[0].commit)"
+  Comprueba 'no da por culpable al que no compila ni al siguiente' ($r.Salida -notmatch 'se rompe en') (Cola $r.Salida)
+  Comprueba 'dice que es uno de los dos' ($r.Salida.Contains((Corto $c3)) -and $r.Salida.Contains((Corto $c4)) -and $r.Salida -match 'no se puede decir') (Cola $r.Salida)
+  Comprueba 'y que en uno no se pudo ejecutar el caso, con lo que dijo Maven' ($r.Salida -match 'no se pudo ejecutar' -and $r.Salida -match 'simbolo de mentira') (Cola $r.Salida)
+  Igual 'culpables vacio' 0 @(Culpables $e).Count
 }
 
 $Pruebas['28 culpable (j): el culpable es un merge: no se deshace y se dice'] = {
@@ -745,7 +749,7 @@ function Prueba-Con-Cuelgue($E, [string[]]$A) {
   return [pscustomobject]@{ Codigo = $r.Codigo; Salida = $r.Salida; Segundos = $reloj.Elapsed.TotalSeconds; Pids = $pids }
 }
 
-$Pruebas['33 culpable (o): un commit en el que Maven se cuelga (pasa del tope) cuenta como malo: el culpable es el que cuelga, y el mensaje lo dice'] = {
+$Pruebas['33 culpable (o): un commit en el que Maven se cuelga (pasa del tope) se salta: con -Deshacer no se revierte nada y el mensaje dice lo del tope'] = {
   $e = Nuevo-Escenario 'culpable-o' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
   $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
@@ -756,11 +760,12 @@ $Pruebas['33 culpable (o): un commit en el que Maven se cuelga (pasa del tope) c
   [void](GitEn $e.Wt @('add', '--', 'regla.txt'))
   [void](GitEn $e.Wt @('commit', '-q', '-m', 'quita el bucle y cambia el limite'))
   $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
-  $r = Prueba-Con-Cuelgue $e @('-Desde', $desde)
-  Igual 'sale con 2' 2 $r.Codigo
-  Comprueba 'el culpable es el que cuelga a Maven (no el siguiente, que ya no cuelga pero sigue distinto)' ($r.Salida.Contains("se rompe en $(Corto $c3) (un lector que devuelve una lista vacia y el job no acaba).")) (Cola $r.Salida)
+  $r = Prueba-Con-Cuelgue $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 2 (no se deshace nada: sigue distinto)' 2 $r.Codigo
+  Comprueba 'no da por culpable al que cuelga a Maven ni al siguiente' ($r.Salida -notmatch 'se rompe en') (Cola $r.Salida)
   Comprueba 'y el mensaje dice que ahi no se pudo ejecutar, por el tope de Maven' ($r.Salida -match 'no se pudo ejecutar' -and $r.Salida -match 'se ha pasado del tope de 0\.05 min') (Cola $r.Salida)
-  Igual 'culpables: el que cuelga' $c3 "$(@(Culpables $e)[0].commit)"
+  Igual 'culpables vacio' 0 @(Culpables $e).Count
+  Igual 'la rama de rescate queda en su ultimo commit, sin ningun revert' $c5 (GitEn $e.Wt @('rev-parse', 'HEAD'))
   Comprueba-Tope $r.Pids $r.Segundos 60 (Registro-Del-Tope $r.Salida)
 }
 
@@ -991,6 +996,254 @@ $Pruebas['54 m18 arnes (k4): la llamada cortada escribio el test (permitido) y t
   $v = ''
   if (Test-Path -LiteralPath $f) { $v = ([System.IO.File]::ReadAllLines($f) -join ' ') }
   Igual 'al empezar la 2.a llamada: el test sigue en la copia y src/main/java/Tocado.java no' 'test=True tocado=False' $v
+}
+
+# ===================== M20b: lo que no es igual no sale igual, y -Deshacer no deshace a ciegas =====================
+# Ajustes del escenario con los falsos de este grupo: m20b-copilot.ps1 (con el guion m20b-sin-entradas: un arnes que no le pasa las entradas
+# al job) y m20b-mvn.ps1 (IGNORA_ENTRADAS y las lineas 'reescribe=<texto>=><otro>' de regla.txt: el migrado escribe otro texto).
+function Ajustes-M20b($E) {
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm20b-copilot.ps1'); MvnExe = (Join-Path $falsos 'm20b-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $E.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+}
+
+# El texto de las funciones $Nombres de un script, para probarlas sin lanzar el script entero.
+function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Ruta, [ref]$null, [ref]$null)
+  $fs = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Nombres -contains $n.Name }, $true))
+  return (($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+$Pruebas['55 m20b (a, b): una fecha de negocio que no es de hoy y cambia entre el original y el migrado sale distinta; la fecha y hora de hoy con otra hora sale igual'] = {
+  $hoy = (Get-Date).ToString('yyyy-MM-dd')
+  $e = Nuevo-Escenario 'm20b-fechas' ([ordered]@{ cargaJob = @('importe=10.00 vence=1980-05-12 00:00:00', "importe=10.00 hecho=$hoy 10:00:00") }) 'minimo=5.00' "minimo=5.00`nreescribe=1980-05-12 00:00:00=>1980-05-11 23:00:00`nreescribe=$hoy 10:00:00=>$hoy 11:30:00"
+  Ajustes-M20b $e
+  $r = Prueba $e
+  Igual 'sale con 2 (hay un distinto)' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual '(a) la fecha de negocio que cambia de dia sale distinta' 'distinto' $c.resultado
+  $d = @($c.diferencias)[0]
+  Comprueba '(a) con la linea del original, con la fecha de antes' ("$($d.original)" -match '1980-05-12 00:00:00') "$($d.original)"
+  Comprueba '(a) y la del migrado, con la de despues' ("$($d.migrado)" -match '1980-05-11 23:00:00') "$($d.migrado)"
+  Igual '(b) la fecha y hora de hoy con otra hora sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
+  $rel = 'cargaJob/caso-02/ficheros/salida/resultado_' + (Hoy) + '.txt'
+  Comprueba '(b) aunque los ficheros no son identicos' ((Lee $e.Local "salidas/original/$rel") -ne (Lee $e.Local "salidas/migrado/$rel"))
+}
+
+$Pruebas['56 m20b (c): Get-Hoy da los dias de la ejecucion en hora local y en UTC; una fecha UTC de otro dia sale igual y una de negocio no se toca'] = {
+  $f = Join-Path $Dir 'm20b-hoy.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$off = [System.TimeZoneInfo]::Local.GetUtcOffset([datetime]'2026-11-18T12:00:00').TotalHours
+$inicio = [datetime]'2026-11-18T00:30:00'
+if ($off -lt 0) { $inicio = [datetime]'2026-11-18T23:30:00' }
+$loc = $inicio.Date.ToString('yyyy-MM-dd', $Inv)
+$utc = $inicio.ToUniversalTime().Date.ToString('yyyy-MM-dd', $Inv)
+$Hoy = @(Get-Hoy $inicio ($inicio.AddHours(1)))
+'OFFSET ' + $off
+'LOC ' + $loc
+'UTC ' + $utc
+'HOY ' + (@($Hoy | ForEach-Object { $_.ToString('yyyy-MM-dd', $Inv) } | Sort-Object) -join ',')
+'N1 ' + (Get-Normal "x $utc 10:00:00")
+'N2 ' + (Get-Normal "x ${loc}T10:00:00.123")
+'N3 ' + (Get-Normal 'x 1980-05-12 00:00:00')
+'N4 ' + (Get-Normal 'x 2026-11-16 23:45:00')
+'N5 ' + (Get-Normal 'a 10:11:12 b')
+'N6 ' + (Get-Normal "f_${loc}.txt")
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Normal', 'Get-Hoy')) + "`n" + $cuerpo))
+  $tzAntes = $env:TZ
+  $env:TZ = 'Europe/Madrid'   # en Linux hace que la hora local sea UTC+1; en Windows no vale y se usa la de la maquina
+  try { $r = Lanzar $f @() }
+  finally { if ($null -eq $tzAntes) { Remove-Item Env:TZ -ErrorAction SilentlyContinue } else { $env:TZ = $tzAntes } }
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^([A-Z0-9]+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  Comprueba 'los dias de la ejecucion llevan el local y el UTC' ($v['HOY'] -and $v['HOY'].Contains($v['LOC']) -and $v['HOY'].Contains($v['UTC'])) (Cola $r.Salida)
+  if ($v['OFFSET'] -and [double]$v['OFFSET'] -ne 0) { Comprueba 'con otra hora que UTC son dos dias distintos' ($v['LOC'] -ne $v['UTC'] -and @($v['HOY'] -split ',').Count -eq 2) "$($v['LOC']) $($v['UTC']) $($v['HOY'])" }
+  else { Write-Host '  (esta maquina va en UTC: no se ve la diferencia entre el dia local y el UTC)' }
+  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hora>' $v['N1']
+  Igual 'con T y fraccion, tambien' 'x <hora>' $v['N2']
+  Igual 'una fecha de negocio con hora no se toca' 'x 1980-05-12 00:00:00' $v['N3']
+  Igual 'ni otra de hace dias' 'x 2026-11-16 23:45:00' $v['N4']
+  Igual 'las horas sueltas se siguen tapando' 'a <hora> b' $v['N5']
+  Igual 'la fecha de hoy sola sigue con su marca' 'f_<hoy:yyyy-MM-dd>.txt' $v['N6']
+}
+
+$Pruebas['57 m20b (d): todos los casos de un job como el vacio y ninguno distinto: fallo con el detalle, arnes invalidado y el motivo llega a la IA al relanzar'] = {
+  $e = Nuevo-Escenario 'm20b-vacios' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  Ajustes-M20b $e
+  $detalle = 'En cargaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job'
+  $r = Prueba $e @() 'm20b-sin-entradas'
+  Igual 'sale con 1 (fallo)' 1 $r.Codigo
+  Comprueba 'el detalle esta en las tres ultimas lineas con texto (lo que guarda migracion.ps1)' ((@($r.Salida -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' / ').Contains($detalle)) (Cola $r.Salida)
+  Comprueba 'no deja prueba-local.json (el informe no da por buenos casos que no probaron nada)' (-not (Test-Path -LiteralPath $e.Json))
+  foreach ($lado in @('original', 'migrado')) {
+    Comprueba "el arnes guardado del $lado queda invalidado" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes/$lado")))
+    $t = Tarea-Arnes $e $lado
+    Comprueba "y su tarea vuelve a pendiente, con un intento y el motivo ($lado)" ($t.estado -eq 'pendiente' -and $t.intentos -eq 1 -and "$($t.motivo)".Contains($detalle)) "$($t.estado) $($t.intentos) $($t.motivo)"
+  }
+  $n = @(Llamadas $e).Count
+  Igual 'cinco llamadas: dos arneses y tres casos' 5 $n
+  $r = Prueba $e
+  Igual 'al relanzar, con un arnes que si pasa las entradas, sale con 0' 0 $r.Codigo
+  Igual 'solo se vuelven a escribir los dos arneses' ($n + 2) @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) {
+    $p = Registro-Arnes $e $lado 2
+    Comprueba "el prompt del arnes del $lado lleva el motivo, en la seccion de correccion" ($p -match 'CORRECCI' -and $p.Contains($detalle)) $p
+  }
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'y ya hay prueba-local.json' (Test-Path -LiteralPath $e.Json)
+}
+
+$Pruebas['58 m20b (e): si solo algunos casos salen como el vacio, o el job tiene un distinto, todo sigue como hoy'] = {
+  $e = Nuevo-Escenario 'm20b-algunos' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba $e @() 'caso-sin-efecto:caso-cargaJob-01'
+  Igual 'sale con 0, como siempre' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'el que sale como el vacio lleva su aviso' ((Caso $e 'cargaJob' 'caso-01').motivo -match 'vacio')
+  Igual 'y los otros dos, ninguno' '' ((@((Caso $e 'cargaJob' 'caso-02').motivo, (Caso $e 'cargaJob' 'caso-03').motivo) | Where-Object { $_ }) -join '')
+  Comprueba 'los arneses siguen hechos y guardados' ((Tarea-Arnes $e 'original').estado -eq 'hecha' -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado')))
+  $e = Nuevo-Escenario 'm20b-algunos-2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) 'minimo=5.00' 'minimo=5.01'
+  $r = Prueba $e @() 'caso-sin-efecto:caso-cargaJob-02'
+  Igual 'con un distinto en el job (aunque el otro caso salga como el vacio) sale con 2, no con 1' 2 $r.Codigo
+  Igual 'el distinto y el igual con aviso' 'distinto,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['59 m20b (f): -Deshacer vuelve a ejecutar todos los casos tras el revert: el que arreglaba el commit revertido sale distinto'] = {
+  $e = Nuevo-Escenario 'm20b-deshacer-f' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=5.50') }) 'minimo=5.40' 'minimo=5.60'
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  $x = Commit-En $e.Wt 'regla.txt' "minimo=5.00`n" 'baja el limite: arregla el caso 2 y rompe el 1'
+  $c4 = Commit-En $e.Wt 'notas/paso-4.txt' "nota 4`n" 'nota del paso 4'
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 2: sin el commit, el caso 2 vuelve a estar distinto' 2 $r.Codigo
+  $c = @(Culpables $e)
+  Igual 'el unico culpable es el caso 1, por ese commit, deshecho' "caso-01 $x True" "$($c[0].caso) $($c[0].commit) $($c[0].deshecho)"
+  Igual 'el caso 1 queda igual y el 2, distinto' 'igual,distinto' ((Resultados $e) -join ',')
+  Igual 'el caso 2 se ha vuelto a ejecutar con el revert (la comparacion normal y la de despues)' 2 (Ejecuciones-Mig $e 'caso-02')
+  Comprueba 'la tabla de despues de deshacer lo dice' ($r.Salida -match 'distinto: cargaJob/caso-02') (Cola $r.Salida)
+  Igual 'el json lleva el commit de ahora (el del revert)' (GitEn $e.Wt @('rev-parse', 'HEAD')) (Lee-Json $e.Json).commitMigrado
+}
+
+$Pruebas['60 m20b (g): -Deshacer salta un commit donde el caso no se pudo ejecutar: no lo da por culpable y no lo revierte, y el culpable de verdad si'] = {
+  $e = Nuevo-Escenario 'm20b-salta' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  $roto = Commit-En $e.Wt 'src/main/java/com/acme/nuevo/Roto.java' "package com.acme.nuevo;`n// NO_COMPILA`n" 'mete una clase que no compila'
+  [void](GitEn $e.Wt @('rm', '-q', 'src/main/java/com/acme/nuevo/Roto.java'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'quita la clase que no compila'))
+  $c4 = Commit-En $e.Wt 'regla.txt' "minimo=5.01`n" 'cambia el limite'
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 0 (el revert del limite arregla el caso)' 0 $r.Codigo
+  Comprueba 'el culpable es el que cambia el limite, no el que no compila' ($r.Salida.Contains("se rompe en $(Corto $c4) (cambia el limite).")) (Cola $r.Salida)
+  Comprueba 'y dice que ha saltado el commit donde no se pudo ejecutar' ($r.Salida -match 'saltados' -and $r.Salida.Contains((Corto $roto))) (Cola $r.Salida)
+  $c = @(Culpables $e)
+  Igual 'culpables: solo el del limite, deshecho' "$c4 True 1" "$($c[0].commit) $($c[0].deshecho) $($c.Count)"
+  Igual 'el unico commit nuevo es el revert del limite, encima del ultimo' $c5 (GitEn $e.Wt @('rev-parse', 'HEAD~1'))
+  Igual 'que es el revert de cambia el limite' 'Revert "cambia el limite"' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Igual 'sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['61 m20b (h): -Deshacer quita el revert que no arregla el caso: otro revert encima, el aviso en rojo y la rama con su contenido de antes'] = {
+  $base = "minimo=5.00`nsegundos=0`nmayus=no`nrelleno1=1`nrelleno2=2`nrelleno3=3`nrelleno4=4`n"
+  $e = Nuevo-Escenario 'm20b-deshacer-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) 'minimo=5.00' $base.TrimEnd("`n")
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  $c3 = Commit-En $e.Wt 'regla.txt' $base.Replace('minimo=5.00', 'minimo=5.01') 'sube el limite'
+  $c4 = Commit-En $e.Wt 'notas/paso-4.txt' "nota 4`n" 'nota del paso 4'
+  $final = $base.Replace('minimo=5.00', 'minimo=5.01').Replace('relleno4=4', 'minimo=5.01')
+  $c5 = Commit-En $e.Wt 'regla.txt' $final 'sube el limite otra vez, al final del fichero'
+  $r = Prueba $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Comprueba 'dice en rojo que deshacer ese commit no arregla el caso y que lo deja como estaba' ($r.Salida.Contains("Deshacer $(Corto $c3) no arregla cargaJob/caso-01: lo vuelvo a dejar como estaba")) (Cola $r.Salida)
+  Igual 'la rama lleva dos commits nuevos: el revert y el revert del revert' 2 (GitEn $e.Wt @('rev-list', '--count', "$c5..HEAD"))
+  $ultimo = GitEn $e.Wt @('log', '-1', '--format=%s')
+  Comprueba 'el ultimo es el revert del revert (git nuevo lo titula Reapply, el viejo Revert "Revert ...")' ($ultimo -ceq 'Reapply "sube el limite"' -or $ultimo -ceq 'Revert "Revert "sube el limite""') $ultimo
+  Igual 'regla.txt queda como en el ultimo commit de antes' $final (Lee $e.Wt 'regla.txt')
+  Igual 'sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
+  $c = @(Culpables $e)
+  Igual 'culpables: el commit del limite, sin deshacer' "$c3 False" "$($c[0].commit) $($c[0].deshecho)"
+  Igual 'el caso 1 sigue distinto y el 2 igual' 'distinto,igual' ((Resultados $e) -join ',')
+  Comprueba 'la prueba no dice que han cambiado las carpetas (los dos commits son suyos)' ($r.Salida -notmatch 'Ha cambiado durante la prueba') (Cola $r.Salida)
+  Igual 'el caso 1 se ha ejecutado tras el revert y tras quitarlo: la normal, -Desde, dos de la busqueda y dos de despues' 6 (Ejecuciones-Mig $e 'caso-01')
+}
+
+# Un arnes guardado que sigue valiendo no se vuelve a pedir a la IA, aunque su tarea no este hecha.
+# Cambia la huella de la tarea del arnes del $Repo (como si la plantilla hubiera cambiado) y, con $Estado, su estado.
+function Cambia-Huella($E, [string]$Repo, [string]$Estado = '') {
+  $f = Get-Ruta $E.Local "tareas/arnes-$Repo.json"
+  $t = Lee-Json $f
+  $t.entradas.huella = 'plantilla-vieja'
+  if ($Estado) { $t.estado = $Estado; $t.intentos = 2; $t.motivo = 'no compila' }
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+}
+
+# Estropea el test que el arnes del $Repo dejo guardado: ya no compila.
+function Rompe-Arnes-Guardado($E, [string]$Repo) {
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local "arnes/$Repo") -Recurse -File -Filter 'PruebaLocalTest.java')) { [System.IO.File]::AppendAllText($f.FullName, "// NO_COMPILA`n") }
+}
+
+$Pruebas['62 m20b (i): la huella del arnes cambia (la plantilla) y el test guardado sigue valiendo: se usa, sin llamar a Copilot, y la tarea queda hecha'] = {
+  $e = Nuevo-Escenario 'm20b-huella' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado }
+  $r = Prueba $e
+  Igual 'con la huella cambiada sale con 0' 0 $r.Codigo
+  Igual 'sin ninguna llamada a Copilot' $n @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) {
+    $t = Tarea-Arnes $e $lado
+    Comprueba "la tarea del $lado queda hecha, con la huella de ahora" ($t.estado -eq 'hecha' -and $t.entradas.huella -ne 'plantilla-vieja') "$($t.estado) $($t.entradas.huella)"
+    Comprueba "dice que el test de otro lanzamiento del $lado sigue valiendo" ($r.Salida -match "Arnes del ${lado}: bien \(el test de otro lanzamiento sigue valiendo\)") (Cola $r.Salida)
+  }
+  Comprueba 'no dice que lo vuelve a escribir' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
+}
+
+$Pruebas['63 m20b (j): la huella cambia y el test guardado ya no compila: se llama a la IA como hoy, solo para ese arnes y sin el aviso de volver a escribir'] = {
+  $e = Nuevo-Escenario 'm20b-huella-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado }
+  Rompe-Arnes-Guardado $e 'original'
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'una sola llamada: el arnes del original (el del migrado sigue valiendo)' ($n + 1) @(Llamadas $e).Count
+  Comprueba 'el del migrado se usa sin llamar' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'el del original no dice que se use el de antes' ($r.Salida -notmatch 'Arnes del original: bien \(el test de otro lanzamiento') (Cola $r.Salida)
+  Comprueba 'ni lo de volver a escribir (la tarea ya era nueva)' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con la IA' 'hecha' (Tarea-Arnes $e 'original').estado
+  Comprueba 'y lo guardado ahora es lo que escribio la IA, que compila' (-not ((Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'arnes/original') -Recurse -File | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join '' ).Contains('NO_COMPILA'))
+}
+
+$Pruebas['64 m20b (k): la tarea del arnes quedo atascada en otro lanzamiento y el test guardado vale: se usa, sin llamar a Copilot'] = {
+  $e = Nuevo-Escenario 'm20b-atascada' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado 'atascada' }
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin ninguna llamada a Copilot' $n @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Igual "la tarea del $lado queda hecha" 'hecha' (Tarea-Arnes $e $lado).estado }
+}
+
+$Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale sigue como hoy: se avisa de que se vuelve a escribir'] = {
+  $e = Nuevo-Escenario 'm20b-hecha-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  Rompe-Arnes-Guardado $e 'original'
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que el test del original ya no vale y que se vuelve a escribir' ($r.Salida -match 'Arnes|test PruebaLocalTest del original de otro lanzamiento ya no vale' -and $r.Salida -match 'se vuelve a escribir') (Cola $r.Salida)
+  Igual 'una llamada: el arnes del original' ($n + 1) @(Llamadas $e).Count
 }
 
 # ================================ LANZADOR ================================
