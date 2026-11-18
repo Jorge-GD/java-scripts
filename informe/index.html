@@ -56,7 +56,7 @@
   <p>Pega este texto en Copilot para que te diga qué hacer. Después vuelve a lanzar el mismo comando y sigue donde se quedó.</p>
   <pre class="cmd">{{AYUDA}}</pre>
 </div><!--FIN-->
-<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
+<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ninguna diferencia con el original, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
 <!--TROZO toca-grupo--><div class="grupo">
   <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
   <p>{{TEXTO}}</p>
@@ -76,6 +76,8 @@
 <!--TROZO toca-tecnicos-titulo-->Datos con nombres de clase ({{N}})<!--FIN-->
 <!--TROZO toca-tecnicos-texto-->Estos datos no salen en la página para negocio porque nombran clases del original. Están en datos/jobs/<job>.json con tecnico: true. Las clases que no caben en la redacción de un job están en su campo fuera.<!--FIN-->
 <!--TROZO toca-fuera-->    <li>{{{CABECERA}}}<span class="motivo">No caben en la redacción estas clases: {{CLASES}}.</span></li><!--FIN-->
+<!--TROZO toca-diferencias-titulo-->Diferencias con el original ({{N}})<!--FIN-->
+<!--TROZO toca-diferencias-texto-->Datos del original que, según la IA, el migrado hace distinto o no hace. Están uno a uno en la página Original frente a migrado, con las citas de los dos lados.<!--FIN-->
 <!--TROZO toca-arreglos-titulo-->Arreglos atascados ({{N}})<!--FIN-->
 <!--TROZO toca-arreglos-texto-->El motor de arreglos no ha podido con esto y queda sin corregir. El motivo está en cada línea; el resto, en la página Correcciones.<!--FIN-->
 <!--TROZO toca-variables-titulo-->Variables que tienes que dar al lanzar ({{N}})<!--FIN-->
@@ -84,6 +86,7 @@
 <!--TROZO cab-variable--><code>{{NOMBRE}}</code> <!--FIN-->
 <!--TROZO cab-tarea--><code>{{ID}}</code> {{DONDE}}<!--FIN-->
 <!--TROZO cab-job--><code>{{JOB}}</code> <!--FIN-->
+<!--TROZO cab-diferencia--><code>{{JOB}}</code> <code>{{CLASE}}</code> {{{ESTADO}}} <!--FIN-->
 <!--TROZO cab-dato--><code>{{JOB}}</code> <code>{{DONDE}}</code> <!--FIN-->
 <!--TROZO fase-linea-->  <li><span class="fase-n">{{NOMBRE}}</span><span class="fase-e" data-e="{{ESTADO}}">{{{ESTADO_TEXTO}}}</span><span class="fase-c">{{{CUENTA}}}</span></li><!--FIN-->
 <!--TROZO fase-diagnostico-->Diagnóstico del migrado<!--FIN-->
@@ -92,6 +95,7 @@
 <!--TROZO fase-fichas-job-->Redacción de cada job<!--FIN-->
 <!--TROZO fase-resumen-->Resumen y glosario<!--FIN-->
 <!--TROZO fase-pruebas-pre-->Guion de prueba en pre<!--FIN-->
+<!--TROZO fase-comparar-->Comparación con el original<!--FIN-->
 <!--TROZO fase-correccion-->Corrección del migrado<!--FIN-->
 <!--TROZO estado-fase-hecha-->Hecha<!--FIN-->
 <!--TROZO estado-fase-curso-->Por aquí va<!--FIN-->
@@ -110,6 +114,7 @@
 <!--TROZO f-index-->Esta portada.<!--FIN-->
 <!--TROZO f-original-->Qué hace el batch original, para negocio.<!--FIN-->
 <!--TROZO f-problemas-->Los problemas del migrado, por área y con su gravedad.<!--FIN-->
+<!--TROZO f-comparar-->El original frente al migrado, dato a dato y job a job, tal como llegó el migrado.<!--FIN-->
 <!--TROZO f-correcciones-->Qué se ha corregido, qué queda y por qué, área por área.<!--FIN-->
 <!--TROZO f-hallazgos-despues-->Los problemas que quedan tras corregir, con la misma forma que los de antes.<!--FIN-->
 <!--TROZO f-diagnostico-despues-->El informe del diagnóstico del migrado tras corregir: estado del build y cuenta por área.<!--FIN-->
@@ -128,6 +133,7 @@
 <!--TROZO f-variables-->Las variables de configuración del migrado y su valor por defecto.<!--FIN-->
 <!--TROZO f-jobs-->Una ficha por job: pasos, lo que necesita, lo que produce, reglas y fallos.<!--FIN-->
 <!--TROZO f-pruebas-->Un guion de prueba en pre por job.<!--FIN-->
+<!--TROZO f-comparacion-->Una comparación por clase del original: cada dato, si el migrado lo hace igual, distinto o no lo hace, con su cita.<!--FIN-->
 <!--TROZO f-fichas-->Una ficha por clase del original, con cada dato y la cita de donde sale.<!--FIN-->
 <!--TROZO f-tareas-->Cada tarea que se le pidió a la IA, con su estado y su motivo si se atascó.<!--FIN-->
 <!--TROZO f-registros-->Lo que contestó la IA en cada tarea. Para mirar si algo falla.<!--FIN-->

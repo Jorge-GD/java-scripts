@@ -1,17 +1,18 @@
 <#
 informe.ps1 - Las paginas HTML del informe de migracion: la portada (index.html), que hace el batch original
-(1-batch-original.html), los problemas del migrado (2-problemas.html) y que se ha corregido (4-correcciones.html). Las monta el script con los datos de datos\ (sin IA,
+(1-batch-original.html), los problemas del migrado (2-problemas.html), el original frente al migrado (3-original-vs-migrado.html)
+y que se ha corregido (4-correcciones.html). Las monta el script con los datos de datos\ (sin IA,
 sin JavaScript y sin nada externo: se abren con doble clic). Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito: todo el texto
 que ve la persona (con sus acentos) esta en las plantillas de informe\ (marco.html, index.html,
-1-batch-original.html, 2-problemas.html y 4-correcciones.html; estilo.css se incrusta dentro de cada pagina).
+1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html; estilo.css se incrusta dentro de cada pagina).
 Se carga con '. (Join-Path $PSScriptRoot 'informe.ps1')' despues de comun.ps1 y tareas.ps1, desde migracion.ps1 o
 desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
-    Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, variables.json,
+    Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, comparacion\, variables.json,
     hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md y correcciones.json) y escribe
-    <Salida>\index.html, 1-batch-original.html, 2-problemas.html y 4-correcciones.html con lo que haya. Un dato que falta (una fase sin hacer)
+    <Salida>\index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
 
@@ -37,7 +38,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # Las fases del script, en orden, y de que tipo son sus tareas
-$FasesInforme = @(@('diagnostico', ''), @('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'), @('correccion', ''))
+$FasesInforme = @(@('diagnostico', ''), @('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'), @('comparar', 'comparar-pieza'), @('correccion', ''))
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -46,7 +47,7 @@ $TextosBuild = @(
 # Los ficheros de la carpeta del informe: ruta, trozo que lo explica, icono y si es una pagina del informe
 $FicherosInforme = @(
   @('index.html', 'f-index', 'f-fichero', $true), @('1-batch-original.html', 'f-original', 'f-fichero', $true), @('2-problemas.html', 'f-problemas', 'f-fichero', $true),
-  @('4-correcciones.html', 'f-correcciones', 'f-fichero', $true),
+  @('3-original-vs-migrado.html', 'f-comparar', 'f-fichero', $true), @('4-correcciones.html', 'f-correcciones', 'f-fichero', $true),
   @('datos', 'f-datos', 'f-carpeta', $false), @('datos/estado.json', 'f-estado', 'f-fichero', $false),
   @('datos/hallazgos-antes.json', 'f-hallazgos', 'f-fichero', $false), @('datos/diagnostico-antes.md', 'f-diagnostico', 'f-fichero', $false),
   @('datos/hallazgos-despues.json', 'f-hallazgos-despues', 'f-fichero', $false), @('datos/diagnostico-despues.md', 'f-diagnostico-despues', 'f-fichero', $false),
@@ -54,7 +55,7 @@ $FicherosInforme = @(
   @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
-  @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
+  @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/comparacion', 'f-comparacion', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
   @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false),
   @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false),
   @('registros/cobertura-antes.log', 'f-cobertura-antes-log', 'f-fichero', $false), @('registros/cobertura-despues.log', 'f-cobertura-despues-log', 'f-fichero', $false)
@@ -107,6 +108,18 @@ function Format-Lista($Trozos, [string]$Nombre, $Lista, [scriptblock]$Valores) {
 }
 
 # ================================== DATOS ==================================
+# Las comparaciones de datos\comparacion\<ficha>.json, por ficha.
+function Read-Comparaciones([string]$Carpeta) {
+  $r = @{}
+  $dir = Join-Path $Carpeta 'comparacion'
+  if (-not (Test-Path -LiteralPath $dir)) { return $r }
+  foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter 'clase-*.json' | Sort-Object Name)) {
+    $x = Read-JsonSuave $f.FullName
+    if ($x) { $r[[string]$x.ficha] = $x }
+  }
+  return $r
+}
+
 function Read-JsonSuave([string]$Ruta) {
   if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
   try { return (Read-Json $Ruta) } catch { return $null }
@@ -253,6 +266,7 @@ function Read-DatosInforme([string]$Salida) {
     Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos); Despues = (Read-Diagnostico $datos 'despues')
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
+    Comparacion = (Read-Comparaciones $datos)
   }
   if ($D.Mapa) {
     $porNombre = @{}
@@ -412,6 +426,74 @@ function Get-CuerpoOriginal($D, $T, [string]$Cuerpo) {
   return (Expand-Plantilla $Cuerpo @{ BATCH = (Get-BatchInforme $D); ORIGINAL = (Get-Hoja $D.Estado.legacy); ETIQUETA = $et; RESUMEN = $resumen; RECORRIDO = $recorrido; JOBS = $jobs; GLOSARIO = $glosario })
 }
 
+# ============================== EL ORIGINAL FRENTE AL MIGRADO ==============================
+# Las filas de la comparacion de un job del mapa: por cada clase del job (en su orden) y cada dato de su comparacion, lo que dijo
+# la IA (o el script, en sin-pieza) junto al dato del original.
+function Get-DatosComparar($D, $J) {
+  $filas = @()
+  foreach ($cl in @($J.clases)) {
+    $c = $D.Comparacion[[string]$cl.ficha]
+    if (-not $c) { continue }
+    foreach ($dato in @($c.datos)) {
+      $h = $D.Indice["$($cl.ficha)#$($dato.dato)"]
+      $texto = ''; $original = ''; $citaOriginal = ''
+      if ($h) { $texto = $h.texto; $original = "$($h.fichero):$($h.linea)"; $citaOriginal = $h.cita }
+      $migrado = ''
+      if ($dato.fichero) { $migrado = "$($dato.fichero):$($dato.linea)" }
+      $filas += [pscustomobject]@{
+        Job = $J.job; Clase = $c.clase; Estado = [string]$dato.estado; Texto = $texto; Original = $original; CitaOriginal = $citaOriginal
+        Migrado = $migrado; CitaMigrado = [string]$dato.cita; Nota = [string]$dato.nota; Probado = ($dato.probado -eq $true)
+      }
+    }
+  }
+  return $filas
+}
+
+# Medido (lo cuenta el script) en sin-pieza; leido por la IA con prueba si la cita salio en el fichero; sin comprobar en lo demas.
+function Get-MarcaComparar($T, $R) {
+  if ($R.Estado -ceq 'sin-pieza') { return (Format-Trozo $T 'marca-medido') }
+  return (Get-MarcaHecho $T ($R.Probado -and $R.Migrado))
+}
+
+function Get-FilaComparar($T, $R) {
+  $clase = ''
+  if ($R.Estado -ceq 'distinto') { $clase = 's-error' } elseif ($R.Estado -cne 'igual') { $clase = 's-aviso' }
+  $migrado = ''
+  if ($R.Migrado) { $migrado = Format-Trozo $T 'comp-migrado' @{ DONDE = $R.Migrado; CITA = $R.CitaMigrado } }
+  $nota = ''
+  if ($R.Nota) { $nota = Format-Trozo $T 'comp-nota' @{ NOTA = $R.Nota } }
+  return (Format-Trozo $T 'comp-fila' @{
+      CLASE = $clase; ESTADO = (Format-Trozo $T "comp-est-$($R.Estado)"); TEXTO = $R.Texto; MARCA = (Get-MarcaComparar $T $R)
+      NOMBRE = $R.Clase; ORIGINAL = $R.Original; CITA = $R.CitaOriginal; MIGRADO = $migrado; NOTA = $nota
+    })
+}
+
+# Un job: la cabecera con sus cuentas, primero los distintos, las faltas, los que no sabe y los sin pieza, y los iguales plegados.
+function Get-GrupoComparar($D, $T, $J) {
+  $filas = @(Get-DatosComparar $D $J)
+  $n = @{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-pieza' = 0 }
+  foreach ($f in $filas) { $n[$f.Estado]++ }
+  $primeras = @(foreach ($e in @('distinto', 'falta', 'no-lo-se', 'sin-pieza')) { @($filas | Where-Object { $_.Estado -ceq $e }) })
+  $iguales = @($filas | Where-Object { $_.Estado -ceq 'igual' })
+  $cuerpo = ''
+  if ($primeras.Count -gt 0) { $cuerpo = Format-Trozo $T 'comp-filas' @{ FILAS = (@($primeras | ForEach-Object { Get-FilaComparar $T $_ }) -join "`n") } }
+  if ($iguales.Count -gt 0) {
+    $texto = Format-Trozo $T 'comp-iguales-otros' @{ N = "$($iguales.Count)" }
+    if ($iguales.Count -eq 1) { $texto = Format-Trozo $T 'comp-iguales-uno' }
+    $cuerpo += Format-Trozo $T 'comp-iguales' @{ TEXTO = $texto; FILAS = (@($iguales | ForEach-Object { Get-FilaComparar $T $_ }) -join "`n") }
+  }
+  if (-not $cuerpo) { $cuerpo = Format-Trozo $T 'comp-job-vacio' }
+  $cuenta = Format-Trozo $T 'comp-cuenta' @{ IGUAL = "$($n['igual'])"; DISTINTO = "$($n['distinto'])"; FALTA = "$($n['falta'])"; NOLOSE = "$($n['no-lo-se'])"; SINPIEZA = "$($n['sin-pieza'])" }
+  return (Format-Trozo $T 'comp-job' @{ ID = (Get-NombreJob $J.job); JOB = $J.job; CUENTA = $cuenta; CUERPO = $cuerpo })
+}
+
+function Get-CuerpoComparar($D, $T, [string]$Cuerpo) {
+  $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'comparar'; ETIQUETA = (Format-Trozo $T 'et-sin') }
+  if (-not $D.Mapa) { $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'mapa'; ETIQUETA = (Format-Trozo $T 'et-sin') } }
+  elseif ($D.Comparacion.Count -gt 0) { $jobs = (@($D.Mapa.jobs | ForEach-Object { Get-GrupoComparar $D $T $_ }) -join "`n") }
+  return (Expand-Plantilla $Cuerpo @{ JOBS = $jobs })
+}
+
 function ConvertTo-FechaInforme($V) {
   if ($V -is [datetime]) { return $V }
   try { return [datetime]::ParseExact([string]$V, 's', [System.Globalization.CultureInfo]::InvariantCulture) } catch { return $null }
@@ -482,8 +564,9 @@ function Get-GrupoToca($T, [string]$Nombre, $Items, [string]$N) {
     })
 }
 
-# "Lo que te toca": tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba y datos
-# que nombran clases (los que la pagina de negocio no pinta, y las clases que no cupieron en la redaccion de un job).
+# "Lo que te toca": tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba, datos
+# que nombran clases (los que la pagina de negocio no pinta, y las clases que no cupieron en la redaccion de un job) y
+# los datos que el migrado hace distinto o no hace (uno por job y dato).
 function Get-TocaHtml($D, $T) {
   $grupos = @()
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
@@ -511,6 +594,16 @@ function Get-TocaHtml($D, $T) {
     if (@($v.Fuera).Count -gt 0) { $conClase += (Format-Trozo $T 'toca-fuera' @{ CABECERA = (Format-Trozo $T 'cab-job' @{ JOB = $v.Job }); CLASES = (@($v.Fuera) -join ', ') }) }
   }
   if ($conClase.Count -gt 0) { $grupos += (Get-GrupoToca $T 'tecnicos' $conClase "$($conClase.Count)") }
+  $diferencias = @()
+  if ($D.Mapa) {
+    foreach ($j in @($D.Mapa.jobs)) {
+      foreach ($r in @(Get-DatosComparar $D $j | Where-Object { $_.Estado -ceq 'distinto' -or $_.Estado -ceq 'falta' })) {
+        $cab = Format-Trozo $T 'cab-diferencia' @{ JOB = $r.Job; CLASE = $r.Clase; ESTADO = (Format-Trozo $T "comp-est-$($r.Estado)") }
+        $diferencias += (Format-Trozo $T 'toca-item' @{ CABECERA = $cab; TEXTO = (($r.Texto + ' ' + $r.Nota).Trim()) })
+      }
+    }
+  }
+  if ($diferencias.Count -gt 0) { $grupos += (Get-GrupoToca $T 'diferencias' $diferencias "$($diferencias.Count)") }
   if ($D.Correccion) {
     $atascos = @($D.Correccion.atascados | Where-Object { $null -ne $_ })
     if ($atascos.Count -gt 0) {
@@ -884,12 +977,13 @@ function Write-Informes {
     @{ Fichero = 'index.html'; Actual = 'ACTUAL_INDEX'; Titulo = 'titulo-index'; Cuerpo = { param($D, $T, $C) Get-CuerpoIndex $D $T $C } },
     @{ Fichero = '1-batch-original.html'; Actual = 'ACTUAL_ORIGINAL'; Titulo = 'titulo-original'; Cuerpo = { param($D, $T, $C) Get-CuerpoOriginal $D $T $C } },
     @{ Fichero = '2-problemas.html'; Actual = 'ACTUAL_PROBLEMAS'; Titulo = 'titulo-problemas'; Cuerpo = { param($D, $T, $C) Get-CuerpoProblemas $D $T $C } },
+    @{ Fichero = '3-original-vs-migrado.html'; Actual = 'ACTUAL_COMPARAR'; Titulo = 'titulo-comparar'; Cuerpo = { param($D, $T, $C) Get-CuerpoComparar $D $T $C } },
     @{ Fichero = '4-correcciones.html'; Actual = 'ACTUAL_CORRECCIONES'; Titulo = 'titulo-correcciones'; Cuerpo = { param($D, $T, $C) Get-CuerpoCorrecciones $D $T $C } }
   )
   foreach ($p in $paginas) {
     $plantilla = Split-Plantilla (Read-PlantillaInforme $p.Fichero)
     $T = Merge-Trozos $marco.Trozos $plantilla.Trozos
-    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = ''; ACTUAL_CORRECCIONES = '' }
+    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = ''; ACTUAL_COMPARAR = ''; ACTUAL_CORRECCIONES = '' }
     $v[$p.Actual] = Format-Trozo $T 'actual'
     Save-PaginaInforme (Join-Path $Salida $p.Fichero) (Expand-Plantilla $marco.Cuerpo $v)
   }

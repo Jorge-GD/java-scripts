@@ -1,0 +1,27 @@
+<header class="cab-prob">
+  <h1>El original frente al migrado</h1>
+  <p class="lede">Es una lectura de la IA sobre el migrado tal como llegó, antes de corregir: para cada dato que se leyó del original, dice si el migrado lo hace igual, distinto o no lo hace. El script comprueba que las citas existan en los ficheros, pero esta página no sustituye a lanzar los dos batch con los mismos datos y comparar lo que dejan.</p>
+</header>
+
+{{{JOBS}}}
+<!--TROZO titulo-comparar-->El original frente al migrado {{BATCH}}<!--FIN-->
+<!--TROZO comp-job--><section class="prob-grupo comp-grupo" id="comp-{{ID}}" aria-labelledby="g-comp-{{ID}}">
+  <header class="pg-cab"><h2 id="g-comp-{{ID}}">{{JOB}}</h2><span class="pg-num">{{{CUENTA}}}</span></header>
+{{{CUERPO}}}
+</section><!--FIN-->
+<!--TROZO comp-cuenta-->igual {{IGUAL}} · distinto {{DISTINTO}} · falta {{FALTA}} · no lo sé {{NOLOSE}} · sin pieza {{SINPIEZA}}<!--FIN-->
+<!--TROZO comp-filas-->  <ul class="filas">
+{{{FILAS}}}
+  </ul><!--FIN-->
+<!--TROZO comp-fila-->    <li class="fila {{CLASE}}">{{{ESTADO}}}<span class="d">{{TEXTO}}{{{MARCA}}}</span><span class="q"><b>Original:</b> <code>{{NOMBRE}}</code><code class="donde">{{ORIGINAL}}</code><span class="cita">{{CITA}}</span>{{{MIGRADO}}}{{{NOTA}}}</span></li><!--FIN-->
+<!--TROZO comp-migrado--><b>Migrado:</b> <code class="donde">{{DONDE}}</code><span class="cita">{{CITA}}</span><!--FIN-->
+<!--TROZO comp-nota--><b>Nota:</b> {{NOTA}}<!--FIN-->
+<!--TROZO comp-iguales--><div class="pg-l"><details>
+  <summary>{{{TEXTO}}}</summary>
+  <ul class="filas">
+{{{FILAS}}}
+  </ul>
+</details></div><!--FIN-->
+<!--TROZO comp-iguales-uno-->1 dato igual<!--FIN-->
+<!--TROZO comp-iguales-otros-->{{N}} datos iguales<!--FIN-->
+<!--TROZO comp-job-vacio--><p class="pg-como">Ningún dato de las clases de este job se ha comparado.</p><!--FIN-->
