@@ -2965,5 +2965,129 @@ $Pruebas['97 portada y marco: navegacion a Original frente a migrado, Diferencia
   Comprueba 'sin nada que revisar, lo que te toca nombra tambien las diferencias con el original' ($t3 -match 'Nada que revisar' -and $t3 -match 'ninguna diferencia con el original') $t3
 }
 
+# ============================ PRUEBA EN PRE: LO QUE FALTABA POR COMPROBAR ============================
+$Pruebas['98 prueba-pre: el guion tiene que ser del job de la tarea, con texto en cada campo y alguna referencia en cada caso'] = {
+  $codigo = @'
+$Fuentes = @('CargaReader') | ForEach-Object { [pscustomobject]@{ BaseName = $_ } }
+$hechos = "clase-aaaaaaaa#0 [regla] Rechaza el recibo sin importe.`nclase-aaaaaaaa#1 [error] Si falla el envio, avisa."
+function Caso([string]$Titulo, [string]$Entrada, [string]$Esperado, [string[]]$Refs) {
+  return [ordered]@{ titulo = $Titulo; entrada = $Entrada; esperado = $Esperado; refs = $Refs }
+}
+function Guion($Job, $Casos, [string]$Preparar = 'Deja el fichero listo.', [string]$Comprobar = 'Mira el aviso.') {
+  return [ordered]@{ job = $Job; preparar = @([ordered]@{ texto = $Preparar; refs = @() }); casos = @($Casos); comprobar = @([ordered]@{ texto = $Comprobar; refs = @() }) }
+}
+function Valida($Guion) {
+  $dir = Join-Path '{{DIR}}' ('g' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  [System.IO.File]::WriteAllText((Join-Path $dir '.rescate/tareas/prueba-cargaJob.json'), (ConvertTo-Json -InputObject $Guion -Depth 8))
+  $t = [pscustomobject]@{ id = 'prueba-cargaJob'; intentos = 0; entradas = [pscustomobject]@{ job = 'cargaJob'; datos = $hechos } }
+  $r = Test-PruebaPre $t $dir
+  if ($r.Ok) { return 'BIEN' }
+  return ('MAL ' + $r.Motivo)
+}
+$bueno = Caso 'Sin importe' 'Un recibo sin importe.' 'Se rechaza.' @('clase-aaaaaaaa#0', 'clase-aaaaaaaa#1')
+'G1=' + (Valida (Guion 'cargaJob' @($bueno)))
+'G2=' + (Valida (Guion 'informeJob' @($bueno)))
+'G3=' + (Valida (Guion 'cargaJob' @((Caso 'Sin refs' 'Algo.' 'Otra cosa.' @()), $bueno)))
+'G4=' + (Valida (Guion 'cargaJob' @((Caso 'Esperado en blanco' 'Algo.' '   ' @('clase-aaaaaaaa#0')), $bueno)))
+'G5=' + (Valida (Guion 'cargaJob' @($bueno) 'Deja el fichero listo.' ' '))
+'G6=' + (Valida (Guion 'cargaJob' @($bueno) ''))
+'FIN'
+'@
+  $codigo = $codigo.Replace('{{DIR}}', (Join-Path $Dir 'pre-guion'))
+  $r = En-Biblioteca 'pre-guion' $codigo
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^(G\d)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'un guion con todo en regla vale' 'BIEN' $v['G1']
+  Comprueba 'el guion que dice ser de otro job no vale y el motivo dice cual es el job' ($v['G2'] -match '^MAL' -and $v['G2'] -match "'cargaJob'") $v['G2']
+  Comprueba 'un caso sin ninguna referencia no vale aunque otro caso cubra todo, y el motivo dice cual' ($v['G3'] -match '^MAL' -and $v['G3'] -match 'casos\[0\]\.refs' -and $v['G3'] -match 'al menos una') $v['G3']
+  Comprueba 'un campo de un caso en blanco no vale y el motivo lo nombra' ($v['G4'] -match '^MAL' -and $v['G4'] -match 'casos\[0\]\.esperado') $v['G4']
+  Comprueba 'el texto de comprobar en blanco, igual' ($v['G5'] -match '^MAL' -and $v['G5'] -match 'comprobar\[0\]\.texto') $v['G5']
+  Comprueba 'el texto de preparar vacio, igual' ($v['G6'] -match '^MAL' -and $v['G6'] -match 'preparar\[0\]\.texto') $v['G6']
+}
+
+$Pruebas['99 prueba-pre: una tarea hecha solo se reutiliza si no cambian los hechos ni las variables que recibe'] = {
+  $codigo = @'
+$Datos = '{{DIR}}'
+$mapa = [pscustomobject]@{ jobs = @([pscustomobject]@{ job = 'cargaJob'; clases = @([pscustomobject]@{ ficha = 'clase-aaaaaaaa' }) }) }
+function Ficha([string]$Regla) {
+  Write-Json (Join-Path $Datos 'fichas/clase-aaaaaaaa.json') ([ordered]@{ id = 'clase-aaaaaaaa'; clase = 'CargaReader'; datos = @([ordered]@{ tipo = 'regla'; texto = $Regla }) })
+}
+function Ahora {
+  $t = @(Get-TareasPrueba $mapa $false)
+  if ($t.Count -ne 1) { return ('TAREAS ' + $t.Count) }
+  return $t[0].estado
+}
+function Da-Por-Hecha {
+  $t = @(Get-TareasPrueba $mapa $false)[0]
+  $t.estado = 'hecha'
+  Save-Tarea $t
+}
+Ficha 'Rechaza el recibo sin importe.'
+'A1=' + (Ahora)
+Da-Por-Hecha
+'A2=' + (Ahora)
+Ficha 'Rechaza el recibo sin importe ni fecha.'
+'A3=' + (Ahora)
+Da-Por-Hecha
+'A4=' + (Ahora)
+Write-Json (Join-Path $Datos 'variables.json') @([ordered]@{ variable = 'CLAVE_BANCO'; porDefecto = $null; fichero = 'application.yml'; linea = 1 })
+'A5=' + (Ahora)
+Da-Por-Hecha
+'A6=' + (Ahora)
+'FIN'
+'@
+  $codigo = $codigo.Replace('{{DIR}}', (Join-Path $Dir 'pre-huella'))
+  $r = En-Biblioteca 'pre-huella' $codigo
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^(A\d)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'una tarea nueva esta pendiente' 'pendiente' $v['A1']
+  Igual 'hecha y con los mismos hechos, se reutiliza' 'hecha' $v['A2']
+  Igual 'con otro texto en una regla, se vuelve a pedir' 'pendiente' $v['A3']
+  Igual 'hecha otra vez, se reutiliza' 'hecha' $v['A4']
+  Igual 'con otras variables, se vuelve a pedir' 'pendiente' $v['A5']
+  Igual 'hecha otra vez, se reutiliza' 'hecha' $v['A6']
+}
+
+# ============================ PAGINAS: LO QUE FALTABA POR COMPROBAR ============================
+$Pruebas['100 paginas: un dato o un paso sin cita encontrada sale como Sin comprobar y nunca como leido por la IA con prueba'] = {
+  $c = Corrida-Dos $GuionBase
+  $a = Articulo (Pagina $c.E.Out '1-batch-original.html') 'cargaJob'
+  $corte = $a.IndexOf('id="pre-cargaJob"')
+  Comprueba 'el job lleva sus datos y, despues, el bloque de la prueba en pre' ($corte -gt 0) (Cola $c.R.Salida)
+  if ($corte -lt 0) { return }
+  $datos = $a.Substring(0, $corte)
+  $n = [regex]::Matches($datos, 'm m-ia').Count
+  Comprueba 'con todo probado, sus datos y pasos salen como leidos por la IA y ninguno sin comprobar' ($n -gt 0 -and $datos -notmatch 'm m-sin') "$n"
+  $s = Copia-Salida $c.E 'marca-sin'
+  $ruta = Get-Ruta $s 'datos/jobs/cargaJob.json'
+  $j = Lee-Json $ruta
+  foreach ($h in (Elementos-De $j)) { $h.probado = $false }
+  foreach ($p in @($j.pasos)) { $p.probado = $false }
+  Guarda-Json $ruta $j
+  # los pasos tambien citan datos de las fichas de clase
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $s 'datos/fichas') -File -Filter 'clase-*.json')) {
+    $x = Lee-Json $f.FullName
+    foreach ($d in @($x.datos)) { $d.probado = $false }
+    Guarda-Json $f.FullName $x
+  }
+  $g = Genera-Informes $s
+  Comprueba 'Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $a = Articulo (Pagina $s '1-batch-original.html') 'cargaJob'
+  $datos = $a.Substring(0, $a.IndexOf('id="pre-cargaJob"'))
+  Igual 'sin cita probada, ninguno sale como leido por la IA' 0 ([regex]::Matches($datos, 'm m-ia').Count)
+  Igual 'y los que salian como leidos salen ahora como sin comprobar' $n ([regex]::Matches($datos, 'm m-sin').Count)
+}
+
+$Pruebas['101 paginas: al acabar la lectura la portada dice que ha terminado, aunque no se corrija nada'] = {
+  $c = Corrida-Dos $GuionBase
+  Igual 'la fase acaba en lectura-hecha' 'lectura-hecha' (Estado $c.E).fase
+  $i = Pagina $c.E.Out 'index.html'
+  Comprueba 'la portada dice que la lectura del original ha terminado' ($i -match 'La lectura del original ha terminado') (Cola $c.R.Salida)
+  Comprueba 'y no que la pasada va por una fase' ($i -notmatch 'La pasada no ha terminado')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
