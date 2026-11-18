@@ -441,10 +441,11 @@ $Pruebas['14 el banco del motor sigue pasando entero'] = {
 }
 
 # ============================ BIBLIOTECA Y LANZADOR ============================
-# Lanza un script de prueba que carga comun.ps1 y tareas.ps1 (nunca migracion.ps1), como haria un preflight.
-function En-Biblioteca([string]$Nombre, [string]$Codigo) {
+# Lanza un script de prueba que carga comun.ps1 y tareas.ps1 (nunca migracion.ps1), como haria un preflight; con -ConInforme, tambien informe.ps1.
+function En-Biblioteca([string]$Nombre, [string]$Codigo, [switch]$ConInforme) {
   $raiz = Split-Path -Parent $Script
   $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n"
+  if ($ConInforme) { $cab += ". '" + (Join-Path $raiz 'informe.ps1') + "'`n" }
   $carpeta = Join-Path $Dir 'biblioteca'
   Escribe $carpeta "$Nombre.ps1" ($cab + $Codigo)
   return (Lanzar (Join-Path $carpeta "$Nombre.ps1") @())
@@ -3791,6 +3792,230 @@ $Pruebas['122 (P2) pagina 4: con uno solo que aparecio o se fue, la frase va en 
 $Pruebas['112 (E2) el banco nunca ejecuta el prueba-local.ps1 de verdad: ninguna carpeta *-prueba-local en el banco ni debajo de los escenarios'] = {
   $c = @(Get-ChildItem -LiteralPath $Dir -Directory -Recurse -Depth 2 -Filter '*-prueba-local')
   Igual 'ninguna carpeta *-prueba-local' '' ($c | ForEach-Object { $_.FullName }) 
+}
+
+# ============================ M16: EL SIGUIENTE PASO EN LA PORTADA ============================
+# Lo que dice Get-SiguientePaso (informe.ps1) de un estado.json ($Est, tabla) y de los datos del informe ($D: Correccion, PruebaLocal y
+# Diag.Errores), con un script de prueba que carga las tres bibliotecas. Devuelve el objeto que da la funcion.
+function Siguiente($Est, $D = @{}) {
+  $carpeta = Join-Path $Dir 'siguiente'
+  Escribe $carpeta 'est.json' (ConvertTo-Json -InputObject $Est -Depth 8)
+  Escribe $carpeta 'd.json' (ConvertTo-Json -InputObject $D -Depth 8)
+  $codigo = "`$est = Read-Json '" + (Join-Path $carpeta 'est.json') + "'`n`$d = Read-Json '" + (Join-Path $carpeta 'd.json') + "'`n'SIGUIENTE=' + (ConvertTo-Json -InputObject (Get-SiguientePaso `$est `$d) -Compress -Depth 4)`n"
+  $r = En-Biblioteca 'siguiente' $codigo -ConInforme
+  $l = @($r.Salida -split "`n" | Where-Object { $_ -match '^SIGUIENTE=' })
+  if ($l.Count -eq 0) { Comprueba 'Get-SiguientePaso devuelve algo' $false (Cola $r.Salida); return [pscustomobject]@{ Caso = ''; N = 0; Comando = ''; Fase = ''; Motivo = ''; Detalle = '' } }
+  return ($l[0].Substring(10).TrimEnd("`r") | ConvertFrom-Json)
+}
+
+# Un estado.json de una pasada acabada con la respuesta parar y la prueba en local hecha; $Cambios lo pisa campo a campo.
+function Estado-Siguiente([hashtable]$Cambios = @{}) {
+  $e = [ordered]@{
+    version = 1; batch = 'batch-life'; legacy = 'C:\ruta\original'; migrado = 'C:\ruta\migrado'; plantilla = 'C:\ruta\referencia'
+    worktree = 'C:\ruta\migrado-rescate'; rama = 'rescate/feat-life-20261118-0900'; ramaOrigen = 'feat/life'; javaLegacy = ''
+    modelo = 'claude-sonnet-5.5'; aptitud = 'claude-sonnet-5.5'; respuesta = 'parar'; fase = 'hecha'
+    creado = '2026-11-18T09:00:00'; actualizado = '2026-11-18T10:00:00'; fin = '2026-11-18T10:00:00'; parada = $null
+    pruebaLocal = [ordered]@{ resultado = 'hecha'; codigo = 0; minutos = 3.2; detalle = ''; registro = 'registros/prueba-local.log' }
+  }
+  foreach ($k in $Cambios.Keys) { $e[$k] = $Cambios[$k] }
+  return $e
+}
+
+$ComandoSiguiente = '.\migracion.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Plantilla "C:\ruta\referencia" -Modelo claude-sonnet-5.5'
+
+# Los datos del informe: la prueba en local con $Distintos casos distintos y 2 iguales, la correccion (o $null) y los errores del diagnostico.
+function Datos-Siguiente([int]$Distintos = 0, $Correccion = $null, [int]$Errores = 0, [int]$Avisos = 0) {
+  $casos = @((Caso-Local 'cargaJob' 'caso-01' 'Recibo correcto' 'igual'), (Caso-Local 'cargaJob' 'caso-02' 'Recibo sin importe' 'igual'))
+  for ($i = 1; $i -le $Distintos; $i++) { $casos += (Caso-Local 'cargaJob' ('caso-d' + $i) ('Distinto ' + $i) 'distinto') }
+  return [ordered]@{
+    Correccion = $Correccion
+    PruebaLocal = [ordered]@{ jobs = @([ordered]@{ job = 'cargaJob'; casos = $casos.Count; iguales = 2; distintos = $Distintos; sinProbar = 0 }); casos = $casos }
+    Diag = [ordered]@{ Errores = $Errores; Avisos = $Avisos }
+  }
+}
+
+function Correccion-Siguiente([bool]$Completa = $true, [int]$Commits = 2) {
+  return [ordered]@{
+    completa = $Completa; codigo = 0; rama = 'rescate/feat-life-20261118-0900'; base = 'feat/life'
+    commits = @(1..$Commits | ForEach-Object { [ordered]@{ hash = ('abc123' + $_); paso = 'estructura'; asunto = 'rescate(estructura): lote 1' } }); atascados = @(); resueltos = @(); variablesNuevas = @()
+  }
+}
+
+$Pruebas['m16 siguiente: fila 1, fin vacio: sigue trabajando, con la fase y el comando de la pasada (comillas en las rutas, -Si o -SoloInforme, -JavaLegacy); gana a todo lo demas'] = {
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; fase = 'mapa' }) (Datos-Siguiente)
+  Igual 'caso corriendo' 'corriendo' $s.Caso
+  Igual 'dice la fase' 'mapa' $s.Fase
+  Igual 'el comando de la pasada, con -SoloInforme' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; fase = 'correccion'; respuesta = 'corregir'; javaLegacy = 'C:\jdk 8' }) (Datos-Siguiente)
+  Igual 'con la respuesta corregir, -Si, y -JavaLegacy con comillas' ($ComandoSiguiente + ' -Si -JavaLegacy "C:\jdk 8"') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; modelo = ''; migrado = 'C:\mi ruta\migrado' }) (Datos-Siguiente)
+  Igual 'sin modelo no hay -Modelo, y una ruta con espacios va entre comillas' '.\migracion.ps1 -Legacy "C:\ruta\original" -Migrado "C:\mi ruta\migrado" -Plantilla "C:\ruta\referencia" -SoloInforme' $s.Comando
+  $p = [ordered]@{ motivo = 'copilot-no-responde'; detalle = 'x'; registro = 'r'; ayuda = 'a' }
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; parada = $p }) (Datos-Siguiente 2 (Correccion-Siguiente) 3)
+  Igual 'con parada y casos distintos, todavia gana corriendo' 'corriendo' $s.Caso
+}
+
+$Pruebas['m16 siguiente: fila 2, parada: el motivo y el comando de la pasada, para cada motivo de la tabla de FLUJO.md y uno que no esta'] = {
+  foreach ($m in @('copilot-no-responde', 'tope-de-tiempo', 'no-compila', 'lotes-deshechos', 'guardas', 'git', 'motor', 'error-interno', 'motivo-nuevo')) {
+    $p = [ordered]@{ motivo = $m; detalle = "detalle de $m"; registro = "C:\ruta\registro-$m.log"; ayuda = 'ayuda' }
+    $s = Siguiente (Estado-Siguiente @{ parada = $p; respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente))
+    Comprueba "$m : caso parada con su motivo y el comando de la pasada" ($s.Caso -ceq 'parada' -and $s.Motivo -ceq $m -and $s.Comando -ceq ($ComandoSiguiente + ' -Si')) ($s | ConvertTo-Json -Compress)
+  }
+  $s = Siguiente (Estado-Siguiente @{ parada = [ordered]@{ motivo = 'no-compila'; detalle = 'd'; registro = 'C:\r.log'; ayuda = 'a' } }) (Datos-Siguiente)
+  Igual 'lleva el detalle y el registro de la parada' 'd|C:\r.log|C:\ruta\migrado-rescate' "$($s.Detalle)|$($s.Registro)|$($s.Worktree)"
+}
+
+$Pruebas['m16 siguiente: fila 3, casos distintos y hubo correccion: deshacer con prueba-local.ps1 -Desde <ramaOrigen> -Deshacer (y -JavaLegacy si lo hay)'] = {
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente))
+  Igual 'caso distinto-corregido' 'distinto-corregido' $s.Caso
+  Igual 'cuenta los casos distintos' 2 $s.N
+  Igual 'el comando' '.\prueba-local.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Desde feat/life -Deshacer' $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; javaLegacy = 'C:\jdk8' }) (Datos-Siguiente 1 (Correccion-Siguiente))
+  Igual 'con -JavaLegacy' '.\prueba-local.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Desde feat/life -Deshacer -JavaLegacy "C:\jdk8"' $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; ramaOrigen = '' }) (Datos-Siguiente 1 (Correccion-Siguiente))
+  Igual 'un estado.json de antes, sin ramaOrigen: la base de correcciones.json' 'feat/life' ([regex]::Match($s.Comando, '-Desde (\S+)').Groups[1].Value)
+}
+
+$Pruebas['m16 siguiente: fila 4, casos distintos sin correccion: mirarlos en la pagina 3, sin comando'] = {
+  $s = Siguiente (Estado-Siguiente) (Datos-Siguiente 3)
+  Igual 'caso distinto' 'distinto' $s.Caso
+  Igual 'cuenta los casos' 3 $s.N
+  Igual 'sin comando' '' $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 1 (Correccion-Siguiente $true 0))
+  Igual 'con una correccion sin ningun commit tambien es sin correccion' 'distinto' $s.Caso
+  $s = Siguiente (Estado-Siguiente) (Datos-Siguiente 2 $null 4)
+  Igual 'gana a los problemas de la pagina 2' 'distinto' $s.Caso
+}
+
+$Pruebas['m16 siguiente: fila 5, la prueba en local fallo o se salto: su detalle; con el JDK del original, -JavaLegacy con la ruta del JDK'] = {
+  $fallo = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'dos / tres'; registro = 'registros/prueba-local.log' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $fallo }) (@{})
+  Igual 'caso local-fallo' 'local-fallo' $s.Caso
+  Igual 'con su detalle' 'dos / tres' $s.Detalle
+  Igual 'el comando de la pasada' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+  $jdk = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'no compila'; jdkOriginal = $true; registro = 'registros/prueba-local.log' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $jdk }) (@{})
+  Igual 'caso local-jdk' 'local-jdk' $s.Caso
+  Igual 'el comando de la pasada con -JavaLegacy y la ruta del JDK del original' ($ComandoSiguiente + ' -SoloInforme -JavaLegacy "C:\ruta\jdk-del-original"') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $fallo; javaLegacy = 'C:\jdk8' }) (@{})
+  Igual 'con -JavaLegacy ya dado, el comando lo mantiene' ($ComandoSiguiente + ' -SoloInforme -JavaLegacy "C:\jdk8"') $s.Comando
+  $salto = [ordered]@{ resultado = 'saltada'; codigo = $null; minutos = 0; detalle = ''; registro = '' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $salto; respuesta = 'corregir' }) (Datos-Siguiente 0 (Correccion-Siguiente))
+  Igual 'saltada: caso local-saltada' 'local-saltada' $s.Caso
+  Igual 'y el comando de la pasada, que la hace' ($ComandoSiguiente + ' -Si') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $fallo }) (Datos-Siguiente 0 $null 5)
+  Igual 'gana a los problemas de la pagina 2' 'local-fallo' $s.Caso
+}
+
+$Pruebas['m16 siguiente: fila 6, respuesta parar y quedan problemas: corregirlos con el comando de la pasada con -Si en vez de -SoloInforme'] = {
+  $s = Siguiente (Estado-Siguiente) (Datos-Siguiente 0 $null 3 2)
+  Igual 'caso parar-con-problemas' 'parar-con-problemas' $s.Caso
+  Igual 'cuenta los errores de la pagina 2' 3 $s.N
+  Igual 'el comando, con -Si' ($ComandoSiguiente + ' -Si') $s.Comando
+  Comprueba 'y sin -SoloInforme' ($s.Comando -notmatch 'SoloInforme')
+  $s = Siguiente (Estado-Siguiente @{ javaLegacy = 'C:\jdk8' }) (Datos-Siguiente 0 $null 1)
+  Igual 'con -JavaLegacy' ($ComandoSiguiente + ' -Si -JavaLegacy "C:\jdk8"') $s.Comando
+  $s = Siguiente (Estado-Siguiente) (Datos-Siguiente 0 $null 0 4)
+  Igual 'con solo avisos no hay nada que corregir: cae a pre' 'pre' $s.Caso
+}
+
+$Pruebas['m16 siguiente: fila 7, correccion completa: las 3 lineas de git del paso 4 de FLUJO.md con la rama de origen y la de rescate reales'] = {
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 0 (Correccion-Siguiente) 0)
+  Igual 'caso corregido' 'corregido' $s.Caso
+  $esperado = @(
+    'git -C "C:\ruta\migrado" log --oneline feat/life..rescate/feat-life-20261118-0900',
+    'git -C "C:\ruta\migrado" diff --stat feat/life...rescate/feat-life-20261118-0900',
+    'git -C "C:\ruta\migrado" merge rescate/feat-life-20261118-0900') -join "`n"
+  Igual 'las 3 lineas de git' $esperado ($s.Comando -replace "`r", '')
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; ramaOrigen = '' }) (Datos-Siguiente 0 (Correccion-Siguiente))
+  Comprueba 'sin ramaOrigen, la base de correcciones.json' ($s.Comando -match 'log --oneline feat/life\.\.rescate') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente) 0)
+  Igual 'con casos distintos gana la fila 3' 'distinto-corregido' $s.Caso
+}
+
+$Pruebas['m16 siguiente: fila 8 y casos sin fila: nada de lo anterior es probarlo en pre; una pasada cortada con -Limite dice que se relance'] = {
+  $s = Siguiente (Estado-Siguiente) (Datos-Siguiente 0 $null 0 0)
+  Igual 'caso pre' 'pre' $s.Caso
+  Igual 'sin comando' '' $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 0 (Correccion-Siguiente $false 0) 0 0)
+  Igual 'una correccion no completa, sin parada, tambien' 'pre' $s.Caso
+  $s = Siguiente (Estado-Siguiente @{ fase = 'resumen'; pruebaLocal = $null }) (@{})
+  Igual 'fin escrito y fase sin acabar (-Limite): caso cortada' 'cortada' $s.Caso
+  Igual 'con la fase' 'resumen' $s.Fase
+  Igual 'y el comando de la pasada' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+}
+
+$Pruebas['m16 siguiente: migracion.ps1 guarda ramaOrigen y javaLegacy en estado.json, y si el original no compila con el JDK de Maven, pruebaLocal.jdkOriginal'] = {
+  $e = Nuevo-Escenario 'siguiente-estado' @('Clase1')
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  Igual 'ramaOrigen es la rama del migrado' 'main' $s.ramaOrigen
+  Comprueba 'javaLegacy vacio sin -JavaLegacy' ($null -ne $s.javaLegacy -and $s.javaLegacy -ceq '') ($s | ConvertTo-Json -Compress)
+  $r = Migra $e ((Basicos $e) + @('-JavaLegacy', 'C:\jdk8'))
+  Igual 'con -JavaLegacy sale con 0' 0 $r.Codigo
+  Igual 'javaLegacy es el valor dado' 'C:\jdk8' (Estado $e).javaLegacy
+  $o = Orden-Base
+  $l = [ordered]@{ codigo = 1; salida = @('El original no compila con el JDK de Maven. Vuelve a lanzar con -JavaLegacy <carpeta del JDK del original (8 u 11)>. Maven dice:', 'uno', 'dos', 'tres') }
+  $r = Migra-Motor $e $o (Corrige $e) '' $l
+  Igual 'con el JDK mal sale con 0' 0 $r.Codigo
+  $p = (Estado $e).pruebaLocal
+  Igual 'fallo' 'fallo' $p.resultado
+  Igual 'jdkOriginal true' 'True' "$($p.jdkOriginal)"
+  Igual 'y el detalle sigue siendo las 3 ultimas lineas' 'uno / dos / tres' $p.detalle
+  $l = [ordered]@{ codigo = 1; salida = @('Otro fallo', 'uno') }
+  $r = Migra-Motor $e $o (Corrige $e) '' $l
+  Igual 'otro fallo: jdkOriginal false' 'False' "$((Estado $e).pruebaLocal.jdkOriginal)"
+}
+
+# El texto de un trozo de pagina, sin etiquetas, con las entidades HTML decodificadas y los espacios juntos.
+function Texto-Plano([string]$Html) { return [System.Net.WebUtility]::HtmlDecode((Texto-De $Html)) }
+
+# Una carpeta de salida minima (solo datos\estado.json y los datos que se den) para montar la portada sin una corrida.
+function Salida-Siguiente([string]$Nombre, $Est, $Datos = @{}) {
+  $s = Join-Path (Join-Path $Dir $Nombre) 'migracion-batch'
+  Escribe $s 'datos/estado.json' (ConvertTo-Json -InputObject $Est -Depth 8)
+  foreach ($k in $Datos.Keys) { Escribe $s ('datos/' + $k) $(if ($Datos[$k] -is [string]) { $Datos[$k] } else { ConvertTo-Json -InputObject $Datos[$k] -Depth 8 }) }
+  $g = Genera-Informes $s
+  Comprueba "$Nombre : Write-Informes sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  return (Pagina $s 'index.html')
+}
+
+$Pruebas['m16 siguiente: la portada lleva el recuadro arriba (antes de la ficha y de Lo que te toca), uno solo, con el comando escapado, la linea de FLUJO.md y sin JavaScript'] = {
+  $migrado = 'C:\ruta\a&b <x>'
+  $est = Estado-Siguiente @{ fin = ''; fase = 'mapa'; migrado = $migrado }
+  $i = Salida-Siguiente 'siguiente-corriendo' $est
+  $sec = Panel-De $i 'siguiente-paso'
+  Comprueba 'hay un recuadro con id siguiente-paso y su h2' ($sec.Length -gt 0 -and $sec -match '<h2[^>]*>Siguiente paso</h2>') $i
+  Igual 'y solo uno' 1 ([regex]::Matches($i, 'id="siguiente-paso"').Count)
+  $a = $i.IndexOf('id="siguiente-paso"')
+  Comprueba 'va antes de la ficha y de Lo que te toca' ($a -gt 0 -and $a -lt $i.IndexOf('<dl class="ficha">') -and $a -lt $i.IndexOf('id="lo-que-te-toca"')) "$a"
+  $t = Texto-Plano $sec
+  Comprueba 'dice que sigue trabajando, la fase y que no hagas nada' ($t -match 'Sigue trabajando: va por la fase mapa\. No hagas nada\. Si la consola se ha cerrado, lanza el mismo comando') $t
+  $cmd = [regex]::Match($sec, '(?s)<pre class="cmd">(.*?)</pre>').Groups[1].Value
+  Igual 'el comando va en un pre.cmd y escapado' ('.\migracion.ps1 -Legacy &quot;C:\ruta\original&quot; -Migrado &quot;C:\ruta\a&amp;b &lt;x&gt;&quot; -Plantilla &quot;C:\ruta\referencia&quot; -Modelo claude-sonnet-5.5 -SoloInforme') $cmd
+  Comprueba 'debajo, la linea del flujo completo' ($i -match '(?s)</section>\s*<p[^>]*>El flujo completo est. en <code>FLUJO\.md</code>, junto a los scripts\.</p>' -and $i.IndexOf('FLUJO.md') -lt $i.IndexOf('<dl class="ficha">'))
+  Comprueba 'sin JavaScript ni nada externo' ($i -notmatch '<script' -and $i -notmatch 'https?://')
+}
+
+$Pruebas['m16 siguiente: la portada de una parada, de una pasada con problemas por corregir y de una corregida dicen su paso, con acentos y con su comando'] = {
+  $parada = [ordered]@{ motivo = 'no-compila'; detalle = 'Despues de corregir no compila.'; registro = 'C:\ruta\migrado\migracion-batch\registros\correccion.log'; ayuda = 'Pega esto.' }
+  $i = Salida-Siguiente 'siguiente-parada' (Estado-Siguiente @{ parada = $parada; respuesta = 'corregir' })
+  $t = Texto-Plano (Panel-De $i 'siguiente-paso')
+  Comprueba 'parada no-compila: el motivo y que arregles en la copia de rescate' ($t -match 'no compila' -and $t -match 'C:\\ruta\\migrado-rescate' -and $t -match 'haz commit' -and $t -match 'relanza') $t
+  Comprueba 'con el comando de la pasada con -Si' ($t -match '-Migrado "C:\\ruta\\migrado" .* -Si$') $t
+  $h = Hallazgo 'estructura' 'error' 'src/main/java/A.java' 3 'clase suelta A'
+  $i = Salida-Siguiente 'siguiente-parar' (Estado-Siguiente) @{ 'hallazgos-antes.json' = @($h, $h, $h); 'diagnostico-antes.md' = (Md-Diagnostico 'compila: SI | tests: OK'); 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
+  $t = Texto-Plano (Panel-De $i 'siguiente-paso')
+  Comprueba 'parar con 3 problemas: lo dice y propone -Si' ($t -match 'Tu c.digo da lo mismo que el original\. Para corregir los 3 problemas de la p.gina 2' -and $t -match ' -Si$' -and $t -notmatch 'SoloInforme') $t
+  Comprueba 'y la pagina 2 enlazada' ((Panel-De $i 'siguiente-paso') -match 'href="2-problemas\.html"')
+  $c = Correccion-Siguiente
+  $i = Salida-Siguiente 'siguiente-corregido' (Estado-Siguiente @{ respuesta = 'corregir' }) @{ 'correcciones.json' = $c; 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
+  $t = Texto-Plano (Panel-De $i 'siguiente-paso')
+  Comprueba 'corregido: revisa y trae los cambios, con las 3 lineas de git' ($t -match 'Revisa los cambios y tr.elos a tu rama' -and $t -match 'log --oneline feat/life\.\.rescate/feat-life-20261118-0900' -and $t -match 'diff --stat feat/life\.\.\.rescate' -and $t -match 'merge rescate/feat-life-20261118-0900') $t
+  $i = Salida-Siguiente 'siguiente-pre' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
+  $s = Panel-De $i 'siguiente-paso'
+  Comprueba 'pre: sin comando y con la pagina 1' ($s -notmatch '<pre' -and (Texto-Plano $s) -match 'Pru.balo en pre: cada job tiene su guion en la p.gina 1' -and $s -match 'href="1-batch-original\.html"') $s
 }
 
 # ================================ LANZADOR ================================
