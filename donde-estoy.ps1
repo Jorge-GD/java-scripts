@@ -8,6 +8,7 @@ QUE HACE
     Punto      la fase en que va (o "terminado") y su fecha: el fin de la pasada o, si sigue corriendo, la del fichero estado.json.
     Siguiente  lo que toca hacer ahora y, debajo, sangrado y listo para copiar, su comando. Es el texto y el comando de la portada
                (Get-SiguientePaso y Get-SiguienteHtml de informe.ps1): este script no los reescribe, solo los pasa a texto plano.
+               Si la pasada esta parada y estado.json trae su ayuda (parada.ayuda), debajo va "Para pegar en Copilot:" y el texto.
     Despues    solo si la cobertura medida (la de despues de corregir o, si no la hay, la de antes) esta por debajo de
                CoberturaMinima: lo dice y da el comando de rescate.ps1 -Cobertura.
   Un batch sin datos\estado.json esta "sin empezar": da el comando de migracion.ps1 con -SoloInforme.
@@ -88,7 +89,7 @@ function Read-DatosPaso([string]$Salida) {
 # ================================ EL BLOQUE ================================
 function Get-Campo([string]$Etiqueta, [string]$Texto) { return (($Etiqueta + ':').PadRight(11) + $Texto) }
 
-function Get-LineasComando($Comando) { return @($Comando | ForEach-Object { '    ' + $_ }) }
+function Get-LineasComando($Comando) { return @($Comando | ForEach-Object { ('    ' + $_).TrimEnd() }) }
 
 # Un batch sin datos\estado.json: el comando de la primera pasada, solo con informe.
 function Get-LineasSinEmpezar([string]$Nombre, [string]$Ruta) {
@@ -120,6 +121,10 @@ function Get-LineasBatch($Item, $T) {
   $sig = Get-SiguienteTexto $D $T
   $l += (Get-Campo 'Siguiente' $sig.Texto)
   $l += (Get-LineasComando $sig.Comando)
+  if ($paso.Caso -ceq 'parada' -and $D.Estado.parada.ayuda) {
+    $l += 'Para pegar en Copilot:'
+    $l += (Get-LineasComando @(([string]$D.Estado.parada.ayuda) -split "\r?\n"))
+  }
   $c = $D.CobDespues
   if ($null -eq $c) { $c = $D.CobAntes }
   if ($c -and $c.medida -eq $true -and $null -ne $c.porcentaje -and [double]$c.porcentaje -lt [double]$Cfg.CoberturaMinima) {
