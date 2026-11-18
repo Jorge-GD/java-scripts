@@ -16,6 +16,9 @@
 #   sonar-disabled     cambia la linea y anade @Disabled a un test
 #   sonar-borra-test   cambia la linea y borra un fichero de src/test
 #   sonar-sin-tocar    no toca la linea marcada: cambia otra cosa del fichero
+#   sonar-atasca       no toca las incidencias cuyo detalle lleva ATASCA y corrige las demas
+#   sonar-deja         no toca las que llevan DEJAME en el detalle: las apunta con su motivo en .rescate/sonar-sin-arreglar.txt
+#                      (y una linea que no casa con ninguna) y corrige las demas
 # Cada llamada deja una linea en .rescate/llamadas.log, con el modelo y el
 # esfuerzo que ha recibido.
 #
@@ -555,12 +558,15 @@ switch ($paso) {
   }
   'sonar' {
     $dentroS = $false
+    $dejadas = @()
     foreach ($l in ($prompt -split "`r?`n")) {
       if ($l -match '^## (Hallazgos|Ficheros del lote)') { $dentroS = $true; continue }
       if ($dentroS -and $l -match '^## ') { break }
       if (-not ($dentroS -and $l -match '^- (\S+?):(\d+) - ')) { continue }
       $f = $Matches[1]; $n = [int]$Matches[2]
       if ($guion -eq 'sonar-sin-tocar') { Escribir $f ((Leer $f) + "`n// otro cambio: la linea marcada no se toca`n"); continue }
+      if ($guion -eq 'sonar-atasca' -and $l -match 'ATASCA') { continue }   # no toca nada de esa incidencia: el lote no baja
+      if ($guion -eq 'sonar-deja' -and $l -match 'DEJAME') { $dejadas += "${f}:${n} | cambiaria la API publica"; continue }
       $t = @((Leer $f) -split "`r?`n")
       $marca = ' // corregido'
       if ($guion -eq 'sonar-nosonar') { $marca = ' // NOSONAR' }
@@ -568,6 +574,9 @@ switch ($paso) {
       $texto = $t -join "`n"
       if ($guion -eq 'sonar-suppress') { $texto += "`n@SuppressWarnings(`"all`")`nclass Otra {`n}`n" }
       Escribir $f $texto
+    }
+    if ($dejadas.Count -gt 0) {   # las que deja, con su motivo, y una linea que no casa con ninguna incidencia
+      Escribir '.rescate/sonar-sin-arreglar.txt' ((($dejadas + @('src/main/java/com/acme/plantillabatch/NoExiste.java:99 | esta no es de ningun lote')) -join "`n") + "`n")
     }
     if ($guion -eq 'sonar-disabled' -or $guion -eq 'sonar-borra-test') {
       $test = @(Get-ChildItem -LiteralPath (Get-Ruta 'src/test') -Recurse -File -Filter '*.java')[0]

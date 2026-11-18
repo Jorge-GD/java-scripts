@@ -3409,9 +3409,9 @@ $Pruebas['m10 sonar: sin la hoja o sin una columna obligatoria, el error dice cu
   Comprueba 'con -Paso sonar y sin -Sonar tambien hay un error claro' ((Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Paso', 'sonar')).Salida -match "necesita -Sonar") 'sin -Sonar'
 }
 
-$Pruebas['m10 sonar: filtro - BUG, VULNERABILITY, BLOCKER y CRITICAL; MAJOR solo con -SonarMayores; MINOR e INFO nunca; solo Java'] = {
+$Pruebas['m10 sonar: filtro - BUG, VULNERABILITY, BLOCKER, CRITICAL y MAJOR; MINOR e INFO nunca; solo Java'] = {
   . ([scriptblock]::Create((Texto-De-Funciones $FnLectorSonar)))
-  $Cfg = @{ SonarTipos = @('BUG', 'VULNERABILITY'); SonarSeveridades = @('BLOCKER', 'CRITICAL') }
+  $Cfg = @{ SonarTipos = @('BUG', 'VULNERABILITY'); SonarSeveridades = @('BLOCKER', 'CRITICAL', 'MAJOR') }
   function F([int]$N, [string]$Tipo, [string]$Sev, [string]$Lang = 'Java', [string]$Ruta = 'src/main/java/A.java') {
     return [pscustomobject]@{ Fila = $N; Severidad = $Sev; Mensaje = 'm'; Lenguaje = $Lang; Tipo = $Tipo; Recurso = 'A.java'; Ruta = $Ruta; Linea = 1; Etiquetas = @() }
   }
@@ -3419,13 +3419,12 @@ $Pruebas['m10 sonar: filtro - BUG, VULNERABILITY, BLOCKER y CRITICAL; MAJOR solo
     (F 1 'BUG' 'MAJOR'), (F 2 'VULNERABILITY' 'CRITICAL'), (F 3 'CODE_SMELL' 'CRITICAL'), (F 4 'CODE_SMELL' 'BLOCKER'),
     (F 5 'CODE_SMELL' 'MAJOR'), (F 6 'CODE_SMELL' 'MINOR'), (F 7 'CODE_SMELL' 'INFO'), (F 8 'BUG' 'MINOR'),
     (F 9 'BUG' 'CRITICAL' 'JavaScript' 'src/main/webapp/a.js'), (F 10 'BUG' 'CRITICAL' '' 'src/main/resources/a.xml'), (F 11 'BUG' 'CRITICAL' '' 'src/main/java/B.java'))
-  $filtra = { param($Mayores) (@(Get-SonarFiltradas $filas $Mayores | ForEach-Object { $_.Fila }) -join ' ') }
-  Igual 'por defecto: BUG, VULNERABILITY, BLOCKER y CRITICAL (y Java por la ruta si no hay lenguaje)' '1 2 3 4 11' (& $filtra $false)
-  Igual 'con -SonarMayores entran tambien los MAJOR' '1 2 3 4 5 11' (& $filtra $true)
-  $Cfg.SonarSeveridades = @('BLOCKER', 'CRITICAL', 'MINOR')
-  Igual 'MINOR solo entra si esta en la lista de severidades (INFO sigue fuera)' '1 2 3 4 6 8 11' (& $filtra $false)
-  $Cfg = @{ SonarTipos = @('VULNERABILITY'); SonarSeveridades = @('BLOCKER', 'CRITICAL') }
-  Igual 'con otra lista de tipos entra lo de esa lista y lo de las severidades' '2 3 4 11' (& $filtra $false)
+  $filtra = { (@(Get-SonarFiltradas $filas | ForEach-Object { $_.Fila }) -join ' ') }
+  Igual 'por defecto: BUG, VULNERABILITY, BLOCKER, CRITICAL y MAJOR (y Java por la ruta si no hay lenguaje)' '1 2 3 4 5 11' (& $filtra)
+  $Cfg.SonarSeveridades = @('BLOCKER', 'CRITICAL', 'MAJOR', 'MINOR')
+  Igual 'MINOR solo entra si esta en la lista de severidades (INFO sigue fuera)' '1 2 3 4 5 6 8 11' (& $filtra)
+  $Cfg = @{ SonarTipos = @('VULNERABILITY'); SonarSeveridades = @('BLOCKER') }
+  Igual 'con otras listas entra lo de esas listas' '2 4' (& $filtra)
 }
 
 $Pruebas['m10 sonar: la tabla del diagnostico no cambia sin -Sonar y con -Sonar lleva la fila sonar con sus errores'] = {
@@ -3449,19 +3448,19 @@ $Pruebas['m10 sonar: la tabla del diagnostico no cambia sin -Sonar y con -Sonar 
 
   $r1 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
   Igual 'con -Sonar sale con 0' 0 $r1.Codigo
-  Comprueba 'la consola lleva la fila sonar con 1 error' ($r1.Salida -match '(?m)^sonar\s+1\s+0\s*$') (Cola $r1.Salida)
-  Comprueba 'y diagnostico.md tambien' ((Lee $e.Repo '.rescate/diagnostico.md') -match '\| sonar \| 1 \| 0 \|')
+  Comprueba 'la consola lleva la fila sonar con 2 errores' ($r1.Salida -match '(?m)^sonar\s+2\s+0\s*$') (Cola $r1.Salida)
+  Comprueba 'y diagnostico.md tambien' ((Lee $e.Repo '.rescate/diagnostico.md') -match '\| sonar \| 2 \| 0 \|')
   $hs = @(Hallazgos-Sonar $e.Repo)
-  Igual 'un hallazgo sonar (MAJOR, MINOR, INFO y JavaScript fuera)' 1 $hs.Count
-  if ($hs.Count -eq 1) {
-    Igual 'su fichero' $total $hs[0].Fichero
-    Igual 'su linea' $ln $hs[0].Linea
-    Igual 'su detalle, con tipo y severidad' 'Fix this null dereference. [BUG CRITICAL]' $hs[0].Detalle
-    Igual 'es un error' 'error' $hs[0].Sev
+  Igual 'dos hallazgos sonar (BUG CRITICAL y CODE_SMELL MAJOR; MINOR, INFO y JavaScript fuera)' 2 $hs.Count
+  $h1 = @($hs | Where-Object { $_.Fichero -eq $total })
+  if ($h1.Count -eq 1) {
+    Igual 'su linea' $ln $h1[0].Linea
+    Igual 'su detalle, con tipo y severidad' 'Fix this null dereference. [BUG CRITICAL]' $h1[0].Detalle
+    Igual 'es un error' 'error' $h1[0].Sev
   }
+  else { Comprueba 'el de TotalService esta' $false '' }
+  Igual 'el MAJOR entra sin ninguna opcion' 'Reduce this method. [CODE_SMELL MAJOR]' (@($hs | Where-Object { $_.Fichero -eq $recibo })[0]).Detalle
   Comprueba 'el resumen dice cuantas lleva resueltas y que la prueba es volver a pasar Sonar' ($r1.Salida -match 'Sonar: 0 resueltas aqui\. La prueba de verdad es volver a pasar Sonar y relanzar con el xlsx nuevo\.') (Cola $r1.Salida)
-  $r2 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx, '-SonarMayores')
-  Comprueba 'con -SonarMayores la fila sonar cuenta 2' ($r2.Salida -match '(?m)^sonar\s+2\s+0\s*$') (Cola $r2.Salida)
 }
 
 $Pruebas['m10 sonar: -Paso sonar con el Copilot falso que cambia la linea marcada hace el lote y un commit'] = {
@@ -3477,6 +3476,8 @@ $Pruebas['m10 sonar: -Paso sonar con el Copilot falso que cambia la linea marcad
   Comprueba 'la linea marcada ha cambiado' ((Lee $e.Wt $total) -match 'int resultado = a \+ b; // corregido')
   Igual 'sonar queda a 0 en el worktree' 0 (Hallazgos-Sonar $e.Wt 'error').Count
   Comprueba 'el resumen cuenta 1 resuelta' ($r.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r.Salida)
+  Comprueba 'no falta ninguna de las listadas' ($r.Salida -match 'Sonar: no falta ninguna de las listadas; la prueba de verdad es volver a pasar Sonar') (Cola $r.Salida)
+  Comprueba 'y no hay lista de faltan' ($r.Salida -notmatch 'Faltan \d+ de Sonar' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/sonar-faltan.md')))
   $prompt = Lee $e.Wt '.rescate/prompt.md'
   Comprueba 'el prompt lleva el texto del paso' ($prompt -match 'Corrige cada incidencia de Sonar listada SIN cambiar el comportamiento') $prompt
   Comprueba 'y la incidencia con su fichero y su linea' ($prompt.Contains("- ${total}:${ln} - Fix this null dereference. [BUG CRITICAL]")) $prompt
@@ -3495,6 +3496,7 @@ $Pruebas['m10 sonar: un Copilot falso que no toca la linea marcada deja el lote 
   Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
   Comprueba 'el fichero queda atascado' ($r.Salida -match "ATASCADO en 'sonar'") (Cola $r.Salida)
   Comprueba 'y apuntado' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/atascados.md'))
+  Comprueba 'al final faltan 1 de Sonar, atascada tras los intentos' ($r.Salida -match 'Faltan 1 de Sonar' -and $r.Salida -match 'atascada tras los intentos') (Cola $r.Salida)
   Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
   Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
 }
@@ -3590,6 +3592,7 @@ $Pruebas['m10 sonar: solo -Repo y -Sonar hace el paso sonar entero, sin parar a 
   Comprueba 'y ninguno de calidad' ($log -notmatch 'rescate\(calidad\)') $log
   Igual 'los errores de calidad siguen como estaban' $calidad0 (@(Hallazgos $e.Wt | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' })).Count
   Comprueba 'sin plantilla no hay aviso de que el arreglo va a ciegas' ($r.Salida -notmatch 'a ciegas') (Cola $r.Salida)
+  Comprueba 'no falta ninguna de las listadas' ($r.Salida -match 'Sonar: no falta ninguna de las listadas') (Cola $r.Salida)
   $prompt = Lee $e.Wt '.rescate/prompt.md'
   Comprueba 'el prompt de sonar no habla de la plantilla ni de la migracion' ($prompt -notmatch 'PLANTILLA|migracion|hexagonal') $prompt
   Comprueba 'ni lleva hallazgos de calidad' ($prompt -notmatch 'javadoc-') $prompt
@@ -3728,8 +3731,86 @@ $Pruebas['m10 sonar: el filtro sale de SonarTipos y SonarSeveridades de .rescate
     (Inc 'MAJOR' 'Olor mayor.' 'CODE_SMELL' 'TotalService.java' $total "${ln}L"))
   $r1 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
   Igual 'con la config entran la vulnerabilidad y el bloqueante' 'Olor bloqueante. [CODE_SMELL BLOCKER]|Vulnerabilidad mayor. [VULNERABILITY MAJOR]' ((@(Hallazgos-Sonar $e.Repo 'error' | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
-  $r2 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx, '-SonarMayores')
-  Igual '-SonarMayores solo anade MAJOR a las severidades' 3 (Hallazgos-Sonar $e.Repo 'error').Count
+  Igual 'y -SonarMayores ya no existe: sonar no tiene mas opciones de filtro que la config' 0 @(Select-String -LiteralPath $Script -Pattern 'SonarMayores' -SimpleMatch).Count
+}
+
+$Pruebas['m10 sonar: el modelo deja una incidencia con motivo: el lote vale sin reintento y la dejada sale en Faltan con su motivo'] = {
+  $e = Escenario-Sonar 'm10-deja' @('service/TotalService', 'service/ReciboService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $recibo = $RutaSv + 'service/ReciboService.java'
+  $lnT = Linea-De (Lee $e.Repo $total) 'int resultado'
+  $lnR = Linea-De (Lee $e.Repo $recibo) 'int resultado'
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'Fix this bug in TotalService.' 'BUG' 'TotalService.java' $total "${lnT}L"),
+    (Inc 'CRITICAL' 'DEJAME: change the public API of ReciboService.' 'BUG' 'ReciboService.java' $recibo "${lnR}L"))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '3') 'sonar-deja'
+  Igual 'sale con 0: lo dejado no es un atasco' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba "Lote 1 OK: 'sonar' 2 -> 0 (la dejada no cuenta para bajar)" ($r.Salida -match "Lote 1 OK: 'sonar' 2 -> 0") (Cola $r.Salida)
+  Comprueba 'sin segundo intento ni segundo lote' ($r.Salida -notmatch 'intento 2 de' -and $r.Salida -notmatch 'Lote 2') (Cola $r.Salida)
+  Comprueba 'hay un commit de lo arreglado' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(sonar\): lote 1, hallazgos 2 a 0') (GitEn $e.Wt @('log', '--format=%s'))
+  Comprueba 'la linea arreglada ha cambiado' ((Lee $e.Wt $total) -match 'int resultado = a \+ b; // corregido')
+  Comprueba 'la dejada se queda como estaba' ((Lee $e.Wt $recibo) -notmatch 'corregido')
+  Comprueba 'el script ha leido y borrado sonar-sin-arreglar.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/sonar-sin-arreglar.txt')))
+  Comprueba 'el prompt le explica al modelo como dejar una' ((Lee $e.Wt '.rescate/prompt.md') -match 'sonar-sin-arreglar\.txt' -and (Lee $e.Wt '.rescate/prompt.md') -match '<ruta>:<linea> \| <motivo>')
+  Comprueba 'faltan 1 de Sonar' ($r.Salida -match 'Faltan 1 de Sonar') (Cola $r.Salida)
+  Comprueba 'agrupada por motivo' ($r.Salida -match 'dejada por el modelo: cambiaria la API publica') (Cola $r.Salida)
+  Comprueba 'con ruta:linea, mensaje y tipo/severidad' ($r.Salida.Contains("${recibo}:${lnR} - DEJAME: change the public API of ReciboService. [BUG CRITICAL]")) (Cola $r.Salida)
+  Comprueba 'la linea que no casa con ninguna incidencia se ignora' ($r.Salida -notmatch 'NoExiste')
+  $md = ''
+  if (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/sonar-faltan.md')) { $md = Lee $e.Wt '.rescate/sonar-faltan.md' }
+  Comprueba 'la lista tambien esta en .rescate/sonar-faltan.md' ($md -match 'dejada por el modelo: cambiaria la API publica' -and $md.Contains("${recibo}:${lnR}")) $md
+  Comprueba 'y su ruta va en el resumen final' ($r.Salida -match 'sonar-faltan\.md') (Cola $r.Salida)
+  Comprueba 'la dejada es un aviso en la tabla: sonar 0 errores y 1 aviso' ($r.Salida -match '(?m)^sonar\s+0\s+1\s*$') (Cola $r.Salida)
+  Comprueba 'el resumen cuenta 1 resuelta (la dejada no)' ($r.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r.Salida)
+}
+
+$Pruebas['m10 sonar: una incidencia que casa con SonarNoAutomatizar no llega al modelo y sale en Faltan con su motivo'] = {
+  $no = @(, @{ Rx = 'enum-prueba'; Motivo = 'prueba: esta regla no se automatiza' })
+  $e = Escenario-Sonar 'm10-noauto' @('service/TotalService', 'service/ReciboService') @{ SonarNoAutomatizar = $no }
+  $total = $RutaSv + 'service/TotalService.java'
+  $recibo = $RutaSv + 'service/ReciboService.java'
+  $lnT = Linea-De (Lee $e.Repo $total) 'int resultado'
+  $lnR = Linea-De (Lee $e.Repo $recibo) 'int resultado'
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'Fix this bug in TotalService.' 'BUG' 'TotalService.java' $total "${lnT}L"),
+    (Inc 'CRITICAL' 'ENUM-PRUEBA: do not touch this in ReciboService.' 'BUG' 'ReciboService.java' $recibo "${lnR}L"))
+  $r0 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
+  Comprueba 'la tabla cuenta 1 error y 1 aviso (la no automatizable es un aviso)' ($r0.Salida -match '(?m)^sonar\s+1\s+1\s*$') (Cola $r0.Salida)
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba "Lote 1 OK: 'sonar' 1 -> 0" ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'la que si se automatiza va al prompt' ($prompt.Contains("${total}:${lnT} - Fix this bug in TotalService.")) $prompt
+  Comprueba 'la no automatizable no llega al prompt (ni su fichero ni su mensaje)' (-not $prompt.Contains('ENUM-PRUEBA') -and -not $prompt.Contains('ReciboService.java')) $prompt
+  Comprueba 'su linea queda como estaba' ((Lee $e.Wt $recibo) -notmatch 'corregido')
+  Comprueba 'faltan 1 de Sonar' ($r.Salida -match 'Faltan 1 de Sonar') (Cola $r.Salida)
+  Comprueba 'con su motivo' ($r.Salida -match 'no se automatiza: prueba: esta regla no se automatiza') (Cola $r.Salida)
+  Comprueba 'con ruta:linea, mensaje y tipo/severidad' ($r.Salida.Contains("${recibo}:${lnR} - ENUM-PRUEBA: do not touch this in ReciboService. [BUG CRITICAL]")) (Cola $r.Salida)
+}
+
+$Pruebas['m10 sonar: un atasco en el lote 1 no para la pasada: el lote 2 y el 3 se hacen y todo sale contado al final'] = {
+  $e = Escenario-Sonar 'm10-atasco' @('service/TotalService', 'service/ReciboService', 'service/PagoService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $incs = @(, (Inc 'CRITICAL' 'ATASCA: this one cannot be fixed.' 'BUG' 'TotalService.java' $total ((Linea-De (Lee $e.Repo $total) 'int resultado').ToString() + 'L')))
+  foreach ($n in @('ReciboService', 'PagoService')) {
+    $ruta = $RutaSv + 'service/' + $n + '.java'
+    $incs += , (Inc 'CRITICAL' "Fix this bug in $n." 'BUG' ($n + '.java') $ruta ((Linea-De (Lee $e.Repo $ruta) 'int resultado').ToString() + 'L'))
+  }
+  Informe-Sonar $e.Xlsx $incs
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-Lote', '1') 'sonar-atasca'
+  Igual 'sale con 2 (hay un fichero atascado)' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'el lote 1 queda atascado' ($r.Salida -match "ATASCADO en 'sonar': $([regex]::Escape($total))") (Cola $r.Salida)
+  Comprueba "el lote 2 sigue: 'sonar' 3 -> 2" ($r.Salida -match "Lote 2 OK: 'sonar' 3 -> 2") (Cola $r.Salida)
+  Comprueba "y el lote 3: 'sonar' 2 -> 1" ($r.Salida -match "Lote 3 OK: 'sonar' 2 -> 1") (Cola $r.Salida)
+  $log = GitEn $e.Wt @('log', '--format=%s')
+  Comprueba 'hay dos commits de sonar, el 2 y el 3' ($log -match 'rescate\(sonar\): lote 2' -and $log -match 'rescate\(sonar\): lote 3' -and $log -notmatch 'lote 1') $log
+  Comprueba 'faltan 1 de Sonar' ($r.Salida -match 'Faltan 1 de Sonar') (Cola $r.Salida)
+  Comprueba 'atascada tras los intentos, con ruta:linea, mensaje y tipo/severidad' ($r.Salida -match 'atascada tras los intentos' -and $r.Salida -match [regex]::Escape("${total}:") -and $r.Salida.Contains('ATASCA: this one cannot be fixed. [BUG CRITICAL]')) (Cola $r.Salida)
+  Comprueba 'el resumen cuenta las 2 resueltas' ($r.Salida -match 'Sonar: 2 resueltas aqui\.') (Cola $r.Salida)
+  Comprueba 'y deja la lista en sonar-faltan.md' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/sonar-faltan.md'))
 }
 
 $Pruebas['m10 sonar: todo en ASCII (el script, el banco y los falsos)'] = {
