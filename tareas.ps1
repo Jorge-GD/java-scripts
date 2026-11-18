@@ -930,7 +930,8 @@ function Save-Jobs($Mapa, $Tareas) {
     else { $dudas += 'No se ha podido redactar este job: la tarea ha quedado atascada o no hay datos de clases que contar.' }
     foreach ($e in (Get-ListasJob $j).GetEnumerator()) { $o[$e.Key] = @($e.Value) }
     $o['sinFicha'] = @(@($j.clases | Where-Object { -not (Test-Path -LiteralPath (Join-Path (Join-Path $Datos 'fichas') ($_.ficha + '.json'))) }) | ForEach-Object { $_.clase })
-    if ($t -and @($t.entradas.fuera).Count -gt 0) { $dudas += ('No caben en la redaccion estas clases: ' + (@($t.entradas.fuera) -join ', ') + '.') }
+    # las clases que no caben en la redaccion nombran clases: van aparte, no a dudas (que pinta la pagina de negocio)
+    $o['fuera'] = @(if ($t) { $t.entradas.fuera })
     $o['dudas'] = $dudas
     if ($hecha) { $o['redaccion'] = 'hecha' } else { $o['redaccion'] = 'atascada' }
     Write-Json (Get-RutaJob $j.job) $o

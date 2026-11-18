@@ -194,10 +194,12 @@ function Get-VistaJob($D, $J) {
   $paraQue = ''
   $dudas = @()
   $sinFicha = @()
+  $fuera = @()
   if ($ficha) {
     if ($hecha) { $titulo = $ficha.titulo; $paraQue = $ficha.paraQue }
     $dudas = @($ficha.dudas | Where-Object { $null -ne $_ })
     $sinFicha = @($ficha.sinFicha | Where-Object { $null -ne $_ })
+    $fuera = @($ficha.fuera | Where-Object { $null -ne $_ })
   }
   $sinCaso = @()
   if ($pruebas) { $sinCaso = @($pruebas.sinCaso | Where-Object { $null -ne $_ -and -not (Test-HechoTecnico $tecnicos $_) }) }
@@ -205,7 +207,7 @@ function Get-VistaJob($D, $J) {
   if ($D.Resumen) { $m = @($D.Resumen.orden | Where-Object { $_.job -ceq $J.job })[0]; if ($m) { $motivo = $m.motivo } }
   return [pscustomobject]@{
     Job = $J.job; Id = $id; Ficha = $ficha; Pruebas = $pruebas; Hecha = $hecha; Titulo = $titulo; ParaQue = $paraQue; Motivo = $motivo
-    Pasos = $pasos; Citados = $citados; Otros = $otros; Necesita = $necesita; Produce = $produce; Dudas = $dudas; SinFicha = $sinFicha
+    Pasos = $pasos; Citados = $citados; Otros = $otros; Necesita = $necesita; Produce = $produce; Dudas = $dudas; SinFicha = $sinFicha; Fuera = $fuera
     DatosTecnicos = $datosTecnicos; SinCaso = $sinCaso
   }
 }
@@ -481,7 +483,7 @@ function Get-GrupoToca($T, [string]$Nombre, $Items, [string]$N) {
 }
 
 # "Lo que te toca": tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba y datos
-# que nombran clases (los que la pagina de negocio no pinta).
+# que nombran clases (los que la pagina de negocio no pinta, y las clases que no cupieron en la redaccion de un job).
 function Get-TocaHtml($D, $T) {
   $grupos = @()
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
@@ -506,6 +508,7 @@ function Get-TocaHtml($D, $T) {
   $conClase = @()
   foreach ($v in @($D.Vistas)) {
     foreach ($h in @($v.DatosTecnicos)) { $conClase += (Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-dato' @{ JOB = $v.Job; DONDE = "$($h.fichero):$($h.linea)" }); TEXTO = $h.texto }) }
+    if (@($v.Fuera).Count -gt 0) { $conClase += (Format-Trozo $T 'toca-fuera' @{ CABECERA = (Format-Trozo $T 'cab-job' @{ JOB = $v.Job }); CLASES = (@($v.Fuera) -join ', ') }) }
   }
   if ($conClase.Count -gt 0) { $grupos += (Get-GrupoToca $T 'tecnicos' $conClase "$($conClase.Count)") }
   if ($D.Correccion) {

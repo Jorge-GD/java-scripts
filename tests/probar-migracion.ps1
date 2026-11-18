@@ -2547,5 +2547,32 @@ $Pruebas['86 paginas de cobertura: casos de los datos (medida, sin medir, ausent
   }
 }
 
+$Pruebas['87 dudas de job: las clases que no caben en la redaccion no van a dudas ni a la pagina de negocio; salen en la portada con su job'] = {
+  $e = Escenario-Dos 'fuera' @() @{ CaracteresPorTarea = 650 }
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tareas $e 'ficha-job' | Where-Object { $_.entradas.job -eq 'cargaJob' })[0]
+  Comprueba 'hay tarea de ficha de job de cargaJob' ($null -ne $t) (Cola $r.Salida)
+  if ($null -eq $t) { return }
+  $fuera = @($t.entradas.fuera)
+  Comprueba 'el escenario deja clases fuera del prompt (y no todas)' ($fuera.Count -ge 1 -and $t.estado -eq 'hecha') "fuera: $($fuera -join ', '), estado $($t.estado)"
+  if ($fuera.Count -eq 0) { return }
+  $j = Job-De $e 'cargaJob'
+  $dudas = @($j.dudas) -join ' | '
+  foreach ($c in $fuera) { Comprueba "datos/jobs/cargaJob.json: dudas no lleva $c" (-not $dudas.Contains($c)) $dudas }
+  Comprueba 'dudas no dice nada de las clases que no caben' ($dudas -notmatch 'No caben') $dudas
+  Igual 'la ficha del job guarda las clases en su campo fuera' ($fuera -join ',') (@($j.fuera) -join ',')
+  $o = Pagina $e.Out '1-batch-original.html'
+  # los nombres de clase de las citas (la ruta del fichero de cada dato) siguen saliendo: es otra cosa; la duda ya no
+  Comprueba '1-batch-original.html no lleva la duda de las clases que no caben' ($o -notmatch 'No caben en la redacci') ($o.Length)
+  Comprueba '1-batch-original.html no lleva la lista de esas clases' (-not $o.Contains($fuera -join ', '))
+  $toca = Toca-De (Pagina $e.Out 'index.html')
+  $g = [regex]::Match($toca, '(?s)<h3>Datos con nombres de clase \(\d+\)</h3>.*?</div>').Value
+  Comprueba 'la portada tiene el grupo de datos con nombres de clase' ($g.Length -gt 0) $toca
+  Comprueba 'el grupo lleva el job y la lista de clases' ($g.Contains('cargaJob') -and $g.Contains($fuera -join ', ')) $g
+  Comprueba 'y dice que son las que no caben en la redaccion' ($g -match 'No caben en la redacci.n') $g
+  Comprueba 'las clases no salen en el grupo de dudas de la portada' ($toca -notmatch 'Dudas de las fichas de job') $toca
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
