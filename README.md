@@ -54,6 +54,7 @@ Un lote solo se guarda (commit local, nunca push) si pasa todas las puertas:
 - bajan los hallazgos del paso;
 - no empeoran los pasos anteriores;
 - el código nuevo no añade hallazgos de calidad (el Javadoc incluido);
+- no baja el número de `catch` de `src/main/java` (sin contar comentarios ni textos): quitar uno cambia cómo se tratan los errores; llevarlo a otro fichero vale;
 - no se han borrado ni desactivado tests;
 - no se ha tocado la plantilla ni el repo original.
 

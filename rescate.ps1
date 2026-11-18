@@ -29,6 +29,8 @@ COMO FUNCIONA
        - bajan los hallazgos del paso
        - no empeoran los pasos anteriores
        - el codigo nuevo no anade hallazgos de calidad (Javadoc incluido)
+       - no baja el numero de catch de src/main/java (llevar uno a otro
+         fichero vale; quitarlo cambia como se tratan los errores)
        - no se han borrado ni desactivado tests
        - no se ha tocado la plantilla ni el repo original
      Si vale -> commit. Si no -> reintento con el error y, si sigue mal, se
@@ -444,6 +446,7 @@ $RxMetodoInterfaz = '^(?>\s*)(?>(?:(?:public|abstract|default|static)\s+)*)(?!(?
 $RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inject)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s+(?:(?:private|protected|public|transient|volatile)\s+)*[\w\.\[\]<>,\?\s]+?\s+(\w+)\s*;'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
+$RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
 $RxEnvoltorio = New-Object System.Text.RegularExpressions.Regex '\bnew\s+(Integer|Long|Double|Float|Short|Byte|Boolean|Character)\s*\('
 $RxInstanceof = New-Object System.Text.RegularExpressions.Regex 'instanceof\s+([\w\.]+)\s*\)\s*\{?\s*(?:final\s+)?\1\s+\w+\s*=\s*\(\s*\1\s*\)'
 $RxColeccion = New-Object System.Text.RegularExpressions.Regex '\b(StringBuffer|Vector|Hashtable)\b'
@@ -1095,7 +1098,13 @@ function Get-Guardas {
     $des += [regex]::Matches($t, '@(Disabled|Ignore)\b').Count
     $ase += [regex]::Matches($t, '\b(assert\w*|verify)\s*\(').Count
   }
-  return [pscustomobject]@{ Tests = $tests.Count; Desactivados = $des; Aserciones = $ase; Plantilla = (Get-Huella $PlantillaRoot); Legacy = (Get-Huella $LegacyRoot) }
+  # los catch de src/main/java, sin comentarios ni textos (ruta -> cuenta): quitar uno cambia como se tratan los errores
+  $catchDe = @{}; $nc = 0
+  foreach ($f in @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/main/java'))) {
+    $k = $script:RxCatch.Matches((Get-Limpio ([System.IO.File]::ReadAllText($f.FullName)))).Count
+    if ($k -gt 0) { $catchDe[(Get-Rel $RepoRoot $f.FullName)] = $k; $nc += $k }
+  }
+  return [pscustomobject]@{ Tests = $tests.Count; Desactivados = $des; Aserciones = $ase; Catch = $nc; CatchDe = $catchDe; Plantilla = (Get-Huella $PlantillaRoot); Legacy = (Get-Huella $LegacyRoot) }
 }
 
 # ================================ PLAN ================================
@@ -1695,6 +1704,12 @@ function Invoke-Fix {
       if ($g1.Tests -lt $g0.Tests) { $problemas += "Has borrado tests ($($g0.Tests) -> $($g1.Tests) ficheros). Restauralos." }
       if ($g1.Desactivados -gt $g0.Desactivados) { $problemas += 'Has desactivado tests con @Disabled/@Ignore. Quitalo.' }
       if ($g1.Aserciones -lt $g0.Aserciones) { $blandos += "hay menos aserciones en los tests ($($g0.Aserciones) -> $($g1.Aserciones))" }
+      # cuenta de todo el repo: llevar un catch a otro fichero no la baja
+      $catchMenos = @()
+      if ($g1.Catch -lt $g0.Catch) {
+        $problemas += "Has quitado $($g0.Catch - $g1.Catch) catch ($($g0.Catch) -> $($g1.Catch)). El original sigue tras esos errores: manten el mismo tratamiento."
+        $catchMenos = @($g0.CatchDe.Keys | Sort-Object | Where-Object { [int]$g1.CatchDe[$_] -lt $g0.CatchDe[$_] } | ForEach-Object { "  - $_ - catch: $($g0.CatchDe[$_]) -> $([int]$g1.CatchDe[$_])" })
+      }
       $tocados = @($cambios | ForEach-Object { ($_.Substring(3) -replace '^"|"$', '') })
       if ($paso -ne 'build' -and ($tocados -contains 'pom.xml')) { $blandos += 'ha tocado pom.xml' }
       $fuera = @($tocados | Where-Object { -not $_.StartsWith('src/') -and $_ -ne 'pom.xml' })
@@ -1726,7 +1741,7 @@ function Invoke-Fix {
       $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) })
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) }) + $catchMenos
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
       if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }
