@@ -24,6 +24,12 @@ $Script = (Resolve-Path -LiteralPath $Script).Path
 $falsos = Join-Path $aqui 'falsos'
 . (Join-Path $aqui 'comun-banco.ps1')
 
+# Ningun lanzamiento lee el ajustes.json de quien pasa el banco (en su equipo apunta al Copilot de verdad):
+# RESCATE_HOME va a una carpeta de aqui, vacia. Las pruebas de ajustes.json ponen la suya.
+$CasaVacia = Join-Path $Dir 'casa-vacia'
+[void](New-Item -ItemType Directory -Path $CasaVacia -Force)
+$env:RESCATE_HOME = $CasaVacia
+
 # ============================== UTILIDADES ==============================
 # Lanza rescate.ps1 en otro proceso (Lanzar esta en comun-banco.ps1).
 function Rescate([string[]]$A, [string]$Guion = '') { return Lanzar $Script $A $Guion }
@@ -1189,6 +1195,93 @@ $Pruebas['sftp fijo: application.yml sin sftp es un error con una referencia sin
   Pon-Config $e @{ ExigirSftp = $false }
   [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
   Igual 'apagado el interruptor, nada' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+}
+
+# ================ AJUSTES.JSON Y EL PROGRAMA DE COPILOT ================
+# rescate.ps1 lee ajustes.json (RESCATE_HOME o la carpeta .rescate del usuario) antes que el config.json del repo, que
+# manda. El programa de Copilot se busca una vez, con la misma regla que el preflight (Get-Lanzable), antes de tocar el repo.
+
+# Escribe el ajustes.json de este escenario en su propia carpeta y lanza rescate.ps1 con RESCATE_HOME apuntando alli.
+function Rescate-Con-Ajustes([string]$Nombre, [hashtable]$Ajustes, [string[]]$A) {
+  $casa = Join-Path $Dir ($Nombre + '-casa')
+  Escribe $casa 'ajustes.json' (ConvertTo-Json -InputObject $Ajustes)
+  $antes = $env:RESCATE_HOME
+  $env:RESCATE_HOME = $casa
+  try { return (Rescate $A) }
+  finally { $env:RESCATE_HOME = $antes }
+}
+
+# Hay en el worktree el commit del primer lote de 'estructura'? (sin worktree, no.)
+function Hay-Commit-Del-Lote($E) {
+  return ((Test-Path -LiteralPath $E.Wt) -and ((GitEn $E.Wt @('log', '--format=%s')) -match 'rescate\(estructura\): lote 1'))
+}
+
+# El config.json del repo con el Maven de mentira y sin CopilotExe, mas estos ajustes (nombre -> valor).
+function Config-Sin-Copilot($E, [hashtable]$Mas = @{}) {
+  $cfg = [ordered]@{ MvnExe = (Join-Path $falsos 'mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
+}
+
+$Pruebas['ajustes: el banco no lee los ajustes del usuario, y sin CopilotExe en el repo vale el de ajustes.json'] = {
+  Comprueba 'RESCATE_HOME del banco es una carpeta suya y no tiene ajustes.json' ($env:RESCATE_HOME.StartsWith($Dir) -and -not (Test-Path -LiteralPath (Join-Path $env:RESCATE_HOME 'ajustes.json'))) $env:RESCATE_HOME
+  $e = Nuevo-Escenario 'ajustes-copilot'
+  Config-Sin-Copilot $e
+  $r = Rescate-Con-Ajustes 'ajustes-copilot' @{ CopilotExe = (Join-Path $falsos 'copilot.ps1') } (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix)
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  Comprueba 'el Copilot que se ha llamado es el de ajustes.json' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/llamadas.log')) (Cola $r.Salida)
+  Comprueba 'el arreglo hace su commit del lote' (Hay-Commit-Del-Lote $e) (Cola $r.Salida)
+}
+
+$Pruebas['ajustes: si los dos dicen CopilotExe, manda el config.json del repo'] = {
+  $e = Nuevo-Escenario 'ajustes-manda-repo'
+  Pon-Config $e @{}
+  $r = Rescate-Con-Ajustes 'ajustes-manda-repo' @{ CopilotExe = 'copilotinexistentexq' } (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix)
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  Comprueba 'el arreglo hace su commit del lote' (Hay-Commit-Del-Lote $e) (Cola $r.Salida)
+}
+
+$Pruebas['ajustes: una clave de ajustes.json que el motor no conoce ni avisa ni falla; en el config.json del repo si avisa'] = {
+  $e = Nuevo-Escenario 'ajustes-clave-rara'
+  Config-Sin-Copilot $e
+  $r = Rescate-Con-Ajustes 'ajustes-clave-rara' @{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); Plantilla = 'D:\algo'; ClaveDeMigracion = 'x' } @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'ni un aviso de clave desconocida' ($r.Salida -notmatch 'clave desconocida') (Cola $r.Salida)
+  Pon-Config $e @{ ClaveRara = 1 }
+  $r2 = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Comprueba 'la del config.json del repo sigue avisando' ($r2.Salida -match "config.json: clave desconocida 'ClaveRara'") (Cola $r2.Salida)
+}
+
+$Pruebas['ajustes: un CopilotExe que no se puede lanzar para el fix y el plan antes de tocar el repo; el pre sigue con la busqueda por texto'] = {
+  $e = Nuevo-Escenario 'ajustes-sin-copilot'
+  Pon-Config $e @{ CopilotExe = 'copilotinexistentexq' }
+  foreach ($modo in @('fix', 'plan')) {
+    $r = Rescate @('-Modo', $modo, '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinBuild', '-Auto', '-Si')
+    Igual "$modo sale con 1" 1 $r.Codigo
+    Comprueba "$modo dice que no puede lanzar y que es nada" ($r.Salida -match "No puedo lanzar 'copilotinexistentexq': aqui es nada\. Pon la ruta entera") (Cola $r.Salida)
+    Comprueba "$modo no crea el worktree" (-not (Test-Path -LiteralPath $e.Wt))
+    Igual "$modo no crea ninguna rama de rescate" '' ((GitEn $e.Repo @('branch', '--list', 'rescate/*')).Trim())
+    Igual "$modo deja el repo sin cambios" '' ((GitEn $e.Repo @('status', '--porcelain')).Trim())
+  }
+  $orig = Join-Path (Join-Path $Dir 'ajustes-sin-copilot') 'original'
+  Escribe $orig 'src/main/java/com/acme/Cargador.java' "package com.acme;`n`npublic class Cargador {`n    public static void main(String[] args) {`n    }`n}`n"
+  $r = Rescate @('-Modo', 'pre', '-Repo', $e.Repo, '-Legacy', $orig)
+  Igual 'pre sale con 0' 0 $r.Codigo
+  Comprueba 'pre avisa y sigue solo con el texto' ($r.Salida -match "No puedo lanzar 'copilotinexistentexq'" -and $r.Salida -match 'sigo solo con la busqueda por texto') (Cola $r.Salida)
+}
+
+$Pruebas['ajustes: un nombre a secas que en el PATH solo es un .ps1 se lanza por su ruta'] = {
+  $e = Nuevo-Escenario 'ajustes-ps1-en-path'
+  $bin = Join-Path $Dir 'bin-ps1-en-path'
+  Escribe $bin 'copilotfalsoxq.ps1' ("& '" + (Join-Path $falsos 'copilot.ps1') + "' @args`nexit `$LASTEXITCODE`n")
+  Pon-Config $e @{ CopilotExe = 'copilotfalsoxq' }
+  $pathAntes = $env:PATH
+  $env:PATH = $bin + [System.IO.Path]::PathSeparator + $env:PATH
+  try { $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) }
+  finally { $env:PATH = $pathAntes }
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  Comprueba 'Copilot se ha llamado' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/llamadas.log')) (Cola $r.Salida)
+  Comprueba 'el arreglo hace su commit del lote' (Hay-Commit-Del-Lote $e) (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================

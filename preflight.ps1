@@ -933,7 +933,7 @@ try {
         elseif ($k -eq 'Cmdlet') { $tipo = 'cmdlet' }
         else { $tipo = Get-TipoFichero "$($c[0].Source)" }
       }
-      $lanzable = Select-Lanzable $c ($env:OS -eq 'Windows_NT')
+      $lanzable = (Get-Lanzable $Cfg.CopilotExe).Ruta
       if ($lanzable) { $seLanza = Get-TipoFichero $lanzable }
     }
     catch { }

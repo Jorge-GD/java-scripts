@@ -11,7 +11,7 @@ DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
 PasosDefinicionMax, PasosFichaMax, GlosarioMax, ListasJob, Papeles, TiposDato y JavaExe) y
-las funciones, entre ellas Get-RutaAjustes (donde esta ajustes.json; RESCATE_HOME lo cambia).
+las funciones. Get-Lanzador usa Get-Lanzable, de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $Cfg            el de comun.ps1 (este fichero le anade sus claves al cargarse)
@@ -81,12 +81,6 @@ function Get-Hash8([string]$Texto) {
   return ((@($b[0..3]) | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
-# Donde esta ajustes.json: RESCATE_HOME o la carpeta .rescate del usuario.
-function Get-RutaAjustes {
-  if ($env:RESCATE_HOME) { return (Join-Path $env:RESCATE_HOME 'ajustes.json') }
-  return (Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.rescate') 'ajustes.json')
-}
-
 # ================================ LLAMADAS ================================
 # Comillas para la linea de comandos de Windows (valen tambien en Linux). Para cmd, ademas,
 # se entrecomilla lo que lleve & | < > ^ ( ), que cmd leeria como suyo.
@@ -107,38 +101,11 @@ function Get-PowerShellExe {
   return $e
 }
 
-# De lo que PowerShell encuentra con un nombre (Get-Command -All, en su orden: CommandType y Source), el fichero que se
-# lanza, o $null. Solo cuentan los ficheros (Application, ExternalScript): una funcion o un alias no tienen ruta. En
-# Windows el fichero tiene que acabar en una extension que se pueda lanzar (el 'copilot' sin extension que deja npm no);
-# fuera de Windows vale el primer fichero, porque ahi un ejecutable no lleva extension.
-function Select-Lanzable($Candidatos, [bool]$EsWindows) {
-  foreach ($c in $Candidatos) {
-    if (@('Application', 'ExternalScript') -notcontains "$($c.CommandType)") { continue }
-    $ruta = "$($c.Source)"
-    if (-not $ruta) { continue }
-    if (-not $EsWindows) { return $ruta }
-    if (@('.exe', '.com', '.cmd', '.bat', '.ps1') -contains [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()) { return $ruta }
-  }
-  return $null
-}
-
 # Que programa y que argumentos lanzar: un .ps1 va por PowerShell, un .cmd por cmd.
 function Get-Lanzador([string]$Exe, [string[]]$A) {
-  $encontrados = @()
-  if ($Exe) { $encontrados = @(Get-Command $Exe -All -ErrorAction SilentlyContinue) }
-  $ruta = Select-Lanzable $encontrados ($env:OS -eq 'Windows_NT')
-  if (-not $ruta) {
-    $hay = 'nada'
-    if ($encontrados.Count -gt 0) {
-      $tipo = "$($encontrados[0].CommandType)"
-      if ($tipo -eq 'Function') { $hay = 'funcion' }
-      elseif ($tipo -eq 'Alias') { $hay = 'alias' }
-      elseif ($tipo -eq 'Cmdlet') { $hay = 'cmdlet' }
-      elseif ([System.IO.Path]::GetExtension("$($encontrados[0].Source)")) { $hay = 'fichero con otra extension' }
-      else { $hay = 'fichero sin extension' }
-    }
-    throw ("No puedo lanzar '" + (($Exe -replace '\\', '/') -split '/')[-1] + "': aqui es $hay. Pon la ruta entera del .cmd o del .exe en CopilotExe de ajustes.json.")
-  }
+  $l = Get-Lanzable $Exe
+  if (-not $l.Ruta) { throw $l.Mensaje }
+  $ruta = $l.Ruta
   $ext = [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()
   if ($ext -eq '.ps1') {
     return [pscustomobject]@{ Exe = (Get-PowerShellExe); Args = (((@('-NoProfile', '-File', $ruta) + $A) | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }
