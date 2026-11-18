@@ -43,6 +43,7 @@ Uno por línea: primero la referencia (por ejemplo `clase-ab12cd34#3`), después
 
 - Cada hecho de tipo `regla` y cada hecho de tipo `error` de arriba tiene que salir en las `refs` de algún caso. Un caso puede cubrir varios hechos: junta los que se prueben con la misma entrada.
 - Límites: si un hecho pone un límite (un mínimo, un máximo, un número de días, un tope de rechazos), prueba el valor justo en el límite y el primero que lo pasa. Por ejemplo, con «como mucho 45 días»: un caso con 45 días, que se acepta, y otro con 46, que se rechaza. Los dos valores pueden ir en el mismo caso si se prueban con la misma entrada.
+- Opciones de arranque: si un caso necesita encender una opción (por ejemplo, el envío de correo), haz también el mismo caso con la opción apagada, siempre que la regla se vea sin ella. Así se puede probar sin preparar el entorno.
 - Las referencias se copian TAL CUAL de los hechos de arriba. Una referencia que no esté en ellos hace que se rechace todo el guion.
 - Lenguaje de negocio: frases cortas y palabras normales. En ningún texto puede salir el nombre de una clase (por ejemplo `GestorRecibos`) ni el nombre de un fichero que acabe en `.java`.
 - No inventes: pide solo lo que se pueda deducir de los hechos de arriba.
