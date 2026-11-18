@@ -9,12 +9,16 @@
 #   plan-toca-codigo   en la revision previa toca codigo (prohibido)
 #   lento              tarda 3 s antes de hacer nada (para probar el latido de rescate.ps1)
 #   mueve-a-infrastructure   en 'estructura' mueve las clases a infrastructure/util, un subpaquete que la plantilla no tiene
-# Paso 'sonar' (cada incidencia del prompt, '- fichero:linea - detalle', se "corrige" cambiando su linea marcada):
-#   (vacio)            le anade un comentario a la linea marcada
-#   sonar-nosonar      solo le anade '// NOSONAR'
-#   sonar-suppress     cambia la linea y anade @SuppressWarnings al final del fichero
-#   sonar-disabled     cambia la linea y anade @Disabled a un test
-#   sonar-borra-test   cambia la linea y borra un fichero de src/test
+# Paso 'sonar' (cada incidencia del prompt, '- fichero:linea - detalle', se "corrige" cambiando el codigo de su linea marcada: ' + 0;'):
+#   (vacio)            arregla bien
+#   sonar-nosonar      arregla y le anade '// NOSONAR'
+#   sonar-suppress     arregla y anade @SuppressWarnings al final del fichero
+#   sonar-disabled     arregla y anade @Disabled a un test
+#   sonar-borra-test   arregla y borra un fichero de src/test
+#   sonar-quita-test   arregla y quita la linea @Test de un test (el fichero se queda)
+#   sonar-fichero-nuevo  arregla y crea un fichero nuevo en src/main/java
+#   sonar-toca-pom     arregla y cambia el pom.xml
+#   sonar-extrae       la incidencia es de un metodo: extrae la suma a un metodo privado y deja la declaracion igual
 #   sonar-sin-tocar    no toca la linea marcada: cambia otra cosa del fichero
 #   sonar-atasca       no toca las incidencias cuyo detalle lleva ATASCA y corrige las demas
 #   sonar-deja         no toca las que llevan DEJAME en el detalle: las apunta con su motivo en .rescate/sonar-sin-arreglar.txt
@@ -567,10 +571,16 @@ switch ($paso) {
       if ($guion -eq 'sonar-sin-tocar') { Escribir $f ((Leer $f) + "`n// otro cambio: la linea marcada no se toca`n"); continue }
       if ($guion -eq 'sonar-atasca' -and $l -match 'ATASCA') { continue }   # no toca nada de esa incidencia: el lote no baja
       if ($guion -eq 'sonar-deja' -and $l -match 'DEJAME') { $dejadas += "${f}:${n} | cambiaria la API publica"; continue }
+      if ($guion -eq 'sonar-extrae') {   # la incidencia es de un metodo: saca la suma a un metodo privado y deja la declaracion como estaba
+        $texto = (Leer $f).Replace('int resultado = a + b;', 'int resultado = sumaAuxiliar(a, b);')
+        $i = $texto.LastIndexOf('}')
+        Escribir $f ($texto.Substring(0, $i) + "`n    private int sumaAuxiliar(int a, int b) {`n        return a + b;`n    }`n" + $texto.Substring($i))
+        continue
+      }
+      # arreglo por defecto: cambia el codigo de la linea marcada (un comentario no cuenta como cambio)
       $t = @((Leer $f) -split "`r?`n")
-      $marca = ' // corregido'
-      if ($guion -eq 'sonar-nosonar') { $marca = ' // NOSONAR' }
-      $t[$n - 1] = $t[$n - 1].TrimEnd() + $marca
+      $t[$n - 1] = ($t[$n - 1] -replace ';\s*$', ' + 0;')
+      if ($guion -eq 'sonar-nosonar') { $t[$n - 1] += ' // NOSONAR' }
       $texto = $t -join "`n"
       if ($guion -eq 'sonar-suppress') { $texto += "`n@SuppressWarnings(`"all`")`nclass Otra {`n}`n" }
       Escribir $f $texto
@@ -578,9 +588,13 @@ switch ($paso) {
     if ($dejadas.Count -gt 0) {   # las que deja, con su motivo, y una linea que no casa con ninguna incidencia
       Escribir '.rescate/sonar-sin-arreglar.txt' ((($dejadas + @('src/main/java/com/acme/plantillabatch/NoExiste.java:99 | esta no es de ningun lote')) -join "`n") + "`n")
     }
-    if ($guion -eq 'sonar-disabled' -or $guion -eq 'sonar-borra-test') {
+    if ($guion -eq 'sonar-fichero-nuevo') { Escribir 'src/main/java/com/acme/plantillabatch/service/Nuevo.java' "package com.acme.plantillabatch.service;`n`n/** Clase nueva. */`npublic class Nuevo {`n}`n" }
+    if ($guion -eq 'sonar-toca-pom') { Escribir 'pom.xml' ((Leer 'pom.xml') + "`n<!-- cambio -->`n") }
+    if ($guion -in @('sonar-disabled', 'sonar-borra-test', 'sonar-quita-test')) {
       $test = @(Get-ChildItem -LiteralPath (Get-Ruta 'src/test') -Recurse -File -Filter '*.java')[0]
-      if ($guion -eq 'sonar-disabled') { [System.IO.File]::WriteAllText($test.FullName, ([System.IO.File]::ReadAllText($test.FullName) -replace '@Test', "@Disabled`n    @Test")) }
+      $tt = [System.IO.File]::ReadAllText($test.FullName)
+      if ($guion -eq 'sonar-disabled') { [System.IO.File]::WriteAllText($test.FullName, ($tt -replace '@Test', "@Disabled`n    @Test")) }
+      elseif ($guion -eq 'sonar-quita-test') { [System.IO.File]::WriteAllText($test.FullName, ($tt -replace '(?m)^\s*@Test\r?\n', '')) }
       else { Remove-Item -LiteralPath $test.FullName -Force }
     }
   }
