@@ -4667,6 +4667,12 @@ $Pruebas['m20c commit de la IA (g): una lectura que hace git commit se deshace, 
   Igual 'rama nueva: el HEAD es el de antes' $antes2 (GitEn $e2.Wt @('rev-parse', 'HEAD'))
   Igual 'rama nueva: la tarea queda invalida con el motivo del commit' '1|invalida' ((Cuenta-Estado (Tareas $e2) 'atascada').ToString() + '|' + (Tareas $e2)[0].ultimoEstado)
   Comprueba 'rama nueva: con el motivo' ((Tareas $e2)[0].motivo -match 'hizo un commit')
+  # solo cambia de rama, sin commit: el HEAD es el mismo, pero el worktree ya no esta en la rama de rescate
+  $e3 = Nuevo-Escenario 'm20c-solo-rama' @('Clase1') @{ CopilotExe = (Join-Path $falsos 'm20c-copilot-commit.ps1') }
+  $r3 = Con-Entorno @{ M20C_COMMIT = 'solo-rama' } { Migra $e3 (Basicos $e3) }
+  Igual 'solo rama: sale con 0' 0 $r3.Codigo
+  Igual 'solo rama: vuelve a la rama de rescate' ((Estado $e3).rama) (GitEn $e3.Wt @('rev-parse', '--abbrev-ref', 'HEAD'))
+  Igual 'solo rama: la tarea queda invalida' '1|invalida' ((Cuenta-Estado (Tareas $e3) 'atascada').ToString() + '|' + (Tareas $e3)[0].ultimoEstado)
 }
 
 # ================================ LANZADOR ================================
