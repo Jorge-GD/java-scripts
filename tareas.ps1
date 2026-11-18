@@ -1,7 +1,7 @@
 <#
 tareas.ps1 - Las piezas de migracion.ps1 que no son el arranque: las llamadas a Copilot
-en paralelo, las tareas (ficha de clase, definicion de job, ficha de job, resumen y prueba en pre) con su
-comprobacion, el mapa de jobs, las variables del migrado y la prueba de aptitud.
+en paralelo, las tareas (ficha de clase, definicion de job, ficha de job, resumen, prueba en pre y comparacion con el
+migrado) con su comprobacion, el mapa de jobs, las variables del migrado y la prueba de aptitud.
 Se carga con '. (Join-Path $PSScriptRoot 'tareas.ps1')' despues de comun.ps1, desde
 migracion.ps1 o desde cualquier script que necesite lo mismo (un preflight) sin pasar
 por el arranque. Cargarlo no ejecuta nada. Solo ASCII a proposito.
@@ -10,7 +10,8 @@ Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto 
 DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
-PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, ListasJob, Papeles, TiposDato y JavaExe) y
+PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, FicherosComparar, EstadosComparar, ListasJob, Papeles, TiposDato, JavaExe, JacocoPlugin y
+CoberturaMinima) y
 las funciones. Get-Lanzador usa Get-Lanzable, de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
@@ -21,7 +22,7 @@ ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $ModeloElegido  id del modelo ('' = el que tenga Copilot): Invoke-Ronda
   $Datos          carpeta datos\: Save-Tarea, Get-TareasFichas y Save-Fichas
 Las tareas del negocio (mapa, ficha de job, resumen, prueba en pre y variables) necesitan ademas $RepoRoot
-(el worktree: de ahi salen .rescate\contrato.json y las variables) y $Fuentes (los .java del
+(el worktree: de ahi salen .rescate\contrato.json, las variables y los ficheros del migrado que se comparan) y $Fuentes (los .java del
 original que se leen); Get-JobsContrato llama a rescate.ps1 (junto a este script) si falta el contrato.
 Test-Aptitud solo usa $Cfg, $LegacyRoot, $Registros y $ModeloElegido.
 Invoke-Ronda devuelve, por tarea, tambien Segundos y Codigo de la llamada (para medir sin
@@ -49,6 +50,10 @@ $Cfg += @{
   PasosFichaMax      = 12     # pasos de una ficha de job
   GlosarioMax        = 15
   CasosMax           = 40     # casos de la prueba en pre de un job
+  FicherosComparar   = 3      # ficheros del migrado que se le dan a la comparacion de una clase del original
+  EstadosComparar    = @('igual', 'distinto', 'falta', 'no-lo-se')   # lo que puede decir la IA de un dato (sin-pieza lo pone el script)
+  JacocoPlugin       = 'org.jacoco:jacoco-maven-plugin:0.8.16'   # el preflight prueba en el equipo estas mismas coordenadas
+  CoberturaMinima    = 80     # por ciento de lineas cubiertas por los tests por debajo del cual la cobertura se marca como baja
   # Que datos de las fichas de clase van a cada lista de la ficha de job (cada tipo de dato, a una)
   ListasJob          = [ordered]@{
     necesita   = @('entrada-fichero', 'tabla-lee', 'parametro', 'config')
@@ -218,6 +223,10 @@ function Get-VariablesPrompt($T, [string]$Leer) {
     'ficha-job' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.PASOS_MAX = "$($Cfg.PasosFichaMax)" }
     'prueba-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.VARIABLES = $e.variables; $v.CASOS_MAX = "$($Cfg.CasosMax)" }
     'resumen' { $v.JOBS = $e.datos; $v.GLOSARIO_MAX = "$($Cfg.GlosarioMax)" }
+    'comparar-pieza' {
+      $v.FICHERO = $Leer; $v.CLASE = $e.clase; $v.DATOS = $e.datos
+      $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
+    }
     default {
       $v.FICHERO = $Leer; $v.RELATIVO = $e.fichero; $v.LINEAS = "$($e.desde)-$($e.hasta)"
       $v.PAPELES = ($Cfg.Papeles -join ', '); $v.TIPOS = ($Cfg.TiposDato -join ', ')
@@ -293,8 +302,8 @@ function Test-LineaCita($D, [string]$Pre) {
 }
 
 # Busca la cita de cada elemento de $Lista (con linea, cita y probado) en el fichero $Leer: corrige la
-# linea y marca probado los que salen. Si mas de la mitad no salen devuelve el motivo; si no, ''.
-function Test-Citas($Lista, [string]$Leer) {
+# linea y marca probado los que salen. Devuelve las citas que no salen.
+function Set-CitasProbadas($Lista, [string]$Leer) {
   $indice = Get-IndiceCitas $Leer
   $inventadas = @()
   foreach ($d in $Lista) {
@@ -304,6 +313,12 @@ function Test-Citas($Lista, [string]$Leer) {
     if ($cerca.Count -eq 0) { $d.linea = [int](@($donde | Sort-Object { [math]::Abs($_ - $d.linea) })[0]) }
     $d.probado = $true
   }
+  return $inventadas
+}
+
+# Las citas de $Lista en el fichero $Leer (Set-CitasProbadas): si mas de la mitad no salen devuelve el motivo; si no, ''.
+function Test-Citas($Lista, [string]$Leer) {
+  $inventadas = @(Set-CitasProbadas $Lista $Leer)
   if (($inventadas.Count * 2) -gt $Lista.Count) {
     return "Mas de la mitad de las citas ($($inventadas.Count) de $($Lista.Count)) no salen en el fichero, por ejemplo: '$($inventadas[0])'. Copia las citas tal cual del codigo y no inventes ninguna."
   }
@@ -558,6 +573,7 @@ function Test-Salida($T, [string]$Dir, [string]$Leer) {
     'ficha-job' { return (Test-FichaJob $T $Dir) }
     'resumen' { return (Test-Resumen $T $Dir) }
     'prueba-pre' { return (Test-PruebaPre $T $Dir) }
+    'comparar-pieza' { return (Test-Comparar $T $Dir) }
     default { return (Test-Ficha $T $Dir $Leer) }
   }
 }
@@ -892,7 +908,8 @@ function Get-TareasJob($Mapa, [bool]$ConservarAtascadas) {
 }
 
 # Las listas de un job que monta el script con los datos de las fichas de sus clases (ListasJob: a que lista va
-# cada tipo de dato), sin repetir: mismo tipo y mismo texto sin contar espacios ni mayusculas.
+# cada tipo de dato), sin repetir: mismo tipo y mismo texto sin contar espacios ni mayusculas. Un dato cuyo texto no
+# pasa Test-LenguajeNegocio lleva tecnico = $true: sigue en la lista, pero las paginas de negocio no lo pintan.
 function Get-ListasJob($JobMapa) {
   $listas = [ordered]@{}
   foreach ($k in $Cfg.ListasJob.Keys) { $listas[$k] = @() }
@@ -906,7 +923,9 @@ function Get-ListasJob($JobMapa) {
       foreach ($k in $Cfg.ListasJob.Keys) {
         if ($Cfg.ListasJob[$k] -ccontains $d.tipo) {
           $vistos[$clave] = $true
-          $listas[$k] += [ordered]@{ tipo = $d.tipo; texto = $d.texto; ref = "$($f.id)#$n"; clase = $f.clase; fichero = $f.fichero; linea = $d.linea; cita = $d.cita; probado = $d.probado }
+          $x = [ordered]@{ tipo = $d.tipo; texto = $d.texto; ref = "$($f.id)#$n"; clase = $f.clase; fichero = $f.fichero; linea = $d.linea; cita = $d.cita; probado = $d.probado }
+          if (Test-LenguajeNegocio @{ texto = $d.texto }) { $x['tecnico'] = $true }
+          $listas[$k] += $x
         }
       }
     }
@@ -927,7 +946,8 @@ function Save-Jobs($Mapa, $Tareas) {
     else { $dudas += 'No se ha podido redactar este job: la tarea ha quedado atascada o no hay datos de clases que contar.' }
     foreach ($e in (Get-ListasJob $j).GetEnumerator()) { $o[$e.Key] = @($e.Value) }
     $o['sinFicha'] = @(@($j.clases | Where-Object { -not (Test-Path -LiteralPath (Join-Path (Join-Path $Datos 'fichas') ($_.ficha + '.json'))) }) | ForEach-Object { $_.clase })
-    if ($t -and @($t.entradas.fuera).Count -gt 0) { $dudas += ('No caben en la redaccion estas clases: ' + (@($t.entradas.fuera) -join ', ') + '.') }
+    # las clases que no caben en la redaccion nombran clases: van aparte, no a dudas (que pinta la pagina de negocio)
+    $o['fuera'] = @(if ($t) { $t.entradas.fuera })
     $o['dudas'] = $dudas
     if ($hecha) { $o['redaccion'] = 'hecha' } else { $o['redaccion'] = 'atascada' }
     Write-Json (Get-RutaJob $j.job) $o
@@ -1033,8 +1053,10 @@ function Get-TareasPrueba($Mapa, [bool]$ConservarAtascadas) {
 
 # El guion que monta el script sin IA, de las listas del job: "Antes de lanzarlo" con lo que necesita, "Que mirar al
 # acabar" con lo que produce y, con $ConCasos, un caso por regla (su texto de titulo; entrada y esperado, vacios).
+# Es texto para negocio: no usa los datos tecnicos de las listas.
 function Get-GuionMinimo($JobMapa, [bool]$ConCasos) {
   $l = Get-ListasJob $JobMapa
+  foreach ($k in @($l.Keys)) { $l[$k] = @($l[$k] | Where-Object { -not $_.tecnico }) }
   $casos = @()
   if ($ConCasos) { $casos = @($l['reglas'] | ForEach-Object { [ordered]@{ titulo = $_.texto; entrada = ''; esperado = ''; refs = @($_.ref) } }) }
   return [ordered]@{
@@ -1062,6 +1084,145 @@ function Save-Pruebas($Mapa, $Tareas) {
     }
     Write-Json (Join-Path (Join-Path $Datos 'pruebas') ((Get-NombreJob $j.job) + '.json')) $o
   }
+}
+
+# ======================= EL ORIGINAL FRENTE AL MIGRADO =======================
+# Las palabras del nombre de una clase: sus partes en mayuscula de cuatro letras o mas (GestorRecibos -> Gestor, Recibos).
+function Get-PalabrasClase([string]$Nombre) {
+  return @([regex]::Matches($Nombre, '\p{Lu}\p{Ll}{3,}') | ForEach-Object { $_.Value } | Select-Object -Unique)
+}
+
+# Los ficheros del migrado (de $Java, los .java del worktree) que lee la comparacion de una clase del original: los que se
+# llaman como ella; si no hay ninguno, los que comparten alguna palabra de su nombre, los que mas primero y luego por ruta.
+# FicherosComparar como mucho. Sin ninguno, la clase no se compara con IA.
+function Select-FicherosMigrado([string]$Clase, $Java) {
+  $mismos = @($Java | Where-Object { $_.BaseName -ceq $Clase } | ForEach-Object { Get-Rel $RepoRoot $_.FullName } | Sort-Object)
+  if ($mismos.Count -gt 0) { return @($mismos | Select-Object -First ([int]$Cfg.FicherosComparar)) }
+  $palabras = @(Get-PalabrasClase $Clase)
+  $candidatos = @()
+  foreach ($f in $Java) {
+    $comunes = @(Get-PalabrasClase $f.BaseName | Where-Object { $palabras -ccontains $_ }).Count
+    if ($comunes -gt 0) { $candidatos += [pscustomobject]@{ N = $comunes; Rel = (Get-Rel $RepoRoot $f.FullName) } }
+  }
+  return @($candidatos | Sort-Object @{ Expression = 'N'; Descending = $true }, Rel | Select-Object -First ([int]$Cfg.FicherosComparar) | ForEach-Object { $_.Rel })
+}
+
+# Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea. Sin ninguno
+# no hay llamada: la tarea nace hecha, con todos sus datos 'sin-pieza'. La huella es la de los datos de la ficha, no la de las rutas:
+# una tarea hecha sigue valiendo aunque la correccion mueva ficheros del worktree.
+function Get-TareasComparar([bool]$ConservarAtascadas) {
+  $java = @(Get-JavaOriginal $RepoRoot)
+  $tareas = @()
+  foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $Datos 'fichas') -File -Filter 'clase-*.json' | Sort-Object Name)) {
+    $x = Read-Json $f.FullName
+    $lista = @($x.datos)
+    if ($lista.Count -eq 0) { continue }
+    $lineas = @()
+    for ($k = 0; $k -lt $lista.Count; $k++) {
+      $lineas += "$k. [$($lista[$k].tipo)] $($lista[$k].texto)"
+      $lineas += "   Original: $($x.fichero):$($lista[$k].linea) | cita: $($lista[$k].cita)"
+    }
+    $texto = $lineas -join "`n"
+    $migrado = @(Select-FicherosMigrado $x.clase $java)
+    $entradas = [pscustomobject]@{ clase = $x.clase; fichero = $x.fichero; migrado = $migrado; ndatos = $lista.Count; datos = $texto; huella = (Get-Hash8 $texto) }
+    $t = New-TareaTipo 'comparar-pieza' ('comparar-' + $x.id) $x.id ('datos/comparacion/' + $x.id + '.json') $entradas
+    if ($migrado.Count -eq 0) {
+      $t.estado = 'hecha'
+      $t.resultado = [ordered]@{ comparacion = @(0..($lista.Count - 1) | ForEach-Object { [ordered]@{ dato = $_; estado = 'sin-pieza'; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false } }) }
+    }
+    $tareas += , (Restore-Tarea $t $ConservarAtascadas)
+  }
+  return $tareas
+}
+
+# Comprueba lo que ha escrito Copilot: un elemento por dato (cada numero una vez), con su estado; en igual y distinto, uno de los
+# ficheros dados con linea y cita (la cita se busca en ese fichero del worktree); nota en distinto y no-lo-se.
+function Test-Comparar($T, [string]$Dir) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
+  if ($o.comparacion -isnot [array]) { return (New-Resultado $false "Falta el campo 'comparacion': una lista con un elemento por dato." $null) }
+  $n = [int]$T.entradas.ndatos
+  $lista = @()
+  $i = 0
+  foreach ($c in $o.comparacion) {
+    $pre = "comparacion[$i]"
+    if ($c -isnot [System.Management.Automation.PSCustomObject]) { return (New-Resultado $false "$pre tiene que ser un objeto con dato, estado, fichero, linea, cita y nota." $null) }
+    $numero = (($c.dato -is [int]) -or ($c.dato -is [long]) -or (($c.dato -is [double]) -and ($c.dato -eq [math]::Floor($c.dato))))
+    if (-not $numero -or $c.dato -lt 0 -or $c.dato -ge $n) { return (New-Resultado $false "$pre.dato tiene que ser el numero de un dato, de 0 a $($n - 1)." $null) }
+    if ($Cfg.EstadosComparar -cnotcontains $c.estado) { return (New-Resultado $false ("$pre.estado vale '$($c.estado)' y tiene que ser uno de: " + ($Cfg.EstadosComparar -join ', ') + '.') $null) }
+    $x = [ordered]@{ dato = [int]$c.dato; estado = $c.estado; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false }
+    if ($c.estado -ceq 'igual' -or $c.estado -ceq 'distinto') {
+      if (@($T.entradas.migrado) -cnotcontains $c.fichero) { return (New-Resultado $false ("$pre.fichero vale '$($c.fichero)' y tiene que ser uno de: " + (@($T.entradas.migrado) -join ', ') + '.') $null) }
+      $m = Test-LineaCita $c $pre
+      if ($m) { return (New-Resultado $false $m $null) }
+      $x.fichero = $c.fichero; $x.linea = [int]$c.linea; $x.cita = $c.cita
+    }
+    if (Test-Texto $c.nota) { $x.nota = $c.nota }
+    elseif ($c.estado -ceq 'distinto' -or $c.estado -ceq 'no-lo-se') { return (New-Resultado $false "$pre.nota falta o esta vacia: en $($c.estado) cuenta que cambia o por que no puedes decidirlo." $null) }
+    $lista += $x
+    $i++
+  }
+  $m = Compare-Nombres @(0..($n - 1) | ForEach-Object { "$_" }) @($lista | ForEach-Object { "$($_.dato)" }) 'comparacion (el campo dato de cada elemento)'
+  if ($m) { return (New-Resultado $false $m $null) }
+  # las citas: cada una en su fichero; si mas de la mitad de todas no salen, se rechaza
+  $conCita = @($lista | Where-Object { $_.cita })
+  $inventadas = @()
+  foreach ($g in @($conCita | Group-Object { $_.fichero })) {
+    $ruta = Join-Ruta $Dir $g.Name
+    if (Test-Path -LiteralPath $ruta) { $inventadas += @(Set-CitasProbadas $g.Group $ruta) }
+    else { $inventadas += @($g.Group | ForEach-Object { $_.cita }) }
+  }
+  if (($inventadas.Count * 2) -gt $conCita.Count) {
+    return (New-Resultado $false "Mas de la mitad de las citas ($($inventadas.Count) de $($conCita.Count)) no salen en los ficheros del migrado, por ejemplo: '$($inventadas[0])'. Copia las citas tal cual del codigo y no inventes ninguna." $null)
+  }
+  return (New-Resultado $true '' ([ordered]@{ comparacion = @($lista | Sort-Object { $_.dato }) }))
+}
+
+# Escribe datos\comparacion\<ficha>.json de cada tarea hecha: la clase, su fichero del original, los del migrado y, por dato, lo que se dijo.
+function Save-Comparaciones($Tareas) {
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
+    $o = [ordered]@{ ficha = $t.ficha; clase = $t.entradas.clase; ficheroOriginal = $t.entradas.fichero; migrado = @($t.entradas.migrado); datos = @($t.resultado.comparacion) }
+    Write-Json (Join-Path (Join-Path $Datos 'comparacion') ($t.ficha + '.json')) $o
+  }
+}
+
+# ============================== COBERTURA ==============================
+# La cobertura de lineas de los tests del migrado ($Dir, el worktree), con JaCoCo por coordenadas y sin tocar el pom: un solo Maven
+# (prepare-agent, test y report) con su salida en $Registro. Lee target\site\jacoco\jacoco.csv por el nombre de sus columnas y suma
+# todas las filas. Sin medida (medida false y porcentaje nulo) el motivo dice por que: nunca sale un 0 % que no se ha medido.
+# Con $Compila en $false (el diagnostico dice que no compila) no lanza Maven.
+function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
+  $o = [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = $Cfg.CoberturaMinima; motivo = '' }
+  if (-not $Compila) { $o.motivo = 'el migrado no compila'; return $o }
+  $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
+  if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
+  $j = $Cfg.JacocoPlugin
+  $latido = Start-Latido 'Maven (cobertura)' $Cfg.SegundosLatido
+  try { $r = Invoke-Nativo (Get-Mvn $Dir) @('-B', "${j}:prepare-agent", 'test', "${j}:report") $Dir }
+  finally { Stop-Latido $latido }
+  [System.IO.File]::WriteAllText($Registro, ((@($r.Salida) -join "`n") + "`n"), $Utf8)
+  if ($r.Codigo -ne 0) {
+    $e = @($r.Salida | Where-Object { "$_" -match '^\[ERROR\]\s*\S' } | Select-Object -First 1)
+    $o.motivo = "Maven ha salido con error (codigo $($r.Codigo))"
+    if ($e.Count -gt 0) { $o.motivo = 'Maven ha salido con error: ' + ("$($e[0])" -replace '^\[ERROR\]\s*', '').Trim() }
+    return $o
+  }
+  if (-not (Test-Path -LiteralPath $csv)) { $o.motivo = 'Maven no ha dejado target/site/jacoco/jacoco.csv: hay tests?'; return $o }
+  $lineas = @([System.IO.File]::ReadAllLines($csv, $Utf8) | Where-Object { $_.Trim() })
+  $cab = @()
+  if ($lineas.Count -gt 0) { $cab = @($lineas[0] -split ',' | ForEach-Object { $_.Trim().Trim('"') }) }
+  if (($cab -cnotcontains 'LINE_MISSED') -or ($cab -cnotcontains 'LINE_COVERED')) { $o.motivo = 'el CSV de JaCoCo no tiene las columnas LINE_MISSED y LINE_COVERED'; return $o }
+  $faltan = [long]0
+  $cubiertas = [long]0
+  try { foreach ($f in @($lineas | ConvertFrom-Csv)) { $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED } }
+  catch { $o.motivo = 'el CSV de JaCoCo no se puede leer: ' + $_.Exception.Message; return $o }
+  if ($faltan + $cubiertas -eq 0) { $o.motivo = 'ninguna linea medible'; return $o }
+  $o.medida = $true
+  $o.cubiertas = $cubiertas
+  $o.total = $faltan + $cubiertas
+  $o.porcentaje = [math]::Round(100.0 * $cubiertas / $o.total, 1, [System.MidpointRounding]::AwayFromZero)
+  return $o
 }
 
 # ================================ APTITUD ================================

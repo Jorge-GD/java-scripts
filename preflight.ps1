@@ -1075,7 +1075,7 @@ try {
     $dir = Join-Path $Tmp 'juguete'
     Copy-Item -LiteralPath (Join-Path (Join-Path $PSScriptRoot 'preflight') 'juguete') -Destination $dir -Recurse
     $mvn = Get-MvnProyecto $elegido $dir
-    $jacoco = 'org.jacoco:jacoco-maven-plugin:0.8.16'
+    $jacoco = $Cfg.JacocoPlugin
     $rewrite = 'org.openrewrite.maven:rewrite-maven-plugin:6.46.1'
     $r = Invoke-Proceso $mvn @('-B', 'test') $dir 1500
     $script:MavenBien = (-not $r.Agotado -and $r.Codigo -eq 0)

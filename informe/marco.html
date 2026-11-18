@@ -14,6 +14,8 @@
     <symbol id="e-medido" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="currentColor"/><path d="M7 17v-6M12 17V7M17 17v-4" stroke="#fff" stroke-width="2.6"/></symbol>
     <symbol id="e-ia" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M7.7 12.4l3 3 5.6-6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     <symbol id="e-sin" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2.4" stroke-dasharray="3.6 3.2"/><path d="M9.4 9.6a2.6 2.6 0 1 1 3.8 2.3c-.8.5-1.2 1-1.2 1.9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.3" fill="currentColor"/></symbol>
+    <symbol id="e-error" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" rx="3" fill="currentColor"/><path d="M8 8l8 8M16 8l-8 8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="e-aviso" viewBox="0 0 24 24"><path d="M12 2.5l10.5 18.5h-21z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 9.5v5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="17.6" r="1.4" fill="#fff"/></symbol>
     <symbol id="f-fichero" viewBox="0 0 32 32"><path d="M7 3h13l6 6v20H7z" fill="#fff" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M20 3v6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M11 15h11M11 20h11M11 25h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
     <symbol id="f-tabla" viewBox="0 0 32 32"><ellipse cx="16" cy="8" rx="11" ry="4.5" fill="#fff" stroke="currentColor" stroke-width="2"/><path d="M5 8v16c0 2.5 4.9 4.5 11 4.5s11-2 11-4.5V8" fill="#fff" stroke="currentColor" stroke-width="2"/><path d="M5 16c0 2.5 4.9 4.5 11 4.5s11-2 11-4.5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
     <symbol id="f-carpeta" viewBox="0 0 32 32"><path d="M3 7h9l3 3.5h14V27H3z" fill="#fff" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
@@ -31,6 +33,9 @@
       <ul>
         <li><a href="index.html"{{{ACTUAL_INDEX}}}>Portada</a></li>
         <li><a href="1-batch-original.html"{{{ACTUAL_ORIGINAL}}}>Batch original</a></li>
+        <li><a href="2-problemas.html"{{{ACTUAL_PROBLEMAS}}}>Problemas</a></li>
+        <li><a href="3-original-vs-migrado.html"{{{ACTUAL_COMPARAR}}}>Original frente a migrado</a></li>
+        <li><a href="4-correcciones.html"{{{ACTUAL_CORRECCIONES}}}>Correcciones</a></li>
       </ul>
     </nav>
   </div>
@@ -46,4 +51,57 @@
 <!--TROZO et-sin--><span class="et et-sin"><svg aria-hidden="true"><use href="#e-sin"/></svg>Sin comprobar</span><!--FIN-->
 <!--TROZO marca-ia--><span class="m m-ia"><svg aria-hidden="true"><use href="#e-ia"/></svg><span class="sr">Leído por la IA, con prueba</span></span><!--FIN-->
 <!--TROZO marca-sin--><span class="m m-sin"><svg aria-hidden="true"><use href="#e-sin"/></svg><span class="sr">Sin comprobar</span></span><!--FIN-->
+<!--TROZO marca-medido--><span class="m m-medido"><svg aria-hidden="true"><use href="#e-medido"/></svg><span class="sr">Medido</span></span><!--FIN-->
+<!--TROZO comp-est-igual--><span class="sev"><svg aria-hidden="true"><use href="#e-ia"/></svg>Igual</span><!--FIN-->
+<!--TROZO comp-est-distinto--><span class="sev sev-error"><svg aria-hidden="true"><use href="#e-error"/></svg>Distinto</span><!--FIN-->
+<!--TROZO comp-est-falta--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Falta</span><!--FIN-->
+<!--TROZO comp-est-no-lo-se--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>No lo sé</span><!--FIN-->
+<!--TROZO comp-est-sin-pieza--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Sin pieza</span><!--FIN-->
 <!--TROZO sin-datos--><p class="sin-datos">{{{ETIQUETA}}}<span>Todavía no hay datos: la fase {{FASE}} no ha terminado.</span></p><!--FIN-->
+<!--TROZO area-build-->Compilación y pom<!--FIN-->
+<!--TROZO area-estructura-->Estructura de carpetas<!--FIN-->
+<!--TROZO area-hexagonal-->Capas (hexagonal)<!--FIN-->
+<!--TROZO area-ficheros-->Ficheros y SFTP<!--FIN-->
+<!--TROZO area-config-->Configuración y secretos<!--FIN-->
+<!--TROZO area-paridad-->Jobs del original presentes<!--FIN-->
+<!--TROZO area-e2e-->Pruebas de extremo a extremo<!--FIN-->
+<!--TROZO area-tests-->Tests<!--FIN-->
+<!--TROZO area-calidad-->Calidad y Javadoc<!--FIN-->
+<!--TROZO estado-build-no-comprobado-->No se ha comprobado si el migrado compila.<!--FIN-->
+<!--TROZO estado-build-no-->El migrado no compila.<!--FIN-->
+<!--TROZO estado-build-sin-tests-->El migrado compila, pero no se han ejecutado sus tests.<!--FIN-->
+<!--TROZO estado-build-ok-->El migrado compila y sus tests pasan.<!--FIN-->
+<!--TROZO estado-build-fallan-->El migrado compila, pero algunos tests fallan.<!--FIN-->
+<!--TROZO estado-build-desconocido-->No se sabe si el migrado compila: el diagnóstico no lo dice.<!--FIN-->
+<!--TROZO fila-prob-->    <li class="fila s-{{SEV}}">{{{MARCA}}}{{{DONDE}}}<span class="q">{{DETALLE}}</span></li><!--FIN-->
+<!--TROZO fila-donde--><code class="d">{{TEXTO}}</code><!--FIN-->
+<!--TROZO marca-error--><span class="sev sev-error"><svg aria-hidden="true"><use href="#e-error"/></svg>Error</span><!--FIN-->
+<!--TROZO marca-aviso--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Aviso</span><!--FIN-->
+<!--TROZO sin-prob--><div class="sin-prob">
+  <b>Sin problemas:</b>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+  {{{ETIQUETA}}}
+</div><!--FIN-->
+<!--TROZO sin-prob-item-->    <li>{{{NOMBRE}}}</li><!--FIN-->
+<!--TROZO cuenta-error-uno-->{{N}} error<!--FIN-->
+<!--TROZO cuenta-error-otros-->{{N}} errores<!--FIN-->
+<!--TROZO cuenta-aviso-uno-->{{N}} aviso<!--FIN-->
+<!--TROZO cuenta-aviso-otros-->{{N}} avisos<!--FIN-->
+<!--TROZO cuenta-total-->{{{ERRORES}}} y {{{AVISOS}}}<!--FIN-->
+<!--TROZO cuenta-par-->{{{ERRORES}}}, {{{AVISOS}}}<!--FIN-->
+<!--TROZO cuenta-antes-despues-->{{{ANTES}}} → {{{DESPUES}}}<!--FIN-->
+<!--TROZO barra-antes--><div class="barra antes"><span class="b-et">antes</span><div class="pista"><span class="rel" style="--v:{{V}}"></span><b>{{V}}</b></div></div><!--FIN-->
+<!--TROZO barra-despues--><div class="barra desp"><span class="b-et">después</span><div class="pista"><span class="rel" style="--v:{{V}}"></span><b>{{V}}</b></div></div><!--FIN-->
+<!--TROZO leyenda-barras--><p class="barras-ley" aria-hidden="true"><span><i class="sw antes"></i>Antes de corregir</span><span><i class="sw desp"></i>Después</span></p><!--FIN-->
+<!--TROZO estado-area-resuelta--><span class="e-resuelta">Resuelta</span><!--FIN-->
+<!--TROZO estado-area-queda--><span class="e-quedan">Queda {{N}}</span><!--FIN-->
+<!--TROZO estado-area-quedan--><span class="e-quedan">Quedan {{N}}</span><!--FIN-->
+<!--TROZO estado-area-sin-->Sin errores<!--FIN-->
+<!--TROZO sin-valor-->sin dato<!--FIN-->
+<!--TROZO cob-pct-->{{PCT}} %<!--FIN-->
+<!--TROZO cob-sin-medir-->sin medir<!--FIN-->
+<!--TROZO cob-no-medida-->no se ha podido medir: {{MOTIVO}}<!--FIN-->
+<!--TROZO cob-baja-->Está por debajo del mínimo de {{MIN}} %.<!--FIN-->
+<!--TROZO cob-cumple-->Cumple el mínimo de {{MIN}} %.<!--FIN-->

@@ -66,6 +66,16 @@
 #   prueba-falta-siempre     deja sin caso el ultimo hecho regla o error, en todos los intentos
 #   prueba-clase-en-texto    el titulo del primer caso nombra la clase CargaReader (solo en el primer intento)
 #   prueba-de-mas            41 casos (siempre)
+# La comparacion con el migrado (TIPO: comparar-pieza; la clave de los regex es comparar-pieza:<clase del original>) cita las
+# lineas de la primera ruta MIGRADO del prompt, una por dato, y dice igual en todos:
+#   comparar-distinto        el primer dato sale distinto, con nota
+#   comparar-sin-nota        el primer dato sale distinto, sin nota
+#   comparar-inventada       todas las citas inventadas
+#   comparar-falta-dato      deja el ultimo dato sin elemento
+#   comparar-fichero-ajeno   cita un fichero que no se le dio
+# Un dato de la ficha de clase que nombra una clase (para las paginas de negocio; clave: el nombre de la clase):
+#   dato-con-clase           ficha correcta, pero el texto de su primer dato dice 'Delega el envio de la remesa en la
+#                            clase CargaValidator.' (con su cita buena)
 # Cada llamada deja .rescate/falso/<id>-<pid>.txt con sus datos y sus horas
 # (ticks UTC de inicio y de fin; un fin ausente es una llamada que nadie vio acabar).
 # Con la variable RESCATE_LLAMADAS (una carpeta) deja ademas una copia de ese fichero alli:
@@ -361,6 +371,30 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
     if ($guion -eq 'resumen-sin-job' -and $orden.Count -gt 0) { $orden = @($orden | Select-Object -First ($orden.Count - 1)) }
     $json = ConvertTo-Json -InputObject ([ordered]@{ resumen = 'El batch hace cosas para quien las necesita.'; orden = $orden; glosario = @([ordered]@{ termino = 'remesa'; definicion = 'Un grupo de recibos.' }) }) -Depth 8
   }
+  elseif ($tipo -eq 'comparar-pieza') {
+    $nDatos = @([regex]::Matches($prompt, '(?m)^\d+\. \[')).Count
+    $migrados = @([regex]::Matches($prompt, '(?m)^MIGRADO: (.+?)\s*$') | ForEach-Object { $_.Groups[1].Value })
+    $rutaM = $raiz
+    foreach ($s in $migrados[0].Split('/')) { $rutaM = Join-Path $rutaM $s }
+    $lineasM = [System.IO.File]::ReadAllLines($rutaM)
+    $realesM = @(for ($n = 1; $n -le $lineasM.Count; $n++) {
+        if ($lineasM[$n - 1] -match ';\s*$' -and $lineasM[$n - 1] -notmatch '^\s*(package|import)\b') { $n }
+      })
+    $comp = @()
+    for ($k = 0; $k -lt $nDatos; $k++) {
+      $n = $realesM[$k % $realesM.Count]
+      $comp += [ordered]@{ dato = $k; estado = 'igual'; fichero = $migrados[0]; linea = $n; cita = $lineasM[$n - 1].Trim(); nota = '' }
+    }
+    # los guiones de comparar se aplican sobre la lista ya montada
+    if ($guion -eq 'comparar-distinto' -or $guion -eq 'comparar-sin-nota') {
+      $comp[0].estado = 'distinto'
+      if ($guion -eq 'comparar-distinto') { $comp[0].nota = 'El migrado usa una constante en vez del literal.' }
+    }
+    if ($guion -eq 'comparar-inventada') { foreach ($c in $comp) { $c.cita = "esta cita no sale en el fichero $($c.dato)" } }
+    if ($guion -eq 'comparar-falta-dato') { $comp = @($comp | Select-Object -First ($comp.Count - 1)) }
+    if ($guion -eq 'comparar-fichero-ajeno') { foreach ($c in $comp) { $c.fichero = 'src/main/java/com/acme/life/NoMeHanDado.java' } }
+    $json = ConvertTo-Json -InputObject ([ordered]@{ comparacion = $comp }) -Depth 6
+  }
   else {
     $lineas = [System.IO.File]::ReadAllLines($leer)
     $desde = 1; $hasta = $lineas.Count
@@ -385,6 +419,7 @@ if ($texto -match '\.rescate/tareas/\S+\.prompt\.md') {
       $datos = @()
       foreach ($n in $reales) { $d = Nuevo-Dato $n $lineas[$n - 1].Trim(); $d.tipo = $tipos[$datos.Count % $tipos.Count]; $datos += $d }
     }
+    if ($guion -eq 'dato-con-clase') { $datos[0].texto = 'Delega el envio de la remesa en la clase CargaValidator.' }
     if ($guion -eq 'cita-larga') { $datos[0].cita = ('x' * 130) }
     if ($guion -eq 'tipo-libre') { $datos[0].tipo = 'inventado' }
     if ($guion -eq 'linea-texto') { $datos[0].linea = '31' }

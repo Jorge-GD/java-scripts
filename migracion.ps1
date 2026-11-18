@@ -3,7 +3,7 @@ migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
 Necesita comun.ps1, tareas.ps1, informe.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
-QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo a negocio)
+QUE HACE (esta version: la lectura del original, los datos para explicarlo a negocio y la correccion del migrado)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
   dos preguntas (modelo y que hacer al acabar el informe) y te vas. Cada llamada
   a Copilot CLI es una tarea cerrada y pequena; el script la comprueba. El
@@ -13,11 +13,13 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
   Arranque: herramientas y repos, batch de referencia (-Plantilla, o el guardado
   en %USERPROFILE%\.rescate\ajustes.json, o se pregunta), modelo, prueba de
   aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree.
+  Diagnostico (sin IA, la primera fase): rescate.ps1 -Modo diagnostico mide el migrado y deja datos\hallazgos-antes.json y
+  datos\diagnostico-antes.md; su pagina es 2-problemas.html. Se hace una vez: relanzar no repite Maven.
   Lectura: una ficha por clase del original, hasta 4 llamadas a la vez. Tras
   cada ronda el worktree tiene que estar limpio y el original y la referencia sin
   cambios. Una salida invalida se repite una vez, con el motivo y esfuerzo alto;
   si falla otra vez la tarea queda atascada y se sigue.
-  Despues de las clases, cinco fases mas (datos\estado.json lleva la fase en que va; cada
+  Despues de las clases, seis fases mas (datos\estado.json lleva la fase en que va; cada
   tarea hecha se salta al relanzar, y una fase se hace aunque la anterior tenga atascadas):
     mapa        jobs del original (contrato de rescate.ps1 -Modo pre -SinIA, o el que ya haya en
                 .rescate\contrato.json), sus pasos (una tarea de definicion por fichero que
@@ -28,10 +30,19 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
     resumen     una tarea con todos los jobs: datos\resumen.json
     pruebas-pre una tarea por job con reglas o errores (sin leer codigo): el guion de prueba en pre,
                 datos\pruebas\<job>.json; los jobs sin reglas ni errores lo llevan montado por el script
+    comparar    una tarea por clase del original con datos: la IA lee los ficheros del migrado que elige el script (los del
+                mismo nombre o los que comparten palabras con la clase) y dice, dato a dato, si estan igual, distintos o
+                faltan; las citas las comprueba el script: datos\comparacion\<ficha>.json. Sin ficheros del migrado no hay
+                llamada y sus datos salen 'sin-pieza'. Es una lectura sin cambiar nada, del migrado tal como llego.
     lectura-hecha
+    correccion  si contestaste "corregir": rescate.ps1 -Modo fix -Todo arregla el worktree (registros\correccion.log), se vuelve a
+                diagnosticar (datos\hallazgos-despues.json) y datos\correcciones.json cuenta que se ha corregido y que no.
+                Con "parar" (o -SoloInforme) no se corrige nada. Se salta si la correccion ya esta completa.
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
-  que te toca) y 1-batch-original.html (que hace el batch, job a job), con informe.ps1 y las plantillas de
-  informe\. Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
+  que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
+  migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato) y 4-correcciones.html (que se ha
+  corregido y que queda), con informe.ps1 y las plantillas de informe\.
+  Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
   las tareas hechas y sigue donde se quedo. Las atascadas tampoco se repiten (salvo
@@ -113,7 +124,7 @@ function Save-Estado {
   Write-Json (Join-Path $Datos 'estado.json') $Estado
 }
 
-# Las dos paginas del informe (index.html y 1-batch-original.html) con lo que haya hasta ahora. Si no se pueden montar,
+# Las cinco paginas del informe (index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html) con lo que haya hasta ahora. Si no se pueden montar,
 # se avisa y la pasada sigue: son una vista de los datos, no parte del trabajo.
 function Save-Informes {
   try { Write-Informes -Salida $Salida }
@@ -143,6 +154,59 @@ function Select-Modelo {
 }
 
 # ================================= FASES =================================
+# El diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y sus hallazgos se copian a datos\ como
+# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
+# tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile). Si el motor falla, parada 'motor'
+# y devuelve $false.
+function Invoke-Diagnostico([string]$Cuando) {
+  $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
+  $mMotor = Join-Ruta $RepoRoot '.rescate/diagnostico.md'
+  if (Test-Path -LiteralPath $hMotor) { Remove-Item -LiteralPath $hMotor -Force }
+  $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'diagnostico', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Si')
+  $registro = Join-Path $Registros "diagnostico-$Cuando.log"
+  Save-Registro $registro $r.Salida
+  if ($r.Codigo -ne 0 -or -not (Test-Path -LiteralPath $hMotor) -or -not (Test-Path -LiteralPath $mMotor)) {
+    $ultimas = (@($r.Salida | Where-Object { "$_".Trim() } | Select-Object -Last 3) -join ' / ')
+    $que = 'el diagnostico'
+    if ($Cuando -eq 'despues') { $que = 'el diagnostico de despues' }
+    Set-Parada 'motor' "$que (rescate.ps1 -Modo diagnostico) ha salido con codigo $($r.Codigo): $ultimas" $registro
+    $script:Parada = $true
+    return $false
+  }
+  # la cobertura va antes que los hallazgos: si se corta aqui, relanzar repite el diagnostico entero
+  $compila = ((Get-EstadoBuild ([System.IO.File]::ReadAllText($mMotor, $Utf8))) -cne 'compila: NO')
+  $cob = Get-Cobertura $RepoRoot (Join-Path $Registros "cobertura-$Cuando.log") $compila
+  Write-Json (Join-Path $Datos "cobertura-$Cuando.json") $cob
+  if ($cob.medida) { Info "Cobertura ($Cuando): $("$($cob.porcentaje)".Replace('.', ',')) % de las lineas ($($cob.cubiertas) de $($cob.total))." }
+  else { Aviso "Cobertura ($Cuando): no se ha podido medir: $($cob.motivo)" }
+  # el .json el ultimo: es el que dice que la fase esta hecha
+  foreach ($par in @(@($mMotor, "diagnostico-$Cuando.md"), @($hMotor, "hallazgos-$Cuando.json"))) {
+    $destino = Join-Path $Datos $par[1]
+    Copy-Item -LiteralPath $par[0] -Destination ($destino + '.tmp') -Force
+    Move-Item -LiteralPath ($destino + '.tmp') -Destination $destino -Force
+  }
+  return $true
+}
+
+# La salida de un proceso sin los colores de la consola.
+function Get-SinColor($Salida) { return @($Salida | ForEach-Object { [regex]::Replace("$_", '\x1b\[[0-9;]*m', '') }) }
+
+function Save-Registro([string]$Ruta, $Salida) {
+  [System.IO.File]::WriteAllText($Ruta, ((Get-SinColor $Salida) -join "`n") + "`n", $Utf8)
+}
+
+# La fase diagnostico: el diagnostico de antes. Se salta si ya esta (relanzar no repite Maven).
+function Invoke-FaseDiagnostico {
+  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-antes.json')) { return }
+  $Estado['fase'] = 'diagnostico'
+  Save-Estado
+  [void](Get-JobsContrato)
+  if (-not (Invoke-Diagnostico 'antes')) { return }
+  Save-Informes
+  $d = Read-Diagnostico $Datos
+  Info "Diagnostico: $($d.Errores) errores y $($d.Avisos) avisos. Detalle: $(Join-Path $Salida '2-problemas.html')"
+}
+
 # Una fase: rondas de hasta Paralelo llamadas hasta que no quedan tareas pendientes, hay una parada o se llega
 # al -Limite (que cuenta tareas de todas las fases). Tras cada ronda: worktree limpio y original y referencia
 # sin cambios. Los contadores son del script ($script:Parada, Racha, Rondas e Iniciadas): las fases los comparten.
@@ -215,10 +279,15 @@ function Invoke-Fase($Tareas) {
 function Get-TareasFase([string]$Fase, [bool]$Conservar) {
   switch ($Fase) {
     'fichas-clase' { return @(Get-TareasFichas $Fuentes $Conservar) }
-    'mapa' { Write-Json (Join-Path $Datos 'variables.json') @(Get-Variables); return @(Get-TareasDefinicion @(Get-JobsContrato) $Conservar) }
+    'mapa' {
+      # la foto de antes de corregir: una vez escrita no se toca (la correccion cambia los ficheros de configuracion)
+      if (-not (Test-Path -LiteralPath (Join-Path $Datos 'variables.json'))) { Write-Json (Join-Path $Datos 'variables.json') @(Get-Variables) }
+      return @(Get-TareasDefinicion @(Get-JobsContrato) $Conservar)
+    }
     'fichas-job' { return @(Get-TareasJob (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'resumen' { return @(Get-TareasResumen (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'pruebas-pre' { return @(Get-TareasPrueba (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
+    'comparar' { return @(Get-TareasComparar $Conservar) }
   }
 }
 
@@ -231,6 +300,7 @@ function Save-Fase([string]$Fase, $Tareas) {
     'fichas-job' { Save-Jobs (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'resumen' { if (@($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count -gt 0) { Write-Json (Join-Path $Datos 'resumen.json') $Tareas[0].resultado } }
     'pruebas-pre' { Save-Pruebas (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
+    'comparar' { Save-Comparaciones $Tareas }
   }
 }
 
@@ -263,6 +333,140 @@ function Get-LineaFase([string]$Fase, $Tareas) {
       if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
       return $l
     }
+    'comparar' {
+      if (@($Tareas).Count -eq 0) { return 'Comparacion con el original: ninguna clase con datos que comparar' }
+      $l = "Comparacion con el original: $($n.hecha) clases comparadas"
+      if ($n.atascada -gt 0) { $l += ", $($n.atascada) atascadas" }
+      if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
+      $c = [ordered]@{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-pieza' = 0 }
+      foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) { foreach ($d in @($t.resultado.comparacion)) { $c[[string]$d.estado]++ } }
+      return "$l. Datos: $($c['igual']) igual, $($c['distinto']) distinto, $($c['falta']) falta, $($c['no-lo-se']) no lo se, $($c['sin-pieza']) sin pieza."
+    }
+  }
+}
+
+# ============================== CORRECCION ==============================
+# Los hallazgos de antes que ya no estan despues, comparando area, fichero y detalle (no la linea: cambiar de linea no es arreglarse).
+function Get-Resueltos {
+  $quedan = @{}
+  foreach ($h in @(Read-Json (Join-Path $Datos 'hallazgos-despues.json') | Where-Object { $null -ne $_ })) {
+    $k = "$($h.Cat)|$($h.Fichero)|$($h.Detalle)"
+    $quedan[$k] = 1 + [int]$quedan[$k]
+  }
+  $res = @()
+  foreach ($h in @(Read-Json (Join-Path $Datos 'hallazgos-antes.json') | Where-Object { $null -ne $_ })) {
+    $k = "$($h.Cat)|$($h.Fichero)|$($h.Detalle)"
+    if ([int]$quedan[$k] -gt 0) { $quedan[$k] = [int]$quedan[$k] - 1 } else { $res += $h }
+  }
+  return $res
+}
+
+# Los commits de arreglo (rescate(<paso>): ...) de la rama del worktree desde la rama del migrado, en orden.
+function Get-CommitsRescate {
+  $res = @()
+  foreach ($l in @((Invoke-Git $RepoRoot @('log', '--reverse', '--format=%h|%s', "$RamaMigrado..HEAD")).Salida)) {
+    $m = [regex]::Match("$l", '^([0-9a-f]+)\|(rescate\(([^)]*)\).*)$')
+    if ($m.Success) { $res += [ordered]@{ hash = $m.Groups[1].Value; paso = $m.Groups[3].Value; asunto = $m.Groups[2].Value } }
+  }
+  return $res
+}
+
+# Lo que el motor no pudo arreglar: una linea "- [paso] fichero: motivo (registro: ruta)" de .rescate\atascados.md. Una linea que no
+# case se guarda entera en el motivo.
+function Get-Atascados {
+  $ruta = Join-Ruta $RepoRoot '.rescate/atascados.md'
+  $res = @()
+  if (-not (Test-Path -LiteralPath $ruta)) { return $res }
+  foreach ($l in [System.IO.File]::ReadAllLines($ruta, $Utf8)) {
+    if (-not $l.Trim()) { continue }
+    $m = [regex]::Match($l, '^- \[([^\]]*)\] (.+?): (.*?)(?: \(registro: [^)]*\))?\s*$')
+    if ($m.Success) { $res += [ordered]@{ paso = $m.Groups[1].Value; fichero = $m.Groups[2].Value; motivo = $m.Groups[3].Value } }
+    else { $res += [ordered]@{ paso = ''; fichero = ''; motivo = $l.Trim() } }
+  }
+  return $res
+}
+
+# Las variables sin valor por defecto que hay ahora en el worktree y no estaban en datos\variables.json (la foto de antes de corregir).
+function Get-VariablesNuevas {
+  $conocidas = @()
+  $f = Join-Path $Datos 'variables.json'
+  if (Test-Path -LiteralPath $f) { $conocidas = @(Read-Json $f | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.variable }) }
+  $res = @()
+  foreach ($v in @(Get-Variables)) {
+    if ($null -ne $v.porDefecto) { continue }
+    if (($conocidas -ccontains [string]$v.variable) -or (@($res | Where-Object { $_.variable -ceq $v.variable }).Count -gt 0)) { continue }
+    $res += [ordered]@{ variable = $v.variable; fichero = $v.fichero; linea = $v.linea }
+  }
+  return $res
+}
+
+# datos\correcciones.json: lo que paso en la corrida, con parada o sin ella.
+function Save-Correcciones([int]$Codigo, [bool]$Completa) {
+  $resueltos = @()
+  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-despues.json')) { $resueltos = @(Get-Resueltos) }
+  $c = [ordered]@{
+    completa = $Completa; codigo = $Codigo; rama = (Get-Rama $RepoRoot); base = $RamaMigrado
+    commits = @(Get-CommitsRescate); atascados = @(Get-Atascados); resueltos = $resueltos; variablesNuevas = @(Get-VariablesNuevas)
+  }
+  Write-Json (Join-Path $Datos 'correcciones.json') $c
+  return $c
+}
+
+# La fase correccion (tras lectura-hecha): rescate.ps1 -Modo fix -Todo arregla el worktree, se vuelve a diagnosticar y datos\correcciones.json
+# lo cuenta. Con la respuesta 'parar' no se lanza. Si ya hay una correccion completa, se salta. Parada segun el codigo del motor:
+# 0 completa; 2 sin compilar -> no-compila, con PARO: -> lotes-deshechos, si no completa con atascados; 3 git; 4 guardas; otro motor.
+function Invoke-FaseCorreccion {
+  $ruta = Join-Path $Datos 'correcciones.json'
+  if (Test-Path -LiteralPath $ruta) {
+    $previa = $null
+    try { $previa = Read-Json $ruta } catch { $previa = $null }
+    if ($previa -and $previa.completa -eq $true) { $Estado['fase'] = 'correccion'; Save-Estado; return }
+  }
+  if ($respuesta -ne 'corregir') { Info 'No se corrige nada: has pedido parar tras el informe. Para corregir, relanza el mismo comando con -Si.'; return }
+  $Estado['fase'] = 'correccion'
+  Save-Estado
+  $atascadas = Join-Ruta $RepoRoot '.rescate/atascados.md'
+  if (Test-Path -LiteralPath $atascadas) { Remove-Item -LiteralPath $atascadas -Force }
+  Info 'Correccion: corrigiendo el migrado con rescate.ps1 -Modo fix (un fichero por llamada; puede tardar horas)...'
+  $a = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'fix', '-Todo', '-Si', '-Lote', '1', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Legacy', $LegacyRoot, '-Esfuerzo', 'medium', '-EsfuerzoPlan', 'high')
+  if ($ModeloElegido) { $a += @('-Modelo', $ModeloElegido) }
+  # la salida del motor sale por la consola linea a linea mientras corre (con sus latidos); Invoke-Nativo la guardaria hasta el final
+  $eap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $lineas = @(& (Get-PowerShellExe) @a 2>&1 | ForEach-Object { $l = "$_"; Write-Host $l; $l })
+    $r = [pscustomobject]@{ Codigo = $LASTEXITCODE; Salida = $lineas }
+  }
+  finally { $ErrorActionPreference = $eap }
+  $registro = Join-Path $Registros 'correccion.log'
+  Save-Registro $registro $r.Salida
+  $diagnosticado = $true
+  if ($r.Codigo -ne 1) { $diagnosticado = Invoke-Diagnostico 'despues' }
+  $motivo = ''
+  $detalle = ''
+  switch ($r.Codigo) {
+    0 { }
+    2 {
+      $d = Read-Diagnostico $Datos 'despues'
+      if ($d -and $d.Estado -ceq 'compila: NO') { $motivo = 'no-compila'; $detalle = 'Despues de corregir, el migrado no compila. Los arreglos estan en la rama del worktree: mira el registro.' }
+      elseif (@(Get-SinColor $r.Salida | Where-Object { $_ -match '^\s*PARO:' }).Count -gt 0) { $motivo = 'lotes-deshechos'; $detalle = '6 lotes seguidos deshechos: suele ser Copilot, Maven o un flag, no el codigo.' }
+    }
+    3 { $motivo = 'git'; $detalle = 'El motor no ha podido hacer un commit de arreglo (git commit ha fallado).' }
+    4 { $motivo = 'guardas'; $detalle = 'El motor ha visto cambiar el original o la referencia durante los arreglos. Mira con git status y git diff, y vuelve a lanzar.' }
+    default {
+      $ultimas = (@(Get-SinColor $r.Salida | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' / ')
+      $motivo = 'motor'
+      $detalle = "el motor de arreglos (rescate.ps1 -Modo fix) ha salido con codigo $($r.Codigo): $ultimas"
+    }
+  }
+  $c = Save-Correcciones $r.Codigo ($diagnosticado -and -not $motivo)
+  if ($motivo) { Set-Parada $motivo $detalle $registro; $script:Parada = $true }
+  # 'actualizado' se escribio al empezar: sin esto la portada dice que la pasada llevo lo de antes de corregir
+  Save-Estado
+  Save-Informes
+  if ($diagnosticado -and -not $motivo) {
+    Info "Correccion: $(@($c.commits).Count) commits de arreglo y $(@($c.atascados).Count) atascados. Detalle: $(Join-Path $Salida '4-correcciones.html')"
+    if (@($c.atascados).Count -gt 0) { Aviso "Lo que el motor no ha podido arreglar esta en la pagina 4-correcciones.html y en $(Join-Path $Salida 'datos/correcciones.json')." }
   }
 }
 
@@ -279,8 +483,8 @@ foreach ($x in @(@('git', 'git'), @('java', $Cfg.JavaExe), @('Copilot', $Cfg.Cop
 }
 $LegacyRoot = Get-Repo $Legacy '-Legacy'
 $MigradoRoot = Get-Repo $Migrado '-Migrado'
-$rama = Get-Rama $MigradoRoot
-if (-not $rama -or $rama -eq 'HEAD') { Stop-Arranque "El migrado no esta en una rama (HEAD suelto): $MigradoRoot. Cambia a una rama y vuelve a lanzar." }
+$RamaMigrado = Get-Rama $MigradoRoot
+if (-not $RamaMigrado -or $RamaMigrado -eq 'HEAD') { Stop-Arranque "El migrado no esta en una rama (HEAD suelto): $MigradoRoot. Cambia a una rama y vuelve a lanzar." }
 Read-Config $MigradoRoot
 $mvn = Get-Mvn $MigradoRoot
 if (-not (Test-Path -LiteralPath $mvn) -and -not (Get-Command $mvn -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro Maven ('$mvn'). Instalalo o pon MvnExe en los ajustes." }
@@ -347,7 +551,8 @@ $Estado = [ordered]@{
   worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
   fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; parada = $null
 }
-if ($previo -and $previo.creado) { $Estado['creado'] = [string]$previo.creado }
+# En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
+if ($previo -and $previo.creado) { $Estado['creado'] = if ($previo.creado -is [datetime]) { $previo.creado.ToString('s') } else { [string]$previo.creado } }
 try {
   foreach ($d in @((Join-Path $Datos 'tareas'), (Join-Path $Datos 'fichas'))) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
   Save-Estado
@@ -358,7 +563,9 @@ try {
   $script:Iniciadas = @{}
   $todas = @()
   $quedan = 0
-  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')) {
+  Invoke-FaseDiagnostico
+  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'comparar')) {
+    if ($script:Parada) { break }
     $Estado['fase'] = $fase
     Save-Estado
     $tareas = @(Get-TareasFase $fase $conservar)
@@ -377,7 +584,7 @@ try {
     $quedan = @($tareas | Where-Object { $_.estado -eq 'pendiente' }).Count
     if ($script:Parada -or $quedan -gt 0) { break }
   }
-  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado; Save-Informes }
+  if (-not $script:Parada -and $quedan -eq 0) { $Estado['fase'] = 'lectura-hecha'; Save-Estado; Save-Informes; Invoke-FaseCorreccion }
 
   Info ''
   if (-not $script:Parada -and $quedan -gt 0) { Info "Limite de -Limite $Limite alcanzado: quedan $quedan tareas pendientes. Relanza el mismo comando sin -Limite para seguir." }
