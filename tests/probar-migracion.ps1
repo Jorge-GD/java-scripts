@@ -2574,5 +2574,21 @@ $Pruebas['87 dudas de job: las clases que no caben en la redaccion no van a duda
   Comprueba 'las clases no salen en el grupo de dudas de la portada' ($toca -notmatch 'Dudas de las fichas de job') $toca
 }
 
+# ============================ E: EL ORIGINAL FRENTE AL MIGRADO ============================
+$Pruebas['88 consola de la correccion: las lineas del motor salen por la consola mientras corre, antes de la linea final, y el registro sigue entero'] = {
+  $e = Nuevo-Escenario 'consola-correccion' @('Clase1')
+  $o = Orden-Base
+  $o.salida = @('LINEA-VIVA-UNO del motor', 'LINEA-VIVA-DOS del motor')
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $a = $r.Salida.IndexOf('LINEA-VIVA-UNO')
+  $b = $r.Salida.IndexOf('LINEA-VIVA-DOS')
+  $fin = $r.Salida.IndexOf('commits de arreglo')
+  Comprueba 'la consola lleva las dos lineas del motor, en orden' ($a -ge 0 -and $b -gt $a) (Cola $r.Salida)
+  Comprueba 'y salen antes de la linea final de la correccion' ($b -ge 0 -and $fin -gt $b) (Cola $r.Salida)
+  $log = Lee $e.Out 'registros/correccion.log'
+  Comprueba 'registros/correccion.log sigue llevando las lineas del motor, sin colores' ($log -match 'LINEA-VIVA-UNO' -and $log -match 'LINEA-VIVA-DOS' -and $log -notmatch '\x1b\[') $log
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

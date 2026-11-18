@@ -414,7 +414,14 @@ function Invoke-FaseCorreccion {
   Info 'Correccion: corrigiendo el migrado con rescate.ps1 -Modo fix (un fichero por llamada; puede tardar horas)...'
   $a = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'fix', '-Todo', '-Si', '-Lote', '1', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Legacy', $LegacyRoot, '-Esfuerzo', 'medium', '-EsfuerzoPlan', 'high')
   if ($ModeloElegido) { $a += @('-Modelo', $ModeloElegido) }
-  $r = Invoke-Nativo (Get-PowerShellExe) $a
+  # la salida del motor sale por la consola linea a linea mientras corre (con sus latidos); Invoke-Nativo la guardaria hasta el final
+  $eap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $lineas = @(& (Get-PowerShellExe) @a 2>&1 | ForEach-Object { $l = "$_"; Write-Host $l; $l })
+    $r = [pscustomobject]@{ Codigo = $LASTEXITCODE; Salida = $lineas }
+  }
+  finally { $ErrorActionPreference = $eap }
   $registro = Join-Path $Registros 'correccion.log'
   Save-Registro $registro $r.Salida
   $diagnosticado = $true
