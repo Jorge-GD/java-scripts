@@ -158,7 +158,7 @@ function Select-Modelo {
 # hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
 # tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile). Si el motor falla, parada 'motor'
 # y devuelve $false.
-function Invoke-Diagnostico([string]$Cuando) {
+function Invoke-DiagnosticoMotor([string]$Cuando) {
   $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
   $mMotor = Join-Ruta $RepoRoot '.rescate/diagnostico.md'
   if (Test-Path -LiteralPath $hMotor) { Remove-Item -LiteralPath $hMotor -Force }
@@ -201,7 +201,7 @@ function Invoke-FaseDiagnostico {
   $Estado['fase'] = 'diagnostico'
   Save-Estado
   [void](Get-JobsContrato)
-  if (-not (Invoke-Diagnostico 'antes')) { return }
+  if (-not (Invoke-DiagnosticoMotor 'antes')) { return }
   Save-Informes
   $d = Read-Diagnostico $Datos
   Info "Diagnostico: $($d.Errores) errores y $($d.Avisos) avisos. Detalle: $(Join-Path $Salida '2-problemas.html')"
@@ -441,7 +441,7 @@ function Invoke-FaseCorreccion {
   $registro = Join-Path $Registros 'correccion.log'
   Save-Registro $registro $r.Salida
   $diagnosticado = $true
-  if ($r.Codigo -ne 1) { $diagnosticado = Invoke-Diagnostico 'despues' }
+  if ($r.Codigo -ne 1) { $diagnosticado = Invoke-DiagnosticoMotor 'despues' }
   $motivo = ''
   $detalle = ''
   switch ($r.Codigo) {
