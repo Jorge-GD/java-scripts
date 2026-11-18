@@ -62,6 +62,10 @@ USO
   # Sin .rescate\contrato.json (y con -Legacy) hace antes lo del modo pre.
   .\rescate.ps1 -Modo fix ... -Todo
 
+  # Con el informe de Sonar (.xlsx): paso 'sonar' el ultimo, para cualquier repo Maven de Java (sin -Plantilla ni -Legacy).
+  # Solo con -Repo y -Sonar: -Modo fix, -Paso sonar y -Auto. Deja .rescate\sonar-faltan.md con lo que no ha podido arreglar.
+  .\rescate.ps1 -Repo C:\ruta\batch -Sonar C:\ruta\informe.xlsx
+
   # Con modelo de reserva: si el principal se atasca con un fichero, prueba el otro
   .\rescate.ps1 -Modo fix ... -Todo -Modelo <principal> -ModeloB <reserva>
 
@@ -121,7 +125,8 @@ param(
   [string]$Repo = '.',
   [string]$Plantilla = '',
   [string]$Legacy = '',
-  [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')][string]$Paso = '',
+  [string]$Sonar = '',       # informe de Sonar (.xlsx, hoja Issues Breakdown): anade el paso 'sonar' al final y arregla sus incidencias; sin -Modo hace el fix entero
+  [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar')][string]$Paso = '',
   [string]$Modelo = '',
   [string]$ModeloB = '',     # modelo de reserva cuando el principal se atasca con un fichero (vacio = ModeloB de la config)
   # Esfuerzo de razonamiento de Copilot (--effort). Vacio = el que tenga Copilot.
@@ -147,11 +152,17 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
+# Las reglas del paso sonar (prompt, recetas, mensajes que no se automatizan y puertas del diff) estan en sonar-reglas.ps1, junto a este script.
+# Sin ese fichero rescate.ps1 sigue funcionando; solo -Sonar lo necesita.
+$ReglasSonar = Join-Path $PSScriptRoot 'sonar-reglas.ps1'
+$HayReglasSonar = Test-Path -LiteralPath $ReglasSonar
+if ($HayReglasSonar) { . $ReglasSonar }
+else { $SonarPromptReal = ''; $SonarRecetasReal = @(); $SonarNoAutomatizarReal = @(); $SonarProhibidoReal = @() }
 
 # ============================ CONFIGURACION ============================
 # Los flags de Copilot, la ruta de Maven y las carpetas ignoradas estan en comun.ps1.
 $Cfg += @{
-  Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')
+  Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar')   # sonar solo existe con -Sonar
   Capas  = @('domain', 'application', 'infrastructure')   # si no hay plantilla
   # Reglas de dependencias. En = carpeta (relativa al paquete base).
   # No = regex sobre el import; {base} es el paquete base del proyecto.
@@ -224,6 +235,30 @@ $Cfg += @{
   # Vacio = como hasta ahora. Si Copilot no admite el esfuerzo, baja con Get-EsfuerzosMenores (max -> xhigh -> high).
   EsfuerzoReintento     = 'high'
   LineasDiff            = 300   # lineas del diff del intento que recibe la reflexion
+  # Sonar. El paso 'sonar' (el ultimo) arregla las incidencias del informe que se pasa con -Sonar. Se arreglan las de estas severidades, o las
+  # de estos tipos con una severidad que no sea MINOR ni INFO; solo Java.
+  SonarTipos            = @('BUG', 'VULNERABILITY')
+  SonarSeveridades      = @('BLOCKER', 'CRITICAL', 'MAJOR')
+  # Las columnas de la hoja del informe: nombre -> alias (da igual mayusculas, tildes y espacios de los bordes; el nombre mismo vale siempre).
+  # Obligatorias: Severity, Message, Issue Type y Path.
+  SonarColumnas         = @{
+    'Severity'    = @('Severity', 'Severidad', 'Gravedad')
+    'Message'     = @('Message', 'Mensaje', 'Descripcion')
+    'Issue Type'  = @('Issue Type', 'Type', 'Tipo', 'Tipo de incidencia')
+    'Path'        = @('Path', 'Ruta', 'Component', 'Componente', 'File', 'Fichero', 'Archivo')
+    'Line Number' = @('Line Number', 'Line', 'Linea', 'Numero de linea')
+    'Resource'    = @('Resource', 'Recurso')
+    'Tags'        = @('Tags', 'Etiquetas')
+    'Language'    = @('Language', 'Lenguaje', 'Idioma')
+  }
+  # Lo que se le pide al modelo en cada lote de Sonar, las recetas por regla (SonarRecetas; con Avisar = $true lo arreglado asi se lista al final),
+  # los mensajes que no se mandan al modelo (SonarNoAutomatizar) y lo que un intento no puede hacer, mirado en el diff entero del lote
+  # (SonarProhibido; Modo anadida, neto+, neto- o neto0; Si y Salvo condicionan la entrada a los mensajes del lote): los valores por defecto
+  # salen de sonar-reglas.ps1. Las Rx se aplican a la linea sin su + o - y sin distinguir mayusculas.
+  SonarPrompt           = $SonarPromptReal
+  SonarRecetas          = $SonarRecetasReal
+  SonarNoAutomatizar    = $SonarNoAutomatizarReal
+  SonarProhibido        = $SonarProhibidoReal
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
   MvnTests              = @('-q', '-B', 'test')
@@ -582,7 +617,7 @@ function Get-Calidad($Hechos) {
     }
     # Practicas que se ven en el texto
     foreach ($m in $script:RxInyeccion.Matches($limpio)) {
-      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final")
+      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final; sin estado mutable en el componente: si un campo guarda estado entre llamadas, no lo conviertas en final ni lo inicialices en el constructor; dilo")
     }
     foreach ($m in $script:RxConsola.Matches($limpio)) {
       Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'salida-consola' 'System.out, System.err o printStackTrace: usa el logger'
@@ -671,6 +706,773 @@ function Get-TextoMapaPaquetes($Cal) {
 # Cuanto incumple la propia plantilla (lo que se permite en el repo porque ella lo hace), en una linea.
 function Get-TextoIncumple($Cal) {
   return "capas $($Cal.ExcImports.Count) | ficheros $($Cal.ExcFicheros.Count) | calidad $($Cal.Calidad.Count) | secretos $($Cal.Secretos)"
+}
+
+# ================================ SONAR ================================
+# El paso 'sonar' arregla las incidencias de un informe de Sonar (.xlsx, hoja Issues Breakdown). Vale para cualquier repo Maven de
+# Java: no necesita plantilla ni original. Aqui van, primero, las funciones puras (leer el xlsx, filtrar, la "unidad" de una
+# incidencia y las puertas del diff), que prueba el banco sin lanzar el script, y despues lo que cuelga del repo (la base, el estado de
+# cada incidencia, los prompts, las puertas del intento y la lista de lo que falta).
+
+# Un texto sin tildes, en minusculas y con los espacios de los bordes fuera y los de dentro en uno: para comparar cabeceras.
+function Get-SonarPlegado([string]$Texto) {
+  $t = "$Texto".Normalize([System.Text.NormalizationForm]::FormD)
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($c in $t.ToCharArray()) {
+    if ([System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($c) -ne [System.Globalization.UnicodeCategory]::NonSpacingMark) { [void]$sb.Append($c) }
+  }
+  return (($sb.ToString().ToLowerInvariant()) -replace '\s+', ' ').Trim()
+}
+
+# El texto de un <si> o un <is>: sus <t> y los <t> de sus <r> (texto enriquecido). La fonetica (<rPh>) no cuenta.
+function Get-SonarTextoRico($Nodo) {
+  $sb = New-Object System.Text.StringBuilder
+  foreach ($c in $Nodo.ChildNodes) {
+    if ($c.NodeType -ne [System.Xml.XmlNodeType]::Element) { continue }
+    if ($c.LocalName -eq 't') { [void]$sb.Append($c.InnerText) }
+    elseif ($c.LocalName -eq 'r') {
+      foreach ($t in $c.ChildNodes) {
+        if ($t.NodeType -eq [System.Xml.XmlNodeType]::Element -and $t.LocalName -eq 't') { [void]$sb.Append($t.InnerText) }
+      }
+    }
+  }
+  return $sb.ToString()
+}
+
+# Un miembro XML del zip, sin DTD ni recursos externos. $null si el miembro no esta.
+function Read-SonarXml($Zip, [string]$Nombre) {
+  $e = $Zip.GetEntry($Nombre)
+  if ($null -eq $e) { return $null }
+  $ajustes = New-Object System.Xml.XmlReaderSettings
+  $ajustes.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+  $ajustes.XmlResolver = $null
+  $flujo = $e.Open()
+  try {
+    $lector = [System.Xml.XmlReader]::Create($flujo, $ajustes)
+    try {
+      $doc = New-Object System.Xml.XmlDocument
+      $doc.PreserveWhitespace = $true
+      $doc.Load($lector)
+    }
+    finally { $lector.Dispose() }
+  }
+  finally { $flujo.Dispose() }
+  return , $doc
+}
+
+# Las celdas de una hoja: numero de fila -> (numero de columna, desde 1 -> texto). Las celdas se leen por su referencia (B7), no por su
+# orden. $Compartidas: las cadenas compartidas del libro.
+function Get-SonarCeldasHoja($Doc, $Compartidas) {
+  $filas = @{}
+  $datos = $null
+  foreach ($c in $Doc.DocumentElement.ChildNodes) {
+    if ($c.NodeType -eq [System.Xml.XmlNodeType]::Element -and $c.LocalName -eq 'sheetData') { $datos = $c; break }
+  }
+  if ($null -eq $datos) { return $filas }
+  $ultima = 0
+  foreach ($fila in $datos.ChildNodes) {
+    if ($fila.NodeType -ne [System.Xml.XmlNodeType]::Element -or $fila.LocalName -ne 'row') { continue }
+    $num = $ultima + 1
+    $r = 0
+    if ([int]::TryParse($fila.GetAttribute('r'), [ref]$r) -and $r -ge 1) { $num = $r }
+    $ultima = $num
+    $celdas = @{}
+    $pos = 0
+    foreach ($celda in $fila.ChildNodes) {
+      if ($celda.NodeType -ne [System.Xml.XmlNodeType]::Element -or $celda.LocalName -ne 'c') { continue }
+      $pos++
+      $ref = $celda.GetAttribute('r')
+      $m = [regex]::Match($ref, '^([A-Za-z]+)')
+      if ($m.Success) {
+        $pos = 0
+        foreach ($ch in $m.Groups[1].Value.ToUpperInvariant().ToCharArray()) { $pos = $pos * 26 + ([int]$ch - 64) }
+      }
+      $tipo = $celda.GetAttribute('t')
+      $texto = $null
+      if ($tipo -eq 'inlineStr') {
+        foreach ($h in $celda.ChildNodes) {
+          if ($h.NodeType -eq [System.Xml.XmlNodeType]::Element -and $h.LocalName -eq 'is') { $texto = Get-SonarTextoRico $h }
+        }
+      }
+      else {
+        foreach ($h in $celda.ChildNodes) {
+          if ($h.NodeType -ne [System.Xml.XmlNodeType]::Element -or $h.LocalName -ne 'v') { continue }
+          $t = $h.InnerText
+          if ($tipo -eq 's') {
+            $idx = 0
+            if (-not [int]::TryParse($t, [ref]$idx) -or $idx -lt 0 -or $idx -ge @($Compartidas).Count) { throw "Cadena compartida invalida en la celda $ref." }
+            $texto = $Compartidas[$idx]
+          }
+          elseif ($tipo -eq '' -or $tipo -eq 'n') {
+            # un numero entero sale sin decimales (7 y no 7.0)
+            $x = 0.0
+            if ([double]::TryParse($t, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$x) -and $x -eq [math]::Floor($x) -and [math]::Abs($x) -lt 1e15) {
+              $texto = ([long]$x).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+            }
+            else { $texto = $t }
+          }
+          else { $texto = $t }
+        }
+      }
+      if ($null -ne $texto) { $celdas[$pos] = $texto }
+    }
+    $filas[$num] = $celdas
+  }
+  return $filas
+}
+
+# La fila de cabecera de una hoja: la que lleva mas columnas obligatorias (Severity, Message, Issue Type, Path), buscadas por sus alias
+# ($Columnas: nombre -> alias; el nombre mismo vale siempre; da igual mayusculas, tildes y espacios de los bordes). Devuelve Fila,
+# Cols (nombre -> columna) y Faltan (las obligatorias que no estan), o $null si la hoja no tiene ninguna.
+function Get-SonarCabecera($Filas, $Columnas) {
+  $nombres = @('Severity', 'Message', 'Issue Type', 'Path', 'Line Number', 'Resource', 'Tags', 'Language')
+  $obligatorias = @('Severity', 'Message', 'Issue Type', 'Path')
+  $alias = @{}
+  foreach ($n in $nombres) {
+    $lista = New-Object System.Collections.Generic.List[string]
+    $lista.Add((Get-SonarPlegado $n))
+    $v = $null
+    if ($Columnas -is [System.Collections.IDictionary]) { if ($Columnas.Contains($n)) { $v = $Columnas[$n] } }
+    elseif ($null -ne $Columnas) { $p = $Columnas.PSObject.Properties[$n]; if ($null -ne $p) { $v = $p.Value } }
+    foreach ($a in @($v)) { if ($null -ne $a) { $lista.Add((Get-SonarPlegado "$a")) } }
+    $alias[$n] = $lista
+  }
+  $mejor = $null
+  foreach ($num in @($Filas.Keys | Sort-Object { [int]$_ })) {
+    $celdas = $Filas[$num]
+    $cols = @{}
+    $usadas = @{}
+    foreach ($n in $nombres) {
+      foreach ($col in @($celdas.Keys | Sort-Object { [int]$_ })) {
+        if ($usadas.ContainsKey($col)) { continue }
+        if ($alias[$n] -contains (Get-SonarPlegado $celdas[$col])) { $cols[$n] = $col; $usadas[$col] = $true; break }
+      }
+    }
+    $faltan = @($obligatorias | Where-Object { -not $cols.ContainsKey($_) })
+    $buenas = $obligatorias.Count - $faltan.Count
+    if ($buenas -eq 0) { continue }
+    if ($null -eq $mejor -or $buenas -gt $mejor.Buenas -or ($buenas -eq $mejor.Buenas -and $cols.Count -gt $mejor.Cols.Count)) {
+      $mejor = [pscustomobject]@{ Fila = [int]$num; Cols = $cols; Faltan = $faltan; Buenas = $buenas }
+    }
+  }
+  return $mejor
+}
+
+# El numero de linea de una celda: 'L32', '32L' o 32 dan 32; el guion, vacio o lo que no trae numero, 0.
+function Get-SonarNumeroLinea([string]$Texto) {
+  $m = [regex]::Match("$Texto", '\d+')
+  if ($m.Success) { return [int]$m.Value }
+  return 0
+}
+
+# Las incidencias de un informe de Sonar (.xlsx): objetos con Fila (la fila de la hoja, desde 1), Severidad, Mensaje, Lenguaje, Tipo,
+# Recurso, Ruta, Linea y Etiquetas. La hoja es 'Issues Breakdown' o, si no esta o no sirve, la primera con las columnas obligatorias. Si
+# ninguna sirve, lanza un error que dice cual falta.
+function Read-SonarXlsx([string]$Ruta, $Columnas) {
+  Add-Type -AssemblyName System.IO.Compression
+  $nombre = Split-Path $Ruta -Leaf
+  $fs = [System.IO.File]::Open($Ruta, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+  $zip = $null
+  try {
+    try { $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Read) }
+    catch { throw "$nombre no es un .xlsx (no es un zip)." }
+    $libro = Read-SonarXml $zip 'xl/workbook.xml'
+    if ($null -eq $libro) { throw "$nombre no es un .xlsx (le falta xl/workbook.xml)." }
+    $hojas = New-Object System.Collections.Generic.List[object]
+    foreach ($n in $libro.GetElementsByTagName('*')) {
+      if ($n.LocalName -ne 'sheet') { continue }
+      $id = ''
+      foreach ($a in $n.Attributes) { if ($a.LocalName -eq 'id') { $id = $a.Value } }
+      $hojas.Add([pscustomobject]@{ Nombre = $n.GetAttribute('name'); Id = $id; Pos = ($hojas.Count + 1) })
+    }
+    # relaciones del libro: id -> miembro del zip (la ruta del Target, contra xl/)
+    $rels = @{}
+    $compartidasEn = 'xl/sharedStrings.xml'
+    $docRels = Read-SonarXml $zip 'xl/_rels/workbook.xml.rels'
+    if ($null -ne $docRels) {
+      foreach ($n in $docRels.GetElementsByTagName('*')) {
+        if ($n.LocalName -ne 'Relationship') { continue }
+        $t = $n.GetAttribute('Target')
+        if ($t.StartsWith('/')) { $t = $t.TrimStart('/') } else { $t = 'xl/' + $t }
+        $partes = New-Object System.Collections.Generic.List[string]
+        foreach ($s in $t.Split('/')) {
+          if ($s -eq '..') { if ($partes.Count -gt 0) { $partes.RemoveAt($partes.Count - 1) } }
+          elseif ($s -and $s -ne '.') { $partes.Add($s) }
+        }
+        $t = ($partes -join '/')
+        $rels[$n.GetAttribute('Id')] = $t
+        if ($n.GetAttribute('Type') -like '*/sharedStrings') { $compartidasEn = $t }
+      }
+    }
+    $compartidas = New-Object System.Collections.Generic.List[string]
+    $docComp = Read-SonarXml $zip $compartidasEn
+    if ($null -ne $docComp) {
+      foreach ($n in $docComp.DocumentElement.ChildNodes) {
+        if ($n.NodeType -eq [System.Xml.XmlNodeType]::Element -and $n.LocalName -eq 'si') { $compartidas.Add((Get-SonarTextoRico $n)) }
+      }
+    }
+    # la hoja: Issues Breakdown primero, y si no sirve, la primera con las columnas obligatorias
+    $buscada = Get-SonarPlegado 'Issues Breakdown'
+    $orden = @(@($hojas | Where-Object { (Get-SonarPlegado $_.Nombre) -eq $buscada }) + @($hojas | Where-Object { (Get-SonarPlegado $_.Nombre) -ne $buscada }))
+    $elegida = $null
+    $falloBuscada = ''
+    foreach ($h in $orden) {
+      $miembro = "xl/worksheets/sheet$($h.Pos).xml"
+      if ($h.Id -and $rels.ContainsKey($h.Id)) { $miembro = $rels[$h.Id] }
+      $doc = Read-SonarXml $zip $miembro
+      if ($null -eq $doc) { continue }
+      $celdas = Get-SonarCeldasHoja $doc $compartidas
+      $cab = Get-SonarCabecera $celdas $Columnas
+      $faltan = @('Severity', 'Message', 'Issue Type', 'Path')
+      if ($null -ne $cab) { $faltan = @($cab.Faltan) }
+      if ($faltan.Count -eq 0) { $elegida = [pscustomobject]@{ Celdas = $celdas; Cab = $cab }; break }
+      if ((Get-SonarPlegado $h.Nombre) -eq $buscada) { $falloBuscada = "la hoja '$($h.Nombre)' no sirve: " + ((@($faltan | ForEach-Object { "falta la columna obligatoria '$_'" })) -join ', ') }
+    }
+    if ($null -eq $elegida) {
+      if ($falloBuscada) { throw "En $nombre $falloBuscada." }
+      throw "En $nombre no hay ninguna hoja 'Issues Breakdown' ni otra con las columnas obligatorias: Severity, Message, Issue Type y Path."
+    }
+    $cols = $elegida.Cab.Cols
+    $coger = {
+      param($c, [string]$n)
+      if ($cols.ContainsKey($n) -and $c.ContainsKey($cols[$n])) { return [string]$c[$cols[$n]] }
+      return ''
+    }
+    $res = New-Object System.Collections.Generic.List[object]
+    foreach ($num in @($elegida.Celdas.Keys | Sort-Object { [int]$_ })) {
+      if ([int]$num -le $elegida.Cab.Fila) { continue }
+      $c = $elegida.Celdas[$num]
+      $sev = (& $coger $c 'Severity').Trim()
+      $msg = & $coger $c 'Message'
+      $rut = & $coger $c 'Path'
+      if (-not $sev -and -not $msg -and -not $rut) { continue }
+      $tags = @((& $coger $c 'Tags').Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+      $res.Add([pscustomobject]@{
+          Fila = [int]$num; Severidad = $sev; Mensaje = $msg; Lenguaje = (& $coger $c 'Language').Trim(); Tipo = (& $coger $c 'Issue Type').Trim()
+          Recurso = (& $coger $c 'Resource').Trim(); Ruta = $rut; Linea = (Get-SonarNumeroLinea (& $coger $c 'Line Number')); Etiquetas = $tags })
+    }
+    return $res.ToArray()
+  }
+  finally {
+    if ($null -ne $zip) { $zip.Dispose() }
+    $fs.Dispose()
+  }
+}
+
+# Las incidencias que se arreglan: Java (por su lenguaje o, si no lo trae, por acabar en .java) y, o de una severidad de
+# $Cfg.SonarSeveridades, o de un tipo de $Cfg.SonarTipos con una severidad que no sea MINOR ni INFO.
+function Get-SonarFiltradas($Filas) {
+  $tipos = @($Cfg.SonarTipos | ForEach-Object { "$_".Trim().ToUpperInvariant() })
+  $sevs = @($Cfg.SonarSeveridades | ForEach-Object { "$_".Trim().ToUpperInvariant() })
+  foreach ($f in @($Filas)) {
+    $esJava = ("$($f.Lenguaje)".Trim() -ieq 'Java') -or (-not "$($f.Lenguaje)".Trim() -and "$($f.Ruta)".Trim() -match '(?i)\.java$')
+    if (-not $esJava) { continue }
+    $sev = "$($f.Severidad)".Trim().ToUpperInvariant()
+    $tipo = "$($f.Tipo)".Trim().ToUpperInvariant()
+    if (($sevs -contains $sev) -or (($tipos -contains $tipo) -and @('MINOR', 'INFO') -notcontains $sev)) { $f }
+  }
+}
+
+# Codigo sin comentarios que no sean Javadoc y sin ningun espacio: lo que queda es lo que hace el codigo (y su Javadoc). Reformatear no
+# lo cambia; cambiar el codigo o anadir un Javadoc, si.
+function Get-SonarNormal([string]$Texto) {
+  $sin = $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
+      param($m)
+      $v = $m.Value
+      if ($v.StartsWith('/**') -and $v.Length -gt 4) { return $v }
+      if ($v.StartsWith('/')) { return '' }
+      return $v
+    })
+  return ($sin -replace '\s+', '')
+}
+
+# La unidad de una incidencia: su linea marcada o, si esa linea abre un bloque { que no cierra en ella, el bloque entero hasta su llave de
+# cierre, con las anotaciones y el Javadoc que lleva pegados encima. Normalizada (Get-SonarNormal). SinDoc dice que un bloque no tenia
+# Javadoc (si despues aparece uno encima, la incidencia ya no esta). Sin linea (0) o fuera de rango, el fichero entero.
+function Get-SonarUnidad([string]$Texto, [int]$Linea) {
+  $orig = @($Texto -split "`r?`n")
+  $entero = [pscustomobject]@{ Unidad = (Get-SonarNormal $Texto); SinDoc = $false }
+  if ($Linea -lt 1 -or $Linea -gt $orig.Count) { return $entero }
+  $limp = @((Get-Limpio $Texto) -split "`r?`n")
+  if ($limp.Count -ne $orig.Count) { return $entero }
+  $i = $Linea - 1
+  $abiertas = 0
+  foreach ($ch in $limp[$i].ToCharArray()) {
+    if ($ch -eq '{') { $abiertas++ }
+    elseif ($ch -eq '}' -and $abiertas -gt 0) { $abiertas-- }
+  }
+  if ($abiertas -eq 0) {
+    $u = Get-SonarNormal $orig[$i]
+    if (-not $u) { return $entero }   # una linea sin codigo (en blanco, de comentario): cualquier cambio del fichero vale
+    return [pscustomobject]@{ Unidad = $u; SinDoc = $false }
+  }
+  # hasta la llave que cierra el bloque (la linea entera)
+  $fin = $i
+  $d = $abiertas
+  for ($k = $i + 1; $k -lt $limp.Count -and $d -gt 0; $k++) {
+    foreach ($ch in $limp[$k].ToCharArray()) {
+      if ($ch -eq '{') { $d++ }
+      elseif ($ch -eq '}') { $d--; if ($d -eq 0) { break } }
+    }
+    $fin = $k
+  }
+  # hacia arriba: las anotaciones, y encima de ellas, si lo hay, el Javadoc
+  $ini = $i
+  $k = $i - 1
+  while ($k -ge 0 -and $limp[$k].Trim().StartsWith('@')) { $ini = $k; $k-- }
+  while ($k -ge 0 -and $limp[$k].Trim() -eq '') { $k-- }
+  $sinDoc = $true
+  if ($k -ge 0 -and $limp[$k].Trim().EndsWith('/*JD*/')) {
+    foreach ($m in $script:RxLexico.Matches($Texto)) {
+      if (-not $m.Value.StartsWith('/**') -or $m.Value.Length -le 4) { continue }
+      $antes = $Texto.Substring(0, $m.Index)
+      $l0 = $antes.Length - $antes.Replace("`n", '').Length
+      $l1 = $l0 + $m.Value.Length - $m.Value.Replace("`n", '').Length
+      if ($l1 -eq $k) { $ini = $l0; $sinDoc = $false; break }
+    }
+  }
+  return [pscustomobject]@{ Unidad = (Get-SonarNormal ($orig[$ini..$fin] -join "`n")); SinDoc = $sinDoc }
+}
+
+# Sigue en el fichero la unidad de una incidencia? $Normal es el fichero normalizado. $Indice: si la misma unidad esta varias veces (una
+# linea corriente como 'return null;'), la de orden $Indice sigue ahi mientras haya mas de $Indice. Con SinDoc, una aparicion pegada a un
+# Javadoc ('*/' justo antes) no cuenta: el Javadoc se ha anadido encima.
+function Test-SonarSigueAhi([string]$Unidad, [bool]$SinDoc, [string]$Normal, [int]$Indice = 0) {
+  if (-not $Unidad) { return $false }
+  $n = 0
+  $pos = 0
+  while ($true) {
+    $p = $Normal.IndexOf($Unidad, $pos, [System.StringComparison]::Ordinal)
+    if ($p -lt 0) { break }
+    $pos = $p + $Unidad.Length
+    if ($SinDoc -and $p -ge 2 -and $Normal.Substring($p - 2, 2) -eq '*/') { continue }
+    $n++
+    if ($n -gt $Indice) { return $true }
+  }
+  return $false
+}
+
+# Las entradas de SonarProhibido que el diff de un intento incumple: sus motivos, en el orden de la lista y sin repetir. $Diff es un
+# diff de git (-U0). $Entradas: @{ Rx; Modo; Motivo; Si }, con el Rx sobre el texto de la linea sin su + o -. Modo: 'anadida' (falla si
+# alguna linea + casa), 'neto+' (casan mas + que -), 'neto-' (menos) o 'neto0' (distinto). Las cuentas son de todo el diff, no por
+# fichero: mover algo de un fichero a otro da 0. Si una entrada lleva Si (un regex), solo cuenta si algun mensaje de $Mensajes lo cumple.
+function Get-SonarProhibidas([string]$Diff, $Entradas, [string[]]$Mensajes = @()) {
+  $mas = New-Object System.Collections.Generic.List[string]
+  $menos = New-Object System.Collections.Generic.List[string]
+  foreach ($l in ($Diff -split "`r?`n")) {
+    if ($l -match '^\+\+\+ (b/|/dev/null)' -or $l -match '^--- (a/|/dev/null)') { continue }
+    if ($l.StartsWith('+')) { $mas.Add($l.Substring(1)) }
+    elseif ($l.StartsWith('-')) { $menos.Add($l.Substring(1)) }
+  }
+  $res = New-Object System.Collections.Generic.List[string]
+  foreach ($e in @($Entradas)) {
+    if ($null -eq $e -or -not $e.Rx) { continue }
+    if ($e.Si) {
+      $aplica = $false
+      foreach ($m in @($Mensajes)) { if ([regex]::IsMatch("$m", "$($e.Si)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $aplica = $true; break } }
+      if (-not $aplica) { continue }
+    }
+    if ($e.Salvo) {   # lo contrario de Si: un mensaje del lote que casa la deja sin efecto
+      $exenta = $false
+      foreach ($m in @($Mensajes)) { if ([regex]::IsMatch("$m", "$($e.Salvo)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $exenta = $true; break } }
+      if ($exenta) { continue }
+    }
+    $a = @($mas | Where-Object { [regex]::IsMatch($_, "$($e.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }).Count
+    $b = @($menos | Where-Object { [regex]::IsMatch($_, "$($e.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) }).Count
+    $modo = "$($e.Modo)"
+    if (-not $modo) { $modo = 'anadida' }
+    $falla = $false
+    if ($modo -eq 'anadida') { $falla = ($a -gt 0) }
+    elseif ($modo -eq 'neto+') { $falla = ($a -gt $b) }
+    elseif ($modo -eq 'neto-') { $falla = ($a -lt $b) }
+    elseif ($modo -eq 'neto0') { $falla = ($a -ne $b) }
+    if ($falla -and -not $res.Contains("$($e.Motivo)")) { $res.Add("$($e.Motivo)") }
+  }
+  return $res.ToArray()
+}
+
+# ----- lo que cuelga del repo -----
+# La base de las incidencias (.rescate/sonar-base.json): el hash del xlsx y, por cada incidencia, su fichero (el de verdad, tras buscar un
+# fichero movido), su linea, su unidad normalizada (Get-SonarUnidad) y, si el modelo la dejo con motivo, 'dejada'. Se rehace cuando
+# el xlsx es otro (otro hash); con el mismo, se conserva: lo resuelto lo dice el codigo de ahora frente a la unidad de entonces.
+# $script:SonarFilas son las incidencias que se arreglan (filtradas); $script:SonarPorFila, por su numero de fila; $script:SonarHash,
+# el SHA256 del xlsx; $script:SonarBase (fila -> entrada), la base en memoria ($null = hay que leerla del disco).
+
+# El fichero de una incidencia: su Path si existe; si no (se movio), el unico fichero de src/main/java o src/test/java con el nombre
+# de su Resource. '' si no hay o hay varios.
+function Find-SonarFichero($Fila) {
+  $rel = (("$($Fila.Ruta)" -replace '\\', '/') -replace '^\./', '').TrimStart('/')
+  if ($rel -and (Test-Path -LiteralPath (Join-Ruta $RepoRoot $rel) -PathType Leaf)) { return $rel }
+  $nombre = "$($Fila.Recurso)".Trim()
+  if (-not $nombre) { $nombre = $rel.Split('/')[-1] }
+  if (-not $nombre) { return '' }
+  $esta = @()
+  foreach ($sub in @('src/main/java', 'src/test/java')) { $esta += @(Get-JavaFiles (Join-Ruta $RepoRoot $sub) | Where-Object { $_.Name -eq $nombre }) }
+  if ($esta.Count -eq 1) { return (Get-Rel $RepoRoot $esta[0].FullName) }
+  return ''
+}
+
+function Save-SonarBase {
+  $json = ConvertTo-Json -InputObject ([pscustomobject]@{ hash = $script:SonarHash; incidencias = @($script:SonarBase.Values) }) -Depth 5
+  [System.IO.File]::WriteAllText((Join-Path $Work 'sonar-base.json'), $json)
+}
+
+function Initialize-SonarBase {
+  if ($null -ne $script:SonarBase) { return }
+  $ruta = Join-Path $Work 'sonar-base.json'
+  $base = $null
+  if (Test-Path -LiteralPath $ruta) {
+    try { $b = [System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json } catch { $b = $null }
+    if ($b -and "$($b.hash)" -ceq $script:SonarHash) {
+      $base = [ordered]@{}
+      foreach ($x in @($b.incidencias)) { $base["$($x.fila)"] = $x }
+    }
+    else {
+      # otro xlsx: la base de antes no se pierde (quien compare dos pasadas la necesita), pasa a sonar-base-anterior.json y machaca la anterior
+      Move-Item -LiteralPath $ruta -Destination (Join-Path $Work 'sonar-base-anterior.json') -Force
+    }
+  }
+  $rehecha = ($null -eq $base)
+  if ($rehecha) { $base = [ordered]@{} }
+  # las incidencias que la base no tiene (la primera vez, o si ha cambiado el filtro) salen de los ficheros de ahora
+  $nuevas = New-Object System.Collections.Generic.List[object]
+  foreach ($f in $script:SonarFilas) {
+    if ($base.Contains("$($f.Fila)")) { continue }
+    $d = Find-SonarFichero $f
+    $u = ''; $sd = $false
+    if ($d) {
+      $un = Get-SonarUnidad ([System.IO.File]::ReadAllText((Join-Ruta $RepoRoot $d))) $f.Linea
+      $u = $un.Unidad; $sd = $un.SinDoc
+    }
+    $e = [pscustomobject]@{ fila = $f.Fila; fichero = $d; linea = $f.Linea; mensaje = $f.Mensaje; tipo = $f.Tipo; severidad = $f.Severidad; unidad = $u; sinDoc = $sd; indice = 0; resuelta = $false; regla = ''; commit = '' }
+    $base["$($f.Fila)"] = $e
+    $nuevas.Add($e)
+  }
+  # la misma unidad en varias lineas de un fichero: cada linea lleva su orden (0, 1, ...) para no dar por vistas todas con una sola
+  # que quede; las incidencias de una misma linea comparten orden
+  $orden = @{}
+  foreach ($x in $base.Values) {
+    if ($nuevas.Contains($x)) { continue }
+    $k = "$($x.fichero)|$($x.unidad)"
+    if (-not $orden.ContainsKey($k)) { $orden[$k] = @{} }
+    $orden[$k]["$($x.linea)"] = [int]$x.indice
+  }
+  foreach ($x in @($nuevas | Sort-Object linea, fila)) {
+    $k = "$($x.fichero)|$($x.unidad)"
+    if (-not $orden.ContainsKey($k)) { $orden[$k] = @{} }
+    if (-not $orden[$k].ContainsKey("$($x.linea)")) { $orden[$k]["$($x.linea)"] = $orden[$k].Count }
+    $x.indice = $orden[$k]["$($x.linea)"]
+  }
+  $script:SonarBase = $base
+  if ($rehecha -or $nuevas.Count -gt 0) { Save-SonarBase }
+}
+
+# El motivo de la primera entrada de SonarNoAutomatizar cuyo Rx casa con el mensaje; '' si ninguna.
+function Get-SonarNoAutomatizar([string]$Mensaje) {
+  foreach ($x in @($Cfg.SonarNoAutomatizar)) {
+    if ($null -eq $x -or -not $x.Rx) { continue }
+    if ([regex]::IsMatch($Mensaje, "$($x.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+      $m = "$($x.Motivo)"
+      if (-not $m) { $m = 'sin motivo' }
+      return $m
+    }
+  }
+  return ''
+}
+
+# Las recetas de SonarRecetas cuyo Rx casa con el mensaje.
+function Get-SonarRecetasDe([string]$Mensaje) {
+  foreach ($r in @($Cfg.SonarRecetas)) {
+    if ($null -ne $r -and $r.Rx -and [regex]::IsMatch($Mensaje, "$($r.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $r }
+  }
+}
+
+# Tras el commit de un lote: apunta en la base cada incidencia que el codigo de ahora da por resuelta y que aun no constaba, con la regla (el Rx de la
+# receta que le tocaba, o vacio si no tenia) y el commit del lote. Es lo que conserva sonar-base-anterior.json.
+function Set-SonarResueltas([string]$Commit) {
+  foreach ($x in @(Get-SonarEstado)) {
+    if ($x.Estado -ne 'resuelta') { continue }
+    $b = $script:SonarBase["$($x.Fila)"]
+    if ($b.resuelta -eq $true) { continue }
+    $regla = ''
+    $rs = @(Get-SonarRecetasDe "$($x.Mensaje)")
+    if ($rs.Count -gt 0) { $regla = "$($rs[0].Rx)" }
+    Add-Member -InputObject $b -NotePropertyName resuelta -NotePropertyValue $true -Force
+    Add-Member -InputObject $b -NotePropertyName regla -NotePropertyValue $regla -Force
+    Add-Member -InputObject $b -NotePropertyName commit -NotePropertyValue $Commit -Force
+  }
+}
+
+# El estado de cada incidencia que se arregla, segun el codigo de ahora: Estado = resuelta (su unidad ya no esta en el fichero, o el
+# fichero ya no existe), pendiente, dejada (el modelo la dejo con motivo), noauto (SonarNoAutomatizar) o sinfichero (no se encontro).
+function Get-SonarEstado {
+  Initialize-SonarBase
+  $normales = @{}
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($f in $script:SonarFilas) {
+    $b = $script:SonarBase["$($f.Fila)"]
+    $estado = 'pendiente'
+    $motivo = ''
+    if (-not $b.fichero) { $estado = 'sinfichero' }
+    else {
+      $ruta = Join-Ruta $RepoRoot $b.fichero
+      if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { $estado = 'resuelta' }
+      else {
+        if (-not $normales.ContainsKey($b.fichero)) { $normales[$b.fichero] = Get-SonarNormal ([System.IO.File]::ReadAllText($ruta)) }
+        if (-not (Test-SonarSigueAhi "$($b.unidad)" ([bool]$b.sinDoc) $normales[$b.fichero] ([int]$b.indice))) { $estado = 'resuelta' }
+      }
+    }
+    if ($estado -eq 'pendiente') {
+      $no = Get-SonarNoAutomatizar $f.Mensaje
+      if ($b.dejada) { $estado = 'dejada'; $motivo = "$($b.dejada)" }
+      elseif ($no) { $estado = 'noauto'; $motivo = $no }
+    }
+    $res.Add([pscustomobject]@{ Fila = $f.Fila; Fichero = "$($b.fichero)"; Linea = [int]$b.linea; Ruta = $f.Ruta; Mensaje = $f.Mensaje; Tipo = $f.Tipo; Sev = $f.Severidad; Estado = $estado; Motivo = $motivo })
+  }
+  return $res.ToArray()
+}
+
+# 'ruta:linea - mensaje [TIPO SEV]' de una incidencia (la ruta del xlsx si no se encontro el fichero).
+function Get-SonarLineaItem($x) {
+  $donde = $x.Fichero
+  if (-not $donde) { $donde = $x.Ruta }
+  if ($x.Linea -gt 0) { $donde += ':' + $x.Linea }
+  return "$donde - $($x.Mensaje) [$($x.Tipo) $($x.Sev)]"
+}
+
+# La seccion de Sonar del diagnostico: un error por cada incidencia pendiente y un aviso por las que no se arreglan (dejadas por el modelo,
+# no automatizables, sin fichero).
+function Add-SonarHallazgos {
+  foreach ($x in @(Get-SonarEstado)) {
+    $d = "$($x.Mensaje) [$($x.Tipo) $($x.Sev)]"
+    $sev = 'aviso'
+    $fich = $x.Fichero
+    if ($x.Estado -eq 'resuelta') { continue }
+    elseif ($x.Estado -eq 'pendiente') { $sev = 'error' }
+    elseif ($x.Estado -eq 'dejada') { $d = "dejada por el modelo: $($x.Motivo) - $d" }
+    elseif ($x.Estado -eq 'noauto') { $d = "no se automatiza: $($x.Motivo) - $d" }
+    else { $fich = $x.Ruta; $d = "no encuentro el fichero $($x.Ruta) - $d" }
+    Add-Hallazgo 'sonar' $sev $fich $x.Linea $d
+    Add-Member -InputObject $script:H[$script:H.Count - 1] -NotePropertyName Fila -NotePropertyValue $x.Fila
+  }
+}
+
+# Cuantas incidencias de este lote ha dejado ya el modelo con motivo.
+function Get-SonarDejadas($LoteH) {
+  return @($LoteH | Where-Object { $script:SonarBase["$($_.Fila)"].dejada }).Count
+}
+
+# Tras una llamada al modelo: lee .rescate/sonar-sin-arreglar.txt ('<ruta>:<linea> | <motivo>' por linea), lo borra y apunta como dejada cada incidencia
+# del lote que nombra. Una linea que no casa con ninguna incidencia del lote se ignora.
+function Read-SonarSinArreglar($LoteH) {
+  $ruta = Join-Path $Work 'sonar-sin-arreglar.txt'
+  if (-not (Test-Path -LiteralPath $ruta)) { return }
+  $lineas = @([System.IO.File]::ReadAllLines($ruta))
+  Remove-Item -LiteralPath $ruta -Force
+  Initialize-SonarBase
+  foreach ($l in $lineas) {
+    $m = [regex]::Match($l, '^\s*(?<f>.+?):(?<n>\d+)\s*\|\s*(?<m>.*?)\s*$')
+    if (-not $m.Success) { continue }
+    $f = (($m.Groups['f'].Value.Trim() -replace '\\', '/') -replace '^\./', '')
+    $n = [int]$m.Groups['n'].Value
+    $motivo = $m.Groups['m'].Value
+    if (-not $motivo) { $motivo = 'sin motivo' }
+    foreach ($x in @($LoteH | Where-Object { $_.Fichero -eq $f -and $_.Linea -eq $n })) {
+      Add-Member -InputObject $script:SonarBase["$($x.Fila)"] -NotePropertyName dejada -NotePropertyValue $motivo -Force
+    }
+  }
+}
+
+# Las recetas del lote: por cada receta cuyo Rx casa con algun mensaje, 'RECETA para <ruta>:<linea>, ...:' (las incidencias del lote a las que se aplica)
+# y debajo su texto. Una vez por receta.
+function Get-SonarTextoRecetas($LoteH) {
+  $l = New-Object System.Collections.Generic.List[string]
+  foreach ($r in @($Cfg.SonarRecetas)) {
+    if ($null -eq $r -or -not $r.Rx) { continue }
+    $donde = @($LoteH | Where-Object { [regex]::IsMatch("$($script:SonarPorFila[$_.Fila].Mensaje)", "$($r.Rx)", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase) } | ForEach-Object {
+        $x = $_.Fichero
+        if ($_.Linea -gt 0) { $x += ':' + $_.Linea }
+        $x })
+    if ($donde.Count -eq 0) { continue }
+    $l.Add('RECETA para ' + ($donde -join ', ') + ':')
+    $l.Add("$($r.Texto)".TrimEnd())
+    $l.Add('')
+  }
+  return $l.ToArray()
+}
+
+# El prompt de un lote de Sonar (primer intento, o el de reparacion si hay CORRECCION). Las incidencias van antes que las recetas.
+function New-PromptSonar($LoteH, [string]$Correccion, $Consejo, $Reflexiones) {
+  Initialize-SonarBase
+  $vivas = @($LoteH | Where-Object { -not $script:SonarBase["$($_.Fila)"].dejada })
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea de Sonar: paso 'sonar'")
+  $l.Add('')
+  if ($Correccion) {
+    $l.Add('Tu intento anterior sigue en el arbol de trabajo. No vuelvas a explorar el repo: arregla solo esto.')
+    $l.Add('')
+    $l.Add('## CORRECCION: tu intento anterior no paso las comprobaciones')
+    $l.Add('Corrige esto sin deshacer lo que estaba bien:')
+    $l.Add($Correccion)
+    foreach ($x in (Get-TextoReflexiones $Reflexiones $true)) { $l.Add($x) }
+    $l.Add('')
+  }
+  else {
+    $l.Add('Trabaja SOLO en el repositorio actual (un proyecto Maven de Java).')
+    $l.Add('')
+    $l.Add('## Que hay que hacer')
+    $l.Add("$($Cfg.SonarPrompt)".TrimEnd())
+    $l.Add('')
+  }
+  $l.Add('## Hallazgos de este lote (resuelve estos y nada mas)')
+  foreach ($x in $vivas) {
+    $s = $script:SonarPorFila[$x.Fila]
+    $l.Add('- ' + (Get-SonarLineaItem ([pscustomobject]@{ Fichero = $x.Fichero; Ruta = $x.Fichero; Linea = $x.Linea; Mensaje = $s.Mensaje; Tipo = $s.Tipo; Sev = $s.Severidad })))
+  }
+  $l.Add('')
+  if ($Consejo) { foreach ($x in (Get-TextoConsejoLote $Consejo)) { $l.Add($x) } }
+  $recetas = @(Get-SonarTextoRecetas $vivas)
+  if ($recetas.Count -gt 0) {
+    $l.Add('## Recetas (siguelas para las incidencias que nombran)')
+    foreach ($x in $recetas) { $l.Add($x) }
+  }
+  $l.Add('## Reglas obligatorias')
+  foreach ($x in $TextoReglas) { $l.Add($x) }
+  $l.Add('')
+  $l.Add('## Al terminar')
+  foreach ($x in (Get-TextoAlTerminar (Get-OrdenMaven) 'sonar')) { $l.Add($x) }
+  if (-not $Correccion) { foreach ($x in (Get-TextoReflexiones $Reflexiones $false)) { $l.Add($x) } }
+  return ($l -join "`n")
+}
+
+# Lo que un intento de Sonar no puede hacer, como lista de problemas (cada uno sale como su linea NO PASA):
+#  - tocar algo que no sea un .java de src/main/java o src/test/java (crear .java nuevos si vale);
+#  - borrar o renombrar nada de src/test;
+#  - borrar o renombrar un .java de src/main/java cuyo nombre de clase aparece en un fichero de src/main/resources (se cablea por nombre);
+#  - lo que diga SonarProhibido sobre el diff entero del intento (lo cambiado frente a $Check mas los .java nuevos, sus lineas como +).
+# $Cambios: las lineas de git status --porcelain del intento.
+function Get-SonarProblemas($Cambios, [string]$Check, $LoteH) {
+  $p = New-Object System.Collections.Generic.List[string]
+  $ajenos = New-Object System.Collections.Generic.List[string]
+  $tests = New-Object System.Collections.Generic.List[string]
+  $mains = New-Object System.Collections.Generic.List[string]
+  $nuevos = New-Object System.Collections.Generic.List[string]
+  $carpetas = @{}   # carpetas de los .java que ya existian y el intento ha cambiado
+  foreach ($c in @($Cambios)) {
+    if ("$c".Length -lt 4) { continue }
+    $xy = "$c".Substring(0, 2)
+    $rutas = @(("$c".Substring(3) -replace '^"|"$', '') -split ' -> ')
+    for ($i = 0; $i -lt $rutas.Count; $i++) {
+      $r = $rutas[$i].Trim('"')
+      if ($r -match '^\.rescate/') { continue }   # ahi escribe el modelo sonar-sin-arreglar.txt
+      # con un renombrado la primera ruta es la de antes (se va) y la segunda la de despues
+      $sale = (($xy.Contains('D')) -or ($rutas.Count -gt 1 -and $i -eq 0))
+      if ($r -notmatch '^src/(main|test)/java/.+\.java$') { if (-not $ajenos.Contains($r)) { $ajenos.Add($r) }; continue }
+      if ($sale -and $r.StartsWith('src/test/')) { $tests.Add($r) }
+      elseif ($sale) { $mains.Add($r) }
+      if ($xy -eq '??' -or $xy.Contains('A')) { $nuevos.Add($r) } else { $carpetas[$r.Substring(0, $r.LastIndexOf('/'))] = $true }
+    }
+  }
+  if ($ajenos.Count -gt 0) { $p.Add('Has tocado ficheros que no son .java de src/main/java o src/test/java: ' + (($ajenos | Select-Object -First 6) -join ', ') + '. En este paso solo se cambian ficheros .java (crear uno nuevo si vale).') }
+  $lejos = @($nuevos | Where-Object { -not $carpetas.ContainsKey($_.Substring(0, $_.LastIndexOf('/'))) })
+  if ($lejos.Count -gt 0) { $p.Add('Has creado clases nuevas fuera de la carpeta de las que arreglas: ' + (($lejos | Select-Object -First 6) -join ', ') + ': crea la clase nueva en el mismo paquete que la clase que arreglas.') }
+  if ($tests.Count -gt 0) { $p.Add('No se puede borrar ni renombrar nada de src/test: ' + (($tests | Select-Object -First 6) -join ', ') + '. Restauralo.') }
+  if ($mains.Count -gt 0) {
+    $recursos = @(Get-ChildItem -LiteralPath (Join-Ruta $RepoRoot 'src/main/resources') -Recurse -File -ErrorAction SilentlyContinue)
+    foreach ($r in $mains) {
+      $clase = [System.IO.Path]::GetFileNameWithoutExtension($r.Split('/')[-1])
+      $rx = '\b' + [regex]::Escape($clase) + '\b'
+      foreach ($f in $recursos) {
+        if ($f.Length -gt 2MB) { continue }
+        if ([regex]::IsMatch([System.IO.File]::ReadAllText($f.FullName), $rx)) {
+          $p.Add("Has borrado o renombrado $clase.java, pero $clase aparece en $(Get-Rel $RepoRoot $f.FullName): se cablea por nombre y no se puede quitar. Restauralo.")
+          break
+        }
+      }
+    }
+  }
+  $entradas = @($Cfg.SonarProhibido)
+  if ($entradas.Count -gt 0) {
+    $diff = New-Object System.Collections.Generic.List[string]
+    $d = Invoke-Git $RepoRoot @('diff', '--no-color', '-U0', '--no-renames', $Check)
+    foreach ($x in @($d.Salida)) { $diff.Add("$x") }
+    foreach ($r in $nuevos) {
+      $diff.Add("+++ b/$r")
+      $t = [System.IO.File]::ReadAllText((Join-Ruta $RepoRoot $r))
+      foreach ($x in @($t -split "`r?`n")) { $diff.Add('+' + $x) }
+    }
+    $mensajes = @($LoteH | ForEach-Object { "$($script:SonarPorFila[$_.Fila].Mensaje)" })
+    foreach ($m in @(Get-SonarProhibidas ($diff -join "`n") $entradas $mensajes)) { $p.Add("Cambio no permitido: $m") }
+  }
+  return $p.ToArray()
+}
+
+# Las lineas de la lista de lo que falta de Sonar (la misma para la consola y para .rescate/sonar-faltan.md). $Tope: cuantas incidencias
+# por grupo salen (0 = todas).
+function Get-SonarLineasFaltan($Estado, [int]$Tope) {
+  $atascados = @()
+  if ($script:Atascados.ContainsKey('sonar')) { $atascados = @($script:Atascados['sonar']) }
+  $faltan = @($Estado | Where-Object { $_.Estado -ne 'resuelta' })
+  $grupos = [ordered]@{}
+  $orden = @('atascada tras los intentos', 'dejada por el modelo', 'no se automatiza', 'no encuentro el fichero', 'sin intentar (el pase paro antes de llegar)')
+  foreach ($x in $faltan) {
+    if ($x.Estado -eq 'pendiente' -and ($atascados -contains $x.Fichero)) { $g = 'atascada tras los intentos' }
+    elseif ($x.Estado -eq 'pendiente') { $g = 'sin intentar (el pase paro antes de llegar)' }
+    elseif ($x.Estado -eq 'dejada') { $g = 'dejada por el modelo: ' + $x.Motivo }
+    elseif ($x.Estado -eq 'noauto') { $g = 'no se automatiza: ' + $x.Motivo }
+    else { $g = 'no encuentro el fichero' }
+    if (-not $grupos.Contains($g)) { $grupos[$g] = New-Object System.Collections.Generic.List[object] }
+    $grupos[$g].Add($x)
+  }
+  $l = New-Object System.Collections.Generic.List[string]
+  if ($faltan.Count -gt 0) {
+    $l.Add("Faltan $($faltan.Count) de Sonar:")
+    foreach ($base in $orden) {
+      foreach ($g in @($grupos.Keys | Where-Object { $_ -eq $base -or $_.StartsWith($base + ':') })) {
+        $l.Add("$g ($($grupos[$g].Count)):")
+        $n = 0
+        foreach ($x in $grupos[$g]) {
+          $n++
+          if ($Tope -gt 0 -and $n -gt $Tope) { $l.Add("  ... y $($grupos[$g].Count - $Tope) mas (la lista entera esta en .rescate/sonar-faltan.md)"); break }
+          $l.Add('  - ' + (Get-SonarLineaItem $x))
+        }
+      }
+    }
+  }
+  else { $l.Add('Sonar: no falta ninguna de las listadas; la prueba de verdad es volver a pasar Sonar') }
+  # arregladas con una receta que cambia el resultado a proposito
+  $aviso = @($Estado | Where-Object { $_.Estado -eq 'resuelta' -and @(Get-SonarRecetasDe "$($_.Mensaje)" | Where-Object { $_.Avisar -eq $true -or "$($_.Avisar)" -eq 'true' }).Count -gt 0 })
+  if ($aviso.Count -gt 0) {
+    $l.Add('')
+    $l.Add('Arregladas que cambian el resultado a proposito (revisalas):')
+    foreach ($x in $aviso) { $l.Add('  - ' + (Get-SonarLineaItem $x)) }
+  }
+  # mensajes que no tienen ni receta ni exclusion, contados
+  $sin = @($Estado | Where-Object { @(Get-SonarRecetasDe "$($_.Mensaje)").Count -eq 0 -and -not (Get-SonarNoAutomatizar "$($_.Mensaje)") } | Group-Object -Property Mensaje -CaseSensitive | Sort-Object @{ Expression = 'Count'; Descending = $true }, Name)
+  if ($sin.Count -gt 0) {
+    $l.Add('')
+    $l.Add('Mensajes sin receta ni exclusion (para ampliar), con cuantas veces salen:')
+    $n = 0
+    foreach ($g in $sin) {
+      $n++
+      if ($Tope -gt 0 -and $n -gt $Tope) { $l.Add("  ... y $($sin.Count - $Tope) mas (la lista entera esta en .rescate/sonar-faltan.md)"); break }
+      $l.Add("  - $($g.Count) x $($g.Name)")
+    }
+  }
+  return $l.ToArray()
+}
+
+# Al acabar el paso sonar: lo que falta, agrupado por motivo, en la consola y en .rescate/sonar-faltan.md, y lo que se ha arreglado a proposito
+# de otra forma que merece una mirada.
+function Write-SonarFaltan {
+  $estado = @(Get-SonarEstado)
+  $ruta = Join-Path $Work 'sonar-faltan.md'
+  [System.IO.File]::WriteAllText($ruta, ((@('# Sonar: lo que falta', '') + @(Get-SonarLineasFaltan $estado 0)) -join "`n") + "`n")
+  Info ''
+  foreach ($x in @(Get-SonarLineasFaltan $estado 30)) {
+    if ($x -match '^Faltan ') { Aviso $x } elseif ($x -match '^Sonar: no falta') { Bien $x } else { Info $x }
+  }
+  Info ('Lista de Sonar: ' + $ruta)
 }
 
 # ============================== DIAGNOSTICO ==============================
@@ -949,6 +1751,9 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
     Add-Hallazgo 'calidad' $sev $q.RelRaiz $q.Linea ('[' + $q.Regla + '] ' + $q.Detalle + $nota)
   }
 
+  # ---------- sonar (solo con -Sonar) ----------
+  if ($Sonar) { Add-SonarHallazgos }
+
   return $script:H.ToArray()
 }
 
@@ -1020,6 +1825,7 @@ function Show-Resumen($Hall) {
     $linea = ('{0,-12} {1,8} {2,8}' -f $c, $e, (Get-Cuenta $Hall $c 'aviso'))
     if ($e -gt 0) { Aviso $linea } else { Bien $linea }
   }
+  if ($Sonar) { Info ('Sonar: ' + @(Get-SonarEstado | Where-Object { $_.Estado -eq 'resuelta' }).Count + ' resueltas aqui. La prueba de verdad es volver a pasar Sonar y relanzar con el xlsx nuevo.') }
   Info ('Informe: ' + (Join-Path $Work 'diagnostico.md'))
 }
 
@@ -1037,6 +1843,7 @@ $TextoPaso = @{
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
   e2e        = 'Crea un test de integracion para el job listado, copiando el patron de los tests de integracion de la PLANTILLA. El test lanza el job real de principio a fin con los adaptadores locales (sftp desactivado), base de datos en memoria y los servicios externos simulados; comprueba que termina en COMPLETED y que la salida es la esperada. Usa los datos de src/test/resources/e2e/<nombre-del-job>/ si existen; si no, crea alli datos sinteticos minimos (nunca datos reales). La salida esperada se deduce de la logica del ORIGINAL, no de ejecutar el codigo nuevo. El test debe contener el nombre del job. Si el test falla porque el codigo migrado no hace lo mismo que el original, corrige el codigo, no el test.'
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
+  sonar      = 'Corrige las incidencias de Sonar listadas SIN cambiar el comportamiento ni la API publica (el detalle de lo que se pide va en el prompt del lote).'
   calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. No toques nada mas de esos ficheros.'
 }
 
@@ -1044,7 +1851,7 @@ $TextoPaso = @{
 $TextoCalidad = @(
   'Vale para el codigo NUEVO de este lote y para los metodos que modifiques. No es permiso para refactorizar lo demas.',
   '- Javadoc, en el idioma de los comentarios de la PLANTILLA. Cada clase, interfaz, record o enum publico que crees lleva un Javadoc que dice que es y que papel tiene en su capa (puerto, adaptador, caso de uso...). Cada metodo publico que crees, y todos los de una interfaz, llevan Javadoc: que hace, @param, @return y @throws cuando existan. No hace falta en metodos con @Override, getters, setters ni constructores. Un Javadoc que solo repite el nombre no vale.',
-  '- Inyeccion por constructor con campos private final. Nada de @Autowired ni @Inject en campos.',
+  '- Inyeccion por constructor con campos private final. Nada de @Autowired ni @Inject en campos: inyeccion por un unico constructor, campos final, sin estado mutable en el componente.',
   '- Para datos inmutables nuevos (valores, DTO, propiedades de configuracion) usa record si la PLANTILLA tambien los usa.',
   '- Usa el logger de la PLANTILLA. Nunca System.out, System.err ni printStackTrace. Ningun catch vacio: registra la excepcion con el logger y sigue como hasta ahora, o explica en un comentario por que se ignora. No la relances ni quites el catch: cambia el comportamiento.',
   '- try-with-resources para todo lo que se cierra. Optional solo como valor de retorno. Colecciones inmutables (List.of, Stream.toList) cuando no se modifican.',
@@ -1147,6 +1954,7 @@ function Get-TextoAlTerminar([string]$Mvn, [string]$PasoId) {
 # $Reflexiones: las de los intentos anteriores de estos ficheros (dentro de la CORRECCION, si la hay).
 # Con CORRECCION es el prompt corto de reparacion: el intento anterior sigue en el arbol y no hay que explorar de nuevo.
 function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
+  if ($PasoId -eq 'sonar') { return (New-PromptSonar $LoteH $Correccion $Consejo $Reflexiones) }
   if ($Correccion) { return (New-PromptReparacion $PasoId $LoteH $Correccion $Consejo $Reflexiones) }
   $mvn = Get-OrdenMaven
   $l = New-Object System.Collections.Generic.List[string]
@@ -2015,7 +2823,7 @@ function Undo-IntentoCortado([string]$Rama) {
 }
 
 function Invoke-Fix {
-  if (-not $PlantillaRoot) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
+  if (-not $PlantillaRoot -and -not ($Sonar -and $Paso -eq 'sonar')) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
   # --- rama de rescate y foto del estado actual: nada se pierde ---
   # Con worktree ya estamos en su rama rescate/. Solo con -SinWorktree se crea aqui.
@@ -2059,15 +2867,16 @@ function Invoke-Fix {
 
   $paso = $Paso
   if (-not $paso) { $paso = Get-SiguientePaso $hall }
-  if (-not $paso) { $script:Siguiente = ''; Show-SinPasos 'Revisa los avisos del informe y pasa tu pipeline.'; return }
+  if (-not $paso) { $script:Siguiente = ''; Show-SinPasos 'Revisa los avisos del informe y pasa tu pipeline.'; if ($Sonar) { Write-SonarFaltan }; return }
   if ($paso -ne 'build' -and -not $script:Build.Compila) {
     if ($script:Atascados.ContainsKey('build')) { Fallo "El proyecto no compila y 'build' se ha quedado atascado: no sigo con '$paso'."; $script:Parar = $true; return }
     Fallo "El proyecto no compila: primero hay que hacer -Paso build."; exit 2
   }
+  $esSonar = ($paso -eq 'sonar')   # el paso de Sonar no depende de los anteriores: no avisa de ellos
   foreach ($c in $Cfg.Orden) {
     if ($c -eq $paso) { break }
     $q = Get-Cuenta $hall $c
-    if ($q -gt 0) { Aviso "Ojo: quedan $q errores en el paso anterior '$c'." }
+    if ($q -gt 0 -and -not $esSonar) { Aviso "Ojo: quedan $q errores en el paso anterior '$c'." }
   }
   # En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
   $conTests = (Get-ConTests $paso)
@@ -2127,6 +2936,7 @@ function Invoke-Fix {
     $sel | ForEach-Object { Info "  $_" }
 
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
+    $sinCambios = $false   # sonar: el modelo ha dejado todo el lote con su motivo y no hay nada que guardar
     $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
     Save-Intento $paso $n $check $sel $hallAntes   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
@@ -2182,8 +2992,18 @@ function Invoke-Fix {
       if ($ramaAhora -ne $rama) { $problemas = @('Copilot cambio de rama.'); break }
       $head = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
       if ($head -ne $check) { [void](Invoke-Git $RepoRoot @('reset', '-q', '--mixed', $check)) }   # si hizo commit, lo deshago y conservo los cambios
+      if ($esSonar) { Read-SonarSinArreglar $loteH }   # lo que el modelo deja con motivo no cuenta para bajar ni se reintenta
 
       $cambios = @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ })
+      if ($cambios.Count -eq 0 -and $esSonar -and @($loteH | Where-Object { -not $script:SonarBase["$($_.Fila)"].dejada }).Count -eq 0) {
+        # el modelo ha dejado con motivo todo lo del lote: no hay nada que arreglar ni que guardar
+        $sinCambios = $true
+        $problemas = @()
+        $hall2 = @(Invoke-Diagnostico $false $false)
+        $script:Build = $buildAntes
+        $ok = $true
+        break
+      }
       if ($cambios.Count -eq 0) {
         $problemas = @('No has cambiado ningun fichero.')
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
@@ -2210,14 +3030,29 @@ function Invoke-Fix {
       $fuera = @($tocados | Where-Object { -not $_.StartsWith('src/') -and $_ -ne 'pom.xml' })
       if ($fuera.Count -gt 0) { $blandos += ('ha tocado ficheros fuera de src: ' + (($fuera | Select-Object -First 6) -join ', ')) }
 
-      Info '  Comprobando (Maven)...'
-      $hall2 = @(Invoke-Diagnostico $true $conTests)
+      # sonar: lo que el intento no puede hacer (ficheros, tests, diff). Si ya incumple algo, el intento no vale y Maven no cambia nada.
+      $sonarMal = @()
+      if ($esSonar) { $sonarMal = @(Get-SonarProblemas $cambios $check $loteH); $problemas += $sonarMal }
+      if ($sonarMal.Count -gt 0) {
+        Info '  Sin Maven: el intento ya incumple las reglas del paso.'
+        $hall2 = @(Invoke-Diagnostico $false $false)
+      }
+      else {
+        Info '  Comprobando (Maven)...'
+        $hall2 = @(Invoke-Diagnostico $true $conTests)
+      }
       $d = Get-Cuenta $hall2 $paso
+      $antesPaso = $antes[$paso]
+      if ($esSonar) { $antesPaso -= (Get-SonarDejadas $loteH) }   # las dejadas con motivo no cuentan para bajar
       if (-not $script:Build.Compila -and ($paso -ne 'build' -or $antesCompila)) { $problemas += 'El proyecto no compila.' }
-      if ($d -ge $antes[$paso]) { $problemas += "Los hallazgos de '$paso' no han bajado ($($antes[$paso]) -> $d)." }
+      if ($d -ge $antesPaso) { $problemas += "Los hallazgos de '$paso' no han bajado ($antesPaso -> $d)." }
       $empeorados = @()   # los pasos que el intento ha empeorado: sus hallazgos nuevos salen en el detalle
       foreach ($c in $Cfg.Orden) {
         if ($c -eq $paso) { break }
+        # sonar vale para cualquier repo Java: build, tests, hexagonal (reglas del codigo) y calidad (la comprueba despues, con su propio aviso) cuentan siempre;
+        # la colocacion (estructura, ficheros, config, paridad, e2e) solo si hay plantilla
+        if ($esSonar -and $c -eq 'calidad') { continue }
+        if ($esSonar -and -not $PlantillaRoot -and @('estructura', 'ficheros', 'config', 'paridad', 'e2e') -contains $c) { continue }
         $q = Get-Cuenta $hall2 $c
         if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)."; $empeorados += $c }
       }
@@ -2240,6 +3075,7 @@ function Invoke-Fix {
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
                 ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20)) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos
+      if ($sonarMal.Count -gt 0) { $detalle += ('  - ficheros que has tocado: ' + (($tocados | Select-Object -First 12) -join ', ')) }
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
       # por pantalla, lo que se ha roto primero; el resto, y la correccion completa, en el fichero del intento
       $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
@@ -2253,7 +3089,7 @@ function Invoke-Fix {
         $sha = Save-ArbolIntento
         if ($sha) {
           $mejor = @{ Sha = $sha; Peso = $peso; Problemas = $problemas.Count; Nuevos = $nuevos.Count; Correccion = $correccion; Intento = $i; Lote = $n; Base = $check; Ref = ''
-            Sirve = ($script:Build.Compila -and $d -lt $antes[$paso]) }
+            Sirve = ($script:Build.Compila -and $sonarMal.Count -eq 0 -and $d -lt $antesPaso) }
         }
       }
       elseif ($i -lt $intentos) {
@@ -2275,6 +3111,7 @@ function Invoke-Fix {
       Undo-Lote $rama $check
       Remove-Intento   # la marca se va cuando el lote ya esta deshecho, no antes
       $script:Build = $buildAntes
+      if ($esSonar) { $script:SonarBase = $null }   # las dejadas de un lote que no pasa no valen: la base se vuelve a leer del disco
       Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $intentos intento(s)."
       $problemas | ForEach-Object { Aviso "  - $_" }
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
@@ -2325,7 +3162,7 @@ function Invoke-Fix {
       foreach ($x in $sel) { $unoAUno.Remove($x); $mejorDe.Remove($x) }
       # la cascada de un fichero (de uno en uno, reserva, consejo) cuenta una vez, al quedar atascado, no una por escalon
       $script:Fallos++
-      if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
+      if (-not $esSonar -and $script:Fallos -ge $Cfg.MaxFallosSeguidos) {   # en sonar un fichero atascado no para la pasada: todo sale contado al final
         Fallo "PARO: $($script:Fallos) ficheros atascados seguidos, sin ningun lote bueno entre medias. Puede ser un problema de Copilot, de Maven o de un flag, no del codigo."
         Info "Ultimas lineas de Copilot (.rescate/lote-$paso-$n-*.log):"
         $rc.Salida | Select-Object -Last 8 | ForEach-Object { Info "  $_" }
@@ -2334,11 +3171,18 @@ function Invoke-Fix {
       continue
     }
 
-    [void](Invoke-Git $RepoRoot @('add', '-A'))
     $d = Get-Cuenta $hall2 $paso
-    $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', "rescate($paso): lote $n, hallazgos $($antes[$paso]) a $d") + $Cfg.CommitArgs)
+    if ($sinCambios) { $r = [pscustomobject]@{ Codigo = 0; Salida = @() } }
+    else {
+      [void](Invoke-Git $RepoRoot @('add', '-A'))
+      $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', "rescate($paso): lote $n, hallazgos $($antes[$paso]) a $d") + $Cfg.CommitArgs)
+    }
     Remove-Intento   # la marca se va cuando el lote ya esta commiteado (o ha fallado el commit y los cambios son del usuario), no antes
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado; los cambios siguen en el arbol de trabajo: ' + ($r.Salida -join ' ')); exit 3 }
+    if ($esSonar) {   # lo que el modelo ha dejado con motivo y lo que este lote ha resuelto (con su commit) queda en la base
+      if (-not $sinCambios) { Set-SonarResueltas (Get-Head $RepoRoot) }
+      Save-SonarBase
+    }
     if ($conIntento) {
       Write-Consejo $consejoDe[$sel[0]] "atascado en '$paso': $($sel[0])" @('si, commit ' + ((Invoke-Git $RepoRoot @('log', '-1', '--format=%h')).Salida -join '').Trim())
       $consejoDe.Remove($sel[0])   # si al fichero le quedan hallazgos, su lote siguiente va como uno normal
@@ -2347,8 +3191,11 @@ function Invoke-Fix {
     $script:Fallos = 0
     foreach ($f in $sel) { $unoAUno.Remove($f); $mejorDe.Remove($f) }
     Write-Informe $hall
-    Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho."
-    (Invoke-Git $RepoRoot @('show', '--stat', '--oneline', '--format=%h %s', 'HEAD')).Salida | Select-Object -First 25 | ForEach-Object { Info "  $_" }
+    if ($sinCambios) { Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Sin cambios que guardar: el modelo ha dejado con su motivo todo lo del lote." }
+    else {
+      Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho."
+      (Invoke-Git $RepoRoot @('show', '--stat', '--oneline', '--format=%h %s', 'HEAD')).Salida | Select-Object -First 25 | ForEach-Object { Info "  $_" }
+    }
     $blandos | ForEach-Object { Aviso "  REVISA: $_" }
 
     if (-not $Auto -and $d -gt 0) {
@@ -2361,6 +3208,7 @@ function Invoke-Fix {
   $script:Hall = $hall
   $script:HallCache = @{ Commit = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim(); Hall = $hall; Build = $script:Build }
   Show-Resumen $hall
+  if ($esSonar) { Write-SonarFaltan }
   $sig = Get-SiguientePaso $hall
   $script:Siguiente = $sig
   if ($sig) { Info "Siguiente paso pendiente: $sig  ->  vuelve a lanzar con -Modo fix (o -Paso $sig)" }
@@ -2402,6 +3250,20 @@ function Invoke-Comprobar {
 
 # ================================= MAIN =================================
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fallo "No encuentro 'git' en el PATH."; exit 1 }
+# Con -Sonar y sin -Modo: el fix entero del paso sonar, sin parar a preguntar entre lotes
+if ($Sonar) {
+  if (-not $PSBoundParameters.ContainsKey('Modo')) {
+    $Modo = 'fix'
+    if (-not $Paso -and -not $Todo) { $Paso = 'sonar' }
+  }
+  $Auto = [switch]$true
+}
+if ($Paso -eq 'sonar' -and -not $Sonar) { Fallo "El paso 'sonar' necesita -Sonar <informe.xlsx>."; exit 1 }
+if ($Sonar) {
+  $Sonar = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Sonar)
+  if (-not (Test-Path -LiteralPath $Sonar -PathType Leaf)) { Fallo "No existe el informe de Sonar: $Sonar"; exit 1 }
+  if (-not $HayReglasSonar) { Fallo "Falta sonar-reglas.ps1 junto a rescate.ps1 ($ReglasSonar): lleva las reglas del paso sonar."; exit 1 }
+}
 $RepoRoot = Resolve-Dir $Repo
 $PlantillaRoot = Resolve-Dir $Plantilla
 $LegacyRoot = Resolve-Dir $Legacy
@@ -2415,6 +3277,15 @@ $OrigenRoot = $RepoRoot
 if (-not $soloLee) { Set-Excluidos $OrigenRoot }
 [void](Read-CfgFile (Get-RutaAjustes) @() $false)   # ajustes.json: lleva claves de otros scripts, ninguna avisa; el del repo manda
 Read-Config $OrigenRoot    # antes del worktree: CommitArgs vale tambien para el commit 'foto'
+# El informe de Sonar se lee entero antes de crear nada: si no sirve, se dice ahora. Solo se arreglan las incidencias filtradas.
+$script:SonarBase = $null
+if ($Sonar) {
+  try { $script:SonarFilas = @(Get-SonarFiltradas @(Read-SonarXlsx $Sonar $Cfg.SonarColumnas)) }
+  catch { Fallo $_.Exception.Message; exit 1 }
+  $script:SonarPorFila = @{}
+  foreach ($f in $script:SonarFilas) { $script:SonarPorFila[$f.Fila] = $f }
+  $script:SonarHash = (Get-FileHash -LiteralPath $Sonar -Algorithm SHA256).Hash
+}
 if (-not $soloLee) { Test-Copilot }   # antes del worktree: sin Copilot que lanzar no se toca el repo
 if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
   $dirWt = Get-DirRescate
@@ -2427,6 +3298,10 @@ if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
     if (-not $soloLee) { Test-Copilot }
   }
 }
+
+# El paso sonar solo existe con -Sonar, y va el ultimo
+$Cfg.Orden = @($Cfg.Orden | Where-Object { $_ -ne 'sonar' })
+if ($Sonar) { $Cfg.Orden += 'sonar' }
 
 $Work = Join-Path $RepoRoot '.rescate'
 if (-not $soloLee -and -not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
