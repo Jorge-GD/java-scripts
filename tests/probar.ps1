@@ -1369,7 +1369,17 @@ $Pruebas['m6 atascados: se recuerdan entre pasadas; -Reintentar o un cambio del 
   Comprueba 'y no dice que no lo reintenta' ($r3.Salida -notmatch 'no los reintento') (Cola $r3.Salida)
   Escribe $e.Wt $SueltaM6 ((Lee $e.Wt $SueltaM6) + "// arreglado a mano`n")
   $r4 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
-  Comprueba 'si el fichero ha cambiado, se intenta' ((Lotes-Suelta $e).Count -gt $n3) (Cola $r4.Salida)
+  $n4 = (Lotes-Suelta $e).Count
+  Comprueba 'si el fichero ha cambiado, se intenta' ($n4 -gt $n3) (Cola $r4.Salida)
+  # la pieza que le faltaba la arregla una persona en otro fichero, con un commit suyo: el atascado no cambia, pero se intenta
+  $r5 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
+  Igual 'sin nada nuevo desde que se atasco, no se intenta' $n4 (Lotes-Suelta $e).Count
+  Escribe $e.Wt 'docs/pieza-comun.md' "La pieza comun, hecha a mano.`n"
+  [void](GitEn $e.Wt @('add', '--', 'docs/pieza-comun.md'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'pieza comun hecha a mano'))
+  $r6 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
+  Comprueba 'con un commit que no es del script desde que se atasco, se intenta' ((Lotes-Suelta $e).Count -gt $n4) (Cola $r6.Salida)
+  Comprueba 'y no dice que no lo reintenta' ($r6.Salida -notmatch 'no los reintento') (Cola $r6.Salida)
 }
 
 $Pruebas['m6 ruido: lo que deja Maven fuera de target no entra en los commits; lo que crea la IA, si'] = {

@@ -1490,9 +1490,11 @@ function Invoke-Pre {
 
 # ============================== ATASCADOS ==============================
 # Lo que la IA no ha sabido arreglar queda en .rescate/atascados.json (paso, fichero, motivo, huella del contenido del
-# fichero y, si lo hay, el consejo) para no gastar llamadas en el en la pasada siguiente: se vuelve a intentar con
-# -Reintentar o si el fichero ha cambiado. $script:Atascados (paso -> ficheros) es lo que saltan los lotes y
-# Get-SiguientePaso; $script:AtascadosInfo ('paso|fichero' -> entrada) es lo que se guarda.
+# fichero, commit en el que se atasco y, si lo hay, el consejo) para no gastar llamadas en el en la pasada siguiente:
+# se vuelve a intentar con -Reintentar, si el fichero ha cambiado o si desde entonces hay un commit que no es de un
+# lote del script (la pieza que faltaba la puede poner una persona en otro fichero). $script:Atascados (paso ->
+# ficheros) es lo que saltan los lotes y Get-SiguientePaso; $script:AtascadosInfo ('paso|fichero' -> entrada) es lo
+# que se guarda.
 function Get-HuellaFichero([string]$Rel) {
   $p = Join-Ruta $RepoRoot $Rel
   if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return '' }
@@ -1504,18 +1506,28 @@ function Save-Atascados { [System.IO.File]::WriteAllText((Join-Path $Work 'atasc
 function Add-Atascado([string]$PasoId, [string]$Fichero, [string]$Motivo, $Duda) {
   if (-not $script:Atascados.ContainsKey($PasoId)) { $script:Atascados[$PasoId] = @() }
   if ($script:Atascados[$PasoId] -notcontains $Fichero) { $script:Atascados[$PasoId] += $Fichero }
-  $script:AtascadosInfo["$PasoId|$Fichero"] = [pscustomobject]@{ paso = $PasoId; fichero = $Fichero; motivo = $Motivo; huella = (Get-HuellaFichero $Fichero); consejo = $Duda }
+  $script:AtascadosInfo["$PasoId|$Fichero"] = [pscustomobject]@{ paso = $PasoId; fichero = $Fichero; motivo = $Motivo; huella = (Get-HuellaFichero $Fichero); commit = (Get-Head $RepoRoot); consejo = $Duda }
 }
 
-# Al empezar el fix: los atascados de pasadas anteriores cuyo fichero no ha cambiado no se vuelven a intentar (salvo
-# -Reintentar). Los demas salen de la lista: si se vuelven a atascar, se apuntan de nuevo.
+# Si desde el commit $Desde hay alguno que no es de un lote del script (sin commit apuntado o si git no lo encuentra,
+# tambien: mejor gastar un intento que dejar un fichero sin tocar).
+function Test-CommitsAjenos([string]$Desde) {
+  if (-not $Desde) { return $true }
+  $r = Invoke-Git $RepoRoot @('log', '--format=%s', "$Desde..HEAD")
+  if ($r.Codigo -ne 0) { return $true }
+  return (@($r.Salida | Where-Object { $_ -and $_ -notmatch '^rescate\([\w\-]+\): lote ' }).Count -gt 0)
+}
+
+# Al empezar el fix (despues de la foto, que cuenta como commit ajeno): los atascados de pasadas anteriores cuyo
+# fichero no ha cambiado y sin commits ajenos desde entonces no se vuelven a intentar (salvo -Reintentar). Los demas
+# salen de la lista: si se vuelven a atascar, se apuntan de nuevo.
 function Read-Atascados {
   $p = Join-Path $Work 'atascados.json'
   if (-not (Test-Path -LiteralPath $p)) { return }
   try { $todos = @([System.IO.File]::ReadAllText($p) | ConvertFrom-Json | ForEach-Object { $_ }) }
   catch { Aviso 'atascados.json no es JSON valido: lo ignoro.'; return }
   foreach ($a in $todos) {
-    if ($Reintentar -or -not $a.paso -or -not $a.fichero -or (Get-HuellaFichero $a.fichero) -ne "$($a.huella)") { continue }
+    if ($Reintentar -or -not $a.paso -or -not $a.fichero -or (Get-HuellaFichero $a.fichero) -ne "$($a.huella)" -or (Test-CommitsAjenos "$($a.commit)")) { continue }
     Add-Atascado $a.paso $a.fichero "$($a.motivo)" $a.consejo
   }
   Save-Atascados
@@ -1567,6 +1579,7 @@ function Invoke-Fix {
     $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', 'rescate: foto del estado antes de empezar') + $Cfg.CommitArgs)
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado: ' + ($r.Salida -join ' ')); exit 3 }
   }
+  if (-not $script:AtascadosLeidos) { Read-Atascados; $script:AtascadosLeidos = $true }
 
   # --- diagnostico inicial ---
   Info 'Diagnostico inicial (compilando)...'
@@ -1871,7 +1884,6 @@ switch ($Modo) {
     $script:Parar = $false
     $script:Siguiente = ''
     $previo = ''
-    Read-Atascados
     # -Todo sin lista de jobs: primero lo del modo pre (sin -Legacy no se puede; paridad lo avisa en el informe)
     $sinRevisar = ''
     if ($Todo -and $LegacyRoot -and -not (Test-Path -LiteralPath (Join-Path $Work 'contrato.json'))) {
