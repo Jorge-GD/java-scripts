@@ -1917,12 +1917,25 @@ function Sistema-Motor {
 }
 
 # Lanza migracion.ps1 con el motor falso; $Orden dice que hace (ver tests/falsos/rescate.ps1).
-function Migra-Motor($E, $Orden, [string[]]$A) {
+function Migra-Motor($E, $Orden, [string[]]$A, [string]$Programa = '') {
+  if (-not $Programa) { $Programa = Sistema-Motor }
   $ctrl = Get-Ruta $E.Raiz 'motor-falso.json'
   Guarda-Json $ctrl $Orden
   $env:MOTOR_FALSO = $ctrl
-  try { return (Migra $E $A '' @('') (Sistema-Motor)) }
+  try { return (Migra $E $A '' @('') $Programa) }
   finally { $env:MOTOR_FALSO = '' }
+}
+
+# El mismo sistema, con el motor de mentira esperando 3 s antes de arreglar (la correccion dura algo).
+function Sistema-Motor-Lento {
+  $sis = Join-Path $Dir 'sistema-motor-lento'
+  if (-not (Test-Path -LiteralPath $sis)) {
+    Copy-Item -LiteralPath (Split-Path -Parent (Sistema-Motor)) -Destination $sis -Recurse
+    $motor = Join-Path $sis 'rescate.ps1'
+    $t = [System.IO.File]::ReadAllText($motor)
+    [System.IO.File]::WriteAllText($motor, $t.Replace('if ($orden.ficheros) {', "Start-Sleep -Seconds 3`nif (`$orden.ficheros) {"))
+  }
+  return (Join-Path $sis 'migracion.ps1')
 }
 
 # Las lineas que el motor falso apunto de ese modo (una por llamada).
@@ -2588,6 +2601,16 @@ $Pruebas['88 consola de la correccion: las lineas del motor salen por la consola
   Comprueba 'y salen antes de la linea final de la correccion' ($b -ge 0 -and $fin -gt $b) (Cola $r.Salida)
   $log = Lee $e.Out 'registros/correccion.log'
   Comprueba 'registros/correccion.log sigue llevando las lineas del motor, sin colores' ($log -match 'LINEA-VIVA-UNO' -and $log -match 'LINEA-VIVA-DOS' -and $log -notmatch '\x1b\[') $log
+}
+
+$Pruebas['89 correccion: al acabar el motor se guarda estado.json, y actualizado cuenta la correccion entera'] = {
+  $e = Nuevo-Escenario 'estado-correccion' @('Clase1')
+  $r = Migra-Motor $e (Orden-Base) (Corrige $e) (Sistema-Motor-Lento)
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  $fin = (Get-Item -LiteralPath (Get-Ruta $e.Out 'registros/correccion.log')).LastWriteTime
+  $act = [datetime]$s.actualizado
+  Comprueba 'actualizado no es anterior al final del motor (el registro de la correccion se escribe al acabar)' ($act -ge $fin.AddSeconds(-1)) "actualizado $($s.actualizado), registro $($fin.ToString('s'))"
 }
 
 # ================================ LANZADOR ================================

@@ -445,6 +445,8 @@ function Invoke-FaseCorreccion {
   }
   $c = Save-Correcciones $r.Codigo ($diagnosticado -and -not $motivo)
   if ($motivo) { Set-Parada $motivo $detalle $registro; $script:Parada = $true }
+  # 'actualizado' se escribio al empezar: sin esto la portada dice que la pasada llevo lo de antes de corregir
+  Save-Estado
   Save-Informes
   if ($diagnosticado -and -not $motivo) {
     Info "Correccion: $(@($c.commits).Count) commits de arreglo y $(@($c.atascados).Count) atascados. Detalle: $(Join-Path $Salida '4-correcciones.html')"
