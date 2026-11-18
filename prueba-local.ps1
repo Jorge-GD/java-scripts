@@ -16,6 +16,9 @@ QUE HACE
      con @SpringBootApplication y, si le hace falta, src\test\resources\application-prueba-local.yml (en el original,
      tambien dependencias de test en el pom.xml). El script comprueba que no toca nada mas, que compila y que, con un
      caso vacio, cada job deja su estado.txt. Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
+     Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
+     vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
+     mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -69,12 +72,16 @@ $Cfg += @{
   EsfuerzoArnes  = 'high'
   EsfuerzoCaso   = 'medium'
   SegundosArnes  = 1800   # tope de una llamada que escribe un arnes (las de los casos usan SegundosPorLlamada)
+  SegundosTestArnes = 300 # tope del mvn test que prueba el arnes (-Dsurefire.timeout): el de la comprobacion y el que se le pide a la IA
   LeerPorCaso    = 3      # ficheros del original que lee la tarea de un caso
   Ejemplos       = 3      # tests de ejemplo que recibe la tarea de un arnes
   LineasError    = 15     # lineas del error de Maven que van al motivo
   FallosSeguidos = 6      # llamadas fallidas seguidas antes de parar
 }
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
+# Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
+# de un parrafo y cada tarea elige una. Ninguna otra linea de las plantillas empieza asi.
+$MarcaNo = '<!--no-->'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
@@ -202,7 +209,7 @@ function Invoke-Lote($Lote, [string]$Esfuerzo) {
     $esf = $Esfuerzo
     $motivo = ''
     if ($t.intentos -gt 0) { $esf = $Cfg.EsfuerzoReintento; $motivo = $t.motivo }
-    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = (Get-Prompt $t '' $motivo); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs) })
+    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = ((Get-Prompt $t '' $motivo) -replace ('(?m)^' + [regex]::Escape($MarcaNo) + '.*\n(\n)?'), ''); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs) })
   }
   $ll = @(Invoke-Llamadas $items)
   for ($i = 0; $i -lt $items.Count; $i++) {
@@ -282,7 +289,7 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   if ($PlantillaRoot -and @($ejemplos | Where-Object { $_.StartsWith($PlantillaRoot) }).Count -gt 0) { $dirs = @($PlantillaRoot) }
   $pom = 'no'
   if ($Repo -eq 'original') { $pom = 'si' }
-  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom }
+  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = '' }
   $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
   $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
@@ -340,8 +347,12 @@ function Test-Arnes($T, [string[]]$Jobs) {
   if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r)) }
   foreach ($j in $Jobs) { foreach ($c in @('vacio', 'otro')) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/$c") -Force) } }
   Remove-Carpeta (Join-Ruta $dir 'target/prueba-local')
-  $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio') "arnes $($T.entradas.repo), caso vacio"
+  $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio', "-Dsurefire.timeout=$($Cfg.SegundosTestArnes)") "arnes $($T.entradas.repo), caso vacio"
   Remove-Carpeta (Join-Ruta $dir $Casos)
+  # Surefire mata el fork pasado el tiempo y Maven acaba con 'There was a timeout in the fork' (en Surefire 2.x, '... timeout or other error in the fork'): SurefireHelper.createErrorMessage
+  if ($r.Codigo -ne 0 -and (@($r.Salida) -join "`n") -match 'There was a timeout( or other error)? in the fork') {
+    return "Con un caso vacio, el test no termina en $($Cfg.SegundosTestArnes) s: el job intenta conectar con algo de verdad (base de datos, SFTP, correo, HTTP). Simulalo en el test."
+  }
   foreach ($j in $Jobs) {
     $sal = Join-Ruta $dir "target/prueba-local/$j/vacio"
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
@@ -376,6 +387,41 @@ function Use-ArnesGuardado($T, [string[]]$Jobs) {
   Save-Tarea $T
 }
 
+# '' si lo que dejo la IA en la copia del arnes $T tras la llamada $C vale; si no, el motivo. Una llamada que se paso del tope o
+# salio con un codigo distinto de 0 puede haber dejado ya un test que vale: si hay test, se comprueba igual (y se avisa de que se usa).
+# Si no vale, el motivo junta el de la llamada y el de la comprobacion, para que el reintento sepa que fallo.
+function Get-MotivoArnes($T, $C, [string[]]$Jobs) {
+  $fallo = Get-MotivoLlamada $C
+  if (-not $fallo) { return (Test-Arnes $T $Jobs) }
+  if (-not (Test-Path -LiteralPath (Join-Ruta $T.entradas.copia $T.entradas.test))) { return $fallo }
+  $m = Test-Arnes $T $Jobs
+  if (-not $m) {
+    $que = "ha fallado (codigo $($C.Codigo))"
+    if ($C.Agotado) { $que = 'se ha pasado del tiempo' }
+    Aviso "La IA $que, pero el test que ha dejado vale: lo uso."
+    return ''
+  }
+  return "$fallo Ademas, lo que dejo escrito no vale: $m"
+}
+
+# Deshace en la copia del arnes $T lo que la IA cambio fuera de lo permitido (Get-Permitidos) y deja lo permitido como lo dejo: el
+# reintento sigue desde ahi.
+function Undo-Fuera($T) {
+  $dir = $T.entradas.copia
+  $permitidos = @(Get-Permitidos $T)
+  $dejado = @{}
+  foreach ($rel in @(Get-Cambios $dir | Where-Object { $permitidos -contains $_ })) {
+    $f = Join-Ruta $dir $rel
+    if (Test-Path -LiteralPath $f -PathType Leaf) { $dejado[$rel] = [System.IO.File]::ReadAllBytes($f) }
+  }
+  Undo-Copia $dir
+  foreach ($rel in $dejado.Keys) {
+    $f = Join-Ruta $dir $rel
+    [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
+    [System.IO.File]::WriteAllBytes($f, $dejado[$rel])
+  }
+}
+
 # Las tareas de arnes pendientes, a la vez; cada una con su comprobacion y, si falla, su reintento con el motivo.
 function Invoke-Arneses($Tareas, [string[]]$Jobs) {
   while ($true) {
@@ -389,9 +435,15 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
     for ($i = 0; $i -lt $pend.Count; $i++) {
       $t = $pend[$i]
       Restore-Base $t.entradas.copia
-      $m = Get-MotivoLlamada $ll[$i]
-      if (-not $m) { $m = Test-Arnes $t $Jobs }
-      if ($m) { Undo-Copia $t.entradas.copia } else { Save-Arnes $t }
+      $m = Get-MotivoArnes $t $ll[$i] $Jobs
+      # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
+      $sigue = [bool]($m -and $ll[$i].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
+      if (-not $m) { Save-Arnes $t }
+      elseif ($sigue) { Undo-Fuera $t }
+      else { Undo-Copia $t.entradas.copia }
+      $t.entradas.prompt.SI_CORTADO = $MarcaNo
+      $t.entradas.prompt.SI_DESHECHO = ''
+      if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
       Set-Intento $t $m
       if ($m) { Aviso "Arnes del $($t.entradas.repo) rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del $($t.entradas.repo): bien." }
     }
@@ -400,9 +452,11 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
 
 # El arnes atascado: que ha pasado y el texto para pegar en Copilot en otra ventana.
 function Show-Atascado($T) {
+  $reg = Join-Path $Registros ($T.id + '-' + $T.intentos + '.log')   # la ultima llamada: su prompt y lo que dijo Copilot
   Fallo "El test PruebaLocalTest del $($T.entradas.repo) ha quedado atascado: $($T.motivo)"
+  Info "Lo que dijo Copilot en la ultima llamada esta en ${reg}: abrelo o mandalo."
   Aviso 'Para que te ayude Copilot, pega esto en otra ventana:'
-  Info ("Estoy ejecutando prueba-local.ps1 (la prueba en local de un batch Java: el original frente al migrado) y la IA no ha conseguido escribir el test PruebaLocalTest en la copia $($T.entradas.copia). Motivo: $($T.motivo -replace '\s+', ' ') Los registros estan en $Registros. Dime que falla (por ejemplo, que Maven no descarga las dependencias o que el contexto de Spring no arranca) y como lo arreglo. Despues vuelvo a lanzar el mismo comando.")
+  Info ("Estoy ejecutando prueba-local.ps1 (la prueba en local de un batch Java: el original frente al migrado) y la IA no ha conseguido escribir el test PruebaLocalTest en la copia $($T.entradas.copia). Motivo: $($T.motivo -replace '\s+', ' ') Lo que dijo en la ultima llamada esta en $reg; los demas registros, en $Registros. Dime que falla (por ejemplo, que Maven no descarga las dependencias o que el contexto de Spring no arranca) y como lo arreglo. Despues vuelvo a lanzar el mismo comando.")
 }
 
 # ================================ CASOS ================================

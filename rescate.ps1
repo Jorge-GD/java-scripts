@@ -639,7 +639,7 @@ function Get-Calidad($Hechos) {
     }
     $viejas = @($f.Imports | Where-Object { $_.Fqn -cmatch $RxFechaAntigua })
     if ($viejas.Count -gt 0) {
-      Add-Cal $out $f.RelRaiz $viejas[0].Linea 'fecha-antigua' ('usa java.time en vez de ' + ((@($viejas | ForEach-Object { $_.Fqn })) -join ', ') + ' (con un test delante: puede cambiar el formato o la zona)')
+      Add-Cal $out $f.RelRaiz $viejas[0].Linea 'fecha-antigua' ('usa ' + ((@($viejas | ForEach-Object { $_.Fqn })) -join ', ') + ' (API antigua de fechas). Pasarlo a java.time puede cambiar el formato o la zona: hazlo solo con un test delante')
     }
     $mc = $script:RxColeccion.Match($limpio)
     if ($mc.Success) {
@@ -647,6 +647,28 @@ function Get-Calidad($Hechos) {
     }
   }
   return $out.ToArray()
+}
+
+# Los ficheros de la plantilla fuera de src/ (hasta 2 niveles) que el repo tiene que tener tambien: si es un repo de git, solo los que
+# estan en git (git ls-files); si no, los que haya. En ambos casos, sin los de datos o informes (los que deja una herramienta o un
+# proceso: .txt, .csv, .json, .html, .md, .log, .dat, .xls, .xlsx, .pdf, .png, .jpg, .svg). Ordenados, para que el aviso sea estable.
+function Get-FicherosDePlantilla([string]$Raiz) {
+  $rx = '\.(txt|csv|json|html|md|log|dat|xls|xlsx|pdf|png|jpg|svg)$'
+  $rels = @()
+  if (Test-Path -LiteralPath (Join-Path $Raiz '.git')) {
+    $g = Invoke-Git $Raiz @('-c', 'core.quotepath=off', 'ls-files')
+    if ($g.Codigo -eq 0) { $rels = @($g.Salida | Where-Object { $_ }) }
+  }
+  else { $rels = @(Get-Arbol $Raiz 2 | ForEach-Object { Get-Rel $Raiz $_.FullName }) }
+  $extra = @()
+  foreach ($rel in $rels) {
+    $seg = $rel.Split('/')
+    if ($rel.StartsWith('src/') -or $seg.Count -gt 3 -or $rel -match $rx) { continue }
+    if ($seg.Count -gt 1 -and @($seg[0..($seg.Count - 2)] | Where-Object { $Cfg.DirsIgnorados -contains $_ }).Count -gt 0) { continue }
+    $extra += $rel
+  }
+  [Array]::Sort($extra, [System.StringComparer]::Ordinal)
+  return $extra
 }
 
 # Lo que se aprende de la plantilla.
@@ -675,11 +697,7 @@ function Get-Calibracion([string]$Raiz) {
   foreach ($t in $Cfg.ApiAntigua) { $tokens[$t] = ($todo -match ('\b' + $t + '\b')) }
   $jakarta = $false
   foreach ($f in (@($h.Ficheros) + @($h.Tests))) { foreach ($i in $f.Imports) { if ($i.Fqn.StartsWith('jakarta.')) { $jakarta = $true } } }
-  $extra = @()
-  foreach ($f in @(Get-Arbol $Raiz 2)) {
-    $rel = Get-Rel $Raiz $f.FullName
-    if (-not $rel.StartsWith('src/')) { $extra += $rel }
-  }
+  $extra = @(Get-FicherosDePlantilla $Raiz)
   $calReglas = @{}
   foreach ($q in @(Get-Calidad $h)) { $calReglas[$q.Regla] = $true }
   return [pscustomobject]@{

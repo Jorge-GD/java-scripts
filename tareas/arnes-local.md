@@ -13,7 +13,18 @@ POM: {{POM}}
 - `src/test/resources/application-prueba-local.yml`, solo si te hace falta configuración para este test (perfil de Spring `prueba-local`).
 - Si POM es `si`, puedes añadir al `pom.xml` las dependencias que falten para el test, todas con `<scope>test</scope>` (por ejemplo `spring-boot-starter-test` o `spring-batch-test`). Nada más del `pom.xml`. Si POM es `no`, el `pom.xml` no se toca.
 
-Nada más: ni el código de `src/main`, ni otros tests, ni la configuración del batch. Si cambias otra cosa, el script lo deshace y rechaza el test entero. Puedes lanzar `mvn` para probarlo y crear casos de prueba en `src/test/resources/prueba-local/`: el script los borra al acabar.
+Nada más: ni el código de `src/main`, ni otros tests, ni la configuración del batch. Si cambias otra cosa, el script lo deshace y rechaza el test entero. Puedes crear casos de prueba en `src/test/resources/prueba-local/`: el script los borra al acabar.
+
+## Qué puedes lanzar
+
+Solo estos dos comandos de Maven, y ningún otro:
+
+- `mvn -q test-compile`
+- `mvn test -Dtest=PruebaLocalTest -Dprueba.local.caso=<caso> -Dsurefire.timeout={{SEGUNDOS_TEST}}`, con un `<caso>` que hayas creado tú en `src/test/resources/prueba-local/<job>/<caso>/`.
+
+Prohibido: `mvn test` sin `-Dtest`, `mvn verify`, `mvn package`, `mvn install`, `mvn spring-boot:run` y `java -jar`. Arrancan el batch entero y pueden no terminar.
+
+Si el test se pasa de {{SEGUNDOS_TEST}} s, Maven lo mata: el job está intentando conectar con algo de verdad (base de datos, SFTP, correo, HTTP). Simúlalo en el test.
 
 ## Tests de ejemplo
 
@@ -50,13 +61,16 @@ En `target/prueba-local/<job>/<caso>/`, en UTF-8 y con saltos de línea `\n`:
 
 ## Cuando acabes
 
-Comprueba con `mvn test-compile` que compila. Termina tu respuesta con una sola palabra: hecho.
+Comprueba con `mvn -q test-compile` que compila. Termina tu respuesta con una sola palabra: hecho.
 <!--CORRECCION-->
 
 ## CORRECCIÓN: tu intento anterior no pasó la comprobación
+
+{{SI_CORTADO}}Tu intento anterior se cortó por tiempo. Lo que escribiste sigue en la copia: continúa desde ahí, no empieces de cero.
 
 El script ha revisado lo que escribiste y ha encontrado esto:
 
 {{MOTIVO}}
 
-Lo que habías cambiado se ha deshecho. Vuelve a escribir el test completo en ESCRIBIR (y lo demás que te haga falta de lo permitido), corrigiendo eso.
+{{SI_DESHECHO}}Lo que habías cambiado se ha deshecho. Vuelve a escribir el test completo en ESCRIBIR (y lo demás que te haga falta de lo permitido), corrigiendo eso.
+{{SI_CORTADO}}Corrige eso en lo que ya está escrito y termina; no vuelvas a empezar.

@@ -4842,5 +4842,51 @@ $Pruebas['m14 cobertura: P1 - el lote que escribe sus tests en otro fichero y no
   Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
 }
 
+# ===================== M18: lo que la plantilla tiene y el repo no, y el texto de fecha-antigua =====================
+# Lo que dice el diagnostico de los ficheros de la plantilla que faltan en el repo (un aviso de config), o '' si no dice nada.
+function Faltan-De-La-Plantilla($E) {
+  $r = Rescate @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-SinBuild')
+  if ($r.Codigo -ne 0) { return "rescate.ps1 salio con $($r.Codigo): " + (Cola $r.Salida) }
+  $a = @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'config' -and $_.Detalle -like 'ficheros que la plantilla tiene*' })
+  if ($a.Count -eq 0) { return '' }
+  return "$($a[0].Detalle)"
+}
+
+# Deja en la plantilla (despues de su commit) un Dockerfile, un datos.txt y un docs/INFORME.md; si $EnGit, tambien en git.
+function Pon-Ficheros-De-Plantilla($E, [bool]$EnGit) {
+  Escribe $E.Plantilla 'Dockerfile' "FROM eclipse-temurin:21`n"
+  Escribe $E.Plantilla 'datos.txt' "uno`ndos`n"
+  Escribe $E.Plantilla 'docs/INFORME.md' "# Informe`n"
+  if ($EnGit) {
+    [void](GitEn $E.Plantilla @('add', '--', 'Dockerfile', 'datos.txt', 'docs/INFORME.md'))
+    [void](GitEn $E.Plantilla @('commit', '-q', '-m', 'ficheros'))
+  }
+  Escribe $E.Plantilla 'salida-x/graph.json' "{}`n"
+}
+
+$Pruebas['m18 plantilla (h): la referencia con git solo cuenta lo que esta en git y no es de datos: Dockerfile si; graph.json y herramienta-out/config.yml (fuera de git), datos.txt e INFORME.md no'] = {
+  $e = Nuevo-Escenario 'm18-h'
+  Pon-Ficheros-De-Plantilla $e $true
+  Escribe $e.Plantilla 'herramienta-out/config.yml' "a: b`n"   # fuera de git y que no es de datos: con git, tampoco cuenta
+  Igual 'solo avisa del Dockerfile' 'ficheros que la plantilla tiene y aqui faltan: Dockerfile' (Faltan-De-La-Plantilla $e)
+}
+
+$Pruebas['m18 plantilla (i): la referencia sin git lista como hoy, pero sin las extensiones de datos'] = {
+  $e = Nuevo-Escenario 'm18-i'
+  Pon-Ficheros-De-Plantilla $e $false
+  Escribe $e.Plantilla 'config/app.properties' "a=b`n"
+  Remove-Item -LiteralPath (Join-Path $e.Plantilla '.git') -Recurse -Force
+  Igual 'avisa del Dockerfile y de lo que no es de datos, sin graph.json, datos.txt ni INFORME.md' 'ficheros que la plantilla tiene y aqui faltan: Dockerfile, config/app.properties' (Faltan-De-La-Plantilla $e)
+}
+
+$Pruebas['m18 plantilla (j): fecha-antigua dice que usa la API antigua y que pasarla a java.time pide un test delante'] = {
+  $e = Nuevo-Escenario 'm18-j'
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  $f = @(Hallazgos $e.Repo | Where-Object { $_.Detalle -like '`[fecha-antigua`]*' })
+  Igual 'hay un aviso de fecha-antigua' 1 $f.Count
+  Igual 'con el texto nuevo' '[fecha-antigua] usa java.util.Date (API antigua de fechas). Pasarlo a java.time puede cambiar el formato o la zona: hazlo solo con un test delante' "$($f[0].Detalle)"
+  Comprueba 'y ya no dice que usa java.time en vez de la antigua' (("$($f[0].Detalle)") -notmatch 'usa java\.time en vez de')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
