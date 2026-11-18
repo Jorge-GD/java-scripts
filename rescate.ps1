@@ -391,6 +391,43 @@ function Get-SecretosEnClaro($Hechos) {
   return $out.ToArray()
 }
 
+# El bloque sftp: del yml de una plantilla (solo .yml/.yaml). $null, o un objeto con Rel (el yml), Ruta (las claves padre y sftp,
+# unidas con punto) y Claves (los hijos directos de sftp:, en orden y sin repetir). Vale la primera linea que sea solo 'sftp:' (primero
+# en application.yml, luego en los de perfil); los padres salen subiendo por la indentacion; los hijos son las lineas con la
+# indentacion del primero, hasta volver a la de sftp: o a una menor. Nunca se copia un valor.
+function Get-SftpYml($Hechos) {
+  $rxClave = '^\s*["'']?([^\s:"''#]+)["'']?\s*:'
+  $rxVacia = '^\s*(#|$)'
+  $yamls = @($Hechos.YmlFicheros | Where-Object { $_.Nombre -match '^application\.ya?ml$' }) + @($Hechos.YmlFicheros | Where-Object { $_.Nombre -match '^application.+\.ya?ml$' -and $_.Nombre -notmatch '^application\.ya?ml$' })
+  foreach ($y in $yamls) {
+    $l = @($y.Texto -split "`r?`n")
+    for ($i = 0; $i -lt $l.Count; $i++) {
+      if ($l[$i] -notmatch '^(\s*)sftp:\s*$') { continue }
+      $sangria = ([regex]::Match($l[$i], '^\s*')).Length
+      $ruta = @('sftp')
+      $actual = $sangria
+      for ($k = $i - 1; $k -ge 0 -and $actual -gt 0; $k--) {
+        if ($l[$k] -match $rxVacia) { continue }
+        $n = ([regex]::Match($l[$k], '^\s*')).Length
+        if ($n -ge $actual) { continue }
+        $actual = $n
+        if ($l[$k] -match $rxClave) { $ruta = @($Matches[1]) + $ruta }
+      }
+      $claves = New-Object System.Collections.Generic.List[string]
+      $hijo = -1
+      for ($k = $i + 1; $k -lt $l.Count; $k++) {
+        if ($l[$k] -match $rxVacia) { continue }
+        $n = ([regex]::Match($l[$k], '^\s*')).Length
+        if ($n -le $sangria) { break }
+        if ($hijo -lt 0) { $hijo = $n }
+        if ($n -eq $hijo -and $l[$k] -match $rxClave -and -not $claves.Contains($Matches[1])) { $claves.Add($Matches[1]) }
+      }
+      if ($claves.Count -gt 0) { return [pscustomobject]@{ Rel = $y.Rel; Ruta = ($ruta -join '.'); Claves = $claves.ToArray() } }
+    }
+  }
+  return $null
+}
+
 # Texto de todos los ficheros de texto de una carpeta (para buscar literales).
 function Get-TextoArbol([string]$Dir) {
   if (-not $Dir -or -not (Test-Path -LiteralPath $Dir)) { return '' }
@@ -611,7 +648,7 @@ function Get-Calibracion([string]$Raiz) {
     Calidad = $calReglas; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
-    YmlSftp = ($h.Yml -match 'sftp'); Pom = (Get-Pom $Raiz); Extra = $extra
+    YmlSftp = ($h.Yml -match 'sftp'); SftpYml = (Get-SftpYml $h); Pom = (Get-Pom $Raiz); Extra = $extra
   }
 }
 
@@ -826,8 +863,14 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
     }
   }
   if ($ymlSinSftp) {
-    if ($cal -and $cal.YmlSftp) { $deLaPlantilla = ' (la plantilla si)' } else { $deLaPlantilla = '' }
-    Add-Hallazgo 'ficheros' 'error' 'src/main/resources' 0 ('application.yml no tiene configuracion sftp: anade un bloque ''sftp:'' (host, port, username, password, remote-dir) que lea variables de entorno, por ejemplo host: ${SFTP_HOST}; ningun valor real' + $deLaPlantilla)
+    if ($cal -and $cal.SftpYml) {
+      $b = $cal.SftpYml
+      $textoYml = 'application.yml no tiene configuracion sftp: copia el bloque ''' + $b.Ruta + ''' de la PLANTILLA (' + $b.Rel + ') con sus claves (' + ($b.Claves -join ', ') + '), bajo el prefijo propio de este batch, con valores ${...} como los suyos (salen del configmap); ningun valor real (la plantilla si)'
+    }
+    else {
+      $textoYml = 'application.yml no tiene configuracion sftp: anade un bloque ''sftp:'' (servidor, puerto, usuario, contrasena y rutas) con valores ${...} que salgan de la configuracion externa, como el resto de este application.yml; ningun valor real'
+    }
+    Add-Hallazgo 'ficheros' 'error' 'src/main/resources' 0 $textoYml
   }
 
   # ---------- config ----------

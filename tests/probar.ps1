@@ -1219,6 +1219,8 @@ $Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote s
 # referencia y tambien sin ella. El interruptor ExigirSftp (por defecto true) lo apaga: entonces solo se exige lo que la referencia tiene.
 $SinAdaptadorSftp = 'no hay adaptador SFTP*'
 $SinYmlSftp = 'application.yml no tiene configuracion sftp*'
+# El texto cuando la plantilla no tiene un bloque sftp en un yml que copiar (M9.5).
+$TextoSinBloqueM95 = 'application.yml no tiene configuracion sftp: anade un bloque ''sftp:'' (servidor, puerto, usuario, contrasena y rutas) con valores ${...} que salgan de la configuracion externa, como el resto de este application.yml; ningun valor real'
 
 # Los hallazgos de ficheros del repo que dicen eso (patron -like sobre el detalle).
 function Hallazgos-Sftp([string]$Repo, [string]$Patron) {
@@ -1349,9 +1351,10 @@ $Pruebas['sftp en java: sin la configuracion en el yml ni en una clase, el error
   $d = ''
   if ($y.Count -eq 1) { $d = $y[0].Detalle }
   Comprueba 'lleva la instruccion del bloque' ($d -match [regex]::Escape("anade un bloque 'sftp:'")) $d
-  Comprueba 'con las claves' ($d -match [regex]::Escape('(host, port, username, password, remote-dir)')) $d
-  Comprueba 'y el ejemplo con la variable de entorno' ($d -match [regex]::Escape('por ejemplo host: ${SFTP_HOST}; ningun valor real')) $d
-  Comprueba 'el texto entero' ($d -ceq 'application.yml no tiene configuracion sftp: anade un bloque ''sftp:'' (host, port, username, password, remote-dir) que lea variables de entorno, por ejemplo host: ${SFTP_HOST}; ningun valor real') $d
+  Comprueba 'con lo que lleva el bloque' ($d -match [regex]::Escape('(servidor, puerto, usuario, contrasena y rutas)')) $d
+  Comprueba 'y los valores salen de la configuracion externa' ($d -match [regex]::Escape('con valores ${...} que salgan de la configuracion externa, como el resto de este application.yml; ningun valor real')) $d
+  Comprueba 'sin pedir copiar nada de la plantilla' ($d -notmatch 'PLANTILLA|plantilla') $d
+  Comprueba 'el texto entero' ($d -ceq $TextoSinBloqueM95) $d
   Comprueba 'y es ASCII' ($d -cmatch '^[\x20-\x7e]*$') $d
   # otra configuracion que no es de sftp no la salva
   $otra = $ClaseCabecera + "/** Ajustes. */`n@ConfigurationProperties(prefix = `"batch`")`npublic class Ajustes {`n    @Value(`"`${batch.nombre}`")`n    private String nombre;`n}`n"
@@ -2814,6 +2817,121 @@ $Pruebas['m94 textos: el hallazgo de ficheros sale con el texto nuevo, entero y 
     Comprueba 'y es ASCII' ([string]$fic[0].Detalle -cmatch '^[\x20-\x7E]+$') $fic[0].Detalle
     Comprueba 'dice que pasar un Path como dato si vale' ([string]$fic[0].Detalle).EndsWith('(pasar un Path como dato si vale)') $fic[0].Detalle
   }
+}
+
+# ===== M9.5: LA PLANTILLA DICE COMO SE ESCRIBE EL BLOQUE SFTP =====
+# La plantilla del equipo lleva el sftp anidado bajo el prefijo de su batch y con valores ${env.x} (salen del configmap). El hallazgo manda
+# copiar ese bloque: su ruta, sus claves y el yml donde esta; nunca un valor. Nombres inventados.
+$YmlPlantillaM95 = @'
+plantillabatch:
+  sftp:
+    enabled: ${env.x}
+    domain: host-que-no-sale
+    user: ${env.valor-que-no-sale}
+    password: ${env.x}
+    port: ${env.x}
+    allow-unknown-keys: ${env.x}
+    input-path: ${env.x}
+    archive-path: ${env.x}
+    quarantine-path: ${env.x}
+  input-directory: ${env.x:}
+'@
+
+$Pruebas['m95 sftp: con el bloque en config/ de la plantilla, el hallazgo manda copiarlo (prefijo, claves en orden, su yml, la plantilla si) y ningun valor sale'] = {
+  $e = Nuevo-Escenario 'm95-bloque'
+  Mueve-Yml-A-Config $e.Plantilla $YmlPlantillaM95
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'un error de configuracion sftp' 1 $y.Count
+  $d = ''
+  if ($y.Count -eq 1) { $d = [string]$y[0].Detalle }
+  Comprueba 'lleva el bloque con el prefijo de la plantilla' ($d.Contains("copia el bloque 'plantillabatch.sftp' de la PLANTILLA")) $d
+  Comprueba 'y el yml de la plantilla donde esta' ($d.Contains('(src/main/resources/config/application.yml)')) $d
+  Comprueba 'las 9 claves, en orden' ($d.Contains('con sus claves (enabled, domain, user, password, port, allow-unknown-keys, input-path, archive-path, quarantine-path), bajo')) $d
+  Comprueba 'sin la clave que cuelga del prefijo y no del sftp' (-not $d.Contains('input-directory')) $d
+  Comprueba 'y acaba con (la plantilla si)' ($d.EndsWith('ningun valor real (la plantilla si)')) $d
+  Igual 'el texto entero' "application.yml no tiene configuracion sftp: copia el bloque 'plantillabatch.sftp' de la PLANTILLA (src/main/resources/config/application.yml) con sus claves (enabled, domain, user, password, port, allow-unknown-keys, input-path, archive-path, quarantine-path), bajo el prefijo propio de este batch, con valores `${...} como los suyos (salen del configmap); ningun valor real (la plantilla si)" $d
+  Comprueba 'y es ASCII' ($d -cmatch '^[\x20-\x7e]+$') $d
+  $todo = Lo-Que-Sale $e.Repo $r.Salida
+  Comprueba 'el valor ${env.valor-que-no-sale} no sale en ninguna salida' (-not $todo.Contains('valor-que-no-sale')) (Cola $r.Salida)
+  Comprueba 'el literal host-que-no-sale no sale en ninguna salida' (-not $todo.Contains('host-que-no-sale')) (Cola $r.Salida)
+}
+
+$Pruebas['m95 sftp: el bloque se lee por indentacion: padres, hijos directos sin repetir ni nietos ni comentarios, el primero que haya, y ningun valor'] = {
+  $e = Nuevo-Escenario 'm95-indentacion'
+  Mueve-Yml-A-Config $e.Plantilla @'
+app:
+  batch:
+    # sftp:
+    nombre: ejemplo
+    sftp:
+
+      host: ${env.a}
+      # port: comentado
+      port: ${env.b}
+      opciones:
+        nodo: valor-literal-que-no-sale
+      host: ${env.c}
+      user: ${env.valor-que-no-sale}
+    otro: 1
+sftp:
+  falso: ${env.z}
+'@
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'un error de configuracion sftp' 1 $y.Count
+  $d = ''
+  if ($y.Count -eq 1) { $d = [string]$y[0].Detalle }
+  Comprueba 'la ruta sube por los dos padres' ($d.Contains("copia el bloque 'app.batch.sftp' de la PLANTILLA")) $d
+  Comprueba 'claves: host, port, opciones y user, una vez cada una, sin el nieto ni el comentario ni lo que viene despues' ($d.Contains('con sus claves (host, port, opciones, user), bajo')) $d
+  Comprueba 'no usa el sftp: de la raiz que viene despues' (-not $d.Contains('falso')) $d
+  $todo = Lo-Que-Sale $e.Repo $r.Salida
+  Comprueba 'ningun valor sale en ninguna salida' (-not ($todo.Contains('valor-que-no-sale') -or $todo.Contains('${env.c}'))) (Cola $r.Salida)
+}
+
+$Pruebas['m95 sftp: sin un bloque sftp en un yml de la plantilla el texto es el generico, entero y en ASCII, y sin (la plantilla si)'] = {
+  # la plantilla no tiene sftp
+  $e = Escenario-Referencia-Sin-Sftp 'm95-generico'
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'un error de configuracion sftp' 1 $y.Count
+  if ($y.Count -eq 1) {
+    Igual 'su texto es el generico, entero' $TextoSinBloqueM95 $y[0].Detalle
+    Comprueba 'y es ASCII' ([string]$y[0].Detalle -cmatch '^[\x20-\x7e]+$') $y[0].Detalle
+  }
+  # la plantilla lo tiene solo en un .properties: no hay bloque yml que copiar
+  $p = Nuevo-Escenario 'm95-properties'
+  Remove-Item -LiteralPath (Get-Ruta $p.Plantilla 'src/main/resources/application.yml') -Force
+  Escribe $p.Plantilla 'src/main/resources/application.properties' "sftp.host=`${SFTP_HOST}`n"
+  [void](GitEn $p.Plantilla @('add', '--', 'src/main/resources'))
+  [void](GitEn $p.Plantilla @('commit', '-q', '-m', 'sftp en properties'))
+  $r2 = Rescate @('-Repo', $p.Repo, '-Plantilla', $p.Plantilla, '-SinBuild')
+  Igual 'con el sftp de la plantilla en un .properties, sale con 0' 0 $r2.Codigo
+  $y2 = Hallazgos-Sftp $p.Repo $SinYmlSftp
+  Igual 'un error de configuracion sftp' 1 $y2.Count
+  if ($y2.Count -eq 1) { Igual 'y su texto es el generico' $TextoSinBloqueM95 $y2[0].Detalle }
+}
+
+# El motivo es el del primer metodo que falla: al llegar al siguiente metodo (otra linea <<< FAILURE!) o a otra linea 'Tests run:' se para.
+$Pruebas['m95 motivo: con dos metodos que fallan, el motivo lleva solo la linea del primero, sin la del segundo ni Tests run'] = {
+  $e = Escenario-Test-Roto 'm95-dos-fallos'
+  $resumen = "Tests run: 2, Failures: 2, Errors: 0, Skipped: 0, Time elapsed: 0.8 s <<< FAILURE! - in $ClaseM92"
+  $metodos = @('primeroFalla  Time elapsed: 0.4 s  <<< FAILURE!', 'java.lang.AssertionError: motivo-del-primero') +
+    (Pila-M92 @('com.acme.life.ArquitecturaTest.primeroFalla(ArquitecturaTest.java:20)')) +
+    @('segundoFalla  Time elapsed: 0.1 s  <<< FAILURE!', 'java.lang.AssertionError: motivo-del-segundo') +
+    (Pila-M92 @('com.acme.life.ArquitecturaTest.segundoFalla(ArquitecturaTest.java:30)')) +
+    @('Tests run: 2, Failures: 2, Errors: 0, Skipped: 0')
+  $d = Diagnostica-Con-Informe $e (Informe-M92 $resumen $metodos)
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el detalle cuenta los dos' "2 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $d.H[0].Detalle
+  Igual 'el motivo es la linea del primero' 'java.lang.AssertionError: motivo-del-primero' $d.H[0].Motivo
+  Comprueba 'y no lleva la del segundo' (-not ([string]$d.H[0].Motivo).Contains('motivo-del-segundo')) $d.H[0].Motivo
+  Comprueba 'ni una linea Tests run' (-not ([string]$d.H[0].Motivo).Contains('Tests run')) $d.H[0].Motivo
 }
 
 # ================================ LANZADOR ================================
