@@ -16,6 +16,9 @@ QUE HACE
      con @SpringBootApplication y, si le hace falta, src\test\resources\application-prueba-local.yml (en el original,
      tambien dependencias de test en el pom.xml). El script comprueba que no toca nada mas, que compila y que, con un
      caso vacio, cada job deja su estado.txt. Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
+     Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
+     vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
+     mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
