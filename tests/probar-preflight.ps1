@@ -10,7 +10,7 @@ Vale para Windows PowerShell 5.1 y para PowerShell 7. Solo ASCII a proposito.
   .\tests\probar-preflight.ps1 -Dir D:\tmp\x -Conservar
   .\tests\probar-preflight.ps1 -Script C:\otra\preflight.ps1
 
-La prueba 1 lanza de verdad los otros dos bancos (unos 2 minutos); las demas usan -Solo.
+La prueba 1 lanza de verdad el banco probar (el bloque 2 del preflight); las demas usan -Solo.
 Cada lanzamiento corre sobre una copia de los scripts en la carpeta temporal, para que
 preflight-resultado.txt no se mezcle con el del repo.
 Sale con 0 si todo pasa y con 1 si algo falla.
@@ -273,14 +273,14 @@ $Pruebas['1 completo: nueve bloques con los tres repos y los falsos, sin fallos'
   Comprueba '1: politica de ejecucion efectiva y por ambito' ((Valor-De $r 'politica de ejecucion') -match 'efectiva \w+ \| .*Process=') (Valor-De $r 'politica de ejecucion')
   Comprueba '1: version de Windows en numeros' ((Valor-De $r 'windows') -match '^\d+\.\d+\.\d+') (Valor-De $r 'windows')
   Comprueba '1: versiones de git, java, maven y copilot (solo el numero)' (((Valor-De $r 'git') -match '^\d+\.\d+') -and ((Valor-De $r 'java') -eq '21.0.0') -and ((Valor-De $r 'maven') -eq '3.9.8') -and ((Valor-De $r 'copilot') -eq '1.0.112')) (((Bloque-De $r '1') | Select-Object -First 12) -join ' / ')
-  Igual '1: tipo de copilot' '.ps1' (Valor-De $r 'tipo de copilot')
+  Igual '1: tipo de copilot y lo que se lanza' '.ps1 | se lanza: .ps1' (Valor-De $r 'tipo de copilot')
   Igual '1: impide la suspension' 'si' ((Valor-De $r 'impide la suspension') -replace ' .*$', '')
   Comprueba '1: pagina de codigos' ((Valor-De $r 'pagina de codigos') -match '^\d+') (Valor-De $r 'pagina de codigos')
   Comprueba '1: GB libres' ((Valor-De $r 'GB libres') -match '^\d+(\.\d+)?$') (Valor-De $r 'GB libres')
 
-  # 2 bancos y 10 los otros dos bancos siguen igual
+  # 2 bancos: solo probar (probar-migracion es un banco de desarrollo y no entra en el preflight)
   Comprueba '2: probar.ps1 pasa todas sus comprobaciones (N de N en S s, 75 o mas)' ((Valor-De $r 'probar') -match '^(\d+) de \1 en \d+ s$' -and [int]$Matches[1] -ge 75) (Valor-De $r 'probar')
-  Comprueba '2: probar-migracion.ps1 pasa todas sus comprobaciones (232 o mas)' ((Valor-De $r 'probar-migracion') -match '^(\d+) de \1 en \d+ s$' -and [int]$Matches[1] -ge 232) (Valor-De $r 'probar-migracion')
+  Igual '2: no lanza probar-migracion' 0 (Cuenta-Lineas $r 'probar-migracion')
   Igual '2: fallan' 'ninguna' (Valor-De $r 'fallan')
 
   # 3 copilot
@@ -580,14 +580,14 @@ $Pruebas['12 ruta mal escrita: se dice al instante, sale con 1, no ejecuta ningu
   Sin-Fugas $r2 'dos mal'
 }
 
-$Pruebas['13 bloque 1: tipo de copilot (extension, sin extension, no encontrado) y GB libres con una ruta relativa'] = {
+$Pruebas['13 bloque 1, lanzar Copilot: tipo y lo que se lanza (extension, sin extension, no encontrado) y GB libres con una ruta relativa'] = {
   $e = Nuevo-Escenario 'tipo'
   Pon-Ajustes $e @{ CopilotExe = (Join-Path $Dir 'no-existe-zorba/copilot.exe') }
   $r = Pf $e (Todos $e @('-Solo', '1'))
-  Igual 'un Copilot que no esta: no encontrado' 'no encontrado' (Valor-De $r 'tipo de copilot')
+  Igual 'un Copilot que no esta: no encontrado, y no se lanza nada' 'no encontrado | se lanza: nada' (Valor-De $r 'tipo de copilot')
   Sin-Fugas $r 'tipo'
   if ($env:OS -ne 'Windows_NT') {
-    foreach ($c in @(@('copilot-sin-ext', 'sin extension'), @('copilot.cmd', '.cmd'), @('copilot.zorba', 'otra'))) {
+    foreach ($c in @(@('copilot-sin-ext', 'sin extension | se lanza: sin extension'), @('copilot.cmd', '.cmd | se lanza: .cmd'), @('copilot.zorba', 'otra | se lanza: otra'))) {
       $exe = Join-Path (Join-Path $e.Raiz 'bin') $c[0]
       Nuevo-Lanzador $exe (Join-Path $falsos 'copilot.ps1')
       Pon-Ajustes $e @{ CopilotExe = $exe }
@@ -840,7 +840,7 @@ $Pruebas['20 bloque 9 sin -Modelos: sin -Modelos y ninguna llamada; los bloques 
 }
 
 $Pruebas['21 bloque 9, dos modelos y dos esfuerzos: las llamadas justas, en serie y con el modelo y el esfuerzo de cada una'] = {
-  $e = Nuevo-Examen 'examen-dos' @{ LineasPorTarea = 100 }
+  $e = Nuevo-Examen 'examen-dos' @{ LineasPorTarea = 100; SegundosPorLlamada = 200 }
   $rangos = @(Trozos-De 100)
   $t = $rangos.Count
   $r = Pf-Examen $e "$MA,$MB" 'medium,max'
@@ -888,8 +888,9 @@ $Pruebas['21 bloque 9, dos modelos y dos esfuerzos: las llamadas justas, en seri
   Comprueba 'y dice la mejor' ((Linea-Con $b 'la mejor: ') -match ('^la mejor: ' + [regex]::Escape($MA) + ' con esfuerzo \w+ \(clave \d+ de 36, arreglos 2 de 2\)$')) (Linea-Con $b 'la mejor: ')
   Igual 'todo con uno: no' 'todo con uno: no' (Linea-Con $b 'todo con uno: ')
   $llamadas = 4 * $por
-  $min = 2 * $llamadas
-  Comprueba 'la consola cuenta las llamadas y los minutos' ($r.Salida -match ('(?m)^' + $llamadas + ' llamadas, hasta ' + $min + ' min\s*$') -and $r.Salida -match ('== 9 examen de modelos \(hasta ' + $min + ' min\)\.\.\.')) (Cola $r.Salida)
+  # 2 min por llamada con medium; con max, el tope de una llamada (200 s: 4 min), no 2; dos modelos
+  $min = 2 * ($por * 2 + $por * [math]::Ceiling(200 / 60))
+  Comprueba 'la consola cuenta las llamadas y los minutos: 2 por llamada con medium y el tope de la llamada con max' ($r.Salida -match ('(?m)^' + $llamadas + ' llamadas, hasta ' + $min + ' min\s*$') -and $r.Salida -match ('== 9 examen de modelos \(hasta ' + $min + ' min\)\.\.\.')) (Cola $r.Salida)
   Sin-Fugas $r 'examen dos'
 }
 
@@ -919,6 +920,10 @@ $Pruebas['22 bloque 9, clave: cuenta los datos esperados con cita probada, tipo 
     $xc = @(Combinacion-De $c $MA 'medium')
     Comprueba 'c) L1: el reparto bueno acierta las 2 (153 para la segunda y 150 para la primera)' ((Linea-Con $xc 'L1: ') -match '^L1: json si \| citas 2 de 2 \| clave 2 de 2 \|') (Linea-Con $xc 'L1: ')
     Comprueba 'c) L2: dos datos para una sola condicion cuentan 1 de 1' ((Linea-Con $xc 'L2: ') -match '^L2: json si \| citas 2 de 2 \| clave 1 de 1 \|') (Linea-Con $xc 'L2: ')
+    # d) el contrario: un solo dato que vale para dos condiciones cuenta una (el 153 vale para las dos reglas de L1)
+    $d = Pf-Examen $e $MA 'medium' '' @{ RESCATE_EXAMEN_DATOS = 'L1=153:regla;L2=109:regla' } @('-SinMaven')
+    $xd = @(Combinacion-De $d $MA 'medium')
+    Comprueba 'd) L1: un dato para dos condiciones cuenta 1 de 2, no 2' ((Linea-Con $xd 'L1: ') -match '^L1: json si \| citas 1 de 1 \| clave 1 de 2 \|') (Linea-Con $xd 'L1: ')
   }
   finally { Restaura-Claves }
 }
@@ -928,6 +933,8 @@ $Pruebas['23 bloque 9, E1 (dos errores de compilacion): pasa o el motivo, del vo
   # tres esfuerzos = tres combinaciones: el falso arregla, deja un NO_COMPILA o toca un test
   $a = Pf-Examen $e $MA 'low,medium,high' 'exa-e1-no-compila:medium:E1$;exa-e1-toca-test:high:E1$'
   Igual 'a) sale con 0' 0 $a.Codigo
+  $por = 1 + @(Trozos-De 300).Count + 2
+  Comprueba 'a) la consola: 2 min por llamada con low y medium y el tope de la llamada (10 s: 1 min) con high' ($a.Salida -match ('(?m)^' + (3 * $por) + ' llamadas, hasta ' + ($por * (2 + 2 + 1)) + ' min\s*$')) (Cola $a.Salida)
   Igual 'a) low: el falso arregla y pasa' 'E1: pasa si' ((Linea-Con (Combinacion-De $a $MA 'low') 'E1: ') -replace ' \|.*$', '')
   Igual 'a) medium: no compila' 'E1: pasa no (no compila)' ((Linea-Con (Combinacion-De $a $MA 'medium') 'E1: ') -replace ' \|.*$', '')
   Igual 'a) high: toca un test' 'E1: pasa no (toco tests)' ((Linea-Con (Combinacion-De $a $MA 'high') 'E1: ') -replace ' \|.*$', '')
@@ -938,6 +945,7 @@ $Pruebas['23 bloque 9, E1 (dos errores de compilacion): pasa o el motivo, del vo
   $guion = 'exa-e1-test-falla:low:E1$;exa-e1-toca-pom:medium:E1$;exa-e1-nada:high:E1$;exa-error-privado:xhigh:E1$;exa-espera-14:max:E1$'
   $b = Pf-Examen $e $MA 'low,medium,high,xhigh,max' $guion @{ RESCATE_ERROR_TEXTO = 'Error: sin sesion de zorbalex en PCZORBA' }
   $motivos = [ordered]@{ low = 'test falla'; medium = 'toco fuera de src/main'; high = 'sin cambios'; xhigh = 'fallo de copilot'; max = 'tiempo' }
+  Comprueba 'b) la consola: low y medium a 2 min, xhigh, high y max al tope de la llamada (1 min)' ($b.Salida -match ('(?m)^' + (5 * $por) + ' llamadas, hasta ' + ($por * (2 + 2 + 1 + 1 + 1)) + ' min\s*$')) (Cola $b.Salida)
   foreach ($k in $motivos.Keys) {
     Igual "b) $k" ('E1: pasa no (' + $motivos[$k] + ')') ((Linea-Con (Combinacion-De $b $MA $k) 'E1: ') -replace ' \|.*$', '')
   }
@@ -989,6 +997,14 @@ $Pruebas['25 bloque 9, gasto: creditos y tokens del fichero de uso; sin fichero,
     $ll = @(Llamadas $e.Llamadas)
     Comprueba 'd) las 4 llamadas se hacen y ninguna lleva la bandera' ($ll.Count -eq 4 -and @($ll | Where-Object { $_.uso -eq 'no' }).Count -eq 4) (($ll | ForEach-Object { $_.uso }) -join ' ')
     Comprueba 'd) y los creditos salen desconocidos' ((Linea-Con (Combinacion-De $s $MA 'medium') 'total: ') -match '\| creditos desconocido \|')
+    # f) unas llamadas con fichero de uso y otras sin el: la suma de las que lo tienen engana, sale desconocido
+    $m = Nuevo-Examen 'examen-gasto-mixto' @{ LineasPorTarea = 100 }
+    Igual 'f) L2 se parte en dos trozos o mas' $true (@(Trozos-De 100).Count -ge 2)
+    $rm = Pf-Examen $m $MA 'medium' '' @{ RESCATE_EXAMEN_USO = 'L2-2$=-;E2$=-' }
+    $xm = @(Combinacion-De $rm $MA 'medium')
+    Comprueba 'f) L1 y E1 tienen fichero: llevan su gasto' ((Linea-Con $xm 'L1: ') -match '\| creditos 1,000$' -and (Linea-Con $xm 'E1: ') -match '\| creditos 1,000$') ((Linea-Con $xm 'L1: ') + ' / ' + (Linea-Con $xm 'E1: '))
+    Comprueba 'f) L2 (un trozo sin fichero) y E2 (sin fichero): desconocido' ((Linea-Con $xm 'L2: ') -match '\| creditos desconocido$' -and (Linea-Con $xm 'E2: ') -match '\| creditos desconocido$') ((Linea-Con $xm 'L2: ') + ' / ' + (Linea-Con $xm 'E2: '))
+    Comprueba 'f) el total dice desconocido en creditos y en tokens, no la suma de lo que se sabe' ((Linea-Con $xm 'total: ') -match '\| creditos desconocido \| tokens desconocido$') (Linea-Con $xm 'total: ')
   }
   finally { Restaura-Claves }
   # e) el lector de comun.ps1 con ficheros a mano
@@ -1242,6 +1258,177 @@ $Pruebas['30 bloque 9, privacidad: nada de la empresa en el examen (errores de C
     Comprueba 'ni el texto inventado del modelo ni su secreto salen' (($r.Fichero + $r.Salida) -notmatch 'SECRETO' -and ($r.Fichero + $r.Salida) -notmatch 'nexus')
   }
   finally { Restaura-Claves }
+}
+
+# La referencia de juguete del escenario con lo que incumple: 2 capas (dominio y application importan infrastructure), 1 fichero
+# (una clase abre ficheros a pelo), 3 reglas de calidad (Javadoc, consola y catch vacio) y 4 secretos en claro.
+$SecretosRef = @('zorba-pw-uno', 'zorba-tk-dos', 'zorba-ak-tres', 'zorba-cl-cuatro')
+function Pon-Referencia-Que-Incumple($E) {
+  $b = 'src/main/java/com/zorba/plantilla/'
+  $inf = 'com.zorba.plantilla.infrastructure.config.Ajustes'
+  Escribe $E.Plantilla ($b + 'infrastructure/config/Ajustes.java') (Clase-Con 'Ajustes' 'com.zorba.plantilla.infrastructure.config' @() @('int a = 1;'))
+  Escribe $E.Plantilla ($b + 'domain/Modelo.java') (Clase-Con 'Modelo' 'com.zorba.plantilla.domain' @($inf) @('int a = 1;'))
+  Escribe $E.Plantilla ($b + 'application/Caso.java') (Clase-Con 'Caso' 'com.zorba.plantilla.application' @($inf) @('int a = 1;', 'void m() { System.out.println("x"); }'))
+  Escribe $E.Plantilla ($b + 'infrastructure/adapters/output/sftp/Local.java') (Clase-Con 'Local' 'com.zorba.plantilla.infrastructure.adapters.output.sftp' @('java.io.FileReader') @('Object r = null;', 'void m() { try { r = null; } catch (Exception e) { } }'))
+  Escribe $E.Plantilla 'src/main/resources/application.yml' ("sftp:`n  password: zorba-pw-uno`n  token: zorba-tk-dos`n  api-key: zorba-ak-tres`n  clave: zorba-cl-cuatro`n")
+}
+
+$Pruebas['31 bloque 7, referencia que incumple: cuenta capas, ficheros, calidad y secretos de la referencia, sin el valor de los secretos'] = {
+  $e = Nuevo-Escenario 'referencia'
+  Pon-Referencia-Que-Incumple $e
+  $r = Pf $e (Todos $e @('-Solo', '7'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la linea dice los numeros de la referencia de juguete' 'capas 2 | ficheros 1 | calidad 3 | secretos 4' (Valor-De $r 'plantilla incumple')
+  Igual 'una sola linea' 1 (Cuenta-Lineas $r '^plantilla incumple: ')
+  $l = Lineas-De $r
+  $iLinea = [array]::IndexOf($l, @($l | Where-Object { $_ -match '^plantilla incumple: ' })[0])
+  $iDiag = [array]::IndexOf($l, @($l | Where-Object { $_ -match '^calidad: ' })[0])
+  Comprueba 'va tras las lineas del diagnostico' ($iDiag -ge 0 -and $iLinea -gt $iDiag) "$iDiag $iLinea"
+  Comprueba 'es el bloque 7 quien la escribe' (@(Bloque-De $r '7') -contains ('plantilla incumple: capas 2 | ficheros 1 | calidad 3 | secretos 4'))
+  $todo = $r.Fichero + "`n" + $r.Salida
+  foreach ($s in $SecretosRef) { Comprueba ('el valor del secreto ' + $s.Substring(6, 2) + ' no sale') (-not $todo.Contains($s)) }
+  Sin-Fugas $r 'referencia'
+  Comprueba 'y es ASCII puro' ((Es-Ascii $r.Fichero) -and (Es-Ascii $r.Salida))
+}
+
+$Pruebas['32 bloque 7, referencia que incumple: si el diagnostico corre y no trae la linea o la trae con otra cosa que digitos, desconocido'] = {
+  $e = Nuevo-Escenario 'referencia-sin-linea'
+  Nueva-Instalacion
+  $real = Join-Path $origen 'rescate.ps1'
+  $falso = Join-Path $Inst 'rescate.ps1'
+  try {
+    # a) un rescate.ps1 que hace su diagnostico y no dice nada de la referencia
+    Escribe $Inst 'rescate.ps1' ("param([string]`$Repo, [string]`$Plantilla, [switch]`$SinWorktree)`nWrite-Host 'build               0        0'`nexit 0`n")
+    $a = Pf $e (Todos $e @('-Solo', '7'))
+    Igual 'a) sale con 0' 0 $a.Codigo
+    Igual 'a) el diagnostico corrio' 'codigo 0' ((Valor-De $a 'diagnostico') -replace ' en \d+ s$', '')
+    Igual 'a) build sale' '0 errores, 0 avisos' (Valor-De $a 'build')
+    Igual 'a) la linea dice desconocido' 'desconocido' (Valor-De $a 'plantilla incumple')
+    # b) la linea trae algo que no son digitos (una ruta con nombres): no pasa nada de eso
+    Escribe $Inst 'rescate.ps1' ("param([string]`$Repo, [string]`$Plantilla, [switch]`$SinWorktree)`nWrite-Host 'build               0        0'`nWrite-Host 'Plantilla incumple: capas C:\Users\zorbalex | ficheros 1 | calidad 2 | secretos 3'`nexit 0`n")
+    $b = Pf $e (Todos $e @('-Solo', '7'))
+    Igual 'b) la linea dice desconocido' 'desconocido' (Valor-De $b 'plantilla incumple')
+    Sin-Fugas $b 'referencia b'
+  }
+  finally { Copy-Item -LiteralPath $real -Destination $falso -Force }
+}
+
+$Pruebas['33 bloque 7, referencia que incumple: sin -Plantilla, o con el diagnostico saltado, no hay linea'] = {
+  $e = Nuevo-Escenario 'referencia-sin'
+  Pon-Referencia-Que-Incumple $e
+  $a = Pf $e @('-Legacy', $e.Legacy, '-Migrado', $e.Migrado, '-Solo', '7')
+  Igual 'a) sale con 0' 0 $a.Codigo
+  Comprueba 'a) sin -Plantilla el diagnostico se salta' ((Valor-De $a 'diagnostico') -match '^saltado') ((Bloque-De $a '7') -join ' / ')
+  Igual 'a) no hay linea de la referencia' 0 (Cuenta-Lineas $a 'incumple')
+  Sin-Fugas $a 'referencia a'
+  $b = Pf $e (Todos $e @('-Solo', '7', '-SinMaven'))
+  Comprueba 'b) con -SinMaven el diagnostico se salta' ((Valor-De $b 'diagnostico') -match '^saltado') ((Bloque-De $b '7') -join ' / ')
+  Igual 'b) no hay linea de la referencia' 0 (Cuenta-Lineas $b 'incumple')
+  Sin-Fugas $b 'referencia b'
+}
+
+$Pruebas['34 latido: un bloque que tarda mas que el intervalo escribe "... sigue" en la consola y nunca en el fichero de resultado'] = {
+  $e = Nuevo-Examen 'latido' @{ SegundosLatido = 1 }
+  # la primera llamada del examen (L1) espera 3 s: el bloque 9 dura mas que el intervalo
+  $r = Pf-Examen $e $MA 'medium' 'exa-espera-3:L1$' @{} @('-SinMaven')
+  Igual 'sale con 0' 0 $r.Codigo
+  $l = @($r.Salida -split "`r?`n" | Where-Object { $_ -match '^  \.\.\. sigue: bloque 9, examen de modelos \(lleva \d+ min \d+ s\)$' })
+  Comprueba 'la consola trae al menos una linea del latido del bloque 9' ($l.Count -ge 1) (Cola $r.Salida)
+  Igual 'el fichero de resultado no trae ninguna' 0 (Cuenta-Lineas $r '\.\.\. sigue')
+  Comprueba 'el fichero de resultado sigue entero (tiene el bloque 9 y acaba con == fin)' ((Cuenta-Lineas $r '^== 9 ') -eq 1 -and (Lineas-De $r) -contains '== fin')
+  Sin-Fugas $r 'latido'
+}
+
+# El texto de esas funciones de un script, para cargarlas sin ejecutarlo: . ([scriptblock]::Create(...)).
+function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Ruta, [ref]$null, [ref]$null)
+  $fs = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $Nombres -contains $_.Name })
+  return (@($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+# Las funciones con las que se elige y se lanza un programa: la eleccion es de comun.ps1 y el lanzador de tareas.ps1.
+function Texto-Del-Lanzador {
+  return ((Texto-De-Funciones (Join-Path $origen 'comun.ps1') @('Select-Lanzable', 'Get-Lanzable')) + "`n" + (Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin')))
+}
+
+$Pruebas['35 lanzar Copilot, eleccion (funcion pura): solo ficheros, y en Windows solo con una extension que se lanza'] = {
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'comun.ps1') @('Select-Lanzable'))))
+  function Cand([string]$Tipo, [string]$Ruta) { return [pscustomobject]@{ CommandType = $Tipo; Source = $Ruta } }
+  # lo que da Get-Command -All en un Windows con npm: la funcion (o el alias), el fichero sin extension, el .cmd y el .ps1
+  $npm = @((Cand 'Function' ''), (Cand 'Application' '/n/copilot'), (Cand 'Application' '/n/copilot.cmd'), (Cand 'ExternalScript' '/n/copilot.ps1'))
+  Igual 'Windows: funcion, fichero sin extension, .cmd y .ps1: el .cmd' '/n/copilot.cmd' (Select-Lanzable $npm $true)
+  Igual 'fuera de Windows: el primer fichero, sea como sea' '/n/copilot' (Select-Lanzable $npm $false)
+  $sinExt = @((Cand 'Application' '/n/copilot'))
+  Igual 'Windows: solo un fichero sin extension: nada' '' "$(Select-Lanzable $sinExt $true)"
+  Igual 'fuera de Windows: ese fichero' '/n/copilot' (Select-Lanzable $sinExt $false)
+  foreach ($w in @($true, $false)) {
+    Igual "un alias no es un fichero (Windows $w)" '' "$(Select-Lanzable @((Cand 'Alias' '')) $w)"
+    Igual "un cmdlet tampoco (Windows $w)" '' "$(Select-Lanzable @((Cand 'Cmdlet' 'Mod')) $w)"
+    Igual "ni una lista vacia (Windows $w)" '' "$(Select-Lanzable @() $w)"
+    Igual "ni nada (Windows $w)" '' "$(Select-Lanzable $null $w)"
+  }
+  Igual 'Windows: un .ps1 solo' '/n/copilot.ps1' (Select-Lanzable @((Cand 'ExternalScript' '/n/copilot.ps1')) $true)
+  Igual 'Windows: la extension en mayusculas vale' '/n/COPILOT.EXE' (Select-Lanzable @((Cand 'Application' '/n/COPILOT.EXE')) $true)
+  Igual 'Windows: .bat y .com valen' '/n/a.bat' (Select-Lanzable @((Cand 'Application' '/n/a.vbs'), (Cand 'Application' '/n/a.bat'), (Cand 'Application' '/n/a.com')) $true)
+  Igual 'Windows: de dos que valen, el primero' '/n/uno.exe' (Select-Lanzable @((Cand 'Application' '/n/uno.exe'), (Cand 'Application' '/n/dos.cmd')) $true)
+  Igual 'Windows: una extension que no se lanza (.vbs): nada' '' "$(Select-Lanzable @((Cand 'Application' '/n/a.vbs')) $true)"
+}
+
+$Pruebas['36 lanzar Copilot, de verdad: una funcion con el nombre de un .ps1 del PATH no tapa al .ps1'] = {
+  . ([scriptblock]::Create((Texto-Del-Lanzador)))
+  $bin = Join-Path $Dir 'bin-funcion'
+  Escribe $bin 'copilotfalsoxq.ps1' "Write-Host 'hola'`n"
+  $pathAntes = $env:PATH
+  $env:PATH = $bin + [System.IO.Path]::PathSeparator + $env:PATH
+  try {
+    function copilotfalsoxq { 'una funcion' }
+    $l = Get-Lanzador 'copilotfalsoxq' @('-p', 'hola')
+  }
+  finally { $env:PATH = $pathAntes }
+  Comprueba 'el programa a lanzar no esta vacio y es PowerShell' (-not [string]::IsNullOrEmpty($l.Exe) -and $l.Exe -eq (Get-PowerShellExe)) "Exe='$($l.Exe)'"
+  Comprueba 'lanza el .ps1 con -File y sus argumentos' ($l.Args -match '-File' -and $l.Args.Contains((Join-Path $bin 'copilotfalsoxq.ps1')) -and $l.Args.Contains('hola')) $l.Args
+}
+
+$Pruebas['37 lanzar Copilot, nada que lanzar: el mensaje dice que es lo que hay, sin rutas, y el preflight lo lleva en "sin modelo"'] = {
+  . ([scriptblock]::Create((Texto-Del-Lanzador)))
+  function Mensaje-De([string]$Exe) {
+    try { [void](Get-Lanzador $Exe @()); return 'no falla' } catch { return $_.Exception.Message }
+  }
+  $fin = ". Pon la ruta entera del .cmd o del .exe en CopilotExe de ajustes.json."
+  Igual 'nada de nada' ("No puedo lanzar 'copilotnadaxq': aqui es nada" + $fin) (Mensaje-De 'copilotnadaxq')
+  Igual 'con una ruta entera, el mensaje lleva solo el nombre' ("No puedo lanzar 'copilotnadaxq': aqui es nada" + $fin) (Mensaje-De (Join-Path (Join-Path $Dir 'no-hay') 'copilotnadaxq'))
+  function copilotfuncionxq { 'una funcion' }
+  Igual 'una funcion' ("No puedo lanzar 'copilotfuncionxq': aqui es funcion" + $fin) (Mensaje-De 'copilotfuncionxq')
+  Set-Alias -Name copilotaliasxq -Value Get-Date
+  Igual 'un alias' ("No puedo lanzar 'copilotaliasxq': aqui es alias" + $fin) (Mensaje-De 'copilotaliasxq')
+  # un fichero sin extension en un Windows simulado (como el que deja npm); los lanzadores de prueba son de sh
+  if ($env:OS -ne 'Windows_NT') {
+    $bin = Join-Path $Dir 'bin-sin-ext'
+    Nuevo-Lanzador (Join-Path $bin 'copilotsinextxq') (Join-Path $falsos 'copilot.ps1')
+    $pathAntes = $env:PATH; $so = $env:OS
+    $env:PATH = $bin + [System.IO.Path]::PathSeparator + $env:PATH
+    $env:OS = 'Windows_NT'
+    try { $m = Mensaje-De 'copilotsinextxq' }
+    finally { $env:PATH = $pathAntes; $env:OS = $so }
+    Igual 'un fichero sin extension (en Windows)' ("No puedo lanzar 'copilotsinextxq': aqui es fichero sin extension" + $fin) $m
+  }
+  # el preflight: la linea 'sin modelo' del bloque 4 lleva el mismo mensaje, sin rutas
+  $e = Nuevo-Escenario 'sin-lanzador'
+  Pon-Ajustes $e @{ CopilotExe = 'copilotfalsoinexistente' }
+  $r = Pf $e (Todos $e @('-Solo', '4'))
+  Igual 'el preflight sale con 0' 0 $r.Codigo
+  $sm = Valor-De $r 'sin modelo'
+  Comprueba 'sin modelo dice que no pudo lanzar Copilot y por que' ($sm -ceq ("No pude lanzar Copilot: No puedo lanzar 'copilotfalsoinexistente': aqui es nada" + $fin)) $sm
+  Sin-Fugas $r 'sin lanzador'
+}
+
+$Pruebas['38 lanzar Copilot, bloque 2: solo el banco probar'] = {
+  $e = Nuevo-Escenario 'bancos'
+  $r = Pf $e (Todos $e @('-Solo', '2'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'probar pasa todas sus comprobaciones' ((Valor-De $r 'probar') -match '^(\d+) de \1 en \d+ s$') ((Bloque-De $r '2') -join ' / ')
+  Igual 'ni el fichero de resultado ni la consola nombran probar-migracion' 0 ((Cuenta-Lineas $r 'probar-migracion') + @($r.Salida -split "`n" | Where-Object { $_ -match 'probar-migracion' }).Count)
+  Igual 'fallan: ninguna' 'ninguna' (Valor-De $r 'fallan')
 }
 
 # ================================ LANZADOR ================================
