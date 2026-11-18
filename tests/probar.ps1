@@ -2915,6 +2915,29 @@ $Pruebas['m95 sftp: sin un bloque sftp en un yml de la plantilla el texto es el 
   if ($y2.Count -eq 1) { Igual 'y su texto es el generico' $TextoSinBloqueM95 $y2[0].Detalle }
 }
 
+# El bloque sftp acaba al volver a la indentacion de sftp: o a una menor: un bloque hermano cuyos hijos tienen la misma indentacion que los de
+# sftp no aporta claves.
+$Pruebas['m95 sftp: un bloque hermano de sftp con hijos a la misma indentacion no aporta claves'] = {
+  $e = Nuevo-Escenario 'm95-hermano'
+  Mueve-Yml-A-Config $e.Plantilla @'
+plantillabatch:
+  sftp:
+    domain: ${env.x}
+    user: ${env.x}
+  otro:
+    url: ${env.y}
+    timeout: ${env.z}
+'@
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'un error de configuracion sftp' 1 $y.Count
+  $d = ''
+  if ($y.Count -eq 1) { $d = [string]$y[0].Detalle }
+  Comprueba 'las claves son solo las de sftp' ($d.Contains("copia el bloque 'plantillabatch.sftp' de la PLANTILLA") -and $d.Contains('con sus claves (domain, user), bajo')) $d
+  Comprueba 'sin url ni timeout, que son del bloque otro' (-not ($d.Contains('url') -or $d.Contains('timeout'))) $d
+}
+
 # El motivo es el del primer metodo que falla: al llegar al siguiente metodo (otra linea <<< FAILURE!) o a otra linea 'Tests run:' se para.
 $Pruebas['m95 motivo: con dos metodos que fallan, el motivo lleva solo la linea del primero, sin la del segundo ni Tests run'] = {
   $e = Escenario-Test-Roto 'm95-dos-fallos'
