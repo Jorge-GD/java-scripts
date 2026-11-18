@@ -335,7 +335,7 @@ $Pruebas['1 completo: nueve bloques con los tres repos y los falsos, sin fallos'
   foreach ($p in @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')) {
     Comprueba "7: diagnostico, paso $p" ((Valor-De $r $p) -match '^\d+ errores, \d+ avisos$') (Valor-De $r $p)
   }
-  Comprueba '7: diagnostico con su codigo y su tiempo' ((Valor-De $r 'diagnostico') -match '^codigo 0 en \d+ s$') (Valor-De $r 'diagnostico')
+  Comprueba '7: diagnostico con su codigo y su tiempo' ((Valor-De $r 'diagnostico') -match '^codigo 0 en \d+ s \| del ultimo commit, sin los cambios sin commitear$') (Valor-De $r 'diagnostico')
 
   # 8 clases reales
   Igual '8: cinco clases' 5 (Cuenta-Lineas $r '^clase \d: ')
@@ -1301,7 +1301,7 @@ $Pruebas['32 bloque 7, referencia que incumple: si el diagnostico corre y no tra
     Escribe $Inst 'rescate.ps1' ("param([string]`$Repo, [string]`$Plantilla, [switch]`$SinWorktree)`nWrite-Host 'build               0        0'`nexit 0`n")
     $a = Pf $e (Todos $e @('-Solo', '7'))
     Igual 'a) sale con 0' 0 $a.Codigo
-    Igual 'a) el diagnostico corrio' 'codigo 0' ((Valor-De $a 'diagnostico') -replace ' en \d+ s$', '')
+    Igual 'a) el diagnostico corrio' 'codigo 0' ((Valor-De $a 'diagnostico') -replace ' en \d+ s \| .*$', '')
     Igual 'a) build sale' '0 errores, 0 avisos' (Valor-De $a 'build')
     Igual 'a) la linea dice desconocido' 'desconocido' (Valor-De $a 'plantilla incumple')
     # b) la linea trae algo que no son digitos (una ruta con nombres): no pasa nada de eso
@@ -1456,6 +1456,169 @@ $Pruebas['39 bloque 6: SpotBugs y PMD se pueden descargar; si no, es un aviso y 
   # c) con -SinMaven no se prueba nada de esto
   $r3 = Pf $e2 (Todos $e2 @('-Solo', '6', '-SinMaven'))
   Igual 'c) -SinMaven: ni rastro de spotbugs y pmd' 0 (Cuenta-Lineas $r3 '^(spotbugs y pmd|aviso|detalle): ')
+}
+
+# ===================== M20d: EL DIAGNOSTICO VA SOBRE UN CLON DEL MIGRADO =====================
+# El bloque 7 lanza rescate.ps1 sobre un clon temporal del migrado (pf-<8 hex> bajo la carpeta temporal), nunca sobre la carpeta de la
+# persona, que sigue trabajando en su IDE. TMPDIR, TMP y TEMP de cada lanzamiento apuntan a <escenario>/tmp: asi se ve que clones quedan.
+
+# Lo que una persona veria cambiar en una carpeta: los ficheros (tamano y fecha, sin .git), git status, ramas, worktrees y .git/info/exclude.
+function Foto-Carpeta([string]$Raiz) {
+  $git = Join-Path $Raiz '.git'
+  $dentro = $git + [System.IO.Path]::DirectorySeparatorChar
+  $fich = @(Get-ChildItem -LiteralPath $Raiz -Recurse -Force -File | Where-Object { -not $_.FullName.StartsWith($dentro) } | Sort-Object FullName |
+      ForEach-Object { $_.FullName.Substring($Raiz.Length + 1) + ' ' + $_.Length + ' ' + $_.LastWriteTimeUtc.Ticks })
+  $exclude = ''
+  if (Test-Path -LiteralPath (Join-Path (Join-Path $git 'info') 'exclude')) { $exclude = Lee $git 'info/exclude' }
+  return [pscustomobject]@{
+    Ficheros = ($fich -join "`n"); Estado = (GitEn $Raiz @('status', '--porcelain')); Exclude = $exclude
+    Ramas = (GitEn $Raiz @('branch', '--list')); Worktrees = (GitEn $Raiz @('worktree', 'list'))
+  }
+}
+
+function Igual-Foto([string]$Que, $Antes, $Despues) {
+  foreach ($c in @('Estado', 'Ficheros', 'Exclude', 'Ramas', 'Worktrees')) {
+    Comprueba "$Que`: $c igual que antes" ($Antes.$c -ceq $Despues.$c) ((@(Compare-Object ($Antes.$c -split "`n") ($Despues.$c -split "`n")) | Select-Object -First 4 | ForEach-Object { $_.SideIndicator + ' ' + $_.InputObject }) -join ' / ')
+  }
+}
+
+# Un escenario con el migrado como lo deja una persona que sigue trabajando: un fichero modificado sin commitear y otro sin seguimiento.
+function Nuevo-Escenario-M20d([string]$Nombre, [hashtable]$Ajustes = @{}) {
+  $e = Nuevo-Escenario $Nombre $Ajustes
+  Remove-Item -LiteralPath (Join-Path $e.Migrado '.rescate') -Recurse -Force
+  $base = 'src/main/java/com/zorba/migrado/'
+  Escribe $e.Migrado ($base + 'ZorbaNuevaUno.java') ((Lee $e.Migrado ($base + 'ZorbaNuevaUno.java')) + "// editado-sin-commit`n")
+  Escribe $e.Migrado ($base + 'ZorbaSinSeguir.java') (Clase-Zorba 'ZorbaSinSeguir' 8 'com.zorba.migrado')
+  return $e
+}
+
+# El preflight (bloque 7 o los que se pidan) con los clones temporales en <escenario>/tmp y el rescate falso en el modo dicho.
+function Pf-M20d($E, [string]$Modo, [string[]]$Mas = @('-Solo', '7')) {
+  $tmp = Join-Path $E.Raiz 'tmp'
+  [void](New-Item -ItemType Directory -Path $tmp -Force)
+  $v = @{ TMPDIR = $tmp; TMP = $tmp; TEMP = $tmp; M20D_MODO = $Modo; M20D_REGISTRO = (Join-Path $E.Raiz 'rescate-registro.txt') }
+  return (Pf $E (Todos $E $Mas) '' $v)
+}
+
+# Los clones pf-* que quedan en la carpeta temporal del escenario.
+function Clones-De($E) {
+  $tmp = Join-Path $E.Raiz 'tmp'
+  if (-not (Test-Path -LiteralPath $tmp)) { return @() }
+  return @(Get-ChildItem -LiteralPath $tmp -Force -Filter 'pf-*')
+}
+
+# Cuerpo con el rescate falso (tests/falsos/m20d-rescate.ps1) en la instalacion; al acabar vuelve el real.
+function Con-Rescate-M20d([scriptblock]$Cuerpo) {
+  Nueva-Instalacion
+  $falso = Join-Path $Inst 'rescate.ps1'
+  Copy-Item -LiteralPath (Join-Path $falsos 'm20d-rescate.ps1') -Destination $falso -Force
+  try { & $Cuerpo }
+  finally { Copy-Item -LiteralPath (Join-Path $origen 'rescate.ps1') -Destination $falso -Force }
+}
+
+# Lo que apunto el rescate falso: clave -> valor.
+function Registro-M20d($E) {
+  $h = @{}
+  $f = Join-Path $E.Raiz 'rescate-registro.txt'
+  if (Test-Path -LiteralPath $f) { foreach ($l in [System.IO.File]::ReadAllLines($f)) { $k, $v = ($l -split '=', 2); $h[$k] = $v } }
+  return $h
+}
+
+$Pruebas['40 m20d bloque 7: el diagnostico real no cambia nada en el migrado ni en la referencia'] = {
+  $e = Nuevo-Escenario-M20d 'm20d-intacto'
+  $antesM = Foto-Carpeta $e.Migrado
+  $antesP = Foto-Carpeta $e.Plantilla
+  Comprueba 'el migrado de partida: un fichero modificado y otro sin seguimiento' ($antesM.Estado -match '(?m)^ M src/main/java/com/zorba/migrado/ZorbaNuevaUno\.java$' -and $antesM.Estado -match '(?m)^\?\? src/main/java/com/zorba/migrado/ZorbaSinSeguir\.java$') $antesM.Estado
+  $r = Pf-M20d $e 'bien'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el diagnostico corrio de verdad, con sus pasos' ((Valor-De $r 'diagnostico') -match '^codigo 0 en \d+ s \| ' -and (Valor-De $r 'build') -match '^\d+ errores, \d+ avisos$' -and (Valor-De $r 'plantilla incumple') -match '^capas \d+ \| ficheros \d+ \| calidad \d+ \| secretos \d+$') ((Bloque-De $r '7') -join ' / ')
+  Igual-Foto 'migrado' $antesM (Foto-Carpeta $e.Migrado)
+  Comprueba 'el migrado no recibe carpeta .rescate' (-not (Test-Path -LiteralPath (Join-Path $e.Migrado '.rescate')))
+  Comprueba 'ni carpeta target' (-not (Test-Path -LiteralPath (Join-Path $e.Migrado 'target')))
+  Igual-Foto 'referencia' $antesP (Foto-Carpeta $e.Plantilla)
+  Igual 'no queda ningun clon en la carpeta temporal' 0 (Clones-De $e).Count
+  Sin-Fugas $r 'm20d intacto'
+}
+
+$Pruebas['41 m20d bloque 7: rescate recibe un clon del ultimo commit con la config del migrado, y la linea lo dice'] = {
+  $e = Nuevo-Escenario-M20d 'm20d-clon'
+  Escribe $e.Migrado '.rescate/config.json' ((ConvertTo-Json -InputObject ([ordered]@{ ExigirSftp = $false })))
+  Con-Rescate-M20d {
+    $r = Pf-M20d $e 'bien'
+    $reg = Registro-M20d $e
+    Igual 'sale con 0' 0 $r.Codigo
+    Comprueba 'rescate corrio sobre otra carpeta que la del migrado' ($reg['repo'] -and $reg['repo'] -cne $e.Migrado) $reg['repo']
+    Comprueba 'una carpeta pf- y 8 hexadecimales, dentro de la carpeta temporal' ((Split-Path $reg['repo'] -Leaf) -cmatch '^pf-[0-9a-f]{8}$' -and (Split-Path $reg['repo'] -Parent) -ceq (Join-Path $e.Raiz 'tmp')) $reg['repo']
+    Igual 'existia mientras rescate corria' 'True' $reg['existe']
+    Igual 'es un repo git propio' 'True' $reg['git']
+    Igual 'rescate recibe -SinWorktree' 'True' $reg['sinworktree']
+    Igual 'la referencia es la de siempre' $e.Plantilla $reg['plantilla']
+    Igual 'lleva el .rescate/config.json del migrado' 'True' $reg['config']
+    Igual 'no lleva el fichero modificado sin commitear' 'False' $reg['editada']
+    Igual 'ni el fichero sin seguimiento' 'False' $reg['sinseguir']
+    Comprueba 'la linea dice que es del ultimo commit y sin lo que no esta commiteado, sin ruta' ((Valor-De $r 'diagnostico') -cmatch '^codigo 0 en \d+ s \| del ultimo commit, sin los cambios sin commitear$') (Valor-De $r 'diagnostico')
+    Igual 'y rescate no corrio sobre el migrado: sigue sin .rescate/ propio salvo su config' 'config.json' ((Get-ChildItem -LiteralPath (Join-Path $e.Migrado '.rescate') -Force | ForEach-Object { $_.Name }) -join ' ')
+    Sin-Fugas $r 'm20d clon'
+  }
+}
+
+$Pruebas['42 m20d bloque 7: la copia se borra siempre: rescate bien, rescate con fallo y tiempo agotado (MinutosDiagnostico)'] = {
+  $e = Nuevo-Escenario-M20d 'm20d-borrado' @{ MinutosDiagnostico = 0.1 }
+  Con-Rescate-M20d {
+    $a = Pf-M20d $e 'bien'
+    Igual 'a) rescate bien: sale con 0' 0 $a.Codigo
+    Comprueba 'a) rescate corrio sobre una copia que ya no esta' ((Registro-M20d $e)['repo'] -and (Clones-De $e).Count -eq 0) (@(Clones-De $e | ForEach-Object { $_.Name }) -join ' ')
+    $b = Pf-M20d $e 'falla'
+    Igual 'b) rescate con fallo: sale con 0' 0 $b.Codigo
+    Comprueba 'b) la linea trae el codigo de rescate' ((Valor-De $b 'diagnostico') -cmatch '^codigo 3 en \d+ s \| ') (Valor-De $b 'diagnostico')
+    Igual 'b) la copia ya no esta' 0 (Clones-De $e).Count
+    $c = Pf-M20d $e 'cuelga'
+    Igual 'c) rescate colgado: sale con 0' 0 $c.Codigo
+    Igual 'c) el tope es MinutosDiagnostico (0.1 min), no 30: tiempo agotado' 'tiempo agotado' (Valor-De $c 'diagnostico')
+    Comprueba 'c) rescate llego a empezar en una copia, y ya no esta' ((Registro-M20d $e)['existe'] -ceq 'True' -and (Clones-De $e).Count -eq 0) (@(Clones-De $e | ForEach-Object { $_.Name }) -join ' ')
+    Igual 'c) sin fallos' 'ninguno' (Valor-De $c 'bloques con fallo')
+    Comprueba 'c) la clave MinutosDiagnostico no es desconocida para el preflight' ($c.Salida -notmatch 'desconocida') (Cola $c.Salida)
+  }
+}
+
+$Pruebas['43 m20d bloque 7: si no se puede borrar la copia, una linea dice cual es y el preflight sigue'] = {
+  if ($env:OS -eq 'Windows_NT') { Write-Host '  (solo fuera de Windows: la carpeta sin permiso de escritura se hace con chmod)'; return }
+  if ((& id -u) -eq '0') { Write-Host '  (esta prueba corre como root, que ignora los permisos de escritura)'; return }
+  $e = Nuevo-Escenario-M20d 'm20d-sin-borrar'
+  Con-Rescate-M20d {
+    $r = Pf-M20d $e 'bloquea' @('-Solo', '7,8', '-SinCopilot')
+    $quedan = @(Clones-De $e)
+    try {
+      Igual 'sale con 0' 0 $r.Codigo
+      Igual 'queda una sola copia' 1 $quedan.Count
+      $l = @(Lineas-De $r | Where-Object { $_ -match '^diagnostico: no se pudo borrar' })
+      Igual 'una linea dice que no se pudo borrar' 1 $l.Count
+      Comprueba 'y dice la carpeta, por su nombre y sin ruta' ($l.Count -eq 1 -and $l[0].Contains($quedan[0].Name) -and -not $l[0].Contains($e.Raiz)) ($l -join ' / ')
+      Comprueba 'las lineas del diagnostico salen igual' ((Valor-De $r 'build') -match '^0 errores, 0 avisos$' -and (Valor-De $r 'plantilla incumple') -match '^capas 0 ') ((Bloque-De $r '7') -join ' / ')
+      Comprueba 'el preflight sigue: el bloque 8 y el fin' ((Cuenta-Lineas $r '^== 8 ') -eq 1 -and (Lineas-De $r) -contains '== fin') ((Lineas-De $r) -join ' / ')
+      Igual 'sin fallos' 'ninguno' (Valor-De $r 'bloques con fallo')
+      Sin-Fugas $r 'm20d sin borrar'
+    }
+    finally { & chmod -R u+rwx $e.Raiz }
+  }
+}
+
+$Pruebas['44 m20d bloque 7: si el clon falla (el migrado no es un repo git), lo dice sin rutas y el preflight sigue'] = {
+  $e = Nuevo-Escenario-M20d 'm20d-sin-clon'
+  Remove-Item -LiteralPath (Join-Path $e.Migrado '.git') -Recurse -Force
+  Con-Rescate-M20d {
+    $r = Pf-M20d $e 'bien' @('-Solo', '7,8', '-SinCopilot')
+    Igual 'sale con 0' 0 $r.Codigo
+    $d = Valor-De $r 'diagnostico'
+    Comprueba 'dice que no se pudo clonar el migrado, con el primer error de git' ($d -cmatch '^no se pudo clonar el migrado: (fatal|error): \S') $d
+    Comprueba 'sin ninguna ruta' (-not $d.Contains($e.Raiz) -and $d -notmatch '(?i)zorba') $d
+    Comprueba 'rescate no llego a lanzarse' (-not (Test-Path -LiteralPath (Join-Path $e.Raiz 'rescate-registro.txt')))
+    Igual 'ni linea de la referencia' 0 (Cuenta-Lineas $r 'incumple')
+    Igual 'no queda ninguna copia' 0 (Clones-De $e).Count
+    Comprueba 'el preflight sigue: el bloque 8 y el fin' ((Cuenta-Lineas $r '^== 8 ') -eq 1 -and (Lineas-De $r) -contains '== fin') ((Lineas-De $r) -join ' / ')
+    Igual 'sin fallos' 'ninguno' (Valor-De $r 'bloques con fallo')
+    Sin-Fugas $r 'm20d sin clon'
+  }
 }
 
 # ================================ LANZADOR ================================
