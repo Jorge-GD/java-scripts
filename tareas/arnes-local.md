@@ -45,8 +45,8 @@ En `target/prueba-local/<job>/<caso>/`, en UTF-8 y con saltos de línea `\n`:
 
 - `estado.txt`: dos líneas, `estado=<BatchStatus de la ejecución>` y `salida=<código de ExitStatus>`; por ejemplo, `estado=COMPLETED` y `salida=COMPLETED`. Si lanzar el job lanza una excepción antes de tener ejecución: `estado=EXCEPCION` y `salida=<nombre simple de la clase de la excepción>`.
 - `ficheros/<carpeta>/...`: una copia de cada carpeta de trabajo del job tal como queda al acabar (también la de entrada), con el mismo nombre de carpeta que en los `ficheros/` de los casos. Las carpetas vacías no se copian.
-- `tablas/<TABLA>.csv`: uno por cada tabla que no es de Spring Batch. Primera línea: los nombres de las columnas, en el orden de la tabla, separados por `;`. Después, una línea por fila: el valor de cada columna con `ResultSet.getString` (vacío si es null), separados por `;`. Las filas, ordenadas como texto.
-- `envios/<n>-<tipo>.txt`: uno por cada envío que llegó a un simulado, en orden (`1-sftp.txt`, `2-correo.txt`...), con lo que se envió (el contenido del fichero; el asunto y el cuerpo del correo). Si no hubo ninguno, no hay carpeta.
+- `tablas/<TABLA>.csv`: uno por cada tabla que no es de Spring Batch, con el nombre de la tabla en mayúsculas. Primera línea: los nombres de las columnas en mayúsculas, en el orden de la tabla, separados por `;`. Después, una línea por fila: el valor de cada columna con `ResultSet.getString` (vacío si es null), separados por `;`. Lee las filas sin `ORDER BY`, une cada fila en su línea y ordena las líneas con `String.compareTo`.
+- `envios/<n>-<tipo>.txt`: uno por cada envío que llegó a un simulado, en orden (`1-sftp.txt`, `2-correo.txt`...). Primero las líneas que digan a dónde iba, las que tenga: `destino=<carpeta o ruta remota y nombre del fichero>`, `para=<destinatarios separados por comas>`, `asunto=<asunto>`; después una línea vacía y lo que se envió (el contenido del fichero o el cuerpo del correo). Si no hubo ninguno, no hay carpeta.
 
 ## Cuando acabes
 

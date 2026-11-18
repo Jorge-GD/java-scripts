@@ -44,6 +44,7 @@ Solo dentro de CARPETA (créala). Escribe solo lo que el caso necesite:
 - Nada fuera de CARPETA. Si escribes fuera, el script lo deshace y rechaza el caso.
 - Datos inventados, nunca reales: nombres, cuentas, NIF y direcciones de ejemplo. Las cuentas bancarias, inventadas pero con el formato que pida el código (con los dígitos de control bien, si los comprueba).
 - Lo justo para el caso: los registros que pide ENTRADA, con todo lo demás correcto, para que solo se pruebe lo que dice el caso.
+- Si el caso no necesita ninguna entrada (por ejemplo, no hay ningún fichero que leer), escribe solo `sin-entrada.txt` con una frase que lo diga. Las carpetas vacías no cuentan: el job ya las encuentra vacías.
 - Si el caso no se puede preparar solo con entradas, porque pide cambiar la configuración del batch (encender el correo, otro tope, un servidor caído, una carpeta que no existe o no se puede crear) o lanzar el job más de una vez, no lo prepares: escribe solo `no-aplica.txt` en CARPETA, con una frase que diga por qué.
 - Termina tu respuesta con una sola palabra: hecho.
 <!--CORRECCION-->

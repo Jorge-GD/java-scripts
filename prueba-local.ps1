@@ -63,6 +63,10 @@ $Cfg += @{
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Latin = [System.Text.Encoding]::GetEncoding(28591)
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()   # las rutas de las dos copias, en sus formas: Get-Normal las cambia por <copia>
+$script:Base = @{}  # por copia: el commit y el arbol que se dieron por buenos (Save-Copia)
 
 # ================================ PROMPTS ================================
 # Get-Prompt (tareas.ps1) rellena cada {{CLAVE}} de la plantilla con lo que da esta funcion. Las tareas de este script
@@ -74,27 +78,36 @@ function Get-VariablesPrompt($T, [string]$Leer) {
 }
 
 # ================================ COPIAS ================================
-# La carpeta comun de git (la .git del repo principal) de un repo o de uno de sus worktrees, como ruta completa.
-function Get-GitComun([string]$Dir) {
-  $c = ((Invoke-Git $Dir @('rev-parse', '--git-common-dir')).Salida -join '').Trim()
-  if (-not $c) { return '' }
-  if (-not [System.IO.Path]::IsPathRooted($c)) { $c = Join-Path $Dir $c }
-  return [System.IO.Path]::GetFullPath($c).TrimEnd('\', '/')
+# La ruta que guarda un fichero .git de worktree ('gitdir: <ruta>'), completa.
+function Get-GitDir([string]$Fichero, [string]$Base) {
+  $g = ([System.IO.File]::ReadAllText($Fichero) -replace '^\s*gitdir:\s*', '').Trim()
+  if (-not [System.IO.Path]::IsPathRooted($g)) { $g = [System.IO.Path]::GetFullPath((Join-Path $Base $g)) }
+  return $g
+}
+
+# Es $Dir un worktree de $Repo? Lo dice su fichero .git (se lee como fichero: la salida de git, en PowerShell 5.1, llega
+# en la pagina de codigos de la consola y una ruta con tildes no coincidiria).
+function Test-CopiaDe([string]$Repo, [string]$Dir) {
+  $f = Join-Path $Dir '.git'
+  if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { return $false }
+  $comun = Join-Path $Repo '.git'
+  if (Test-Path -LiteralPath $comun -PathType Leaf) { $comun = Split-Path (Split-Path (Get-GitDir $comun $Repo) -Parent) -Parent }
+  $base = (($comun -replace '\\', '/').TrimEnd('/') + '/worktrees/').ToLowerInvariant()
+  return ((Get-GitDir $f $Dir) -replace '\\', '/').ToLowerInvariant().StartsWith($base)
 }
 
 # Rehace la copia desechable $Dir de $Repo en $Commit (un worktree sin rama). Una carpeta que ya existe solo se borra
 # si es un worktree de ese mismo repo. Devuelve '' o el motivo.
 function New-Copia([string]$Repo, [string]$Commit, [string]$Dir) {
   if (Test-Path -LiteralPath $Dir) {
-    if (-not (Test-Path -LiteralPath (Join-Path $Dir '.git') -PathType Leaf) -or (Get-GitComun $Dir) -ne (Get-GitComun $Repo)) {
-      return "La carpeta $Dir ya existe y no es una copia de la prueba local de $Repo. Muevela o borrala y vuelve a lanzar."
-    }
+    if (-not (Test-CopiaDe $Repo $Dir)) { return "La carpeta $Dir ya existe y no es una copia de la prueba local de $Repo. Muevela o borrala y vuelve a lanzar." }
     $r = Invoke-Git $Repo @('worktree', 'remove', '--force', $Dir)
     if ($r.Codigo -ne 0) { return ("No he podido borrar la copia anterior ($Dir): " + ($r.Salida -join ' ')) }
   }
-  [void](Invoke-Git $Repo @('worktree', 'prune'))
-  $r = Invoke-Git $Repo @('worktree', 'add', '-q', '--detach', $Dir, $Commit)
+  # -f: vale aunque git aun tenga apuntada una copia anterior que alguien borro a mano
+  $r = Invoke-Git $Repo @('worktree', 'add', '-q', '-f', '--detach', $Dir, $Commit)
   if ($r.Codigo -ne 0) { return ("No he podido crear la copia ${Dir}: " + ($r.Salida -join ' ')) }
+  Save-Copia $Dir
   return ''
 }
 
@@ -105,8 +118,19 @@ function Get-Cambios([string]$Dir) {
   return @($r.Salida | Where-Object { $_.Length -gt 3 -and $_[1] -ne ' ' } | ForEach-Object { $_.Substring(3).Trim('"') })
 }
 
-# Da por bueno lo que hay en la copia (al indice).
-function Save-Copia([string]$Dir) { [void](Invoke-Git $Dir @('add', '-A', '--', '.', ':(exclude).rescate', ':(exclude)target')) }
+# Da por bueno lo que hay en la copia (al indice) y apunta su base: el commit y el arbol del indice.
+function Save-Copia([string]$Dir) {
+  [void](Invoke-Git $Dir @('add', '-A', '--', '.', ':(exclude).rescate', ':(exclude)target'))
+  $script:Base[$Dir] = @{ Head = (Get-Head $Dir); Arbol = ((Invoke-Git $Dir @('write-tree')).Salida -join '').Trim() }
+}
+
+# Tras una llamada a la IA: la copia vuelve a su base (por si hizo commit o git add), con lo que hizo como cambios sin
+# guardar, a la vista de Get-Cambios.
+function Restore-Base([string]$Dir) {
+  $b = $script:Base[$Dir]
+  if ((Get-Head $Dir) -ne $b.Head) { [void](Invoke-Git $Dir @('reset', '-q', '--soft', $b.Head)) }
+  [void](Invoke-Git $Dir @('read-tree', $b.Arbol))
+}
 
 # Deja la copia como su indice: deshace lo cambiado y borra lo nuevo.
 function Undo-Copia([string]$Dir) {
@@ -122,21 +146,31 @@ function Copy-Fichero([string]$De, [string]$A) {
   Copy-Item -LiteralPath $De -Destination $A -Force
 }
 
-# Copia los ficheros de la carpeta $De (con sus subcarpetas) a $A, pisando los que haya.
+# Copia los ficheros de la carpeta $De (con sus subcarpetas) a $A, pisando los que haya. Sin $De, nada.
 function Copy-Carpeta([string]$De, [string]$A) {
+  if (-not (Test-Path -LiteralPath $De)) { return }
   foreach ($f in @(Get-ChildItem -LiteralPath $De -Recurse -File)) { Copy-Fichero $f.FullName (Join-Ruta $A (Get-Rel $De $f.FullName)) }
 }
 
 # ================================ MAVEN ================================
-# Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido. Deja lo que dice en
-# registros\mvn-<n>-<que>.log y devuelve Codigo y Salida.
+# Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido y sin saltarse los
+# tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar:
+# no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
+# Codigo y Salida.
 function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
   $script:Mavens++
+  $previos = @(Get-Cambios $Dir)
   $antes = $env:JAVA_HOME
   if ($EsOriginal -and $JavaLegacy) { $env:JAVA_HOME = $JavaLegacy }
   $latido = Start-Latido "Maven, $Que" ([int]$Cfg.SegundosLatido)
-  try { $r = Invoke-Nativo (Get-Mvn $Dir) (@('-B') + $A) $Dir }
+  try { $r = Invoke-Nativo (Get-Mvn $Dir) (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) $Dir }
   finally { Stop-Latido $latido; $env:JAVA_HOME = $antes }
+  $ruido = @(Get-Cambios $Dir | Where-Object { $previos -notcontains $_ })
+  if ($ruido.Count -gt 0) {
+    [void](Invoke-Git $Dir (@('clean', '-fdq', '--') + $ruido))
+    $quedan = @(Get-Cambios $Dir | Where-Object { $ruido -contains $_ })
+    if ($quedan.Count -gt 0) { [void](Invoke-Git $Dir (@('checkout', '-q', '--') + $quedan)) }
+  }
   [System.IO.File]::WriteAllText((Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')), (($r.Salida -join "`n") + "`n"), $Utf8)
   return $r
 }
@@ -240,8 +274,9 @@ function Get-Ejemplos([string]$Dir) {
   return @()
 }
 
-# La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado. El
-# commit no entra en la huella: un arnes de antes se vuelve a comprobar en el commit de ahora (Use-ArnesGuardado).
+# La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado (la
+# plantilla, el test y los jobs). El commit no entra en la huella: un arnes de antes se vuelve a comprobar en el commit
+# de ahora (Use-ArnesGuardado).
 function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$Jobs) {
   $ejemplos = @(Get-Ejemplos $Dir)
   $lista = '(No hay tests de ejemplo: escribe el test desde cero.)'
@@ -251,9 +286,18 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $pom = 'no'
   if ($Repo -eq 'original') { $pom = 'si' }
   $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom }
-  $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = (Get-Hash8 ($Test + '|' + ($Jobs -join ','))); prompt = $prompt }
+  $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
+  $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
+  $t.entradas.copia = $Dir   # la de ahora, aunque la tarea venga de otro lanzamiento
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
+}
+
+# Los ficheros que puede escribir el arnes de una copia.
+function Get-Permitidos($T) {
+  $p = @($T.entradas.test, 'src/test/resources/application-prueba-local.yml')
+  if ($T.entradas.repo -eq 'original') { $p += 'pom.xml' }
+  return $p
 }
 
 # '' si el pom $Despues solo anade a $Antes dependencias con <scope>test</scope>; si no, el motivo.
@@ -280,19 +324,19 @@ function Test-PomSoloTest([string]$Antes, [string]$Despues) {
 }
 
 # Comprueba el arnes que acaba de escribir la IA en su copia: solo los ficheros permitidos (y en el pom, solo
-# dependencias de test), compila y, con un caso vacio por job, cada job deja estado.txt. Devuelve '' o el motivo.
+# dependencias de test frente a $PomOriginal), compila y, con un caso vacio por job, cada job deja estado.txt (la
+# salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso). Devuelve '' o el motivo.
 function Test-Arnes($T, [string[]]$Jobs) {
   $dir = $T.entradas.copia
   $esOrig = ($T.entradas.repo -eq 'original')
   Remove-Carpeta (Join-Ruta $dir $Casos)
-  $permitidos = @($T.entradas.test, 'src/test/resources/application-prueba-local.yml')
-  if ($esOrig) { $permitidos += 'pom.xml' }
+  $permitidos = @(Get-Permitidos $T)
   $cambios = @(Get-Cambios $dir)
   $fuera = @($cambios | Where-Object { $permitidos -notcontains $_ })
   if ($fuera.Count -gt 0) { return ('Solo puedes escribir ' + ($permitidos -join ', ') + ', y has cambiado tambien: ' + (@($fuera | Select-Object -First 5) -join ', ') + '. Deja todo lo demas como estaba.') }
   if (-not (Test-Path -LiteralPath (Join-Ruta $dir $T.entradas.test))) { return "No has escrito el test $($T.entradas.test)." }
   if ($cambios -contains 'pom.xml') {
-    $m = Test-PomSoloTest ((Invoke-Git $dir @('show', 'HEAD:pom.xml')).Salida -join "`n") ([System.IO.File]::ReadAllText((Join-Ruta $dir 'pom.xml')))
+    $m = Test-PomSoloTest $PomOriginal ([System.IO.File]::ReadAllText((Join-Ruta $dir 'pom.xml')))
     if ($m) { return $m }
   }
   $r = Invoke-Maven $dir $esOrig @('test-compile') "arnes $($T.entradas.repo), compilar"
@@ -305,6 +349,10 @@ function Test-Arnes($T, [string[]]$Jobs) {
     $sal = Join-Ruta $dir "target/prueba-local/$j/vacio"
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
   }
+  if ($esOrig) {
+    Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
+    foreach ($j in $Jobs) { Copy-Carpeta (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") }
+  }
   return ''
 }
 
@@ -313,7 +361,8 @@ function Save-Arnes($T) {
   $dir = $T.entradas.copia
   $dest = Join-Ruta $Local "arnes/$($T.entradas.repo)"
   Remove-Carpeta $dest
-  foreach ($rel in @(Get-Cambios $dir)) { Copy-Fichero (Join-Ruta $dir $rel) (Join-Ruta $dest $rel) }
+  $permitidos = @(Get-Permitidos $T)
+  foreach ($rel in @(Get-Cambios $dir | Where-Object { $permitidos -contains $_ })) { Copy-Fichero (Join-Ruta $dir $rel) (Join-Ruta $dest $rel) }
   Save-Copia $dir
 }
 
@@ -341,6 +390,7 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
     finally { $Cfg.SegundosPorLlamada = $tope }
     for ($i = 0; $i -lt $pend.Count; $i++) {
       $t = $pend[$i]
+      Restore-Base $t.entradas.copia
       $m = Get-MotivoLlamada $ll[$i]
       if (-not $m) { $m = Test-Arnes $t $Jobs }
       if ($m) { Undo-Copia $t.entradas.copia } else { Save-Arnes $t }
@@ -385,6 +435,7 @@ function Get-TareasCasos($Prueba, $JobMapa) {
     $huella = Get-Hash8 ((@([string]$c.titulo, [string]$c.entrada, [string]$c.esperado, $ctx.Pasos, $ctx.Datos, $leer, $HeadOrig)) -join "`n")
     $e = [pscustomobject]@{ job = $Prueba.job; caso = $caso; titulo = [string]$c.titulo; carpeta = $carpeta; copia = $CopiaOrig; dirs = @(); huella = $huella; prompt = $prompt }
     $t = Restore-Tarea (New-TareaTipo 'caso-local' ('caso-' + (Get-NombreJob $Prueba.job) + '-' + $n.ToString('00')) '' "prueba-local/casos/$($Prueba.job)/$caso" $e) $false
+    $t.entradas.copia = $CopiaOrig   # la de ahora, aunque la tarea venga de otro lanzamiento
     $tareas += , (Test-Guardada $t (Join-Ruta $Local "casos/$($Prueba.job)/$caso"))
   }
   return $tareas
@@ -413,6 +464,7 @@ function Invoke-Casos($Tareas) {
     if ($lote.Count -eq 0) { $lote = @($pend[0]) }
     Info ("Entradas de los casos: preparando $($lote.Count) a la vez (quedan $($pend.Count))...")
     $ll = @(Invoke-Lote $lote $Cfg.EsfuerzoCaso)
+    Restore-Base $CopiaOrig
     $suyas = @($lote | ForEach-Object { $_.entradas.carpeta + '/' })
     $fuera = @(Get-Cambios $CopiaOrig | Where-Object { $r = $_; @($suyas | Where-Object { $r.StartsWith($_) }).Count -eq 0 })
     if ($fuera.Count -gt 0) {
@@ -431,7 +483,9 @@ function Invoke-Casos($Tareas) {
       $t = $lote[$i]
       $dirCaso = Join-Ruta $CopiaOrig $t.entradas.carpeta
       $m = Get-MotivoLlamada $ll[$i]
-      if (-not $m -and -not (Test-Path -LiteralPath $dirCaso)) { $m = "No has escrito nada en CARPETA ($($t.entradas.carpeta))." }
+      if (-not $m -and (-not (Test-Path -LiteralPath $dirCaso) -or @(Get-ChildItem -LiteralPath $dirCaso -Recurse -File).Count -eq 0)) {
+        $m = "No has escrito ningun fichero en CARPETA ($($t.entradas.carpeta)); las carpetas vacias no cuentan. Si el caso no necesita ninguna entrada, escribe solo sin-entrada.txt con una frase que lo diga."
+      }
       $motivos[$t.id] = $m
       if (-not $m -and -not (Test-Path -LiteralPath (Join-Path $dirCaso 'no-aplica.txt'))) { $correr[$t.entradas.job] = $true }
     }
@@ -466,22 +520,30 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, [strin
 }
 
 # ================================ COMPARAR ================================
-# Un texto sin lo que cambia de una ejecucion a otra: las horas (las mismas reglas que comparar-salidas.py, y sus
-# fracciones de segundo) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato
-# se sigue viendo).
+# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las horas
+# (las mismas reglas que comparar-salidas.py, y sus fracciones de segundo) y la fecha de hoy en sus formatos de siempre
+# (cada formato con su marca: un cambio de formato se sigue viendo), con la hora pegada detras (aaaammdd_hhmmss).
 function Get-Normal([string]$Texto) {
-  $t = $Texto -replace '\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?|\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
+  $t = $Texto
+  foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
+  $t = $t -replace '\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?|\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
   foreach ($d in $Hoy) {
     foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
   }
-  return $t
+  return ($t -replace '(<hoy:[^>]+>)[_\-T\. ]?\d{6}(\d{3})?(?!\d)', '$1<hora>')
 }
 
-# Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea).
+# Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
+# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
 function Get-LineasNormales([string]$Ruta) {
-  $l = @((Get-Normal ($Utf8.GetString([System.IO.File]::ReadAllBytes($Ruta)))) -split '\r?\n')
+  $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta)))) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   return $l
+}
+
+# Una linea leida byte a byte, para ensenarla: en UTF-8 si lo es; si no, tal cual (Latin-1).
+function Get-Legible([string]$Linea) {
+  try { return $Utf8Estricto.GetString($Latin.GetBytes($Linea)) } catch { return $Linea }
 }
 
 # Si dos ficheros distintos solo cambian en la codificacion (JEP 400: UTF-8 por defecto desde Java 18) o en el formato
@@ -489,11 +551,10 @@ function Get-LineasNormales([string]$Ruta) {
 function Get-NotaJdk([string]$A, [string]$B) {
   $ba = [System.IO.File]::ReadAllBytes($A)
   $bb = [System.IO.File]::ReadAllBytes($B)
-  $latin = [System.Text.Encoding]::GetEncoding(28591)
   $limpio = { param([string]$s) ((Get-Normal $s.TrimStart([char]0xFEFF)) -replace '\r\n', "`n").TrimEnd("`n") }
   $ua = & $limpio ($Utf8.GetString($ba))
   $ub = & $limpio ($Utf8.GetString($bb))
-  if ($ua -ceq $ub -or $ua -ceq (& $limpio ($latin.GetString($bb))) -or (& $limpio ($latin.GetString($ba))) -ceq $ub) {
+  if ($ua -ceq $ub -or $ua -ceq (& $limpio ($Latin.GetString($bb))) -or (& $limpio ($Latin.GetString($ba))) -ceq $ub) {
     return 'posible diferencia del JDK: codificacion (JEP 400)'
   }
   $formato = { param([string]$s) (($s -replace '[\u00a0\u202f]', ' ') -replace "(?<=\d)[\.,' ](?=\d)", '' -replace '(?<=[A-Za-z])\.', '').ToLowerInvariant() }
@@ -517,16 +578,17 @@ function Compare-Fichero([string]$A, [string]$B) {
   }
   if ($A -and $B -and $n -eq 0) { return $null }
   if ($primera -lt 0) { $primera = 0 }
-  $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { [string]$L[$primera] } else { '(no hay)' } }
+  $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
   if ($A -and $B) { $nota = Get-NotaJdk $A $B }
   return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
 }
 
 # Las diferencias entre lo que dejo un caso en dos carpetas: una por fichero que no coincide (con su ruta relativa).
-# Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados).
+# Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
+# mayusculas.
 function Compare-Caso([string]$A, [string]$B) {
-  $pares = @{}
+  $pares = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
   foreach ($lado in @(@('A', $A), @('B', $B))) {
     if (-not (Test-Path -LiteralPath $lado[1])) { continue }
     foreach ($f in @(Get-ChildItem -LiteralPath $lado[1] -Recurse -File)) {
@@ -546,7 +608,8 @@ function Compare-Caso([string]$A, [string]$B) {
 }
 
 # El resultado de un caso: igual, distinto (con sus diferencias), no determinista, no se pudo preparar o sin probar en
-# local, con su motivo.
+# local, con su motivo. Los ficheros que cambian entre las dos ejecuciones del original no se comparan; el resto, si.
+# Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
 function Get-Resultado($T) {
   $j = $T.entradas.job
   $c = $T.entradas.caso
@@ -556,13 +619,16 @@ function Get-Resultado($T) {
   if ($T.estado -ne 'hecha') { $o.motivo = "La IA no ha podido preparar sus entradas: $($T.motivo)"; return $o }
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
   if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j"]); return $o }
-  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c"))
-  if ($d.Count -gt 0) { $o.resultado = 'no determinista'; $o.motivo = "El original da dos salidas distintas ($($d[0].fichero), linea $($d[0].linea)): no cuenta."; return $o }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
-  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/migrado/$j/$c"))
-  if ($d.Count -eq 0) { $o.resultado = 'igual'; return $o }
-  $o.resultado = 'distinto'
-  $o.diferencias = $d
+  $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c"))
+  $sinContar = @($azar | ForEach-Object { Get-Normal $_.fichero })
+  if ($azar.Count -gt 0) { $o.motivo = 'No se comparan, porque el original da dos salidas distintas: ' + (@($azar | Select-Object -First 3 | ForEach-Object { $_.fichero }) -join ', ') + '.' }
+  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/migrado/$j/$c") | Where-Object { $sinContar -notcontains (Get-Normal $_.fichero) })
+  if ($d.Count -gt 0) { $o.resultado = 'distinto'; $o.diferencias = $d; return $o }
+  if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
+  $o.resultado = 'igual'
+  $vacio = Join-Ruta $Local "salidas/vacio/$j"
+  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio).Count -eq 0) { $o.motivo = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.' }
   return $o
 }
 
@@ -573,10 +639,11 @@ function Show-Resultado($Res, $PorJob) {
   $fmt = '{0,-32} {1,6} {2,8} {3,10} {4,11}'
   Info ($fmt -f 'Job', 'Casos', 'Iguales', 'Distintos', 'Sin probar')
   foreach ($p in $PorJob) { Info ($fmt -f $p.job, $p.casos, $p.iguales, $p.distintos, $p.sinProbar) }
-  foreach ($r in @($Res | Where-Object { $_.resultado -ne 'igual' })) {
+  foreach ($r in @($Res | Where-Object { $_.resultado -ne 'igual' -or $_.motivo })) {
     $donde = "$($r.job)/$($r.caso) ($($r.titulo))"
     if ($r.resultado -eq 'distinto') {
       Fallo "  distinto: $donde"
+      if ($r.motivo) { Aviso "    $($r.motivo)" }
       foreach ($d in @($r.diferencias | Select-Object -First 3)) {
         Info "    $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"
         Info "      original: $($d.original)"
@@ -633,14 +700,16 @@ $ModeloElegido = $Modelo
 if (-not $PSBoundParameters.ContainsKey('Modelo') -and (Test-Path -LiteralPath (Join-Path $DatosMig 'estado.json'))) { $ModeloElegido = [string](Read-Json (Join-Path $DatosMig 'estado.json')).modelo }
 if ($ModeloElegido) { Info "Modelo: $ModeloElegido" } else { Info 'Modelo: el que tenga Copilot' }
 
-# Huellas de lo que no se puede tocar: el original, el migrado y su worktree de rescate
+# Huellas de lo que no se puede tocar: el original, el migrado, su worktree de rescate y la referencia
 $Worktree = ''
 $OrigenRoot = $MigradoRoot
 Set-Excluidos $MigradoRoot   # migracion-*/ fuera de git, como hace migracion.ps1
 $dirRescate = Get-DirRescate
 $hayRescate = Test-WorktreeRescate $dirRescate
-$H0 = @((Get-Huella $LegacyRoot), (Get-Huella $MigradoRoot))
-if ($hayRescate) { $H0 += Get-Huella $dirRescate }
+$intocables = @($LegacyRoot, $MigradoRoot)
+if ($hayRescate) { $intocables += $dirRescate }
+if ($PlantillaRoot) { $intocables += $PlantillaRoot }
+$H0 = @($intocables | ForEach-Object { Get-Huella $_ })
 
 $script:Llamadas = 0
 $script:Racha = 0
@@ -660,6 +729,12 @@ try {
     if ($m) { Stop-Arranque $m }
   }
   Info "Copias: $CopiaOrig y $CopiaMig"
+  $PomOriginal = ''   # el pom.xml del original tal cual (leido como fichero, no por git): Test-PomSoloTest
+  if (Test-Path -LiteralPath (Join-Path $CopiaOrig 'pom.xml')) { $PomOriginal = [System.IO.File]::ReadAllText((Join-Path $CopiaOrig 'pom.xml')) }
+  foreach ($c in @($CopiaOrig, $CopiaMig)) {
+    foreach ($v in @($c, ($c -replace '\\', '/'), ($c -replace '/', '\'))) { $RutasCopia += $v; $RutasCopia += $Latin.GetString($Utf8.GetBytes($v)) }
+  }
+  $RutasCopia = @($RutasCopia | Select-Object -Unique | Sort-Object Length -Descending)
   $r = Invoke-Maven $CopiaOrig $true @('test-compile') 'compilar el original'
   if ($r.Codigo -ne 0) {
     if ($JavaLegacy) { Stop-Arranque ("El original no compila ni con -JavaLegacy ${JavaLegacy}:`n" + (Get-FalloMaven $r.Salida)) }
@@ -734,9 +809,8 @@ try {
   Info $NoPromete
 
   # Lo que no se podia tocar sigue igual
-  $H1 = @((Get-Huella $LegacyRoot), (Get-Huella $MigradoRoot))
-  if ($hayRescate) { $H1 += Get-Huella $dirRescate }
-  if (($H0 -join "`n") -ne ($H1 -join "`n")) { Stop-Arranque 'Ha cambiado el original, el migrado o su worktree de rescate durante la prueba: miralo con git status y git diff.' }
+  $H1 = @($intocables | ForEach-Object { Get-Huella $_ })
+  if (($H0 -join "`n") -ne ($H1 -join "`n")) { Stop-Arranque ('Ha cambiado durante la prueba alguna de estas carpetas: ' + ($intocables -join ', ') + '. Miralo con git status y git diff.') }
   if (@($res | Where-Object { $_.resultado -eq 'distinto' }).Count -gt 0) { exit 2 }
   if ($ArnesMig.estado -ne 'hecha' -or @($res | Where-Object { $_.resultado -eq 'igual' }).Count -eq 0) { exit 1 }
   exit 0

@@ -3,7 +3,8 @@
 #   arnes-local  escribe el fichero de la linea ESCRIBIR (un PruebaLocalTest que mvn-local.ps1 sabe "ejecutar") y, si
 #                el prompt deja tocar el pom.xml, le anade una dependencia con <scope>test</scope>.
 #   caso-local   escribe en la carpeta de la linea CARPETA el fichero ficheros/entrada/datos.txt con el texto de la
-#                linea ENTRADA del prompt.
+#                linea ENTRADA del prompt. Si ENTRADA lleva ' | SQL ', lo que va detras va a datos.sql (y lo de delante,
+#                si hay algo, a datos.txt).
 # RESCATE_FALSO es 'guion' o 'guion:regex' (la regex, sobre el id de la tarea), separados por ';'. Gana el primero:
 #   arnes-toca-main      el arnes escribe ademas src/main/java/Tocado.java (prohibido)
 #   arnes-dep-sin-test   el arnes anade al pom.xml una dependencia sin <scope>test</scope> (prohibido)
@@ -11,6 +12,9 @@
 #   caso-fuera           el caso escribe ademas src/main/resources/fuera.txt (prohibido), en todos los intentos
 #   caso-no-aplica       el caso solo escribe no-aplica.txt con una frase
 #   caso-nada            el caso no escribe nada
+#   caso-carpeta-vacia   el caso solo crea la carpeta ficheros/entrada, vacia
+#   caso-sin-efecto      el caso solo escribe parametros.properties (su salida es la de un caso vacio)
+#   caso-commit          el caso escribe lo suyo y src/main/resources/fuera.txt, y hace git add y git commit
 # Cada llamada deja en la carpeta RESCATE_LLAMADAS (si esta) <id>-<pid>.txt con id, tipo, flags y las horas de inicio y
 # de fin (ticks UTC). Con RESCATE_ESPERA=<n>, cada llamada tarda n segundos (para ver cuantas van a la vez).
 $texto = ''
@@ -60,9 +64,16 @@ if ($tipo -eq 'arnes-local') {
 }
 elseif ($tipo -eq 'caso-local') {
   $carpeta = Linea 'CARPETA'
+  $entrada, $sql = ((Linea 'ENTRADA') -split ' \| SQL ', 2)
   if ($guion -eq 'caso-no-aplica') { Escribir ($carpeta + '/no-aplica.txt') "Este caso pide encender el correo.`n" }
-  elseif ($guion -ne 'caso-nada') { Escribir ($carpeta + '/ficheros/entrada/datos.txt') ((Linea 'ENTRADA') + "`n") }
-  if ($guion -eq 'caso-fuera') { Escribir 'src/main/resources/fuera.txt' "fuera`n" }
+  elseif ($guion -eq 'caso-carpeta-vacia') { [void](New-Item -ItemType Directory -Path (Join-Path $raiz ($carpeta + '/ficheros/entrada')) -Force) }
+  elseif ($guion -eq 'caso-sin-efecto') { Escribir ($carpeta + '/parametros.properties') "modo=prueba`n" }
+  elseif ($guion -ne 'caso-nada') {
+    if ($entrada) { Escribir ($carpeta + '/ficheros/entrada/datos.txt') ($entrada + "`n") }
+    if ($sql) { Escribir ($carpeta + '/datos.sql') ($sql + "`n") }
+  }
+  if ($guion -eq 'caso-fuera' -or $guion -eq 'caso-commit') { Escribir 'src/main/resources/fuera.txt' "fuera`n" }
+  if ($guion -eq 'caso-commit') { $null = & git -C $raiz add -A 2>&1; $null = & git -C $raiz commit -q -m 'la IA hace commit' 2>&1 }
 }
 else { 'no entiendo el tipo'; exit 1 }
 if ($fichero) { [System.IO.File]::AppendAllText($fichero, ('fin=' + [DateTime]::UtcNow.Ticks + "`n")) }
