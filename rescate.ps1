@@ -1101,6 +1101,9 @@ function New-PromptReparacion([string]$PasoId, $LoteH, [string]$Correccion, $Con
   $l.Add('')
   $l.Add('## Reglas obligatorias')
   foreach ($x in $TextoReglas) { $l.Add($x) }
+  $l.Add('')
+  $l.Add('## Calidad del codigo que escribas (Java 21)')
+  foreach ($x in $TextoCalidad) { $l.Add($x) }
   return ($l -join "`n")
 }
 

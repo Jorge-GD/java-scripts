@@ -2143,7 +2143,7 @@ $Pruebas['m9 reparar: los intentos 2 y 3 llevan el prompt corto de reparacion; u
     Comprueba "el intento $($q[0]) no dice 'nada mas'" ($p -notmatch 'nada mas') $p
     Comprueba "el intento $($q[0]) lleva la correccion completa, con el detalle" ($p -match '## CORRECCION' -and $p -match "Los hallazgos de 'estructura' no han bajado" -and $p -match 'Detalle:') $p
     Comprueba "el intento $($q[0]) lleva los ficheros del lote, la orden de Maven y las reglas" ($p -match '(?m)^## Ficheros del lote\n- src/main/java/com/acme/life/Suelta\.java\n' -and $p -match '(?m)^- Ejecuta: .* -q -B' -and $p -match '## Reglas obligatorias') $p
-    Comprueba "el intento $($q[0]) es corto: sin el mapa de referencias ni las reglas de calidad" ($p -notmatch 'Antes de tocar nada' -and $p -notmatch 'Calidad del codigo que escribas') $p
+    Comprueba "el intento $($q[0]) es corto: sin las referencias ni el 'Antes de tocar nada', y con las reglas de calidad" ($p -notmatch 'Antes de tocar nada' -and $p -notmatch '## Referencias' -and $p -match '## Calidad del codigo que escribas') $p
   }
   Comprueba 'dice que el intento 2 es peor que el 1 y vuelve a su arbol' ($r.Salida -match 'El intento 2 es peor que el intento 1.*vuelvo a su arbol') (Cola $r.Salida)
   Comprueba 'el 3 lleva la correccion del mejor (el 1), no la del peor' ($p3 -notmatch 'mas tests fallando') $p3
