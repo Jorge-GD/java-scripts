@@ -671,7 +671,7 @@ $Pruebas['29 culpable (l): sin worktree de rescate se busca y se deshace en la c
   Comprueba 'y la prueba no dice que han cambiado las carpetas' ($r.Salida -notmatch 'Ha cambiado durante la prueba') (Cola $r.Salida)
 }
 
-$Pruebas['31 culpable (m): dos casos rotos por commits distintos: se deshacen del mas nuevo al mas viejo (al reves daria conflicto)'] = {
+$Pruebas['30 culpable (m): dos casos rotos por commits distintos: se deshacen del mas nuevo al mas viejo (al reves daria conflicto)'] = {
   $e = Nuevo-Escenario 'culpable-m' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00 LATIN') })
   $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
   $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
@@ -690,7 +690,7 @@ $Pruebas['31 culpable (m): dos casos rotos por commits distintos: se deshacen de
   Igual 'los dos casos quedan iguales' 'igual,igual' ((Resultados $e) -join ',')
 }
 
-$Pruebas['32 culpable (n): si el culpable es el ultimo commit no se ejecuta otra vez (ya se comparo), y -Desde igual al HEAD dice que ya era distinto sin ejecutar nada'] = {
+$Pruebas['31 culpable (n): si el culpable es el ultimo commit no se ejecuta otra vez (ya se comparo), y -Desde igual al HEAD dice que ya era distinto sin ejecutar nada'] = {
   $e = Nuevo-Escenario 'culpable-n' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $h = Historia $e 5
   $r = Prueba $e @('-Desde', $h.Desde)
@@ -712,7 +712,7 @@ function Prueba-Con-Toque($E, [string]$Modo, [string[]]$A) {
   finally { $env:RESCATE_TOCA = '' }
 }
 
-$Pruebas['30 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, un fichero ajeno despues del revert o un reset ajeno): la huella los ve'] = {
+$Pruebas['32 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, un fichero ajeno despues del revert o un reset ajeno): la huella los ve'] = {
   $e = Nuevo-Escenario 'culpable-k1' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $h = Historia $e 3
   $r = Prueba-Con-Toque $e 'commit' @('-Desde', $h.Desde, '-Deshacer')
