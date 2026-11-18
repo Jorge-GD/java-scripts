@@ -1346,9 +1346,9 @@ function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
   return (@($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
 }
 
-# Las funciones con las que se elige y se lanza un programa: la eleccion es de comun.ps1 y el lanzador de tareas.ps1.
+# Las funciones con las que se elige y se lanza un programa: la eleccion y el lanzador son de comun.ps1.
 function Texto-Del-Lanzador {
-  return ((Texto-De-Funciones (Join-Path $origen 'comun.ps1') @('Select-Lanzable', 'Get-Lanzable')) + "`n" + (Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin')))
+  return (Texto-De-Funciones (Join-Path $origen 'comun.ps1') @('Select-Lanzable', 'Get-Lanzable', 'Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin'))
 }
 
 $Pruebas['35 lanzar Copilot, eleccion (funcion pura): solo ficheros, y en Windows solo con una extension que se lanza'] = {
