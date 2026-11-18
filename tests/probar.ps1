@@ -791,6 +791,7 @@ $Pruebas['prompt: con mvnw en la raiz del repo el prompt dice ./mvnw'] = {
   else {
     $w = 'mvnw'; $esperado = './mvnw'
     Escribe $e.Repo $w ('#!/bin/sh' + "`n" + 'exec "' + $ps + '" -NoProfile -File "' + $mvn + '" "$@"' + "`n")
+    & chmod +x (Get-Ruta $e.Repo $w)   # ejecutable de verdad: un mvnw que no se puede lanzar ya no pasa por un build bueno
   }
   [void](GitEn $e.Repo @('add', '--', $w))
   [void](GitEn $e.Repo @('update-index', '--chmod=+x', '--', $w))
@@ -936,6 +937,258 @@ $Pruebas['config: en .properties el separador puede ser dos puntos'] = {
   Igual 'un hallazgo' 1 $d.H.Count
   Igual 'es un error' 'error' $d.H[0].Sev
   Igual 'con su clave' ($DetalleSecreto -f 'mi.password') $d.H[0].Detalle
+}
+
+# ===================== LA PLANTILLA INCUMPLE LO QUE EXIGE =====================
+# Escenario cuya plantilla son estos ficheros (ruta -> texto) en vez de la de siempre.
+function Escenario-Con-Plantilla([string]$Nombre, $Ficheros) {
+  $e = Nuevo-Escenario $Nombre
+  Remove-Item -LiteralPath $e.Plantilla -Recurse -Force
+  Escribe $e.Plantilla 'pom.xml' $Pom
+  foreach ($ruta in $Ficheros.Keys) { Escribe $e.Plantilla $ruta $Ficheros[$ruta] }
+  return $e
+}
+
+$Base = 'src/main/java/com/acme/plantilla/'
+$Arranque = "package com.acme.plantilla;`n`n/** Arranque. */`n@org.springframework.boot.autoconfigure.SpringBootApplication`npublic class PlantillaApplication {`n}`n"
+# Incumple: dos clases de dominio que importan el mismo paquete de infrastructure (1 capa, no 2), dos clases que abren
+# ficheros en la misma carpeta (1 fichero, no 2), dos tipos publicos sin Javadoc y un println (2 reglas de calidad, no 3
+# hallazgos) y un secreto en application.yml (1 error; el de application-local.yml es un aviso y no cuenta).
+$PlantillaIncumple = [ordered]@{
+  ($Base + 'PlantillaApplication.java') = $Arranque
+  ($Base + 'infrastructure/config/BatchProperties.java') = "package com.acme.plantilla.infrastructure.config;`n`n/** Propiedades. */`npublic record BatchProperties(String carpeta) {`n}`n"
+  ($Base + 'domain/model/Poliza.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Poliza. */`npublic record Poliza(String numero) {`n}`n"
+  ($Base + 'domain/model/Cliente.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Cliente. */`npublic record Cliente(String nombre) {`n}`n"
+  ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+  ($Base + 'infrastructure/adapters/output/sftp/EscritorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.FileWriter;`n`n/** Escribe ficheros locales a pelo. */`npublic class EscritorLocal {`n    private FileWriter salida;`n}`n"
+  ($Base + 'application/usecases/SinDocUno.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocUno {`n    void saluda() {`n        System.out.println(`"hola`");`n    }`n}`n"
+  ($Base + 'application/usecases/SinDocDos.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocDos {`n}`n"
+  'src/main/resources/application.yml' = "sftp:`n  password: valor-secreto-9z`n"
+  'src/main/resources/application-local.yml' = "sftp:`n  token: otro-valor-secreto-7y`n"
+}
+# Cumple todo: Javadoc, capas respetadas, ningun fichero local y el secreto entra por una variable sin valor por defecto.
+$PlantillaLimpia = [ordered]@{
+  ($Base + 'PlantillaApplication.java') = $Arranque
+  ($Base + 'domain/model/Poliza.java') = "package com.acme.plantilla.domain.model;`n`n/** Poliza. */`npublic record Poliza(String numero) {`n}`n"
+  ($Base + 'application/usecases/CargarUseCase.java') = "package com.acme.plantilla.application.usecases;`n`nimport com.acme.plantilla.domain.model.Poliza;`n`n/** Carga. */`npublic class CargarUseCase {`n    private Poliza ultima;`n}`n"
+  'src/main/resources/application.yml' = "sftp:`n  password: `${SFTP_PASSWORD}`n"
+}
+$SecretosPlantilla = @('valor-secreto-9z', 'otro-valor-secreto-7y')
+
+$Pruebas['plantilla incumple: la consola y diagnostico.md cuentan capas, ficheros, calidad y secretos, sin el valor del secreto'] = {
+  $e = Escenario-Con-Plantilla 'incumple' $PlantillaIncumple
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $linea = 'capas 1 | ficheros 1 | calidad 2 | secretos 1'
+  $consola = @($r.Salida -split "`r?`n")
+  $i = [array]::IndexOf($consola, 'Plantilla incumple: ' + $linea)
+  Comprueba 'la consola trae la linea con los numeros de la plantilla' ($i -ge 0) (Cola $r.Salida)
+  Comprueba 'va justo despues de leer la plantilla' ($i -gt 0 -and $consola[$i - 1] -ceq 'Leyendo la plantilla...') (Cola $r.Salida)
+  $md = @((Lee $e.Repo '.rescate/diagnostico.md') -split "`r?`n")
+  $j = [array]::IndexOf($md, '- La plantilla incumple: ' + $linea)
+  Comprueba 'diagnostico.md trae los mismos numeros' ($j -ge 0) ($md -join ' / ')
+  Comprueba 'y va debajo de la linea de la plantilla' ($j -gt 0 -and $md[$j - 1] -clike '- Plantilla: *') ($md -join ' / ')
+  $todo = Lo-Que-Sale $e.Repo $r.Salida
+  foreach ($s in $SecretosPlantilla) { Comprueba ('el valor del secreto ' + $s.Substring(0, 5) + '... no sale en ninguna salida') (-not $todo.Contains($s)) }
+}
+
+$Pruebas['plantilla incumple: una plantilla que cumple todo cuenta cero'] = {
+  $e = Escenario-Con-Plantilla 'limpia' $PlantillaLimpia
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $linea = 'capas 0 | ficheros 0 | calidad 0 | secretos 0'
+  Comprueba 'la consola dice todo a cero' (@($r.Salida -split "`r?`n") -contains ('Plantilla incumple: ' + $linea)) (Cola $r.Salida)
+  Comprueba 'y diagnostico.md tambien' (@((Lee $e.Repo '.rescate/diagnostico.md') -split "`r?`n") -contains ('- La plantilla incumple: ' + $linea))
+}
+
+$Pruebas['plantilla incumple: sin -Plantilla no hay linea; con ella, la hay tambien en el modo pre'] = {
+  $e = Escenario-Con-Plantilla 'sin-plantilla' $PlantillaIncumple
+  $r = Rescate @('-Repo', $e.Repo, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola no dice nada de lo que incumple' ($r.Salida -notmatch 'incumple') (Cola $r.Salida)
+  Comprueba 'diagnostico.md tampoco' ((Lee $e.Repo '.rescate/diagnostico.md') -notmatch 'incumple')
+  $orig = Join-Path (Join-Path $Dir 'sin-plantilla') 'original'
+  Escribe $orig 'src/main/java/com/acme/viejo/Viejo.java' "package com.acme.viejo;`n`npublic class Viejo {`n}`n"
+  $pre = Rescate @('-Modo', 'pre', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Legacy', $orig, '-SinIA')
+  Igual 'el modo pre sale con 0' 0 $pre.Codigo
+  Comprueba 'el modo pre trae la linea' (@($pre.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 1 | ficheros 1 | calidad 2 | secretos 1') (Cola $pre.Salida)
+}
+
+# Un adaptador que abre ficheros donde se puede (infrastructure/adapters/output/file) no es un incumplimiento de la referencia.
+$AdaptadorFichero = "package com.acme.plantilla.infrastructure.adapters.output.file;`n`nimport java.nio.file.Files;`n`n/** Lee ficheros del disco. */`npublic class FicheroLocalAdapter {`n    private Files ayuda;`n}`n"
+$LectorFuera = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+
+# La plantilla que cumple todo, con estos ficheros mas (ruta -> texto).
+function Limpia-Mas([hashtable]$Mas) {
+  $f = @{}
+  foreach ($k in $PlantillaLimpia.Keys) { $f[$k] = $PlantillaLimpia[$k] }
+  foreach ($k in $Mas.Keys) { $f[$k] = $Mas[$k] }
+  return $f
+}
+
+# Lo que dice diagnostico.md de lo que se permite porque la plantilla tambien lo hace (desde su titulo hasta el final).
+function Permitido-Del-Informe($E) {
+  $md = Lee $E.Repo '.rescate/diagnostico.md'
+  return $md.Substring($md.IndexOf('## Permitido porque la plantilla tambien lo hace'))
+}
+
+$Pruebas['plantilla incumple: el adaptador de ficheros de su carpeta permitida no cuenta ni sale en lo permitido'] = {
+  $e = Escenario-Con-Plantilla 'adaptador-permitido' (Limpia-Mas @{ ($Base + 'infrastructure/adapters/output/file/FicheroLocalAdapter.java') = $AdaptadorFichero })
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola dice ficheros 0' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 0 | calidad 0 | secretos 0') (Cola $r.Salida)
+  $p = Permitido-Del-Informe $e
+  Comprueba 'lo permitido dice que no hay nada' ($p -match '- \(nada: la plantilla cumple todas las reglas\)') $p
+  Comprueba 'y no lista el uso de ficheros del adaptador' ($p -notmatch 'java\.nio') $p
+}
+
+$Pruebas['plantilla incumple: con el adaptador permitido y un uso de ficheros en otra carpeta, ficheros 1'] = {
+  $e = Escenario-Con-Plantilla 'adaptador-y-fuera' (Limpia-Mas @{
+      ($Base + 'infrastructure/adapters/output/file/FicheroLocalAdapter.java') = $AdaptadorFichero
+      ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java')         = $LectorFuera
+    })
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola dice ficheros 1' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 1 | calidad 0 | secretos 0') (Cola $r.Salida)
+  $p = Permitido-Del-Informe $e
+  Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/sftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
+}
+
+# ======================= LATIDO MIENTRAS ESPERA ========================
+# Mientras Copilot o Maven tardan, la consola escribe cada SegundosLatido una linea
+# "  ... sigue: <que> (lleva N min M s)" para que se vea que el script no esta colgado.
+function Lineas-Latido([string]$Salida) { return @($Salida -split "`r?`n" | Where-Object { $_ -match '^\s*\.\.\. sigue' }) }
+
+# El config.json del repo del escenario: Maven y Copilot, los falsos, mas estos ajustes (nombre -> valor).
+function Pon-Config($E, [hashtable]$Mas) {
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
+}
+
+$ArgsFix = @('-Modo', 'fix', '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
+
+$Pruebas['latido: mientras Copilot tarda, la consola dice que sigue, y el arreglo sale como siempre'] = {
+  $e = Nuevo-Escenario 'latido-copilot'
+  Pon-Config $e @{ SegundosLatido = 1 }
+  $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) 'lento'
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  $l = Lineas-Latido $r.Salida
+  Comprueba 'hay al menos una linea del latido' ($l.Count -ge 1) (Cola $r.Salida)
+  # el tope es holgado a proposito: el arranque de pwsh bajo carga suma segundos a los 3 del falso
+  Comprueba 'y no un aluvion (como mucho 6)' ($l.Count -le 6) ($l.Count.ToString() + ' lineas')
+  Comprueba 'cada una dice que espera a Copilot y cuanto lleva' (@($l | Where-Object { $_ -match '^  \.\.\. sigue: Copilot .*\(lleva \d+ min \d+ s\)$' }).Count -eq $l.Count) ($l -join ' / ')
+  $hw = Hallazgos $e.Wt
+  Igual 'estructura queda a 0 en el worktree' 0 (Cuenta $hw 'estructura')
+  Comprueba 'hay commit del lote' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(estructura\): lote 1') (Cola $r.Salida)
+}
+
+$Pruebas['latido: mientras Maven tarda, la consola dice que sigue'] = {
+  $e = Nuevo-Escenario 'latido-maven'
+  Pon-Config $e @{ SegundosLatido = 1 }
+  $env:RESCATE_MVN_ESPERA = '3'
+  try { $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) }
+  finally { $env:RESCATE_MVN_ESPERA = '' }
+  Igual 'el diagnostico sale con 0' 0 $r.Codigo
+  $l = Lineas-Latido $r.Salida
+  Comprueba 'hay al menos una linea del latido de Maven' (@($l | Where-Object { $_ -match '^  \.\.\. sigue: Maven \((compilar|tests)\) \(lleva \d+ min \d+ s\)$' }).Count -ge 1) (Cola $r.Salida)
+}
+
+$Pruebas['latido: con los falsos rapidos y el intervalo por defecto no sale ninguna linea'] = {
+  $e = Nuevo-Escenario 'latido-rapido'
+  $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix)
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  Igual 'ninguna linea del latido' 0 (Lineas-Latido $r.Salida).Count
+}
+
+# ============================ SFTP COMO REGLA FIJA ============================
+# Si el batch migrado maneja ficheros, tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la
+# referencia y tambien sin ella. El interruptor ExigirSftp (por defecto true) lo apaga: entonces solo se exige lo que la referencia tiene.
+$SinAdaptadorSftp = 'no hay adaptador SFTP*'
+$SinYmlSftp = 'application.yml no tiene configuracion sftp*'
+
+# Los hallazgos de ficheros del repo que dicen eso (patron -like sobre el detalle).
+function Hallazgos-Sftp([string]$Repo, [string]$Patron) {
+  return @(Hallazgos $Repo | Where-Object { $_.Cat -eq 'ficheros' -and $_.Sev -eq 'error' -and $_.Detalle -like $Patron })
+}
+
+# Una referencia que no sabe nada de SFTP: ni carpeta sftp ni configuracion sftp.
+$ConfigSinSftp = "batch:`n  nombre: ejemplo`n"
+function Escenario-Referencia-Sin-Sftp([string]$Nombre) {
+  return (Escenario-Con-Plantilla $Nombre (Limpia-Mas @{ 'src/main/resources/application.yml' = $ConfigSinSftp }))
+}
+
+$Pruebas['sftp fijo: migrado con ficheros y sin carpeta sftp, con una referencia sin SFTP, tiene el error y no dice que la plantilla lo tenga'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-ref-sin'
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $a = Hallazgos-Sftp $e.Repo $SinAdaptadorSftp
+  Igual 'un error de adaptador SFTP' 1 $a.Count
+  Comprueba 'no dice que la plantilla lo tenga' ($a.Count -eq 1 -and $a[0].Detalle -notmatch 'plantilla') (Cola $r.Salida)
+  Comprueba 'dice donde va' ($a.Count -eq 1 -and $a[0].Detalle -match 'infrastructure/adapters/output/sftp')
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'y un error de configuracion sftp' 1 $y.Count
+  Comprueba 'que tampoco habla de la plantilla' ($y.Count -eq 1 -and $y[0].Detalle -notmatch 'plantilla')
+}
+
+$Pruebas['sftp fijo: con una referencia que si lo tiene, el texto sigue diciendolo'] = {
+  $e = Nuevo-Escenario 'sftp-ref-con'
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $a = Hallazgos-Sftp $e.Repo $SinAdaptadorSftp
+  Comprueba 'el adaptador: la plantilla lo tiene en su carpeta' ($a.Count -eq 1 -and $a[0].Detalle -match 'la plantilla lo tiene en infrastructure/adapters/output/sftp')
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Comprueba 'la configuracion: la plantilla si' ($y.Count -eq 1 -and $y[0].Detalle -match '\(la plantilla si\)')
+}
+
+$Pruebas['sftp fijo: sin -Plantilla tambien salta'] = {
+  $e = Nuevo-Escenario 'sftp-sin-plantilla'
+  $r = Rescate @('-Repo', $e.Repo, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'un error de adaptador SFTP' 1 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  Igual 'y uno de configuracion sftp' 1 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+}
+
+$Pruebas['sftp fijo: con ExigirSftp en false y una referencia sin SFTP no salta nada, como antes'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-apagado'
+  Pon-Config $e @{ ExigirSftp = $false }
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ni adaptador SFTP' 0 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  Igual 'ni configuracion sftp' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+  Igual 'solo queda el acceso directo a ficheros' 1 (Cuenta (Hallazgos $e.Repo) 'ficheros')
+}
+
+$Pruebas['sftp fijo: con ExigirSftp en false y una referencia que si lo tiene, salta como antes'] = {
+  $e = Nuevo-Escenario 'sftp-apagado-ref-con'
+  Pon-Config $e @{ ExigirSftp = $false }
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres hallazgos de ficheros de siempre' 3 (Cuenta (Hallazgos $e.Repo) 'ficheros')
+}
+
+$Pruebas['sftp fijo: un migrado que no usa ficheros no tiene nada que exigir'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-sin-ficheros'
+  Remove-Item -LiteralPath (Get-Ruta $e.Repo 'src/main/java/com/acme/life/application/usecases/LeerFichero.java') -Force
+  [void](GitEn $e.Repo @('add', '-u'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'sin ficheros'))
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ningun hallazgo de ficheros' 0 (Cuenta (Hallazgos $e.Repo) 'ficheros')
+}
+
+$Pruebas['sftp fijo: application.yml sin sftp es un error con una referencia sin SFTP, y con el interruptor apagado no'] = {
+  $e = Escenario-Referencia-Sin-Sftp 'sftp-yml'
+  # el migrado trae su adaptador SFTP: solo falta la configuracion
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/output/sftp/FicheroSftp.java' "package com.acme.life.infrastructure.adapters.output.sftp;`n`n/** Adaptador SFTP. */`npublic class FicheroSftp {`n}`n"
+  [void](GitEn $e.Repo @('add', '--', 'src/main/java/com/acme/life/infrastructure/adapters/output/sftp/FicheroSftp.java'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'adaptador sftp'))
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  Igual 'con el adaptador no salta el del adaptador' 0 (Hallazgos-Sftp $e.Repo $SinAdaptadorSftp).Count
+  Igual 'pero si el de la configuracion' 1 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+  Pon-Config $e @{ ExigirSftp = $false }
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  Igual 'apagado el interruptor, nada' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
 }
 
 # ================================ LANZADOR ================================

@@ -14,14 +14,15 @@ Una ruta de -Legacy, -Migrado o -Plantilla que no es una carpeta se dice al inst
 
 BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   1 entorno       modo de lenguaje, versiones, politica de ejecucion, suspension, disco
-  2 bancos        tests\probar.ps1 y tests\probar-migracion.ps1 como procesos hijo
+  2 bancos        tests\probar.ps1 como proceso hijo (probar-migracion es un banco de desarrollo y no entra)
   3 copilot       que banderas conoce (sin llamar a ningun modelo)
   4 aptitud       la ficha de un fichero de juguete, 3 veces + esfuerzo alto + herramientas limitadas
   5 paralelo      4 fichas de juguete a la vez
   6 maven         compilar, JaCoCo y OpenRewrite sobre preflight\juguete (Maven de los ajustes, el mvn del
                   PATH o el mvnw de -Migrado, por este orden; la linea 'maven usado' dice cual)
   7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
-                  diagnostico de rescate.ps1 (solo numeros y palabras fijas)
+                  diagnostico de rescate.ps1, con cuantas reglas incumple la propia referencia
+                  (solo numeros y palabras fijas)
   8 clases reales 5 clases del original por tamano: la ficha de cada una
   9 examen        con cada modelo de -Modelos y cada esfuerzo de -Esfuerzos (medium por defecto): la ficha de
                   una clase corta y de una larga, y arreglar un Maven de juguete y ponerle Javadoc. Cuenta
@@ -474,18 +475,28 @@ function Add-DatosRepo([string]$Nombre, [string]$Raiz) {
   Add-Linea "$Nombre ficheros locales: $($c.locales)"
 }
 
+# De un fichero, su extension si es de las que se lanzan (.exe, .cmd, .bat, .ps1, .com), 'sin extension' o 'otra'.
+function Get-TipoFichero([string]$Ruta) {
+  $ext = [System.IO.Path]::GetExtension($Ruta).ToLowerInvariant()
+  if (-not $ext) { return 'sin extension' }
+  if (@('.exe', '.cmd', '.bat', '.ps1', '.com') -contains $ext) { return $ext }
+  return 'otra'
+}
+
 # Los bloques: cada uno en su try; el fichero se reescribe al acabar cada uno.
 function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cuerpo, [bool]$SinMensaje = $false) {
   if ($SoloN.Count -gt 0 -and $SoloN -notcontains $N) { return }
   Write-Host "== $N $Nombre (hasta $Minutos min)..."
   Add-Linea "== $N $Nombre"
   $bien = $true
+  $latido = Start-Latido "bloque $N, $Nombre" $Cfg.SegundosLatido
   try { & $Cuerpo }
   catch {
     $bien = $false
     Add-Linea ('fallo: ' + (Get-Fallo $_ $SinMensaje))
     $script:Fallos += $N
   }
+  finally { Stop-Latido $latido }
   if ($bien) { Write-Host 'hecho' } else { Write-Host 'fallo' }
   Save-Resultado
 }
@@ -514,14 +525,23 @@ function Get-TrozosExamen {
   return @($tareas | ForEach-Object { [pscustomobject]@{ Desde = [int]$_.entradas.desde; Hasta = [int]$_.entradas.hasta } })
 }
 
-# Los trozos, las llamadas y los minutos (2 por llamada) de todo el examen, y si las pruebas E tienen Maven.
+# Minutos que puede durar una llamada: 2 con low y medium; con otro esfuerzo (max puede tardar lo que el tope), el tope de
+# una llamada (SegundosPorLlamada) redondeado hacia arriba.
+function Get-MinutosPorLlamada([string]$Esfuerzo) {
+  if ($Esfuerzo -ceq 'low' -or $Esfuerzo -ceq 'medium') { return 2 }
+  return [int][math]::Ceiling([double]$Cfg.SegundosPorLlamada / 60)
+}
+
+# Los trozos, las llamadas y los minutos de todo el examen, y si las pruebas E tienen Maven.
 function Get-PlanExamen {
   $plan = [pscustomobject]@{ Trozos = @(Get-TrozosExamen); ConMaven = $false; Llamadas = 0; Minutos = 1 }
   $plan.ConMaven = (-not $SinMaven -and $script:Fallos -notcontains 6 -and $script:MavenBien -ne $false -and (Get-MavenElegido).Origen -ne 'ninguno')
   $por = 1 + $plan.Trozos.Count
   if ($plan.ConMaven) { $por += 2 }
   $plan.Llamadas = $ModelosN.Count * $EsfuerzosN.Count * $por
-  $plan.Minutos = [math]::Max(1, 2 * $plan.Llamadas)
+  $minutos = 0
+  foreach ($e in $EsfuerzosN) { $minutos += $ModelosN.Count * $por * (Get-MinutosPorLlamada $e) }
+  $plan.Minutos = [math]::Max(1, $minutos)
   return $plan
 }
 
@@ -679,7 +699,7 @@ function Test-JavadocMain([string]$Dir) {
 }
 
 # Ruta relativa -> huella de cada fichero de una carpeta (sin .git, target ni .rescate): lo que cambia entre antes y despues.
-function Get-Arbol([string]$Dir) {
+function Get-HuellasPorFichero([string]$Dir) {
   $arbol = @{}
   $sha = [System.Security.Cryptography.SHA256]::Create()
   try { foreach ($f in @(Get-Ficheros $Dir '*')) { $arbol[(Get-Rel $Dir $f.FullName)] = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($f.FullName))) } }
@@ -705,7 +725,7 @@ function Invoke-Lectura($Tarea, [string]$Dir, [string]$Modelo, [string]$Esfuerzo
 function Get-MotivoArreglo([string]$Prueba, $Llamada, [string]$Dir, $Antes, [string]$Mvn) {
   if ($Llamada.Agotado) { return 'tiempo' }
   if ($Llamada.Codigo -ne 0) { return 'fallo de copilot' }
-  $despues = Get-Arbol $Dir
+  $despues = Get-HuellasPorFichero $Dir
   $cambios = @(@($Antes.Keys) + @($despues.Keys) | Select-Object -Unique | Where-Object { $Antes[$_] -cne $despues[$_] })
   if ($cambios.Count -eq 0) { return 'sin cambios' }
   if (@($cambios | Where-Object { $_ -like 'src/test/*' }).Count -gt 0) { return 'toco tests' }
@@ -730,7 +750,7 @@ function Invoke-Arreglo([int]$K, [string]$Prueba, [string]$Modelo, [string]$Esfu
   [void](New-Carpeta $dir)
   foreach ($h in @(Get-ChildItem -LiteralPath (Join-Ruta $PSScriptRoot "preflight/examen/$carpeta") -Force)) { Copy-Item -LiteralPath $h.FullName -Destination $dir -Recurse }
   $mvn = Get-MvnProyecto (Get-MavenElegido) $dir
-  $antes = Get-Arbol $dir
+  $antes = Get-HuellasPorFichero $dir
   $prompt = [System.IO.File]::ReadAllText((Join-Ruta $PSScriptRoot "preflight/examen/arreglo-$carpeta.md"), $Utf8) -replace "`r`n", "`n"
   $archivo = Join-Path $Tmp "uso-pf-exa-$K-$Prueba.json"
   $argsAntes = @($Cfg.CopilotArgs)
@@ -901,19 +921,23 @@ try {
       Add-Linea ('maven: ' + (Get-Version $mvnElegido.Exe @('--version') 'Apache Maven (\d+(?:\.\d+)+)' $carpetaMvn))
     }
     Add-Linea ('copilot: ' + (Get-Version $Cfg.CopilotExe @('--version') '(\d+\.\d+(?:\.\d+)*)'))
-    # la extension del Copilot (.exe, .cmd, .bat, .ps1 o .com; otra cualquiera sale como 'otra')
-    $tipo = 'no encontrado'
+    # lo primero que encuentra PowerShell con el nombre del Copilot (funcion, alias o fichero y su extension) y lo que se
+    # lanza de verdad: la misma eleccion que hace Get-Lanzador
+    $tipo = 'no encontrado'; $seLanza = 'nada'
     try {
-      $c = @(Get-Command $Cfg.CopilotExe -ErrorAction SilentlyContinue)
+      $c = @(Get-Command $Cfg.CopilotExe -All -ErrorAction SilentlyContinue)
       if ($c.Count -gt 0) {
-        $ext = [System.IO.Path]::GetExtension("$($c[0].Source)").ToLowerInvariant()
-        if (-not $ext) { $tipo = 'sin extension' }
-        elseif (@('.exe', '.cmd', '.bat', '.ps1', '.com') -contains $ext) { $tipo = $ext }
-        else { $tipo = 'otra' }
+        $k = "$($c[0].CommandType)"
+        if ($k -eq 'Function') { $tipo = 'funcion' }
+        elseif ($k -eq 'Alias') { $tipo = 'alias' }
+        elseif ($k -eq 'Cmdlet') { $tipo = 'cmdlet' }
+        else { $tipo = Get-TipoFichero "$($c[0].Source)" }
       }
+      $lanzable = Select-Lanzable $c ($env:OS -eq 'Windows_NT')
+      if ($lanzable) { $seLanza = Get-TipoFichero $lanzable }
     }
     catch { }
-    Add-Linea "tipo de copilot: $tipo"
+    Add-Linea "tipo de copilot: $tipo | se lanza: $seLanza"
     $suelta = Set-Despierto $false
     [void](Set-Despierto $true)
     Add-Linea ('impide la suspension: ' + (Get-SiNo $despierto) + ' | al soltar ' + (Get-SiNo $suelta))
@@ -936,7 +960,7 @@ try {
   # ----------------------------------- 2 -----------------------------------
   Invoke-Bloque 2 'bancos' 30 {
     $fallan = @()
-    foreach ($b in @('probar', 'probar-migracion')) {
+    foreach ($b in @('probar')) {
       $ruta = Join-Path (Join-Path $PSScriptRoot 'tests') ($b + '.ps1')
       if (-not (Test-Path -LiteralPath $ruta)) { Add-Linea "${b}: no esta el fichero"; continue }
       $r = Invoke-Proceso (Get-PowerShellExe) (Get-ArgsPowerShell @($ruta, '-Dir', (Join-Path $Tmp $b))) $PSScriptRoot 1800
@@ -1123,6 +1147,10 @@ try {
     foreach ($m in [regex]::Matches($t, '(?m)^([a-z0-9]+)\s+(\d+)\s+(\d+)\s*$')) {
       Add-Linea ("$($m.Groups[1].Value): $($m.Groups[2].Value) errores, $($m.Groups[3].Value) avisos")
     }
+    # cuanto incumple la propia referencia (lo que ella hace se permite en el migrado): solo digitos
+    $ref = [regex]::Match($t, '(?m)^Plantilla incumple: capas ([0-9]+) \| ficheros ([0-9]+) \| calidad ([0-9]+) \| secretos ([0-9]+)\s*$')
+    if ($ref.Success) { Add-Linea "plantilla incumple: capas $($ref.Groups[1].Value) | ficheros $($ref.Groups[2].Value) | calidad $($ref.Groups[3].Value) | secretos $($ref.Groups[4].Value)" }
+    else { Add-Linea 'plantilla incumple: desconocido' }
   } $true
 
   # ----------------------------------- 8 -----------------------------------

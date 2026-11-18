@@ -7,6 +7,7 @@
 #                      el script se lo reclama en la correccion
 #   toca-plantilla     ademas escribe en la plantilla (prohibido)
 #   plan-toca-codigo   en la revision previa toca codigo (prohibido)
+#   lento              tarda 3 s antes de hacer nada (para probar el latido de rescate.ps1)
 # Cada llamada deja una linea en .rescate/llamadas.log, con el modelo y el
 # esfuerzo que ha recibido.
 #
@@ -424,6 +425,7 @@ $titulo = ($prompt -split "`r?`n")[0]
 $correccion = ($prompt -match '## CORRECCION')
 $conPlan = ($prompt -match '## Plan aprobado')
 [System.IO.File]::AppendAllText((Join-Path $rescate 'llamadas.log'), ($titulo + ' | correccion=' + $correccion + ' | plan=' + $conPlan + ' | ' + $flags + "`n"))
+if ($guion -eq 'lento') { Start-Sleep -Seconds 3 }
 
 function Get-Ruta([string]$Rel) {
   $p = $raiz

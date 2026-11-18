@@ -150,6 +150,9 @@ $Cfg += @{
   FicheroImport         = '^(java\.io\.(File|FileReader|FileWriter|FileInputStream|FileOutputStream|RandomAccessFile)|java\.nio\.file\..+|org\.springframework\.core\.io\.(FileSystemResource|PathResource|FileUrlResource))$'
   FicheroToken          = '\b(File|FileReader|FileWriter|FileInputStream|FileOutputStream|RandomAccessFile)\b'
   FicheroPermitidoEn    = @('infrastructure/adapters/output/file')
+  # Un batch que maneja ficheros tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la plantilla.
+  # En false solo se exige lo que la plantilla tiene.
+  ExigirSftp            = $true
   # Palabras que delatan la configuracion antigua. AJUSTALAS a tu repo.
   PalabrasConfigAntigua = @('inventory')
   # API antigua: se marca solo si la plantilla ya no la usa
@@ -309,6 +312,12 @@ function Get-UsoFicheros($Hechos) {
     }
   }
   return $out.ToArray()
+}
+
+# Si una carpeta (relativa al paquete base) es de las que pueden abrir ficheros locales.
+function Test-FicheroPermitido([string]$Dir) {
+  foreach ($p in $Cfg.FicheroPermitidoEn) { if ($Dir -eq $p -or $Dir.StartsWith($p + '/')) { return $true } }
+  return $false
 }
 
 # Secretos escritos en claro en application*.yml|properties: claves cuyo ultimo trozo acaba en una
@@ -536,7 +545,7 @@ function Get-Calibracion([string]$Raiz) {
     if ($n -ge 1) { $dirs3[($seg[0..($n - 1)] -join '/')] = $true }
   }
   foreach ($v in @(Get-ViolImports $h)) { $excImp[$v.Clave] = $true }
-  foreach ($u in @(Get-UsoFicheros $h)) { $excFic[$u.Clave] = $true }
+  foreach ($u in @(Get-UsoFicheros $h)) { if (-not (Test-FicheroPermitido $u.Dir)) { $excFic[$u.Clave] = $true } }
   $todo = (@($h.Ficheros | ForEach-Object { $_.Texto }) -join "`n")
   foreach ($t in $Cfg.ApiAntigua) { $tokens[$t] = ($todo -match ('\b' + $t + '\b')) }
   $jakarta = $false
@@ -551,11 +560,16 @@ function Get-Calibracion([string]$Raiz) {
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object)
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
-    Calidad = $calReglas
+    Calidad = $calReglas; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
     YmlSftp = ($h.Yml -match 'sftp'); Pom = (Get-Pom $Raiz); Extra = $extra
   }
+}
+
+# Cuanto incumple la propia plantilla (lo que se permite en el repo porque ella lo hace), en una linea.
+function Get-TextoIncumple($Cal) {
+  return "capas $($Cal.ExcImports.Count) | ficheros $($Cal.ExcFicheros.Count) | calidad $($Cal.Calidad.Count) | secretos $($Cal.Secretos)"
 }
 
 # ============================== DIAGNOSTICO ==============================
@@ -568,7 +582,10 @@ function Invoke-Build([bool]$ConTests) {
   $rep = Join-Ruta $RepoRoot 'target/surefire-reports'
   if ($ConTests -and (Test-Path -LiteralPath $rep)) { Remove-Item -LiteralPath $rep -Recurse -Force }
   if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
-  $r = Invoke-Nativo (Get-Mvn $RepoRoot) $a $RepoRoot
+  if ($ConTests) { $que = 'Maven (tests)' } else { $que = 'Maven (compilar)' }
+  $latido = Start-Latido $que $Cfg.SegundosLatido
+  try { $r = Invoke-Nativo (Get-Mvn $RepoRoot) $a $RepoRoot }
+  finally { Stop-Latido $latido }
   [System.IO.File]::WriteAllLines((Join-Path $Work 'build.log'), [string[]]$r.Salida)
   if ($r.Codigo -eq 0) {
     if ($ConTests) { $b.TestsEjecutados = $true; $b.TestsOk = $true }
@@ -695,20 +712,18 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   # ---------- ficheros (SFTP) ----------
   $uso = @(Get-UsoFicheros $h)
   $usaFicheros = ($uso.Count -gt 0)   # si el batch no toca ficheros, no se le exige SFTP
-  $uso = @($uso | Where-Object {
-      $d = $_.Dir; $ok = $false
-      foreach ($p in $Cfg.FicheroPermitidoEn) { if ($d -eq $p -or $d.StartsWith($p + '/')) { $ok = $true } }
-      if ($cal -and $cal.ExcFicheros.ContainsKey($_.Clave)) { $ok = $true }
-      -not $ok })
+  $uso = @($uso | Where-Object { -not ((Test-FicheroPermitido $_.Dir) -or ($cal -and $cal.ExcFicheros.ContainsKey($_.Clave))) })
   foreach ($g in @($uso | Group-Object RelRaiz)) {
     $imps = (@($g.Group | ForEach-Object { $_.Fqn }) | Select-Object -Unique | Select-Object -First 5) -join ', '
     Add-Hallazgo 'ficheros' 'error' $g.Name $g.Group[0].Linea "acceso directo a ficheros locales ($imps): debe ir por el puerto de ficheros"
   }
-  if ($usaFicheros -and $cal -and $cal.TieneSftp -and (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -eq 0)) {
-    Add-Hallazgo 'ficheros' 'error' '' 0 'no hay adaptador SFTP (la plantilla lo tiene en infrastructure/adapters/output/sftp)'
+  if ($usaFicheros -and (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -eq 0) -and ($Cfg.ExigirSftp -or ($cal -and $cal.TieneSftp))) {
+    if ($cal -and $cal.TieneSftp) { $donde = 'la plantilla lo tiene en infrastructure/adapters/output/sftp' } else { $donde = 'va en infrastructure/adapters/output/sftp' }
+    Add-Hallazgo 'ficheros' 'error' '' 0 "no hay adaptador SFTP ($donde)"
   }
-  if ($usaFicheros -and $cal -and $cal.YmlSftp -and ($h.Yml -notmatch 'sftp')) {
-    Add-Hallazgo 'ficheros' 'error' 'src/main/resources' 0 'application.yml no tiene configuracion sftp (la plantilla si)'
+  if ($usaFicheros -and ($h.Yml -notmatch 'sftp') -and ($Cfg.ExigirSftp -or ($cal -and $cal.YmlSftp))) {
+    if ($cal -and $cal.YmlSftp) { $deLaPlantilla = ' (la plantilla si)' } else { $deLaPlantilla = '' }
+    Add-Hallazgo 'ficheros' 'error' 'src/main/resources' 0 ('application.yml no tiene configuracion sftp' + $deLaPlantilla)
   }
 
   # ---------- config ----------
@@ -820,6 +835,7 @@ function Write-Informe($Hall) {
   [void]$sb.AppendLine('- Fecha: ' + (Get-Date -Format 'yyyy-MM-dd HH:mm'))
   [void]$sb.AppendLine('- Paquete base: ' + $script:BasePkg)
   [void]$sb.AppendLine('- Plantilla: ' + $PlantillaRoot)
+  if ($script:Cal) { [void]$sb.AppendLine('- La plantilla incumple: ' + (Get-TextoIncumple $script:Cal)) }
   [void]$sb.AppendLine('- Estado: ' + (Get-TextoBuild))
   [void]$sb.AppendLine('')
   [void]$sb.AppendLine('| Paso | Errores | Avisos |')
@@ -865,7 +881,7 @@ $TextoPaso = @{
   build      = 'Haz que el proyecto compile con Java 21 usando el mismo parent, propiedades y plugins que el pom.xml de la PLANTILLA. No copies dependencias de negocio que este repo no necesite. Corrige los errores de compilacion listados. No reestructures paquetes en este paso.'
   estructura = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover y actualizar package e imports: no cambies logica. Mueve tambien sus tests al paquete equivalente.'
   hexagonal  = 'Elimina las dependencias prohibidas listadas. El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports). Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
-  ficheros   = 'Sustituye el acceso directo a ficheros locales por puertos de ficheros, igual que la PLANTILLA: puerto para listar y leer, puerto para el ciclo de vida del fichero, un adaptador SFTP y otro local, y seleccion por propiedad de configuracion. Usa la misma libreria SFTP que la PLANTILLA. No dejes rutas fijas en el codigo.'
+  ficheros   = 'Sustituye el acceso directo a ficheros locales por puertos de ficheros, igual que la PLANTILLA: puerto para listar y leer, puerto para el ciclo de vida del fichero, un adaptador SFTP y otro local, y seleccion por propiedad de configuracion. Usa la misma libreria SFTP que la PLANTILLA; si la PLANTILLA no tiene SFTP, crea igualmente el adaptador SFTP en infrastructure/adapters/output/sftp (con la libreria SFTP que ya use este repo) y su bloque sftp en application.yml. No dejes rutas fijas en el codigo.'
   config     = 'Elimina las referencias a la configuracion antigua (inventory). Toda la configuracion debe entrar por una clase @ConfigurationProperties validada al arranque y por application.yml leyendo variables de entorno, igual que la PLANTILLA. Ningun secreto (contrasena, token, clave) puede quedar escrito en application.yml o application.properties, ni como valor por defecto: se leen de una variable de entorno (`${NOMBRE}`). No escribas el valor en ningun otro fichero del repo; si un test lo necesita, usa un valor inventado en src/test/resources.'
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
   e2e        = 'Crea un test de integracion para el job listado, copiando el patron de los tests de integracion de la PLANTILLA. El test lanza el job real de principio a fin con los adaptadores locales (sftp desactivado), base de datos en memoria y los servicios externos simulados; comprueba que termina en COMPLETED y que la salida es la esperada. Usa los datos de src/test/resources/e2e/<nombre-del-job>/ si existen; si no, crea alli datos sinteticos minimos (nunca datos reales). La salida esperada se deduce de la logica del ORIGINAL, no de ejecutar el codigo nuevo. El test debe contener el nombre del job. Si el test falla porque el codigo migrado no hace lo mismo que el original, corrige el codigo, no el test.'
@@ -960,11 +976,14 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
-function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '') {
+# $Que es lo que dice el latido mientras Copilot trabaja.
+function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [string]$Que = 'Copilot') {
   if (-not $Mod) { $Mod = $Modelo }
   if (-not $Esf) { $Esf = $Esfuerzo }
   $a = Get-ArgsCopilot 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.' $Mod $Esf @($PlantillaRoot, $LegacyRoot) ([bool]$SinInstrucciones)
-  $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot
+  $latido = Start-Latido $Que $Cfg.SegundosLatido
+  try { $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot }
+  finally { Stop-Latido $latido }
   [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
   return $r
 }
@@ -1098,7 +1117,7 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
   $rama = Get-Rama $RepoRoot
   $hp = Get-Huella $PlantillaRoot; $h0 = Get-Huella $LegacyRoot
   Info "Revision previa del paso '$PasoId': Copilot lee $($fichs.Count) fichero(s) y la plantilla..."
-  [void](Invoke-Copilot (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan)
+  [void](Invoke-Copilot (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId)")
   if ((Get-Huella $PlantillaRoot) -ne $hp -or (Get-Huella $LegacyRoot) -ne $h0) {
     Fallo 'ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL durante la revision. Restauralos antes de seguir.'
     exit 4
@@ -1161,7 +1180,7 @@ function Invoke-Pre {
       )
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
       Info 'Copilot leyendo el original...'
-      [void](Invoke-Copilot (Join-Path $Work 'pre.log') '' $EsfuerzoPlan)
+      [void](Invoke-Copilot (Join-Path $Work 'pre.log') '' $EsfuerzoPlan 'Copilot (pre)')
       if ((Get-Huella $LegacyRoot) -ne $h0 -or (Get-Huella $PlantillaRoot) -ne $hp) { Fallo 'ALTO: se ha modificado el ORIGINAL o la PLANTILLA durante el pre. Restauralos antes de seguir.'; exit 4 }
       $despues = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
       if ($despues -ne $antes) { Aviso 'Ojo: Copilot ha tocado ficheros de este repo durante el pre (solo debia escribir en .rescate). Mira git status.' }
@@ -1293,7 +1312,7 @@ function Invoke-Fix {
     for ($i = 1; $i -le $MaxIntentos; $i++) {
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion))
       Info "  Copilot trabajando (intento $i de $MaxIntentos)..."
-      $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod
+      $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod '' "Copilot (paso $paso, lote $n, intento $i)"
       if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)" }
 
       # -- guardas duras: si saltan, no hay reintento --
@@ -1442,6 +1461,7 @@ $script:Cal = $null
 if ($PlantillaRoot) {
   Info 'Leyendo la plantilla...'
   $script:Cal = Get-Calibracion $PlantillaRoot
+  Info ('Plantilla incumple: ' + (Get-TextoIncumple $script:Cal))
 }
 
 switch ($Modo) {
