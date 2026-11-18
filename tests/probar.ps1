@@ -1750,10 +1750,14 @@ $Pruebas['m7 orden sin tests: la puerta de tests solo compara si hay cuenta de a
 # ===== M8: EL MODELO VE LO QUE HA ROTO Y UN INTENTO CORTADO NO ENTRA EN LA FOTO =====
 # Con 'estructura' antes de 'ficheros', el lote de 'ficheros' del guion mueve-a-util lleva LeerFichero a un subpaquete que
 # la plantilla no tiene: estructura pasa de 2 hallazgos (Suelta y PolizaService, que ya estaban) a 3.
+$LeerM8 = 'src/main/java/com/acme/life/application/usecases/LeerFichero.java'
 $LeerMovidoM8 = 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java'
 
 # La CORRECCION de un prompt: desde su titulo hasta el final.
 function Correccion-De([string]$Prompt) { return ([regex]::Match($Prompt, '(?s)## CORRECCION.*$')).Value }
+
+# Lo que ha visto el Copilot del M6 en .rescate/intento-en-curso.json en cada lote (guion ve-marca), una linea por llamada.
+function Marcas-Vistas($E) { return @([System.IO.File]::ReadAllLines((Get-Ruta $E.Wt '.rescate/marca-vista.log'))) }
 
 $Pruebas['m8 detalle: lo que el intento ha roto en un paso anterior sale en la correccion; lo que ya estaba, no'] = {
   $e = Escenario-M6 'm8-detalle' @{ Orden = @('estructura', 'ficheros') }
@@ -1777,6 +1781,63 @@ $Pruebas['m8 detalle: si ningun paso anterior empeora, el detalle no lleva halla
   $c = Correccion-De (Prompt-M6 $e $lotes[1])
   Comprueba 'la correccion no dice que un paso anterior haya empeorado' ($c -notmatch 'Has empeorado') $c
   Comprueba 'ni lista hallazgos de estructura' ($c -notmatch 'Suelta\.java|PolizaService\.java') $c
+}
+
+$Pruebas['m8 marca: cada intento tiene su marca con el commit de partida y, al acabar el lote, pase o no, ya no esta'] = {
+  $e = Escenario-M6 'm8-marca'
+  $r = Fix-M6 $e 'estructura' 2 @() 've-marca;nada-sin-correccion'
+  Igual 'sale con 0' 0 $r.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD~1')
+  $v = @(Marcas-Vistas $e)
+  Igual 'los dos intentos ven la marca' 2 $v.Count
+  foreach ($linea in $v) {
+    $m = $null
+    try { $m = $linea | ConvertFrom-Json } catch { }
+    Comprueba 'la marca dice el paso, el lote y el commit de partida' ($m -and $m.paso -eq 'estructura' -and $m.lote -eq 1 -and $m.commit -eq $partida) $linea
+  }
+  Comprueba 'el lote pasa: la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json'))) (Cola $r.Salida)
+  $e2 = Escenario-M6 'm8-marca-no-pasa'
+  $r2 = Fix-M6 $e2 'estructura' 1 @() 'atasca-siempre;ve-marca;consejo-nada'
+  Igual 'con un atascado sale con 2' 2 $r2.Codigo
+  Comprueba 'hubo un lote deshecho' ($r2.Salida -match 'DESHECHO') (Cola $r2.Salida)
+  Comprueba 'todos los intentos vieron una marca' (@(Marcas-Vistas $e2 | Where-Object { $_ -match '"commit"' }).Count -eq @(Marcas-Vistas $e2).Count) ((Marcas-Vistas $e2) -join ' / ')
+  Comprueba 'el lote no pasa: la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e2.Wt '.rescate/intento-en-curso.json'))) (Cola $r2.Salida)
+}
+
+$Pruebas['m8 cortado: un intento a medias (con marca) se deshace al arrancar con -Todo y no entra en la foto'] = {
+  $e = Escenario-M6 'm8-cortado'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $partida = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $texto = Lee $e.Wt $LeerM8
+  # el corte: el intento dejo un fichero tocado y otro nuevo, sin commit, y su marca
+  Escribe $e.Wt $LeerM8 ($texto + "// a medias`n")
+  Escribe $e.Wt 'src/main/java/com/acme/life/application/usecases/AMedias.java' "class AMedias {}`n"
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $partida + '"}')
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que habia un intento cortado, con su paso, su lote y su commit' ($r.Salida -match ('Habia un intento cortado \(paso estructura, lote 7\): lo deshago y sigo desde ' + $partida.Substring(0, 7))) (Cola $r.Salida)
+  Comprueba 'no pregunta por una foto' ($r.Salida -notmatch 'Hay \d+ cambios sin commit') (Cola $r.Salida)
+  Igual 'la rama sigue en el commit apuntado' $partida (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Comprueba 'no hay commit foto' ((GitEn $e.Wt @('log', '--format=%s')) -notmatch 'foto') (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'el fichero tocado vuelve a como estaba' $texto (Lee $e.Wt $LeerM8)
+  Comprueba 'el fichero nuevo ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/main/java/com/acme/life/application/usecases/AMedias.java')))
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+}
+
+$Pruebas['m8 cortado: sin marca, los cambios sin commit siguen yendo a la foto'] = {
+  $e = Escenario-M6 'm8-sin-marca'
+  $r0 = Fix-M6 $e 'estructura' 1 @() ''
+  Igual 'la primera pasada sale con 0' 0 $r0.Codigo
+  $texto = Lee $e.Wt $LeerM8
+  Escribe $e.Wt $LeerM8 ($texto + "// del usuario`n")
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no habla de un intento cortado' ($r.Salida -notmatch 'intento cortado') (Cola $r.Salida)
+  Igual 'el ultimo commit es la foto' 'rescate: foto del estado antes de empezar' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Comprueba 'la foto lleva el cambio' ((Lee $e.Wt $LeerM8) -match 'del usuario') (Cola $r.Salida)
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
 }
 
 # ===== M8 (parte 6): DESCRIPTIVO POR CONSOLA Y EN LOS LOGS =====

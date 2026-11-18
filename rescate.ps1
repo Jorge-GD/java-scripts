@@ -1650,6 +1650,30 @@ function Show-SinPasos([string]$Pie) {
   else { Bien "No quedan errores. $Pie" }
 }
 
+# ============================ INTENTO EN CURSO ============================
+# Mientras un lote puede dejar cambios sin commit en el arbol, .rescate/intento-en-curso.json apunta su paso, su lote y el
+# commit del que parte (.rescate no se versiona: la marca no entra en ningun commit). Si el script se corta (Ctrl+C, la
+# ventana, la luz), esos cambios a medias no son de nadie: el arranque siguiente los deshace en vez de guardarlos en la foto.
+function Get-RutaIntento { return (Join-Path $Work 'intento-en-curso.json') }
+
+function Save-Intento([string]$PasoId, [int]$N, [string]$Commit) {
+  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit })))
+}
+
+function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
+
+# Si hay marca, vuelve al commit de partida (lo cambiado sin commit y lo creado se va) y la borra.
+function Undo-IntentoCortado([string]$Rama) {
+  $p = Get-RutaIntento
+  if (-not (Test-Path -LiteralPath $p)) { return }
+  try { $m = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { $m = $null }
+  Remove-Intento
+  $c = "$($m.commit)"
+  if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
+  Info "Habia un intento cortado (paso $($m.paso), lote $($m.lote)): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
+  Undo-Lote $Rama $c
+}
+
 function Invoke-Fix {
   if (-not $PlantillaRoot) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
@@ -1657,7 +1681,8 @@ function Invoke-Fix {
   # Con worktree ya estamos en su rama rescate/. Solo con -SinWorktree se crea aqui.
   $rama = Get-Rama $RepoRoot
   if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
-  if (-not $rama.StartsWith('rescate/')) {
+  if ($rama.StartsWith('rescate/')) { Undo-IntentoCortado $rama }   # antes de la foto: lo de un intento cortado no es del usuario
+  else {
     $nueva = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
     if (-not (Confirmar "Creo la rama '$nueva' desde '$rama' ('$rama' no se toca). Seguir?")) { exit 0 }
     $r = Invoke-Git $RepoRoot @('checkout', '-q', '-b', $nueva)
@@ -1747,6 +1772,7 @@ function Invoke-Fix {
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
     $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
+    Save-Intento $paso $n $check   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
     for ($i = 1; $i -le $intentos; $i++) {
       $detalle = @(); $rutaCorr = ''
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
@@ -1759,6 +1785,7 @@ function Invoke-Fix {
       $g1 = Get-Guardas
       if ($g1.Plantilla -ne $g0.Plantilla -or $g1.Legacy -ne $g0.Legacy) {
         Undo-Lote $rama $check
+        Remove-Intento
         Fallo 'ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL. He deshecho el lote en este repo.'
         Fallo 'Revisa esas carpetas con git status y restauralas antes de seguir.'
         exit 4
@@ -1829,6 +1856,7 @@ function Invoke-Fix {
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
       if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }
+    Remove-Intento   # pase o no, ya se commitea o se deshace
 
     if (-not $ok) {
       # Nada se queda a medias: se deshace y se prueba algo mas facil.

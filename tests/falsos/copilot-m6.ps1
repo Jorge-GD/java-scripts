@@ -25,6 +25,11 @@
 #   catch-en-comentario  como quita-catch, y deja 'catch (' en un comentario y en un texto
 #   mueve-a-util       un lote sin CORRECCION mueve LeerFichero a infrastructure/util, un subpaquete que la plantilla
 #                      no tiene (el paso 'estructura' gana un hallazgo en la ruta nueva); con CORRECCION no cambia nada
+#   muchos-ficheros    un lote que lleva LeerFichero.java: sin CORRECCION crea 10 clases mas que abren ficheros (LeerOtro1..10:
+#                      el paso 'ficheros' pasa de 3 hallazgos a 13) y con CORRECCION no cambia nada; los demas lotes, como siempre
+#   falla-copilot      un lote sale con 1 tras escribir nueve lineas (dos de ellas vacias o en blanco) y sin cambiar nada
+#   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
+#                      ('sin marca' si no estaba)
 $todos = $args
 $guiones = @("$env:RESCATE_FALSO" -split ';' | Where-Object { $_ })
 $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
@@ -124,6 +129,12 @@ foreach ($l in ($prompt -split "`r?`n")) {
 }
 $fichs = @($fichs | Select-Object -Unique)
 Apunta 'lote' ($fichs -join ',')
+if ($guiones -contains 've-marca') {
+  $marca = Join-Path $rescate 'intento-en-curso.json'
+  $texto = 'sin marca'
+  if (Test-Path -LiteralPath $marca) { $texto = [System.IO.File]::ReadAllText($marca).Trim() }
+  [System.IO.File]::AppendAllText((Join-Path $rescate 'marca-vista.log'), "$texto`n")
+}
 if ($guiones -contains 'falla-copilot') {
   'SALIDA-A primera'; 'SALIDA-B'; ''; 'SALIDA-C'; 'SALIDA-D'; '   '; 'SALIDA-E'; 'SALIDA-F'; 'SALIDA-G ultima'
   exit 1
