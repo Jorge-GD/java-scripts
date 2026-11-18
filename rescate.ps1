@@ -680,7 +680,8 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   elseif (-not $pom.Valido) { Add-Hallazgo 'build' 'error' 'pom.xml' 0 'pom.xml no es XML valido' }
   else {
     if ($cal -and $cal.Pom -and $cal.Pom.Parent -and ($pom.Parent -ne $cal.Pom.Parent)) {
-      Add-Hallazgo 'build' 'error' 'pom.xml' 0 "parent distinto al de la plantilla (aqui: '$($pom.Parent)'; plantilla: '$($cal.Pom.Parent)')"
+      # cambiar el parent (p. ej. a otra version mayor de Spring Boot) no es un arreglo mecanico: lo decide el equipo
+      Add-Hallazgo 'build' 'aviso' 'pom.xml' 0 "parent distinto al de la plantilla (aqui: '$($pom.Parent)'; plantilla: '$($cal.Pom.Parent)'): decision del equipo: no se cambia solo"
     }
     foreach ($v in $pom.Java) {
       $num = 0

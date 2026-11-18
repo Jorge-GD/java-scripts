@@ -1319,6 +1319,28 @@ $Pruebas['final: con un paso atascado no dice que no quedan errores; con la pasa
   Comprueba 'y no habla de pasos sin arreglar' ($r2.Salida -notmatch 'No quedan pasos|Se ha quedado sin arreglar') (Cola $r2.Salida)
 }
 
+# ================== PARENT DISTINTO: LO DECIDE EL EQUIPO ==================
+# Cambiar el parent (por ejemplo, a otra version mayor de Spring Boot) no es un arreglo mecanico: es un aviso de
+# 'build', no un error, y -Todo no lo toca.
+$Pruebas['parent distinto al de la plantilla: aviso de build (decision del equipo), sin error, en el informe, y -Todo no lo toca'] = {
+  $e = Nuevo-Escenario 'parent-distinto'
+  Escribe $e.Repo 'pom.xml' ($Pom -replace '(?s)(<parent>.*?<version>)3\.2\.0(</version>)', '${1}2.7.18${2}')
+  [void](GitEn $e.Repo @('commit', '-q', '-am', 'parent viejo'))
+  Pon-Config $e @{ Orden = @('build', 'estructura', 'tests') }
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  $h = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'build' })
+  Igual 'build sin errores' 0 (Cuenta $h 'build')
+  $av = @($h | Where-Object { $_.Sev -eq 'aviso' -and $_.Detalle -match 'parent distinto' })
+  Comprueba 'el parent distinto es un aviso que dice que lo decide el equipo' ($av.Count -eq 1 -and $av[0].Detalle -match "aqui: '[^']*2\.7\.18'" -and $av[0].Detalle -match 'decision del equipo: no se cambia solo') (@($h | ForEach-Object { $_.Sev + ' ' + $_.Detalle }) -join ' / ')
+  $inf = Lee $e.Repo '.rescate/diagnostico.md'
+  Comprueba 'y sale en el informe' ($inf -match '\[aviso\] `pom\.xml` - parent distinto.*decision del equipo: no se cambia solo') $inf
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  Comprueba '-Todo sale con 0' ($r.Codigo -eq 0) ("$($r.Codigo) | " + (Cola $r.Salida))
+  $log = Lee $e.Wt '.rescate/llamadas.log'
+  Comprueba '-Todo no hace ningun lote de build' ($log -match "paso 'estructura'" -and $log -notmatch "paso 'build'") $log
+  Comprueba 'y el pom sigue con el parent viejo' ((Lee $e.Wt 'pom.xml') -match '<version>2\.7\.18</version>') (Cola $r.Salida)
+}
+
 # ============= M6: ATASCADOS, RUIDO DE MAVEN, CONSEJO, REFLEXION Y -Todo =============
 # Escenario con el Copilot del M6 (tests/falsos/copilot-m6.ps1), solo los pasos estructura y tests y sin reflexion,
 # mas estos ajustes (nombre -> valor).
