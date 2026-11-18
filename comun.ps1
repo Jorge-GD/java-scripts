@@ -149,6 +149,13 @@ function Get-ArgsCopilot([string]$Texto, [string]$Mod, [string]$Esf, [string[]]$
   return $a
 }
 
+# Los esfuerzos que se prueban, del mas alto al mas bajo, si el modelo no admite el pedido (preflight y rescate).
+function Get-EsfuerzosMenores([string]$Esfuerzo) {
+  if ($Esfuerzo -ceq 'max') { return @('xhigh', 'high') }
+  if ($Esfuerzo -ceq 'xhigh') { return @('high') }
+  return @()
+}
+
 # Maven del repo: el de -MvnExe, el mvnw de la raiz o el mvn del PATH.
 function Get-Mvn([string]$Raiz) {
   if ($Cfg.MvnExe) { return $Cfg.MvnExe }
@@ -176,6 +183,25 @@ function Undo-Lote([string]$Rama, [string]$Check) {
   [void](Invoke-Git $RepoRoot @('checkout', '-q', '-f', $Rama))
   [void](Invoke-Git $RepoRoot @('reset', '-q', '--hard', $Check))
   [void](Invoke-Git $RepoRoot @('clean', '-fdq'))
+}
+
+# Lo cambiado en una carpeta de git desde lo ultimo que se dio por bueno (su indice): rutas relativas, sin .rescate (los
+# prompts) ni target.
+function Get-Cambios([string]$Dir) {
+  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).rescate', ':(exclude)target')
+  return @($r.Salida | Where-Object { $_.Length -gt 3 -and $_[1] -ne ' ' } | ForEach-Object { $_.Substring(3).Trim('"') })
+}
+
+# Lo que Maven deja fuera de target (un log, una base en fichero, la salida de un test) no es de la IA. Tras una ejecucion
+# de Maven: borra lo que ha aparecido en ella (lo que no estaba en $Previos, el Get-Cambios de antes de lanzarla) y deshace
+# lo que ha cambiado de lo que git ya tenia. Lo de antes no se toca. Devuelve las rutas que ha quitado.
+function Remove-Ruido([string]$Dir, [string[]]$Previos) {
+  $ruido = @(Get-Cambios $Dir | Where-Object { $Previos -notcontains $_ })
+  if ($ruido.Count -eq 0) { return @() }
+  [void](Invoke-Git $Dir (@('clean', '-fdq', '--') + $ruido))
+  $quedan = @(Get-Cambios $Dir | Where-Object { $ruido -contains $_ })
+  if ($quedan.Count -gt 0) { [void](Invoke-Git $Dir (@('checkout', '-q', '--') + $quedan)) }
+  return $ruido
 }
 
 function Get-Rama([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', '--abbrev-ref', 'HEAD')).Salida -join '').Trim() }
