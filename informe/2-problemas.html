@@ -20,7 +20,7 @@
 <section class="panel" id="total" aria-labelledby="t-total">
   <h2 id="t-total">Lo que hay que corregir</h2>
   <p>{{{ETIQUETA}}}</p>
-  <p class="total-l"><b>{{ERRORES}} errores y {{AVISOS}} avisos</b></p>
+  <p class="total-l"><b>{{{TOTAL}}}</b></p>
   {{{RESPUESTA}}}
 </section>
 
@@ -38,25 +38,13 @@
 <!--TROZO respuesta-corregir--><p>Qué pasará con ellos: al acabar la lectura se corrigen los errores.</p><!--FIN-->
 <!--TROZO respuesta-parar--><p>Qué pasará con ellos: has pedido parar tras el informe: no se corrige nada.</p><!--FIN-->
 <!--TROZO area-grupo--><section class="prob-grupo" aria-labelledby="g-{{ID}}">
-  <header class="pg-cab"><h2 id="g-{{ID}}">{{{NOMBRE}}}</h2><span class="pg-num">{{ERRORES}} errores, {{AVISOS}} avisos</span>{{{ETIQUETA}}}</header>
+  <header class="pg-cab"><h2 id="g-{{ID}}">{{{NOMBRE}}}</h2><span class="pg-num">{{{CUENTA}}}</span>{{{ETIQUETA}}}</header>
   {{{COMO}}}
   <ul class="filas">
 {{{FILAS}}}
   </ul>
 </section><!--FIN-->
 <!--TROZO area-como--><p class="pg-como"><b>Cómo se arregla:</b> {{{TEXTO}}}</p><!--FIN-->
-<!--TROZO fila-prob-->    <li class="fila s-{{SEV}}">{{{MARCA}}}{{{DONDE}}}<span class="q">{{DETALLE}}</span></li><!--FIN-->
-<!--TROZO fila-donde--><code class="d">{{TEXTO}}</code><!--FIN-->
-<!--TROZO marca-error--><span class="sev sev-error"><svg aria-hidden="true"><use href="#e-error"/></svg>Error</span><!--FIN-->
-<!--TROZO marca-aviso--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Aviso</span><!--FIN-->
-<!--TROZO sin-prob--><div class="sin-prob">
-  <b>Sin problemas:</b>
-  <ul>
-{{{ITEMS}}}
-  </ul>
-  {{{ETIQUETA}}}
-</div><!--FIN-->
-<!--TROZO sin-prob-item-->    <li>{{{NOMBRE}}}</li><!--FIN-->
 <!--TROZO arregla-build-->Dejar el pom y las dependencias como los de la referencia y que el proyecto compile con Java 21.<!--FIN-->
 <!--TROZO arregla-estructura-->Mover las clases a la capa y al paquete que les corresponden, con la misma estructura de carpetas que la referencia.<!--FIN-->
 <!--TROZO arregla-hexagonal-->Quitar las dependencias prohibidas entre capas: el dominio no depende de nada externo y la aplicación solo de sus puertos.<!--FIN-->

@@ -221,6 +221,22 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .sin-prob{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-top:32px;padding:16px;background:var(--surf);border:2px dashed var(--ink)}
 .sin-prob ul{display:flex;flex-wrap:wrap;gap:8px 16px}
 
+/* correcciones: barras de despues, como queda cada area y la pagina 4 */
+.barras-ley{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:12px;color:var(--muted)}
+.barras-ley span{display:inline-flex;align-items:center;gap:8px}
+.sw{display:inline-block;width:24px;height:12px;border-radius:2px}
+.sw.antes{background:repeating-linear-gradient(135deg,var(--branch) 0 4px,var(--edge) 4px 8px)}
+.sw.desp,.barra.desp .rel{background:var(--mal)}
+.barra+.barra{margin-top:4px}
+.e-resuelta{color:var(--ok);font-weight:700}
+.e-quedan{color:var(--mal);font-weight:700}
+.barras{--max:1;padding:12px 16px;max-width:600px}
+.pg-t{padding:12px 16px 4px;font-size:18px;border-top:2px solid var(--edge)}
+.pg-l{display:grid;gap:4px;padding:0 16px 12px}
+.pg-l li{overflow-wrap:anywhere}
+.pg-mal{background:var(--mal-t)}
+.panel>.pg-l{padding:0}
+
 @container (max-width:860px){
   .flujo{grid-template-columns:minmax(0,1fr);gap:8px}
   .flecha{justify-self:center;transform:rotate(90deg);height:28px;width:24px}

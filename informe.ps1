@@ -1,22 +1,22 @@
 <#
 informe.ps1 - Las paginas HTML del informe de migracion: la portada (index.html), que hace el batch original
-(1-batch-original.html) y los problemas del migrado (2-problemas.html). Las monta el script con los datos de datos\ (sin IA,
+(1-batch-original.html), los problemas del migrado (2-problemas.html) y que se ha corregido (4-correcciones.html). Las monta el script con los datos de datos\ (sin IA,
 sin JavaScript y sin nada externo: se abren con doble clic). Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito: todo el texto
 que ve la persona (con sus acentos) esta en las plantillas de informe\ (marco.html, index.html,
-1-batch-original.html y 2-problemas.html; estilo.css se incrusta dentro de cada pagina).
+1-batch-original.html, 2-problemas.html y 4-correcciones.html; estilo.css se incrusta dentro de cada pagina).
 Se carga con '. (Join-Path $PSScriptRoot 'informe.ps1')' despues de comun.ps1 y tareas.ps1, desde migracion.ps1 o
 desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
     Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, variables.json,
-    hallazgos-antes.json y diagnostico-antes.md) y escribe <Salida>\index.html, <Salida>\1-batch-original.html y
-    <Salida>\2-problemas.html con lo que haya. Un dato que falta (una fase sin hacer)
+    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md y correcciones.json) y escribe
+    <Salida>\index.html, 1-batch-original.html, 2-problemas.html y 4-correcciones.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
 
-  Read-Diagnostico -Datos <carpeta datos>
-    Los problemas del migrado (hallazgos-antes.json y diagnostico-antes.md): por area, en el orden de la tabla del .md, con
+  Read-Diagnostico -Datos <carpeta datos> [-Cuando antes|despues]
+    Los problemas del migrado (hallazgos-<Cuando>.json y diagnostico-<Cuando>.md): por area, en el orden de la tabla del .md, con
     Errores y Avisos (las listas y sus cuentas), el Estado del build y lo que Incumple la referencia. $null si falta un fichero.
 
 PLANTILLAS
@@ -37,7 +37,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # Las fases del script, en orden, y de que tipo son sus tareas
-$FasesInforme = @(@('diagnostico', ''), @('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'))
+$FasesInforme = @(@('diagnostico', ''), @('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'), @('correccion', ''))
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -46,12 +46,16 @@ $TextosBuild = @(
 # Los ficheros de la carpeta del informe: ruta, trozo que lo explica, icono y si es una pagina del informe
 $FicherosInforme = @(
   @('index.html', 'f-index', 'f-fichero', $true), @('1-batch-original.html', 'f-original', 'f-fichero', $true), @('2-problemas.html', 'f-problemas', 'f-fichero', $true),
+  @('4-correcciones.html', 'f-correcciones', 'f-fichero', $true),
   @('datos', 'f-datos', 'f-carpeta', $false), @('datos/estado.json', 'f-estado', 'f-fichero', $false),
   @('datos/hallazgos-antes.json', 'f-hallazgos', 'f-fichero', $false), @('datos/diagnostico-antes.md', 'f-diagnostico', 'f-fichero', $false),
+  @('datos/hallazgos-despues.json', 'f-hallazgos-despues', 'f-fichero', $false), @('datos/diagnostico-despues.md', 'f-diagnostico-despues', 'f-fichero', $false),
+  @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
   @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
-  @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false)
+  @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false),
+  @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false)
 )
 
 # ================================ PLANTILLAS ================================
@@ -204,11 +208,12 @@ function Get-VistaJob($D, $J) {
   }
 }
 
-# Los problemas del migrado que dejo la fase diagnostico: hallazgos-antes.json y diagnostico-antes.md. El orden de las areas es el
-# de la tabla del .md (las que solo salen en los hallazgos, al final). $null si falta alguno de los dos o el .json no se lee.
-function Read-Diagnostico([string]$Datos) {
-  $rj = Join-Path $Datos 'hallazgos-antes.json'
-  $rm = Join-Path $Datos 'diagnostico-antes.md'
+# Los problemas del migrado que dejo un diagnostico ($Cuando: antes de corregir o despues): hallazgos-<Cuando>.json y
+# diagnostico-<Cuando>.md. El orden de las areas es el de la tabla del .md (las que solo salen en los hallazgos, al final).
+# $null si falta alguno de los dos o el .json no se lee.
+function Read-Diagnostico([string]$Datos, [string]$Cuando = 'antes') {
+  $rj = Join-Path $Datos "hallazgos-$Cuando.json"
+  $rm = Join-Path $Datos "diagnostico-$Cuando.md"
   if (-not (Test-Path -LiteralPath $rj) -or -not (Test-Path -LiteralPath $rm)) { return $null }
   try { $hall = @(Read-Json $rj | Where-Object { $null -ne $_ }) } catch { return $null }
   $md = [System.IO.File]::ReadAllText($rm, $Utf8) -replace "`r`n", "`n"
@@ -238,7 +243,8 @@ function Read-DatosInforme([string]$Salida) {
   $D = [pscustomobject]@{
     Salida = $Salida; Estado = (Read-JsonSuave (Join-Path $datos 'estado.json')); Mapa = (Read-JsonSuave (Join-Path $datos 'mapa.json'))
     Resumen = (Read-JsonSuave (Join-Path $datos 'resumen.json')); Variables = @(Read-JsonSuave (Join-Path $datos 'variables.json') | Where-Object { $null -ne $_ })
-    Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos)
+    Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos); Despues = (Read-Diagnostico $datos 'despues')
+    Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json'))
   }
   if ($D.Mapa) {
     $porNombre = @{}
@@ -424,13 +430,21 @@ function Get-FaseHtml($D, $T, [string]$Fase, [string]$Tipo) {
   $est = if ($D.Estado) { [string]$D.Estado.fase } else { '' }
   $nombres = @($FasesInforme | ForEach-Object { $_[0] })
   $e = 'espera'
-  if ($est -eq 'lectura-hecha' -or [array]::IndexOf($nombres, $Fase) -lt [array]::IndexOf($nombres, $est)) { $e = 'hecha' }
+  if ($Fase -eq 'correccion') {
+    if ($D.Correccion -and $D.Correccion.completa -eq $true) { $e = 'hecha' }
+    elseif ($est -eq 'correccion') { $e = 'curso' }
+  }
+  elseif ($est -eq 'lectura-hecha' -or [array]::IndexOf($nombres, $Fase) -lt [array]::IndexOf($nombres, $est)) { $e = 'hecha' }
   elseif ($Fase -eq $est) { $e = 'curso' }
   $ts = @($D.Tareas | Where-Object { $_.tipo -eq $Tipo })
   $cuenta = Format-Trozo $T 'cuenta-ninguna'
   if ($Fase -eq 'diagnostico') {
     $cuenta = Format-Trozo $T 'sin-valor'
     if ($D.Diag) { $cuenta = Format-Trozo $T 'cuenta-diagnostico' @{ ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)" } }
+  }
+  elseif ($Fase -eq 'correccion') {
+    $cuenta = Format-Trozo $T 'sin-valor'
+    if ($D.Correccion) { $cuenta = Format-Trozo $T 'cuenta-correccion' @{ COMMITS = "$(@($D.Correccion.commits).Count)"; ATASCADOS = "$(@($D.Correccion.atascados).Count)" } }
   }
   elseif ($ts.Count -gt 0) {
     $c = @{}
@@ -485,6 +499,22 @@ function Get-TocaHtml($D, $T) {
     foreach ($h in @($v.DatosTecnicos)) { $conClase += (Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-dato' @{ JOB = $v.Job; DONDE = "$($h.fichero):$($h.linea)" }); TEXTO = $h.texto }) }
   }
   if ($conClase.Count -gt 0) { $grupos += (Get-GrupoToca $T 'tecnicos' $conClase "$($conClase.Count)") }
+  if ($D.Correccion) {
+    $atascos = @($D.Correccion.atascados | Where-Object { $null -ne $_ })
+    if ($atascos.Count -gt 0) {
+      $items = @($atascos | ForEach-Object {
+          $cab = ''
+          if ($_.paso -or $_.fichero) { $cab = Format-Trozo $T 'cab-arreglo' @{ PASO = $_.paso; DONDE = $_.fichero } }
+          Format-Trozo $T 'toca-item' @{ CABECERA = $cab; TEXTO = $_.motivo }
+        })
+      $grupos += (Get-GrupoToca $T 'arreglos' $items "$($atascos.Count)")
+    }
+    $nuevas = @($D.Correccion.variablesNuevas | Where-Object { $null -ne $_ })
+    if ($nuevas.Count -gt 0) {
+      $items = @($nuevas | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-variable' @{ NOMBRE = $_.variable }); TEXTO = "$($_.fichero):$($_.linea)" } })
+      $grupos += (Get-GrupoToca $T 'variables' $items "$($nuevas.Count)")
+    }
+  }
   if ($grupos.Count -eq 0) { return (Format-Trozo $T 'toca-nada') }
   return ($grupos -join "`n")
 }
@@ -501,6 +531,15 @@ function Get-FicherosHtml($D, $T) {
 }
 
 # ============================ LA PAGINA DE PROBLEMAS ============================
+# "1 error y 2 avisos" ($Forma 'total') o "1 error, 2 avisos" ('par'): la palabra va en singular solo cuando el numero es 1.
+function Get-CuentaHtml($T, [int]$Errores, [int]$Avisos, [string]$Forma) {
+  $e = 'cuenta-error-otros'
+  if ($Errores -eq 1) { $e = 'cuenta-error-uno' }
+  $a = 'cuenta-aviso-otros'
+  if ($Avisos -eq 1) { $a = 'cuenta-aviso-uno' }
+  return (Format-Trozo $T "cuenta-$Forma" @{ ERRORES = (Format-Trozo $T $e @{ N = "$Errores" }); AVISOS = (Format-Trozo $T $a @{ N = "$Avisos" }) })
+}
+
 # El nombre de un area: el de la plantilla o, si no lo tiene, su identificador.
 function Get-NombreArea($T, [string]$Id) {
   if ($T.ContainsKey("area-$Id")) { return (Format-Trozo $T "area-$Id") }
@@ -531,7 +570,7 @@ function Get-GrupoProblemasHtml($T, $A) {
   $como = ''
   if ($T.ContainsKey("arregla-$($A.Id)")) { $como = Format-Trozo $T 'area-como' @{ TEXTO = (Format-Trozo $T "arregla-$($A.Id)") } }
   return (Format-Trozo $T 'area-grupo' @{
-      ID = $A.Id; NOMBRE = (Get-NombreArea $T $A.Id); ERRORES = "$(@($A.Errores).Count)"; AVISOS = "$(@($A.Avisos).Count)"
+      ID = $A.Id; NOMBRE = (Get-NombreArea $T $A.Id); CUENTA = (Get-CuentaHtml $T (@($A.Errores).Count) (@($A.Avisos).Count) 'par')
       ETIQUETA = (Format-Trozo $T 'et-medido'); COMO = $como; FILAS = ($filas -join "`n")
     })
 }
@@ -553,28 +592,168 @@ function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
       $sinProblemas = Format-Trozo $T 'sin-prob' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); ITEMS = (Format-Lista $T 'sin-prob-item' $vacias { param($a) @{ NOMBRE = (Get-NombreArea $T $a.Id) } }) }
     }
     $diag = Format-Trozo $T 'diagnostico' @{
-      ETIQUETA_BUILD = $build.Etiqueta; FRASE = $build.Frase; REFERENCIA = $ref; ETIQUETA = (Format-Trozo $T 'et-medido'); ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)"
+      ETIQUETA_BUILD = $build.Etiqueta; FRASE = $build.Frase; REFERENCIA = $ref; ETIQUETA = (Format-Trozo $T 'et-medido'); TOTAL = (Get-CuentaHtml $T $D.Diag.Errores $D.Diag.Avisos 'total')
       RESPUESTA = $respuesta; GRUPOS = ((@($conErrores) + @($soloAvisos) | ForEach-Object { Get-GrupoProblemasHtml $T $_ }) -join "`n"); SINPROB = $sinProblemas
     }
   }
   return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag })
 }
 
-# La seccion "Problemas del migrado" de la portada: el estado del build, el total y una barra por area con sus errores.
+# Cada area de las dos fotos, en el orden de la tabla de antes (las que solo salen despues, al final): Antes y Despues (sus errores y
+# avisos; vacias si no hay foto de despues), sus Commits y Atascados de la correccion y si Tiene algo que contar.
+function Get-AreasCorreccion($D) {
+  $c = $D.Correccion
+  $areasDespues = @()
+  if ($D.Despues) { $areasDespues = @($D.Despues.Areas) }
+  $ids = @($D.Diag.Areas | ForEach-Object { $_.Id })
+  foreach ($a in $areasDespues) { if ($ids -cnotcontains $a.Id) { $ids += $a.Id } }
+  $vacia = [pscustomobject]@{ Errores = @(); Avisos = @() }
+  $res = @()
+  foreach ($id in $ids) {
+    $antes = $vacia
+    foreach ($a in @($D.Diag.Areas | Where-Object { $_.Id -ceq $id })) { $antes = $a }
+    $despues = $vacia
+    foreach ($a in @($areasDespues | Where-Object { $_.Id -ceq $id })) { $despues = $a }
+    $commits = @()
+    $atascados = @()
+    if ($c) {
+      $commits = @($c.commits | Where-Object { $null -ne $_ -and $_.paso -ceq $id })
+      $atascados = @($c.atascados | Where-Object { $null -ne $_ -and $_.paso -ceq $id })
+    }
+    $cuantos = @($antes.Errores).Count + @($antes.Avisos).Count + @($despues.Errores).Count + @($despues.Avisos).Count + $commits.Count + $atascados.Count
+    $res += [pscustomobject]@{ Id = $id; Antes = $antes; Despues = $despues; Commits = $commits; Atascados = $atascados; Tiene = ($cuantos -gt 0) }
+  }
+  return $res
+}
+
+# Como queda un area: resuelta, lo que queda de errores o sin errores.
+function Get-EstadoAreaHtml($T, $A) {
+  $antes = @($A.Antes.Errores).Count
+  $queda = @($A.Despues.Errores).Count
+  if ($queda -eq 0 -and $antes -gt 0) { return (Format-Trozo $T 'estado-area-resuelta') }
+  if ($queda -eq 1) { return (Format-Trozo $T 'estado-area-queda' @{ N = '1' }) }
+  if ($queda -gt 1) { return (Format-Trozo $T 'estado-area-quedan' @{ N = "$queda" }) }
+  return (Format-Trozo $T 'estado-area-sin')
+}
+
+# El numero mas alto de errores de un area (antes o despues): la escala de las barras.
+function Get-MaxErrores($Areas) {
+  $max = 1
+  foreach ($a in @($Areas)) { foreach ($n in @(@($a.Antes.Errores).Count, @($a.Despues.Errores).Count)) { if ($n -gt $max) { $max = $n } } }
+  return $max
+}
+
+# La seccion "Problemas del migrado" de la portada: el estado del build, el total y una barra por area con sus errores
+# (y, si ya se ha corregido, su barra de despues y como queda).
 function Get-ProblemasPortada($D, $T) {
   if (-not $D.Diag) { return (Format-Trozo $T 'sin-datos' @{ FASE = 'diagnostico'; ETIQUETA = (Format-Trozo $T 'et-sin') }) }
-  $build = Get-BuildHtml $T $D.Diag
-  $max = 1
-  foreach ($a in $D.Diag.Areas) { if (@($a.Errores).Count -gt $max) { $max = @($a.Errores).Count } }
-  $filas = @($D.Diag.Areas | ForEach-Object {
-      $n = @($_.Errores).Count
-      if ($n -gt 0) { Format-Trozo $T 'area-barra' @{ NOMBRE = (Get-NombreArea $T $_.Id); V = "$n" } }
+  $ultimo = $D.Diag
+  $total = Get-CuentaHtml $T $D.Diag.Errores $D.Diag.Avisos 'total'
+  $leyenda = ''
+  if ($D.Despues) {
+    $ultimo = $D.Despues
+    $total = Format-Trozo $T 'cuenta-antes-despues' @{ ANTES = $total; DESPUES = (Get-CuentaHtml $T $D.Despues.Errores $D.Despues.Avisos 'total') }
+    $leyenda = Format-Trozo $T 'leyenda-barras'
+  }
+  $build = Get-BuildHtml $T $ultimo
+  $areas = @(Get-AreasCorreccion $D)
+  $filas = @($areas | ForEach-Object {
+      $n = @($_.Antes.Errores).Count
+      if ($n -gt 0 -or @($_.Despues.Errores).Count -gt 0) {
+        $barras = Format-Trozo $T 'barra-antes' @{ V = "$n" }
+        $estado = ''
+        if ($D.Despues) {
+          $barras += "`n" + (Format-Trozo $T 'barra-despues' @{ V = "$(@($_.Despues.Errores).Count)" })
+          $estado = Format-Trozo $T 'area-estado' @{ TEXTO = (Get-EstadoAreaHtml $T $_) }
+        }
+        Format-Trozo $T 'area-barra' @{ NOMBRE = (Get-NombreArea $T $_.Id); BARRAS = $barras; ESTADO = $estado }
+      }
       else { Format-Trozo $T 'area-limpia' @{ NOMBRE = (Get-NombreArea $T $_.Id) } }
     })
   return (Format-Trozo $T 'prob-datos' @{
-      ETIQUETA_BUILD = $build.Etiqueta; BUILD = $build.Frase; ETIQUETA = (Format-Trozo $T 'et-medido'); ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)"
-      MAX = "$max"; AREAS = ($filas -join "`n")
+      ETIQUETA_BUILD = $build.Etiqueta; BUILD = $build.Frase; ETIQUETA = (Format-Trozo $T 'et-medido'); LEYENDA = $leyenda; TOTAL = $total
+      MAX = "$(Get-MaxErrores $areas)"; AREAS = ($filas -join "`n")
     })
+}
+
+# ============================ LA PAGINA DE CORRECCIONES ============================
+# Un area de la pagina de correcciones: sus barras de antes y despues, los commits de arreglo, los atascados con su motivo y
+# lo que queda (las mismas filas de la pagina de problemas).
+function Get-GrupoCorreccionHtml($T, $A, [int]$Max) {
+  $filas = @($A.Despues.Errores | ForEach-Object { Get-FilaProblemaHtml $T $_ 'error' }) + @($A.Despues.Avisos | ForEach-Object { Get-FilaProblemaHtml $T $_ 'aviso' })
+  $commits = ''
+  if ($A.Commits.Count -gt 0) { $commits = Format-Trozo $T 'area-commits' @{ ITEMS = (Format-Lista $T 'area-commit' $A.Commits { param($x) @{ HASH = $x.hash; ASUNTO = $x.asunto } }) } }
+  $atascados = ''
+  if ($A.Atascados.Count -gt 0) { $atascados = Format-Trozo $T 'area-atascados' @{ ITEMS = (Get-AtascadosItemsHtml $T $A.Atascados) } }
+  $queda = ''
+  if ($filas.Count -gt 0) { $queda = Format-Trozo $T 'area-queda' @{ FILAS = ($filas -join "`n") } }
+  $barras = ''
+  if (@($A.Antes.Errores).Count -gt 0 -or @($A.Despues.Errores).Count -gt 0) {
+    $dos = (Format-Trozo $T 'barra-antes' @{ V = "$(@($A.Antes.Errores).Count)" }) + "`n" + (Format-Trozo $T 'barra-despues' @{ V = "$(@($A.Despues.Errores).Count)" })
+    $barras = Format-Trozo $T 'area-barras' @{ MAX = "$Max"; BARRAS = $dos }
+  }
+  $cuenta = Format-Trozo $T 'cuenta-antes-despues' @{
+    ANTES = (Get-CuentaHtml $T (@($A.Antes.Errores).Count) (@($A.Antes.Avisos).Count) 'par')
+    DESPUES = (Get-CuentaHtml $T (@($A.Despues.Errores).Count) (@($A.Despues.Avisos).Count) 'par')
+  }
+  return (Format-Trozo $T 'area-corr' @{
+      ID = $A.Id; NOMBRE = (Get-NombreArea $T $A.Id); CUENTA = $cuenta; ESTADO = (Get-EstadoAreaHtml $T $A)
+      BARRAS = $barras; COMMITS = $commits; ATASCADOS = $atascados; QUEDA = $queda
+    })
+}
+
+function Get-AtascadosItemsHtml($T, $Atascados) {
+  return (Format-Lista $T 'area-atascado' $Atascados {
+      param($x)
+      $donde = ''
+      if ($x.fichero) { $donde = (Format-Trozo $T 'fila-donde' @{ TEXTO = $x.fichero }) + ' ' }
+      @{ DONDE = $donde; MOTIVO = $x.motivo }
+    })
+}
+
+# Lo que cuenta la pagina cuando hay correcciones.json y el diagnostico de despues.
+function Get-ResultadoCorreccion($D, $T) {
+  $c = $D.Correccion
+  $medido = Format-Trozo $T 'et-medido'
+  $areas = @(Get-AreasCorreccion $D)
+  $max = Get-MaxErrores $areas
+  $con = @($areas | Where-Object { $_.Tiene })
+  $idsCon = @($con | ForEach-Object { $_.Id })
+  $vacias = @($areas | Where-Object { -not $_.Tiene })
+  $antes = Get-BuildHtml $T $D.Diag
+  $despues = Get-BuildHtml $T $D.Despues
+  $sinProblemas = ''
+  if ($vacias.Count -gt 0) {
+    $sinProblemas = Format-Trozo $T 'sin-prob' @{ ETIQUETA = $medido; ITEMS = (Format-Lista $T 'sin-prob-item' $vacias { param($a) @{ NOMBRE = (Get-NombreArea $T $a.Id) } }) }
+  }
+  $sueltos = ''
+  $fuera = @($c.atascados | Where-Object { $null -ne $_ -and ($idsCon -cnotcontains [string]$_.paso) })
+  if ($fuera.Count -gt 0) { $sueltos = Format-Trozo $T 'atascados-sueltos' @{ ITEMS = (Get-AtascadosItemsHtml $T $fuera) } }
+  $variables = ''
+  $nuevas = @($c.variablesNuevas | Where-Object { $null -ne $_ })
+  if ($nuevas.Count -gt 0) {
+    $variables = Format-Trozo $T 'variables-nuevas' @{ ETIQUETA = $medido; ITEMS = (Format-Lista $T 'variable-item' $nuevas { param($v) @{ NOMBRE = $v.variable; DONDE = "$($v.fichero):$($v.linea)" } }) }
+  }
+  $incompleta = ''
+  if ($c.completa -ne $true) { $incompleta = Format-Trozo $T 'correccion-incompleta' }
+  $total = Format-Trozo $T 'cuenta-antes-despues' @{
+    ANTES = (Get-CuentaHtml $T $D.Diag.Errores $D.Diag.Avisos 'total'); DESPUES = (Get-CuentaHtml $T $D.Despues.Errores $D.Despues.Avisos 'total')
+  }
+  return (Format-Trozo $T 'correccion-datos' @{
+      INCOMPLETA = $incompleta; ETIQUETA = $medido; BUILD_ANTES = $antes.Frase; ETIQUETA_ANTES = $antes.Etiqueta; BUILD_DESPUES = $despues.Frase; ETIQUETA_DESPUES = $despues.Etiqueta
+      TOTAL = $total; COMMITS = "$(@($c.commits).Count)"; ATASCADOS = "$(@($c.atascados).Count)"; LEYENDA = (Format-Trozo $T 'leyenda-barras')
+      GRUPOS = (($con | ForEach-Object { Get-GrupoCorreccionHtml $T $_ $max }) -join "`n"); SINPROB = $sinProblemas; SUELTOS = $sueltos; VARIABLES = $variables
+      RAMA = $c.rama; BASE = $c.base; WORKTREE = $D.Estado.worktree; MIGRADO = $D.Estado.migrado
+    })
+}
+
+function Get-CuerpoCorrecciones($D, $T, [string]$Cuerpo) {
+  $sinDatos = Format-Trozo $T 'sin-datos' @{ FASE = 'correccion'; ETIQUETA = (Format-Trozo $T 'et-sin') }
+  if (-not $D.Diag) { $sinDatos = Format-Trozo $T 'sin-datos' @{ FASE = 'diagnostico'; ETIQUETA = (Format-Trozo $T 'et-sin') } }
+  $pagina = $sinDatos
+  if ($D.Diag -and $D.Despues -and $D.Correccion) { $pagina = Get-ResultadoCorreccion $D $T }
+  elseif ($D.Estado -and $D.Estado.respuesta -eq 'parar' -and -not $D.Correccion) { $pagina = Format-Trozo $T 'sin-correccion-parar' @{ ETIQUETA = (Format-Trozo $T 'et-sin') } }
+  return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); CORRECCION = $pagina })
 }
 
 function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
@@ -589,6 +768,7 @@ function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
     $estado = Format-Trozo $T 'estado-parada' @{ FASE = $fase; MOTIVO = $e.parada.motivo }
     $parada = Format-Trozo $T 'parada' @{ MOTIVO = $e.parada.motivo; DETALLE = $e.parada.detalle; REGISTRO = $e.parada.registro; AYUDA = $e.parada.ayuda }
   }
+  elseif ($D.Correccion -and $D.Correccion.completa -eq $true) { $estado = Format-Trozo $T 'estado-corregida' }
   elseif ($fase -eq 'lectura-hecha') { $estado = Format-Trozo $T 'estado-hecha' }
   else { $estado = Format-Trozo $T 'estado-curso' @{ FASE = $fase } }
   $modelo = [string]$e.modelo
@@ -628,12 +808,13 @@ function Write-Informes {
   $paginas = @(
     @{ Fichero = 'index.html'; Actual = 'ACTUAL_INDEX'; Titulo = 'titulo-index'; Cuerpo = { param($D, $T, $C) Get-CuerpoIndex $D $T $C } },
     @{ Fichero = '1-batch-original.html'; Actual = 'ACTUAL_ORIGINAL'; Titulo = 'titulo-original'; Cuerpo = { param($D, $T, $C) Get-CuerpoOriginal $D $T $C } },
-    @{ Fichero = '2-problemas.html'; Actual = 'ACTUAL_PROBLEMAS'; Titulo = 'titulo-problemas'; Cuerpo = { param($D, $T, $C) Get-CuerpoProblemas $D $T $C } }
+    @{ Fichero = '2-problemas.html'; Actual = 'ACTUAL_PROBLEMAS'; Titulo = 'titulo-problemas'; Cuerpo = { param($D, $T, $C) Get-CuerpoProblemas $D $T $C } },
+    @{ Fichero = '4-correcciones.html'; Actual = 'ACTUAL_CORRECCIONES'; Titulo = 'titulo-correcciones'; Cuerpo = { param($D, $T, $C) Get-CuerpoCorrecciones $D $T $C } }
   )
   foreach ($p in $paginas) {
     $plantilla = Split-Plantilla (Read-PlantillaInforme $p.Fichero)
     $T = Merge-Trozos $marco.Trozos $plantilla.Trozos
-    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = '' }
+    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = ''; ACTUAL_CORRECCIONES = '' }
     $v[$p.Actual] = Format-Trozo $T 'actual'
     Save-PaginaInforme (Join-Path $Salida $p.Fichero) (Expand-Plantilla $marco.Cuerpo $v)
   }

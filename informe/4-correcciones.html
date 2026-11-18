@@ -1,0 +1,76 @@
+<header class="cab-prob">
+  <h1>Qué se ha corregido</h1>
+  <p class="lede"><code>{{MIGRADO}}</code> antes y después de los arreglos del motor. Lo que queda y por qué, área por área.</p>
+</header>
+
+{{{CORRECCION}}}
+<!--TROZO titulo-correcciones-->Correcciones del batch migrado {{BATCH}}<!--FIN-->
+<!--TROZO sin-correccion-parar--><p class="sin-datos">{{{ETIQUETA}}}<span>Has pedido parar tras el informe: no se ha corregido nada. Para corregir, relanza el mismo comando con <code>-Si</code>.</span></p><!--FIN-->
+<!--TROZO correccion-incompleta--><p class="sin-datos">{{{ETIQUETA}}}<span>La corrección no ha terminado: el motor se paró. Esto es lo que hay hasta ahí; el motivo está en la portada.</span></p><!--FIN-->
+<!--TROZO correccion-datos-->{{{INCOMPLETA}}}
+<section class="panel" id="estado-build" aria-labelledby="t-build">
+  <h2 id="t-build">Compilación y tests</h2>
+  <p><b>Antes:</b> {{{BUILD_ANTES}}} {{{ETIQUETA_ANTES}}}</p>
+  <p><b>Después:</b> {{{BUILD_DESPUES}}} {{{ETIQUETA_DESPUES}}}</p>
+</section>
+
+<section class="panel" id="resumen" aria-labelledby="t-resumen">
+  <h2 id="t-resumen">Lo que se ha corregido</h2>
+  <p>{{{ETIQUETA}}}</p>
+  <p class="total-l"><b>{{{TOTAL}}}</b></p>
+  <div class="cifras">
+    <p><b>{{COMMITS}}</b>commits de arreglo</p>
+    <p class="cif-mal"><b>{{ATASCADOS}}</b>atascados</p>
+  </div>
+</section>
+
+{{{LEYENDA}}}
+{{{GRUPOS}}}
+{{{SINPROB}}}
+{{{SUELTOS}}}
+{{{VARIABLES}}}
+<section class="panel" id="codigo" aria-labelledby="t-codigo">
+  <h2 id="t-codigo">Dónde está el código</h2>
+  <p>Los arreglos están en la rama <code>{{RAMA}}</code>, en el worktree <code>{{WORKTREE}}</code>. Nada se ha subido a ningún servidor: son commits locales.</p>
+  <p>Desde la carpeta del migrado (<code>{{MIGRADO}}</code>):</p>
+  <pre class="cmd">ver qué ha cambiado:  git diff --stat {{BASE}}...{{RAMA}}
+traerlo a tu rama:    git merge {{RAMA}}
+borrar el worktree:   git worktree remove "{{WORKTREE}}"</pre>
+</section><!--FIN-->
+<!--TROZO variables-nuevas--><section class="panel" id="variables-nuevas" aria-labelledby="t-variables">
+  <h2 id="t-variables">Lo que necesita ahora para arrancar</h2>
+  <p>{{{ETIQUETA}}}</p>
+  <p>La corrección ha sacado estos valores a variables que no tienen valor por defecto. Hay que darlas como variable de entorno (o secreto) al lanzar el migrado: sin ellas puede arrancar igual, salir con 0 y escribir en otra base.</p>
+  <ul class="pg-l">
+{{{ITEMS}}}
+  </ul>
+</section><!--FIN-->
+<!--TROZO variable-item-->    <li><code>{{NOMBRE}}</code> <code>{{DONDE}}</code></li><!--FIN-->
+<!--TROZO atascados-sueltos--><section class="panel" id="atascados-sueltos" aria-labelledby="t-sueltos">
+  <h2 id="t-sueltos">Otros arreglos atascados</h2>
+  <ul class="pg-l">
+{{{ITEMS}}}
+  </ul>
+</section><!--FIN-->
+<!--TROZO area-corr--><section class="prob-grupo" aria-labelledby="g-{{ID}}">
+  <header class="pg-cab"><h2 id="g-{{ID}}">{{{NOMBRE}}}</h2><span class="pg-num">{{{CUENTA}}}</span>{{{ESTADO}}}</header>
+{{{BARRAS}}}
+{{{COMMITS}}}
+{{{ATASCADOS}}}
+{{{QUEDA}}}
+</section><!--FIN-->
+<!--TROZO area-barras-->  <div class="barras" style="--max:{{MAX}}">{{{BARRAS}}}</div><!--FIN-->
+<!--TROZO area-commits-->  <h3 class="pg-t">Arreglos hechos</h3>
+  <ul class="pg-l">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO area-commit-->    <li><code>{{HASH}}</code> {{ASUNTO}}</li><!--FIN-->
+<!--TROZO area-atascados-->  <h3 class="pg-t pg-mal">Atascado: por qué no se ha arreglado</h3>
+  <ul class="pg-l pg-mal">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO area-atascado-->    <li>{{{DONDE}}}<span class="q">{{MOTIVO}}</span></li><!--FIN-->
+<!--TROZO area-queda-->  <h3 class="pg-t">Lo que queda</h3>
+  <ul class="filas">
+{{{FILAS}}}
+  </ul><!--FIN-->

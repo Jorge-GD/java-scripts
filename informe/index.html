@@ -46,6 +46,7 @@
 <!--TROZO titulo-index-->Informe de migración {{BATCH}}<!--FIN-->
 <!--TROZO modelo-defecto-->el que Copilot tenga por defecto<!--FIN-->
 <!--TROZO estado-hecha--><div class="estado estado-ok"><p>La lectura del original ha terminado.</p></div><!--FIN-->
+<!--TROZO estado-corregida--><div class="estado estado-ok"><p>La lectura del original y la corrección han terminado.</p></div><!--FIN-->
 <!--TROZO estado-curso--><div class="estado"><p>La pasada no ha terminado: va por la fase {{FASE}}.</p></div><!--FIN-->
 <!--TROZO estado-parada--><div class="estado estado-parada"><p>La pasada se ha parado en la fase {{FASE}}: {{MOTIVO}}.</p></div><!--FIN-->
 <!--TROZO parada--><div class="parada-info">
@@ -55,7 +56,7 @@
   <p>Pega este texto en Copilot para que te diga qué hacer. Después vuelve a lanzar el mismo comando y sigue donde se quedó.</p>
   <pre class="cmd">{{AYUDA}}</pre>
 </div><!--FIN-->
-<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba y ningún dato con nombres de clase.</p><!--FIN-->
+<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
 <!--TROZO toca-grupo--><div class="grupo">
   <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
   <p>{{TEXTO}}</p>
@@ -74,6 +75,12 @@
 <!--TROZO toca-sincaso-texto-->Reglas del código que ningún caso de prueba en pre cubre. Hay que escribirles un caso a mano.<!--FIN-->
 <!--TROZO toca-tecnicos-titulo-->Datos con nombres de clase ({{N}})<!--FIN-->
 <!--TROZO toca-tecnicos-texto-->Estos datos no salen en la página para negocio porque nombran clases del original. Están en datos/jobs/<job>.json con tecnico: true.<!--FIN-->
+<!--TROZO toca-arreglos-titulo-->Arreglos atascados ({{N}})<!--FIN-->
+<!--TROZO toca-arreglos-texto-->El motor de arreglos no ha podido con esto y queda sin corregir. El motivo está en cada línea; el resto, en la página Correcciones.<!--FIN-->
+<!--TROZO toca-variables-titulo-->Variables que tienes que dar al lanzar ({{N}})<!--FIN-->
+<!--TROZO toca-variables-texto-->La corrección las sacó a variables sin valor por defecto: sin darlas, el migrado puede arrancar, salir con 0 y escribir en otra base.<!--FIN-->
+<!--TROZO cab-arreglo--><code>{{PASO}}</code> <code>{{DONDE}}</code> <!--FIN-->
+<!--TROZO cab-variable--><code>{{NOMBRE}}</code> <!--FIN-->
 <!--TROZO cab-tarea--><code>{{ID}}</code> {{DONDE}}<!--FIN-->
 <!--TROZO cab-job--><code>{{JOB}}</code> <!--FIN-->
 <!--TROZO cab-dato--><code>{{JOB}}</code> <code>{{DONDE}}</code> <!--FIN-->
@@ -84,10 +91,12 @@
 <!--TROZO fase-fichas-job-->Redacción de cada job<!--FIN-->
 <!--TROZO fase-resumen-->Resumen y glosario<!--FIN-->
 <!--TROZO fase-pruebas-pre-->Guion de prueba en pre<!--FIN-->
+<!--TROZO fase-correccion-->Corrección del migrado<!--FIN-->
 <!--TROZO estado-fase-hecha-->Hecha<!--FIN-->
 <!--TROZO estado-fase-curso-->Por aquí va<!--FIN-->
 <!--TROZO estado-fase-espera-->Sin empezar<!--FIN-->
 <!--TROZO cuenta-diagnostico-->errores: {{ERRORES}}, avisos: {{AVISOS}}<!--FIN-->
+<!--TROZO cuenta-correccion-->commits: {{COMMITS}}, atascados: {{ATASCADOS}}<!--FIN-->
 <!--TROZO cuenta-tareas-->hechas: {{HECHAS}}, atascadas: {{ATASCADAS}}, pendientes: {{PENDIENTES}}<!--FIN-->
 <!--TROZO cuenta-jobs-->jobs: {{JOBS}}, clases sin job: {{SINJOB}}<!--FIN-->
 <!--TROZO cuenta-ninguna-->sin tareas<!--FIN-->
@@ -100,6 +109,11 @@
 <!--TROZO f-index-->Esta portada.<!--FIN-->
 <!--TROZO f-original-->Qué hace el batch original, para negocio.<!--FIN-->
 <!--TROZO f-problemas-->Los problemas del migrado, por área y con su gravedad.<!--FIN-->
+<!--TROZO f-correcciones-->Qué se ha corregido, qué queda y por qué, área por área.<!--FIN-->
+<!--TROZO f-hallazgos-despues-->Los problemas que quedan tras corregir, con la misma forma que los de antes.<!--FIN-->
+<!--TROZO f-diagnostico-despues-->El informe del diagnóstico del migrado tras corregir: estado del build y cuenta por área.<!--FIN-->
+<!--TROZO f-correcciones-json-->Los commits de arreglo, lo que quedó atascado, los hallazgos resueltos y las variables nuevas.<!--FIN-->
+<!--TROZO f-correccion-log-->Lo que dijo el motor de arreglos durante la corrección. Para mirar si algo falla.<!--FIN-->
 <!--TROZO f-datos-->Los datos de los que salen estas páginas.<!--FIN-->
 <!--TROZO f-estado-->En qué fase va la pasada, el modelo y, si se paró, por qué.<!--FIN-->
 <!--TROZO f-hallazgos-->Cada problema que encontró el diagnóstico del migrado: área, gravedad, fichero y línea.<!--FIN-->
@@ -115,13 +129,15 @@
 <!--TROZO prob-datos--><p>{{{ETIQUETA_BUILD}}}</p>
   <p>{{{BUILD}}}</p>
   <p>{{{ETIQUETA}}}</p>
-  <p class="total-l"><b>{{ERRORES}} errores y {{AVISOS}} avisos</b></p>
+  {{{LEYENDA}}}
+  <p class="total-l"><b>{{{TOTAL}}}</b></p>
   <ul class="areas" style="--max:{{MAX}}">
 {{{AREAS}}}
   </ul>
   <p><a href="2-problemas.html">Ver los problemas, área por área</a></p><!--FIN-->
 <!--TROZO area-barra-->    <li class="area">
       <p class="a-n">{{{NOMBRE}}}</p>
-      <div class="a-b"><div class="barra antes"><span class="b-et">antes</span><div class="pista"><span class="rel" style="--v:{{V}}"></span><b>{{V}}</b></div></div></div>
+      <div class="a-b">{{{BARRAS}}}</div>{{{ESTADO}}}
     </li><!--FIN-->
+<!--TROZO area-estado--><p class="a-e">{{{TEXTO}}}</p><!--FIN-->
 <!--TROZO area-limpia-->    <li class="area limpia"><p class="a-n">{{{NOMBRE}}}</p><div class="a-b"></div><p class="a-e">sin errores</p></li><!--FIN-->

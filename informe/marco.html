@@ -34,6 +34,7 @@
         <li><a href="index.html"{{{ACTUAL_INDEX}}}>Portada</a></li>
         <li><a href="1-batch-original.html"{{{ACTUAL_ORIGINAL}}}>Batch original</a></li>
         <li><a href="2-problemas.html"{{{ACTUAL_PROBLEMAS}}}>Problemas</a></li>
+        <li><a href="4-correcciones.html"{{{ACTUAL_CORRECCIONES}}}>Correcciones</a></li>
       </ul>
     </nav>
   </div>
@@ -65,3 +66,29 @@
 <!--TROZO estado-build-ok-->El migrado compila y sus tests pasan.<!--FIN-->
 <!--TROZO estado-build-fallan-->El migrado compila, pero algunos tests fallan.<!--FIN-->
 <!--TROZO estado-build-desconocido-->No se sabe si el migrado compila: el diagnóstico no lo dice.<!--FIN-->
+<!--TROZO fila-prob-->    <li class="fila s-{{SEV}}">{{{MARCA}}}{{{DONDE}}}<span class="q">{{DETALLE}}</span></li><!--FIN-->
+<!--TROZO fila-donde--><code class="d">{{TEXTO}}</code><!--FIN-->
+<!--TROZO marca-error--><span class="sev sev-error"><svg aria-hidden="true"><use href="#e-error"/></svg>Error</span><!--FIN-->
+<!--TROZO marca-aviso--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Aviso</span><!--FIN-->
+<!--TROZO sin-prob--><div class="sin-prob">
+  <b>Sin problemas:</b>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+  {{{ETIQUETA}}}
+</div><!--FIN-->
+<!--TROZO sin-prob-item-->    <li>{{{NOMBRE}}}</li><!--FIN-->
+<!--TROZO cuenta-error-uno-->{{N}} error<!--FIN-->
+<!--TROZO cuenta-error-otros-->{{N}} errores<!--FIN-->
+<!--TROZO cuenta-aviso-uno-->{{N}} aviso<!--FIN-->
+<!--TROZO cuenta-aviso-otros-->{{N}} avisos<!--FIN-->
+<!--TROZO cuenta-total-->{{{ERRORES}}} y {{{AVISOS}}}<!--FIN-->
+<!--TROZO cuenta-par-->{{{ERRORES}}}, {{{AVISOS}}}<!--FIN-->
+<!--TROZO cuenta-antes-despues-->{{{ANTES}}} → {{{DESPUES}}}<!--FIN-->
+<!--TROZO barra-antes--><div class="barra antes"><span class="b-et">antes</span><div class="pista"><span class="rel" style="--v:{{V}}"></span><b>{{V}}</b></div></div><!--FIN-->
+<!--TROZO barra-despues--><div class="barra desp"><span class="b-et">después</span><div class="pista"><span class="rel" style="--v:{{V}}"></span><b>{{V}}</b></div></div><!--FIN-->
+<!--TROZO leyenda-barras--><p class="barras-ley" aria-hidden="true"><span><i class="sw antes"></i>Antes de corregir</span><span><i class="sw desp"></i>Después</span></p><!--FIN-->
+<!--TROZO estado-area-resuelta--><span class="e-resuelta">Resuelta</span><!--FIN-->
+<!--TROZO estado-area-queda--><span class="e-quedan">Queda {{N}}</span><!--FIN-->
+<!--TROZO estado-area-quedan--><span class="e-quedan">Quedan {{N}}</span><!--FIN-->
+<!--TROZO estado-area-sin-->Sin errores<!--FIN-->
