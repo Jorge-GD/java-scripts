@@ -156,6 +156,9 @@ El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'resca
 - No se para por una incidencia difícil: termina todo y al final dice «Faltan N de Sonar», con el motivo de cada una. La lista queda en `C:\ruta\migrado-rescate\.rescate\sonar-faltan.md`.
 - Los arreglos van a la rama de rescate, como en el paso 2. Después repite los pasos 3 y 4: relanza `migracion.ps1 -SoloInforme` para que la prueba en local mire el código nuevo, y `prueba-local.ps1 -Desde <tu-rama>` si algún caso pasa a `distinto`.
 - Las reglas del paso están en `sonar-reglas.ps1`.
+- Al empezar, la consola enseña cuántas incidencias hay de cada familia (constantes, logs, complejidad…). La tabla entera queda en `.rescate\sonar-por-familia.tsv`.
+- La IA solo compila. Los tests los pasa el script, una vez por intento.
+- Cada intento deja una línea en `.rescate\intentos.tsv`: paso, lote, segundos de Copilot y de Maven, y si pasa o no. Al acabar, la consola dice cuánto se ha ido en Copilot y cuánto en Maven.
 
 ### La cobertura
 
