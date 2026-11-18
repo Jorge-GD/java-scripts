@@ -968,8 +968,8 @@ $PlantillaIncumple = [ordered]@{
   ($Base + 'infrastructure/config/BatchProperties.java') = "package com.acme.plantilla.infrastructure.config;`n`n/** Propiedades. */`npublic record BatchProperties(String carpeta) {`n}`n"
   ($Base + 'domain/model/Poliza.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Poliza. */`npublic record Poliza(String numero) {`n}`n"
   ($Base + 'domain/model/Cliente.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Cliente. */`npublic record Cliente(String nombre) {`n}`n"
-  ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
-  ($Base + 'infrastructure/adapters/output/sftp/EscritorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.FileWriter;`n`n/** Escribe ficheros locales a pelo. */`npublic class EscritorLocal {`n    private FileWriter salida;`n}`n"
+  ($Base + 'infrastructure/adapters/output/ftp/LectorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.ftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+  ($Base + 'infrastructure/adapters/output/ftp/EscritorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.ftp;`n`nimport java.io.FileWriter;`n`n/** Escribe ficheros locales a pelo. */`npublic class EscritorLocal {`n    private FileWriter salida;`n}`n"
   ($Base + 'application/usecases/SinDocUno.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocUno {`n    void saluda() {`n        System.out.println(`"hola`");`n    }`n}`n"
   ($Base + 'application/usecases/SinDocDos.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocDos {`n}`n"
   'src/main/resources/application.yml' = "sftp:`n  password: valor-secreto-9z`n"
@@ -1025,7 +1025,7 @@ $Pruebas['plantilla incumple: sin -Plantilla no hay linea; con ella, la hay tamb
 
 # Un adaptador que abre ficheros donde se puede (infrastructure/adapters/output/file) no es un incumplimiento de la referencia.
 $AdaptadorFichero = "package com.acme.plantilla.infrastructure.adapters.output.file;`n`nimport java.nio.file.Files;`n`n/** Lee ficheros del disco. */`npublic class FicheroLocalAdapter {`n    private Files ayuda;`n}`n"
-$LectorFuera = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+$LectorFuera = "package com.acme.plantilla.infrastructure.adapters.output.ftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
 
 # La plantilla que cumple todo, con estos ficheros mas (ruta -> texto).
 function Limpia-Mas([hashtable]$Mas) {
@@ -1054,13 +1054,13 @@ $Pruebas['plantilla incumple: el adaptador de ficheros de su carpeta permitida n
 $Pruebas['plantilla incumple: con el adaptador permitido y un uso de ficheros en otra carpeta, ficheros 1'] = {
   $e = Escenario-Con-Plantilla 'adaptador-y-fuera' (Limpia-Mas @{
       ($Base + 'infrastructure/adapters/output/file/FicheroLocalAdapter.java') = $AdaptadorFichero
-      ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java')         = $LectorFuera
+      ($Base + 'infrastructure/adapters/output/ftp/LectorLocal.java')          = $LectorFuera
     })
   $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'la consola dice ficheros 1' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 1 | calidad 0 | secretos 0') (Cola $r.Salida)
   $p = Permitido-Del-Informe $e
-  Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/sftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
+  Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/ftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
 }
 
 # ======================= LATIDO MIENTRAS ESPERA ========================
@@ -2079,7 +2079,7 @@ $Pruebas['m8 consola: tras los NO PASA salen las lineas del detalle (lo roto pri
   $nuevoL = '    - ' + $LeerMovidoM8 + " - subpaquete 'infrastructure/util' no existe en la plantilla"
   Comprueba 'tras los NO PASA sale el detalle del intento' ($det.Count -gt 0 -and $c1.IndexOf('NO PASA') -ge 0 -and $c1.IndexOf('NO PASA') -lt $c1.IndexOf($det[0])) $c1
   Comprueba 'su primera linea es lo nuevo de estructura, con fichero y regla' ($det.Count -gt 0 -and $det[0].StartsWith($nuevoL)) (($det | Select-Object -First 2) -join ' / ')
-  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales' }).Count -eq 1) $c1
+  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte\[\] o InputStream, nunca File ni Path$' }).Count -eq 1) $c1
   Comprueba 'con tan pocas lineas no dice que falten' ($c1 -notmatch ' mas en ') $c1
   $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
   if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
@@ -2115,7 +2115,7 @@ $Pruebas['m8 consola: con mas de 8 lineas salen 8 y dice cuantas faltan; el lote
   Comprueba 'y la ruta de la correccion completa del ultimo intento' ($des -match 'Correccion completa del ultimo intento: \.rescate/intento-ficheros-1-2\.md') $des
   # el atascado: su nota lleva las lineas del detalle del ultimo intento
   $at = Lee $e.Wt '.rescate/atascados.md'
-  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
+  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte\[\] o InputStream, nunca File ni Path' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
 }
 
 $Pruebas['m8 consola: si Copilot sale con un codigo distinto de 0 salen las ultimas 5 lineas no vacias de su salida'] = {
@@ -2670,6 +2670,58 @@ $Pruebas['m92 estructura: el texto del paso manda actualizar los imports de todo
   Comprueba 'lleva "tambien los que no estan en la lista"' ($p.Contains('tambien los que no estan en la lista')) $que
   Comprueba 'lleva "no el test"' ($p.Contains('no el test')) $que
   Comprueba 'ya no dice "Solo mover y actualizar package e imports"' (-not $p.Contains('Solo mover y actualizar package e imports')) $que
+}
+
+# ===== M9.3: LA CARPETA SFTP ES DE ADAPTADORES, Y LOS TEXTOS DE FICHEROS Y DE ENTRADA/SALIDA =====
+$PkM93 = 'src/main/java/com/acme/life/'
+$PorEntradaM93 = 'un adaptador de entrada no importa uno de salida: usa la interfaz de su puerto (application/ports/output) o un caso de uso, como en la PLANTILLA'
+$FicherosM93 = 'acceso directo a ficheros locales (java.nio.file.Path): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte[] o InputStream, nunca File ni Path'
+$AdaptadorRecursoM93 = "package com.acme.life.infrastructure.adapters.output.{0};`n`nimport org.springframework.core.io.FileSystemResource;`n`n/** Adaptador de salida que abre un recurso. */`npublic class Recurso {{`n    private FileSystemResource recurso;`n}}`n"
+
+# Repo de juguete con: un adaptador de salida sftp y otro ftp que importan FileSystemResource, un tasklet de entrada que importa el adaptador de
+# salida de ficheros y un caso de uso con java.nio.file.Path. Diagnostico sin Maven: lo que sale y los hallazgos.
+function Escenario-M93([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre
+  Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/output/sftp/RecursoSftp.java') ($AdaptadorRecursoM93 -f 'sftp')
+  Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/output/ftp/RecursoFtp.java') ($AdaptadorRecursoM93 -f 'ftp')
+  Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/input/job/CargaTasklet.java') "package com.acme.life.infrastructure.adapters.input.job;`n`nimport com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter;`n`n/** Tasklet de entrada. */`npublic class CargaTasklet {`n    private FicheroLocalAdapter ficheros;`n}`n"
+  Escribe $e.Repo ($PkM93 + 'application/usecases/RutaUseCase.java') "package com.acme.life.application.usecases;`n`nimport java.nio.file.Path;`n`n/** Caso de uso con una ruta. */`npublic class RutaUseCase {`n    private Path ruta;`n}`n"
+  [void](GitEn $e.Repo @('add', '--', 'src/main/java'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'm93'))
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  return [pscustomobject]@{ E = $e; R = $r; H = @(Hallazgos $e.Repo) }
+}
+
+$Pruebas['m93 sftp: un fichero de output/sftp que importa FileSystemResource no da hallazgo de ficheros; el mismo codigo en output/ftp, si'] = {
+  $x = Escenario-M93 'm93-sftp'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $f = @($x.H | Where-Object { $_.Cat -eq 'ficheros' })
+  Igual 'el adaptador de output/sftp no tiene hallazgo de ficheros' 0 @($f | Where-Object { $_.Fichero -like '*output/sftp/*' }).Count
+  Igual 'el de output/ftp, que no es de adaptadores permitidos, si' 1 @($f | Where-Object { $_.Fichero -like '*output/ftp/*' }).Count
+}
+
+$Pruebas['m93 sftp: una plantilla con un adaptador SFTP que abre FileSystemResource no incumple en ficheros'] = {
+  $adaptador = ($AdaptadorRecursoM93 -f 'sftp').Replace('com.acme.life.', 'com.acme.plantilla.')
+  $e = Escenario-Con-Plantilla 'm93-plantilla-sftp' (Limpia-Mas @{ ($Base + 'infrastructure/adapters/output/sftp/Recurso.java') = $adaptador })
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola dice ficheros 0' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 0 | calidad 0 | secretos 0') (Cola $r.Salida)
+}
+
+$Pruebas['m93 textos: el hallazgo de un adaptador de entrada y el de ficheros salen con el texto nuevo, tal cual y en ASCII'] = {
+  $x = Escenario-M93 'm93-textos'
+  $hex = @($x.H | Where-Object { $_.Cat -eq 'hexagonal' -and $_.Fichero -like '*CargaTasklet.java' })
+  Igual 'un hallazgo de hexagonal en el tasklet' 1 $hex.Count
+  if ($hex.Count -eq 1) {
+    Igual 'su texto es el nuevo, entero' ('importa com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter (' + $PorEntradaM93 + ')') $hex[0].Detalle
+    Comprueba 'y es ASCII' ([string]$hex[0].Detalle -cmatch '^[\x20-\x7E]+$') $hex[0].Detalle
+  }
+  $fic = @($x.H | Where-Object { $_.Cat -eq 'ficheros' -and $_.Fichero -like '*RutaUseCase.java' })
+  Igual 'un hallazgo de ficheros en el caso de uso' 1 $fic.Count
+  if ($fic.Count -eq 1) {
+    Igual 'su texto es el nuevo, entero' $FicherosM93 $fic[0].Detalle
+    Comprueba 'y es ASCII' ([string]$fic[0].Detalle -cmatch '^[\x20-\x7E]+$') $fic[0].Detalle
+  }
 }
 
 # ================================ LANZADOR ================================

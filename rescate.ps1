@@ -165,13 +165,13 @@ $Cfg += @{
     @{ En = 'application/'; No = '^(org\.springframework\.(batch|integration|jdbc|web|http)|java\.sql|javax\.sql|java\.net\.http|org\.apache\.sshd|com\.jcraft|org\.apache\.http|okhttp3)\.'
        Por = 'application no usa tecnologia concreta: va detras de un puerto' },
     @{ En = 'infrastructure/adapters/input/'; No = '^\{base\}\.infrastructure\.adapters\.output\.'
-       Por = 'un adaptador de entrada no llama a uno de salida: pasa por un caso de uso' }
+       Por = 'un adaptador de entrada no importa uno de salida: usa la interfaz de su puerto (application/ports/output) o un caso de uso, como en la PLANTILLA' }
   )
   SubpaquetesEstrictos  = $true   # domain/x, application/x... deben existir en la plantilla
   # Acceso a ficheros locales (lo que debe ir por el puerto de ficheros / SFTP)
   FicheroImport         = '^(java\.io\.(File|FileReader|FileWriter|FileInputStream|FileOutputStream|RandomAccessFile)|java\.nio\.file\..+|org\.springframework\.core\.io\.(FileSystemResource|PathResource|FileUrlResource))$'
   FicheroToken          = '\b(File|FileReader|FileWriter|FileInputStream|FileOutputStream|RandomAccessFile)\b'
-  FicheroPermitidoEn    = @('infrastructure/adapters/output/file')
+  FicheroPermitidoEn    = @('infrastructure/adapters/output/file', 'infrastructure/adapters/output/sftp')
   # Un batch que maneja ficheros tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la plantilla.
   # En false solo se exige lo que la plantilla tiene.
   ExigirSftp            = $true
@@ -807,7 +807,7 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   $uso = @($uso | Where-Object { -not ((Test-FicheroPermitido $_.Dir) -or ($cal -and $cal.ExcFicheros.ContainsKey($_.Clave))) })
   foreach ($g in @($uso | Group-Object RelRaiz)) {
     $imps = (@($g.Group | ForEach-Object { $_.Fqn }) | Select-Object -Unique | Select-Object -First 5) -join ', '
-    Add-Hallazgo 'ficheros' 'error' $g.Name $g.Group[0].Linea "acceso directo a ficheros locales ($imps): debe ir por el puerto de ficheros"
+    Add-Hallazgo 'ficheros' 'error' $g.Name $g.Group[0].Linea "acceso directo a ficheros locales ($imps): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte[] o InputStream, nunca File ni Path"
   }
   if ($usaFicheros -and (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -eq 0) -and ($Cfg.ExigirSftp -or ($cal -and $cal.TieneSftp))) {
     if ($cal -and $cal.TieneSftp) { $donde = 'la plantilla lo tiene en infrastructure/adapters/output/sftp' } else { $donde = 'va en infrastructure/adapters/output/sftp' }
