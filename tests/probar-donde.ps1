@@ -278,7 +278,7 @@ $Pruebas['c) cobertura: por debajo del minimo sale Despues con -Cobertura; por e
   Igual 'sale con 0' 0 $r.Codigo
   $bl = Bloques $r.Salida
   $d = Campo-De $bl['cob-70'] $Despues_
-  Comprueba 'al 70 %: La cobertura es 70 % (minimo 80 %)' ($d -and $d.Texto -cmatch ('^La cobertura es 70 % \(m' + $i_ + 'nimo 80 %\)')) (Cola $r.Salida)
+  Comprueba 'al 70 %: La cobertura medida el <fecha> es 70 % (minimo 80 %).' ($d -and $d.Texto -cmatch ('^La cobertura medida el \d\d-\d\d-\d{4} \d\d:\d\d es 70 % \(m' + $i_ + 'nimo 80 %\)\.$')) (Cola $r.Salida)
   Comprueba 'al 70 %: el comando es rescate.ps1 -Repo con la ruta entre comillas y -Cobertura' ($d -and $d.Comando.Count -eq 1 -and $d.Comando[0] -ceq ('.\rescate.ps1 -Repo "' + (Join-Path $E.Raiz 'cob-70') + '" -Cobertura')) (Cola $r.Salida)
   Comprueba 'al 85 %: no sale Despues' ($null -eq (Campo-De $bl['cob-85'] $Despues_))
   Comprueba 'justo en el minimo (80 %): no sale Despues, solo cuenta lo que esta por debajo' ($null -eq (Campo-De $bl['cob-80'] $Despues_))
@@ -490,6 +490,34 @@ $Pruebas['k) la ayuda de una parada: con parada.ayuda sale debajo del comando pa
   Comprueba 'parada otro con ayuda vacia: no sale nada' (@($bl['k-ayuda-vacia']) -notcontains 'Para pegar en Copilot:')
   Comprueba 'una pasada que ya corre de nuevo (fin vacio) no la ensena aunque quede la parada vieja' (@($bl['k-corriendo']) -notcontains 'Para pegar en Copilot:')
   Comprueba 'un batch sin parada no la lleva' (@($bl['k-hecho']) -notcontains 'Para pegar en Copilot:')
+}
+
+$Pruebas['l) cobertura: Despues dice cuando se midio (la fecha del fichero que manda) y donde mirar si ya se lanzo'] = {
+  $E = Nuevo-Escenario 'l'
+  $b1 = Nuevo-Batch $E 'l-despues' (Estado-Base 'l-despues' (Join-Path $E.Raiz 'l-despues')) @{ 'cobertura-antes.json' = (Cobertura-Datos 70); 'cobertura-despues.json' = (Cobertura-Datos 60) }
+  [System.IO.File]::SetLastWriteTime((Join-Path $b1.Salida 'datos/cobertura-antes.json'), [datetime]::new(2026, 11, 10, 8, 0, 0))
+  [System.IO.File]::SetLastWriteTime((Join-Path $b1.Salida 'datos/cobertura-despues.json'), [datetime]::new(2026, 11, 17, 16, 45, 0))
+  $b2 = Nuevo-Batch $E 'l-antes' (Estado-Base 'l-antes' (Join-Path $E.Raiz 'l-antes')) @{ 'cobertura-antes.json' = (Cobertura-Datos 70) }
+  [System.IO.File]::SetLastWriteTime((Join-Path $b2.Salida 'datos/cobertura-antes.json'), [datetime]::new(2026, 11, 12, 9, 30, 0))
+  $b3 = Nuevo-Batch $E 'l-alta' (Estado-Base 'l-alta' (Join-Path $E.Raiz 'l-alta')) @{ 'cobertura-antes.json' = (Cobertura-Datos 85) }
+  $r = Donde $E
+  Igual 'sale con 0' 0 $r.Codigo
+  $bl = Bloques $r.Salida
+  $min = 'm' + $i_ + 'nimo 80 %'
+  $d = Campo-De $bl['l-despues'] $Despues_
+  Igual 'con las dos, la fecha es la del fichero de despues' ('La cobertura medida el 17-11-2026 16:45 es 60 % (' + $min + ').') $d.Texto
+  Igual 'el comando sigue siendo uno: rescate.ps1 -Repo con -Cobertura' ('.\rescate.ps1 -Repo "' + (Join-Path $E.Raiz 'l-despues') + '" -Cobertura') ($d.Comando -join ' / ')
+  $nota = 'Si ya lo has lanzado despu' + $e_ + 's de esa fecha, mira el resultado en ' + (Join-Path $E.Raiz 'l-despues') + '-rescate\.rescate\cobertura-faltan.md.'
+  $l = @($bl['l-despues'])
+  $i = [array]::IndexOf($l, '    ' + $d.Comando[0])
+  Comprueba 'justo despues del comando va la linea de donde mirar si ya se lanzo' ($i -ge 0 -and $l[$i + 1] -ceq $nota) ($l -join ' / ')
+  $d2 = Campo-De $bl['l-antes'] $Despues_
+  Igual 'solo con la de antes, la fecha es la de su fichero' ('La cobertura medida el 12-11-2026 09:30 es 70 % (' + $min + ').') $d2.Texto
+  $l2 = @($bl['l-antes'])
+  $nota2 = 'Si ya lo has lanzado despu' + $e_ + 's de esa fecha, mira el resultado en ' + (Join-Path $E.Raiz 'l-antes') + '-rescate\.rescate\cobertura-faltan.md.'
+  Comprueba 'y su linea de donde mirar lleva su ruta' ($l2 -ccontains $nota2) ($l2 -join ' / ')
+  Comprueba 'sin Despues (cobertura alta) no sale ni la fecha ni la linea de donde mirar' (@($bl['l-alta'] | Where-Object { $_ -match 'cobertura' }).Count -eq 0) ($bl['l-alta'] -join ' / ')
+  Comprueba 'la linea de donde mirar solo sale en los dos batchs con Despues (2 en toda la salida)' (@($r.Salida -split "\r?\n" | Where-Object { $_ -match 'cobertura-faltan' }).Count -eq 2) (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
