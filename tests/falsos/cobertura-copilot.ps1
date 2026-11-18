@@ -17,6 +17,8 @@
 #   cob-catch-vacio    un test con un catch vacio
 #   cob-ojo            un test bueno, con el comentario '// OJO: parece un error: suma al reves'
 #   cob-test-falla     un test que contiene TEST_FALLA (el Maven falso lo hace fallar)
+#   cob-quita-asercion quita las aserciones del test que ya existia (no anade ninguno)
+#   cob-otro-fichero   escribe un test bueno en OtraTest.java y no en <Clase>Test.java
 #   cob-nada           no cambia nada
 # Cada llamada deja una linea en .rescate/llamadas.log con la clase y el guion aplicado.
 if ($args -contains '--version') { 'GitHub Copilot CLI 1.0.112 (de mentira).'; exit 0 }
@@ -59,11 +61,20 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
 }
 [System.IO.File]::AppendAllText((Join-Path $rescate 'llamadas.log'), "cobertura | $clase | $guion`n")
 if ($guion -eq 'cob-nada') { 'hecho'; exit 0 }
+if ($guion -eq 'cob-quita-asercion') {
+  if (Test-Path -LiteralPath (Get-Ruta $test)) {
+    $sin = @([System.IO.File]::ReadAllText((Get-Ruta $test)) -split "\r?\n" | Where-Object { $_ -notmatch '\bassert\w*\s*\(' })
+    Escribir $test ($sin -join "`n")
+  }
+  'hecho'; exit 0
+}
 
 $sube = 1000
 if ($guion -eq 'cob-no-sube') { $sube = 0 }
 if ($guion -in @('cob-parcial', 'cob-rompe-otra')) { $sube = 2; if ($env:RESCATE_COB_SUBE) { $sube = [int]$env:RESCATE_COB_SUBE } }
 
+$nombreTest = "${clase}Test"
+if ($guion -eq 'cob-otro-fichero') { $nombreTest = 'OtraTest'; $test = "src/test/java/$paquete/OtraTest.java" }
 $existe = Test-Path -LiteralPath (Get-Ruta $test)
 $texto = ''
 if ($existe) { $texto = [System.IO.File]::ReadAllText((Get-Ruta $test)) }
@@ -87,7 +98,7 @@ if ($existe) {
 }
 else {
   $pq = ($paquete -replace '/', '.')
-  Escribir $test "package $pq;`n`nimport static org.junit.jupiter.api.Assertions.assertEquals;`n`nimport org.junit.jupiter.api.Test;`n`nclass ${clase}Test {`n`n$metodo}`n"
+  Escribir $test "package $pq;`n`nimport static org.junit.jupiter.api.Assertions.assertEquals;`n`nimport org.junit.jupiter.api.Test;`n`nclass $nombreTest {`n`n$metodo}`n"
 }
 if ($guion -eq 'cob-toca-main') { [System.IO.File]::AppendAllText((Get-Ruta $fichero), "`n// tocado por el modelo`n") }
 if ($guion -eq 'cob-toca-pom') { [System.IO.File]::AppendAllText((Get-Ruta 'pom.xml'), "`n<!-- tocado -->`n") }
