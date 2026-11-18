@@ -445,6 +445,7 @@ $Pruebas['14 el banco del motor sigue pasando entero'] = {
 function En-Biblioteca([string]$Nombre, [string]$Codigo, [switch]$ConInforme) {
   $raiz = Split-Path -Parent $Script
   $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n"
+  if (Test-Path -LiteralPath (Join-Path $raiz 'lanzadores.ps1')) { $cab += ". '" + (Join-Path $raiz 'lanzadores.ps1') + "'`n" }
   if ($ConInforme) { $cab += ". '" + (Join-Path $raiz 'informe.ps1') + "'`n" }
   $carpeta = Join-Path $Dir 'biblioteca'
   Escribe $carpeta "$Nombre.ps1" ($cab + $Codigo)
@@ -470,8 +471,9 @@ $Pruebas['15 biblioteca: tareas.ps1 se carga sola, nombra sus variables y sirve 
     Comprueba "$f esta en tareas.ps1 y no en migracion.ps1" (($deTareas -contains $f) -and ($deMigra -cnotcontains $f))
   }
   $todas = @($deTareas) + @($deMigra) + @(Funciones-De (Join-Path $raiz 'comun.ps1')) + @(Funciones-De (Join-Path $raiz 'informe.ps1'))
+  if (Test-Path -LiteralPath (Join-Path $raiz 'lanzadores.ps1')) { $todas += @(Funciones-De (Join-Path $raiz 'lanzadores.ps1')) }
   $dup = @($todas | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
-  Comprueba 'ninguna funcion esta definida dos veces entre comun, tareas, migracion e informe' ($dup.Count -eq 0) ($dup -join ', ')
+  Comprueba 'ninguna funcion esta definida dos veces entre comun, tareas, migracion, informe y lanzadores' ($dup.Count -eq 0) ($dup -join ', ')
   $e = Nuevo-Escenario 'biblioteca' @('Clase1')
   $codigo = @'
 $Cfg.CopilotExe = '{{COPILOT}}'
@@ -1178,7 +1180,9 @@ function Copia-Salida($E, [string]$Nombre) {
 # Llama a Write-Informes sobre una carpeta de salida, cargando comun.ps1, tareas.ps1 e informe.ps1 como migracion.ps1.
 function Genera-Informes([string]$Salida) {
   $raiz = Split-Path -Parent $Script
-  $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n. '" + (Join-Path $raiz 'informe.ps1') + "'`n"
+  $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n"
+  if (Test-Path -LiteralPath (Join-Path $raiz 'lanzadores.ps1')) { $cab += ". '" + (Join-Path $raiz 'lanzadores.ps1') + "'`n" }
+  $cab += ". '" + (Join-Path $raiz 'informe.ps1') + "'`n"
   Escribe (Join-Path $Dir 'biblioteca') 'informes.ps1' ($cab + "Write-Informes -Salida '" + $Salida + "'`n'INFORMES-OK'`n")
   return (Lanzar (Join-Path (Join-Path $Dir 'biblioteca') 'informes.ps1') @())
 }
@@ -4473,6 +4477,340 @@ Save-Casos $mapa @((Hecha 'avisosJob' (Caso 'Dos' 'clase-cccccccc#1')), (Hecha '
 '@
   Igual 'con 2 casos y CasosMax 2: no entra el nuevo y su regla sigue en sinCaso' 'Uno|Dos / clase-bbbbbbbb#2' $v['B']
   Igual 'con 1 caso y CasosMax 2: entra el primero, el segundo no y su regla sigue en sinCaso' 'Uno|Dos / clase-cccccccc#2' $v['C']
+}
+
+# ===================== M17: LO QUE HACEN LOS .sh QUE LANZAN EL BATCH =====================
+# Los scripts que lanzan el jar (lanzadores.ps1): su inventario sin IA, el enlace con el job, la ficha de cada uno (ficha-sh) y su comparacion
+# con el migrado (comparar-sh). Las formas de los scripts son inventadas: una larga en ksh (la A) y una de cuatro lineas en bash (la B).
+$FormaA = @'
+#!/bin/ksh
+# Lanza la carga de cuotas con el modo y la fecha que le pidan
+display_usage() {
+  echo "Uso: cargas.ksh -f|--fecha dd/MM/yyyy -m|--modo ALTA|BAJA|CUOTA_IN|CUOTA_OUT|PAGOS"
+  echo "  -f|--fecha  fecha de proceso (dd/MM/yyyy)"
+  echo "  -m|--modo   ALTA, BAJA, CUOTA_IN, CUOTA_OUT o PAGOS"
+}
+FECHA=""
+MODO=""
+while [ "$1" != "" ]; do
+  case $1 in
+    -f | --fecha ) shift
+                   FECHA=$1
+                   ;;
+    -m | --modo )  shift
+                   MODO=$1
+                   ;;
+    * )            echo "Ejecucion incorrecta"
+                   display_usage
+                   exit 1
+  esac
+  shift
+done
+if [ -z "$FECHA" ]; then
+  display_usage
+  exit 1
+fi
+RUN_DAY=`date +%Y%m%d%H%M%S`
+# antes de java se aparta lo que dejo la carga anterior (con mv)
+cd /opt/acme/cargas/outbox
+case $MODO in
+  ALTA ) for j in `ls -rt SALIDA_ALTA_*.TXT 2>/dev/null`; do mv -f ${j} /opt/acme/cargas/outbox/backup/${j}.${RUN_DAY}; done ;;
+  CUOTA_IN ) for j in `ls -rt SALIDA_CUOTAS_*.TXT 2>/dev/null`; do mv -f ${j} /opt/acme/cargas/outbox/backup/${j}.${RUN_DAY}; done ;;
+esac
+cd /opt/acme/cargas
+java -jar ./jar/cargas-acme.jar ${MODO} ${FECHA}
+if [ ! -f log/log-cargas-${MODO}.log ]; then
+  echo "No existe el log de cargas"
+fi
+cp log/log-cargas-${MODO}.log logs/log-cargas-${MODO}-${RUN_DAY}.log
+find /opt/acme/cargas/logs -type f -mtime +30 -print0 | xargs -0 rm
+for f in `ls /opt/acme/cargas/inbox/ENTRADA_${MODO}_*.TXT 2>/dev/null`; do
+  mv -f ${f} /opt/acme/cargas/inbox/backup/`basename ${f}`.${RUN_DAY}
+done
+exit 0
+'@
+$FormaB = @'
+#!/usr/bin/env bash
+cd /opt/acme/recibos/batch || exit
+export spring_profiles_active=exportar_recibos
+java -jar ./jar/batch-recibos.jar > ./logs/batch-recibos-exportar-recibos.log 2>&1
+'@
+$ScriptCuotas = @'
+#!/usr/bin/env bash
+export SPRING_PROFILES_ACTIVE=cargar_cuotas
+exec java -Dfile.encoding=UTF-8 -jar ./jar/batch-cuotas.jar
+'@
+$ScriptImpagos = @'
+#!/bin/sh
+cd /opt/acme/impagos
+java -jar ./jar/batch-impagos.jar --spring.batch.job.name=avisarImpagosJob
+'@
+$ScriptAvisos = @'
+#!/bin/sh
+java -jar ./jar/batch-impagos.jar --spring.profiles.active=avisar_impagos
+'@
+$ScriptRaro = @'
+#!/bin/sh
+export spring_profiles_active=inexistente
+java -jar ./jar/batch-raro.jar
+'@
+# Los scripts que no cuentan para nada de arriba, uno por cada manera de saltarse un fichero, mas los ficheros de relleno
+$ScriptsLanzadores = [ordered]@{
+  'bin/cargas.ksh' = $FormaA; 'bin/recibos.sh' = $FormaB; 'bin/arranque' = $ScriptCuotas; 'bin/impagos.sh' = $ScriptImpagos
+  'bin/avisos.sh' = $ScriptAvisos; 'bin/perfil-raro.sh' = $ScriptRaro
+}
+$ContratoTres = @(
+  [pscustomobject]@{ nombre = 'cargarCuotasJob'; definidoEn = 'src/main/java/com/acme/old/CargarCuotasConfig.java' },
+  [pscustomobject]@{ nombre = 'exportarRecibosJob'; definidoEn = 'src/main/java/com/acme/old/ExportarRecibosConfig.java' },
+  [pscustomobject]@{ nombre = 'avisarImpagosJob'; definidoEn = 'src/main/java/com/acme/old/AvisarImpagosConfig.java' })
+
+# Una clase de configuracion que define un job (con su paso) y, si se pide, lleva la anotacion de perfil.
+function Config-Job([string]$Clase, [string]$Job, [string]$Paso, [string]$Perfil = '') {
+  $t = (Jobs-Config @("${Job}:$Paso")).Replace('class JobsConfig', "class $Clase")
+  if ($Perfil) { $t = $t.Replace("public class $Clase", "$Perfil`npublic class $Clase") }
+  return $t
+}
+
+# El original con tres jobs (cada uno en su clase de configuracion) y los scripts de arriba. El perfil cargar_cuotas lleva a su job por @Profile,
+# exportar_recibos por un application-<perfil>.yml y avisar_impagos por un @Profile con dos perfiles.
+function Escenario-Lanzadores([string]$Nombre, [hashtable]$Ajustes = @{}, $Scripts = $null) {
+  $e = Nuevo-Escenario $Nombre @() $Ajustes
+  Escribe-Original $e @{
+    CargarCuotasConfig = (Config-Job 'CargarCuotasConfig' 'cargarCuotasJob' 'cargarStep' '@Profile("cargar_cuotas")')
+    ExportarRecibosConfig = (Config-Job 'ExportarRecibosConfig' 'exportarRecibosJob' 'exportarStep')
+    AvisarImpagosConfig = (Config-Job 'AvisarImpagosConfig' 'avisarImpagosJob' 'avisarStep' '@Profile({"avisar_impagos", "pruebas"})')
+    CargarReader = (Clase-Con 'CargarReader' @() 2)
+    ExportarWriter = (Clase-Con 'ExportarWriter')
+    AvisarSender = (Clase-Con 'AvisarSender')
+  }
+  Escribe $e.Legacy 'src/main/resources/application-exportar_recibos.yml' "spring:`n  batch:`n    job:`n      name: exportarRecibosJob`n"
+  if ($null -eq $Scripts) { $Scripts = $ScriptsLanzadores }
+  foreach ($k in $Scripts.Keys) { Escribe $e.Legacy $k $Scripts[$k] }
+  [void](GitEn $e.Legacy @('add', '-A'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'lanzadores'))
+  return $e
+}
+
+# El numero (desde 1) de la primera linea de $Texto que cumple $Rx.
+function Linea-Con([string]$Texto, [string]$Rx) {
+  $l = @($Texto -split "`r?`n")
+  for ($i = 0; $i -lt $l.Count; $i++) { if ($l[$i] -match $Rx) { return ($i + 1) } }
+  return 0
+}
+
+# Lo que escribe un script de prueba como clave=valor, por clave.
+function Claves-De([string]$Salida) {
+  $v = @{}
+  foreach ($l in ($Salida -split "`n")) { if ($l -match '^(\w+)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  return $v
+}
+
+$Pruebas['m17 lanzadores: lanzadores.ps1 solo define funciones, esta en ASCII y ninguna esta definida en otro fichero'] = {
+  $raiz = Split-Path -Parent $Script
+  $lib = Join-Path $raiz 'lanzadores.ps1'
+  Comprueba 'existe lanzadores.ps1 junto a migracion.ps1' (Test-Path -LiteralPath $lib)
+  if (-not (Test-Path -LiteralPath $lib)) { return }
+  $t = [System.IO.File]::ReadAllText($lib)
+  Comprueba 'solo ASCII' ($t -notmatch '[^\x00-\x7F]') ''
+  Comprueba 'su cabecera lo explica (empieza con un comentario de bloque que nombra el fichero)' ($t -match '(?s)^<#.*?lanzadores\.ps1.*?#>') ''
+  $r = En-Biblioteca 'lanzadores-carga' "'FUNCIONES=' + (@(Get-Command Get-FicherosLanzador, Get-InventarioLanzador, Get-JobLanzador, Get-Lanzadores, Get-IndicePerfiles -ErrorAction SilentlyContinue).Count)`n'FIN'"
+  Igual 'cargarlo no ejecuta nada y sale con 0' 0 $r.Codigo
+  Igual 'define las funciones del inventario y del enlace' '5' (Claves-De $r.Salida)['FUNCIONES']
+  $otras = @($Script, (Join-Path $raiz 'comun.ps1'), (Join-Path $raiz 'tareas.ps1'), (Join-Path $raiz 'informe.ps1')) | ForEach-Object { Funciones-De $_ }
+  $mias = @(Funciones-De $lib)
+  $repetidas = @($mias | Where-Object { $otras -contains $_ })
+  Comprueba 'sus funciones no estan en comun, tareas, migracion ni informe' ($repetidas.Count -eq 0) ($repetidas -join ', ')
+}
+
+$Pruebas['m17 lanzadores: el inventario encuentra .sh, .ksh, .bash y el script sin extension con #!; salta mvnw, gradlew, target, .git y node_modules'] = {
+  $e = Escenario-Lanzadores 'lanz-ficheros'
+  Escribe $e.Legacy 'bin/viejo.bash' "echo viejo`n"
+  Escribe $e.Legacy 'mvnw' "#!/bin/sh`necho mvnw`n"
+  Escribe $e.Legacy 'gradlew' "#!/usr/bin/env sh`necho gradlew`n"
+  Escribe $e.Legacy 'target/generado.sh' "#!/bin/sh`necho generado`n"
+  Escribe $e.Legacy 'node_modules/x/y.sh' "#!/bin/sh`necho y`n"
+  Escribe $e.Legacy '.git-no/z.sh' "echo z`n"
+  Escribe $e.Legacy 'bin/LEEME' "Esto no es un script.`n"
+  Escribe $e.Legacy 'bin/herramienta' "#!/usr/bin/python3`nprint('no es un shell')`n"
+  Escribe $e.Legacy 'bin/ksh-sin-extension' "#!/bin/ksh`necho ksh sin extension`n"
+  $r = En-Biblioteca 'lanz-ficheros' ("foreach (`$f in @(Get-FicherosLanzador '" + $e.Legacy + "')) { 'F=' + `$f.Rel + '|' + `$f.Interprete }`n'FIN'")
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $f = @($r.Salida -split "`n" | Where-Object { $_ -match '^F=' } | ForEach-Object { ($_ -replace '^F=', '').Trim() })
+  Igual 'los scripts, por ruta relativa con / y en orden, cada uno con su interprete' '.git-no/z.sh|sh,bin/arranque|bash,bin/avisos.sh|sh,bin/cargas.ksh|ksh,bin/impagos.sh|sh,bin/ksh-sin-extension|ksh,bin/perfil-raro.sh|sh,bin/recibos.sh|bash,bin/viejo.bash|bash' ($f -join ',')
+  Comprueba 'ni mvnw ni gradlew ni lo de target ni node_modules' (@($f | Where-Object { $_ -match 'mvnw|gradlew|target|node_modules' }).Count -eq 0) ($f -join ',')
+  Comprueba 'ni un fichero sin extension que no empieza por #! de un shell' (@($f | Where-Object { $_ -match 'LEEME|herramienta' }).Count -eq 0) ($f -join ',')
+}
+
+$Pruebas['m17 lanzadores: el inventario de la forma A da las lineas java, parametro, fichero, fecha y salida con su numero; los comentarios y los echo no cuentan'] = {
+  $dir = Join-Path $Dir 'lanz-inv-a'
+  Escribe $dir 'cargas.ksh' $FormaA
+  $codigo = @'
+$lineas = [System.IO.File]::ReadAllLines('{{RUTA}}')
+foreach ($x in @(Get-InventarioLanzador $lineas)) { 'I=' + $x.linea + '|' + $x.tipo + '|' + $x.detalle }
+$j = @(Get-InventarioLanzador $lineas | Where-Object { $_.tipo -eq 'java' })[0]
+'JAR=' + $j.jar
+'ARGS=' + (@($j.argumentos) -join ' ')
+'PROPS=' + (@($j.propiedades) -join ' ')
+'FIN'
+'@
+  $r = En-Biblioteca 'lanz-inv-a' $codigo.Replace('{{RUTA}}', (Join-Path $dir 'cargas.ksh'))
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $inv = @($r.Salida -split "`n" | Where-Object { $_ -match '^I=' } | ForEach-Object { ($_ -replace '^I=', '').Trim() })
+  $v = Claves-De $r.Salida
+  $tiene = { param($Linea, $Tipo) @($inv | Where-Object { $_ -match ('^' + $Linea + '\|' + $Tipo + '\|') }).Count -gt 0 }
+  $n = { param($Rx) Linea-Con $FormaA $Rx }
+  $todo = $inv -join ' ; '
+  Comprueba 'java: la linea de java -jar' (& $tiene (& $n '^java -jar') 'java') $todo
+  Igual 'java: el jar' './jar/cargas-acme.jar' $v['JAR']
+  Igual 'java: los argumentos de detras del jar' '${MODO} ${FECHA}' $v['ARGS']
+  Igual 'java: sin -D' '' $v['PROPS']
+  Comprueba 'parametro: las dos opciones del case' ((& $tiene (& $n '^\s+-f \| --fecha') 'parametro') -and (& $tiene (& $n '^\s+-m \| --modo') 'parametro')) $todo
+  Comprueba 'parametro: el $1 del bucle y del case' ((& $tiene (& $n 'while \[ "\$1"') 'parametro') -and (& $tiene (& $n 'case \$1 in') 'parametro')) $todo
+  Comprueba 'fecha: el date +...' (& $tiene (& $n 'RUN_DAY=`date') 'fecha') $todo
+  Comprueba 'salida: los dos exit 1 y el exit 0, cada uno en su linea' ((@($inv | Where-Object { $_ -match '\|salida\|' }).Count -eq 3) -and (& $tiene (Linea-Con $FormaA '^exit 0') 'salida')) $todo
+  Comprueba 'fichero: el mv del bucle de ALTA (con su ls en la misma linea), el cp, el find con xargs rm y el mv final' ((& $tiene (& $n 'ALTA \) for') 'fichero') -and (& $tiene (& $n '^cp ') 'fichero') -and (& $tiene (& $n '^find ') 'fichero') -and (& $tiene (& $n '^  mv -f') 'fichero')) $todo
+  Comprueba 'fichero: los dos cd tambien salen' ((& $tiene (& $n '^cd /opt/acme/cargas/outbox') 'fichero') -and (& $tiene (& $n '^cd /opt/acme/cargas$') 'fichero')) $todo
+  Comprueba 'el comentario que dice mv y los echo con texto no dan fichero ni nada' (-not (& $tiene (& $n '^# antes de java') 'fichero') -and -not (& $tiene (& $n 'echo "Ejecucion incorrecta"') 'fichero') -and -not (& $tiene (& $n 'echo "Uso: cargas') 'parametro')) $todo
+  Comprueba 'sin envio, lanza, cerrojo, perfil ni job' (@($inv | Where-Object { $_ -match '\|(envio|lanza|cerrojo|perfil|job)\|' }).Count -eq 0) $todo
+}
+
+$Pruebas['m17 lanzadores: el inventario de la forma B y de los otros da el perfil, el job, el envio, el lanza y el cerrojo, con su valor y su linea'] = {
+  $dir = Join-Path $Dir 'lanz-inv-b'
+  $lineasE = @('#!/bin/sh', 'export JAVA_OPTS="-Xmx1g -Dspring.profiles.active=p1,p2"', '# sftp en un comentario', 'sftp -b lote.txt usuario@host', 'echo resumen | mailx -s aviso a@acme.test',
+    'curl -s http://acme.test/ok', './otro.sh', 'ksh /opt/acme/b.ksh', '. ./comun.sh', 'source ./ajustes.sh', "flock -n /var/run/batch.lock -c 'true'", 'PID=/tmp/batch.pid',
+    'java -Dspring.batch.job.names=uno,dos -Dotra=1 -jar a.jar \', '   --fecha=2026-01-01')
+  $textoE = $lineasE -join "`n"
+  Escribe $dir 'b.sh' $FormaB
+  Escribe $dir 'c.sh' $ScriptCuotas
+  Escribe $dir 'd.sh' $ScriptImpagos
+  Escribe $dir 'e.sh' ($textoE + "`n")
+  $codigo = @'
+foreach ($n in @('b', 'c', 'd', 'e')) {
+  foreach ($x in @(Get-InventarioLanzador ([System.IO.File]::ReadAllLines('{{DIR}}/' + $n + '.sh')))) { 'I' + $n + '=' + $x.linea + '|' + $x.tipo + '|' + $x.detalle }
+}
+$j = @(Get-InventarioLanzador ([System.IO.File]::ReadAllLines('{{DIR}}/e.sh')) | Where-Object { $_.tipo -eq 'java' })[0]
+'EPROPS=' + (@($j.propiedades) -join ' ')
+'EARGS=' + (@($j.argumentos) -join ' ')
+'EJAR=' + $j.jar
+$j = @(Get-InventarioLanzador ([System.IO.File]::ReadAllLines('{{DIR}}/b.sh')) | Where-Object { $_.tipo -eq 'java' })[0]
+'BJAR=' + $j.jar
+'BARGS=' + (@($j.argumentos) -join ' ')
+$j = @(Get-InventarioLanzador ([System.IO.File]::ReadAllLines('{{DIR}}/c.sh')) | Where-Object { $_.tipo -eq 'java' })[0]
+'CPROPS=' + (@($j.propiedades) -join ' ')
+'FIN'
+'@
+  $r = En-Biblioteca 'lanz-inv-b' $codigo.Replace('{{DIR}}', $dir)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  $de = { param($P) @($r.Salida -split "`n" | Where-Object { $_ -match ('^I' + $P + '=') } | ForEach-Object { ($_ -replace '^I\w=', '').Trim() }) }
+  Igual 'forma B: el cd, el perfil con su valor y java con su jar, y nada mas (el exit sin codigo no cuenta)' '2|fichero|cd,3|perfil|exportar_recibos,4|java|./jar/batch-recibos.jar' ((& $de 'b') -join ',')
+  Igual 'forma B: el redireccionamiento no es un argumento' './jar/batch-recibos.jar|' ($v['BJAR'] + '|' + $v['BARGS'])
+  Igual 'SPRING_PROFILES_ACTIVE en mayusculas tambien vale, y exec java' '2|perfil|cargar_cuotas,3|java|./jar/batch-cuotas.jar' ((& $de 'c') -join ',')
+  Igual 'java con un -D antes del jar' '-Dfile.encoding=UTF-8' $v['CPROPS']
+  Igual '--spring.batch.job.name= en los argumentos da una linea job con el nombre' '2|fichero|cd,3|java|./jar/batch-impagos.jar,3|job|avisarImpagosJob' ((& $de 'd') -join ',')
+  $n = { param($Rx) Linea-Con $textoE $Rx }
+  $esperado = @("$(& $n 'JAVA_OPTS')|perfil|p1,p2", "$(& $n '^sftp')|envio|sftp", "$(& $n 'mailx')|envio|mailx", "$(& $n '^curl')|envio|curl", "$(& $n '^\./otro')|lanza|./otro.sh", "$(& $n '^ksh ')|lanza|/opt/acme/b.ksh",
+    "$(& $n '^\. \./comun')|lanza|./comun.sh", "$(& $n '^source ')|lanza|./ajustes.sh", "$(& $n '^flock')|cerrojo|flock", "$(& $n '^PID=')|cerrojo|.pid", "$(& $n '^java ')|java|a.jar", "$(& $n '^java ')|job|uno,dos")
+  Igual 'el script mezclado: exactamente estas lineas (el sftp comentado y la linea del #! no cuentan)' (($esperado | Sort-Object) -join ' ; ') ((& $de 'e' | Sort-Object) -join ' ; ')
+  Igual 'java con dos -D antes del jar' '-Dspring.batch.job.names=uno,dos -Dotra=1' $v['EPROPS']
+  Igual 'y el argumento de la linea de seguida' '--fecha=2026-01-01' $v['EARGS']
+  Igual 'y el jar' 'a.jar' $v['EJAR']
+}
+
+# El original de las pruebas del enlace: los dos ficheros de perfil, las clases con @Profile y una copia en target que no cuenta.
+function Original-Enlace([string]$Nombre) {
+  $d = Join-Path $Dir $Nombre
+  Escribe $d 'src/main/resources/application-exportar_recibos.yml' "spring:`n  batch:`n    job:`n      name: exportarRecibosJob`n"
+  Escribe $d 'src/main/resources/application-lote.properties' "# dos jobs a la vez`nspring.batch.job.names=cargarCuotasJob,exportarRecibosJob`n"
+  Escribe $d 'src/main/resources/application-doble.yaml' "server:`n  port: 1`nspring.batch.job.name: exportarRecibosJob # el de recibos`n"
+  Escribe $d 'target/classes/application-trampa.yml' "spring:`n  batch:`n    job:`n      name: cargarCuotasJob`n"
+  Escribe $d 'src/main/java/com/acme/old/CargarCuotasConfig.java' (Config-Job 'CargarCuotasConfig' 'cargarCuotasJob' 'cargarStep' '@Profile("cargar_cuotas")')
+  Escribe $d 'src/main/java/com/acme/old/ExportarRecibosConfig.java' ((Config-Job 'ExportarRecibosConfig' 'exportarRecibosJob' 'exportarStep').Replace('public class', "// antes: @Profile(`"trampa`")`n/* y @Profile(`"trampa`") */`npublic class"))
+  Escribe $d 'src/main/java/com/acme/old/AvisarImpagosConfig.java' (Config-Job 'AvisarImpagosConfig' 'avisarImpagosJob' 'avisarStep' '@Profile({"avisar_impagos", "pruebas"})')
+  Escribe $d 'src/main/java/com/acme/old/DobleConfig.java' (Config-Job 'DobleConfig' 'avisarImpagosJob' 'otroStep' '@Profile("doble")')
+  Escribe $d 'bin/trampa.sh' "export SPRING_PROFILES_ACTIVE=trampa`njava -jar t.jar`n"
+  foreach ($k in $ScriptsLanzadores.Keys) { Escribe $d $k $ScriptsLanzadores[$k] }
+  Escribe $d 'bin/lote.sh' "export spring_profiles_active=lote`njava -jar l.jar`n"
+  Escribe $d 'bin/doble.sh' "export spring_profiles_active=doble`njava -jar l.jar`n"
+  return $d
+}
+
+$Pruebas['m17 lanzadores: el enlace con el job sale por argumento, por yml (o .properties) del perfil, por @Profile, por ser el unico, o queda sin enlazar; cada uno con su fichero y su linea'] = {
+  $d = Original-Enlace 'lanz-enlace'
+  $codigo = @'
+$d = '{{DIR}}'
+$jobs = @(
+  [pscustomobject]@{ nombre = 'cargarCuotasJob'; definidoEn = 'src/main/java/com/acme/old/CargarCuotasConfig.java' },
+  [pscustomobject]@{ nombre = 'exportarRecibosJob'; definidoEn = 'src/main/java/com/acme/old/ExportarRecibosConfig.java' },
+  [pscustomobject]@{ nombre = 'avisarImpagosJob'; definidoEn = 'src/main/java/com/acme/old/AvisarImpagosConfig.java' })
+$indice = Get-IndicePerfiles $d
+function Enlace([string]$Script, $Jobs) {
+  $rel = 'bin/' + $Script
+  $inv = @(Get-InventarioLanzador ([System.IO.File]::ReadAllLines((Join-Path $d $rel))))
+  $e = Get-JobLanzador $rel $inv $Jobs $indice
+  return ($e.como + '|' + (@($e.jobs) -join '+') + '|' + $e.fichero + '|' + $e.linea)
+}
+foreach ($s in @('recibos.sh', 'arranque', 'impagos.sh', 'avisos.sh', 'perfil-raro.sh', 'cargas.ksh', 'lote.sh', 'doble.sh', 'trampa.sh')) { 'E_' + ($s -replace '\W', '_') + '=' + (Enlace $s $jobs) }
+'E_UNICO=' + (Enlace 'cargas.ksh' @($jobs[1]))
+'E_UNICO_PERFIL_AJENO=' + (Enlace 'arranque' @($jobs[1]))
+'E_PERFIL_GANA_AL_UNICO=' + (Enlace 'arranque' @($jobs[0]))
+'E_VACIO=' + (Enlace 'cargas.ksh' @())
+'FIN'
+'@
+  $r = En-Biblioteca 'lanz-enlace' $codigo.Replace('{{DIR}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  $cfg = 'src/main/java/com/acme/old/'
+  $n = { param($Fichero, $Rx) Linea-Con (Lee $d $Fichero) $Rx }
+  Igual 'perfil con application-<perfil>.yml: ese job, con el fichero y la linea de name' ('yml|exportarRecibosJob|src/main/resources/application-exportar_recibos.yml|4') $v['E_recibos_sh']
+  Igual 'perfil (en mayusculas, SPRING_PROFILES_ACTIVE) con una clase @Profile("..."): los jobs que define esa clase' "profile|cargarCuotasJob|${cfg}CargarCuotasConfig.java|$(& $n ($cfg + 'CargarCuotasConfig.java') '@Profile')" $v['E_arranque']
+  Igual 'job en un argumento --spring.batch.job.name=: el del argumento, con el script y su linea' 'argumento|avisarImpagosJob|bin/impagos.sh|3' $v['E_impagos_sh']
+  Igual '@Profile({"a", "perfil"}) con el perfil en un argumento --spring.profiles.active=' "profile|avisarImpagosJob|${cfg}AvisarImpagosConfig.java|$(& $n ($cfg + 'AvisarImpagosConfig.java') '@Profile')" $v['E_avisos_sh']
+  Igual 'un perfil que no lleva a nada, con tres jobs: sin enlazar y sin fichero' 'sin-enlazar|||0' $v['E_perfil_raro_sh']
+  Igual 'un script sin perfil ni job, con tres jobs: sin enlazar' 'sin-enlazar|||0' $v['E_cargas_ksh']
+  Igual 'names= en un .properties: los dos jobs, con la linea de la propiedad' 'yml|cargarCuotasJob+exportarRecibosJob|src/main/resources/application-lote.properties|2' $v['E_lote_sh']
+  Igual 'un application-<perfil>.yaml (con la clave plana y un comentario detras) gana a la clase @Profile del mismo perfil' 'yml|exportarRecibosJob|src/main/resources/application-doble.yaml|3' $v['E_doble_sh']
+  Igual 'ni un application-<perfil>.yml en target ni un @Profile en un comentario cuentan' 'sin-enlazar|||0' $v['E_trampa_sh']
+  Igual 'con un solo job en el batch y nada que lo enlace, ese job y su fichero' 'unico|exportarRecibosJob|src/main/java/com/acme/old/ExportarRecibosConfig.java|0' $v['E_UNICO']
+  Igual 'un perfil que lleva a una clase que no es de ningun job del contrato no impide el unico' 'unico|exportarRecibosJob|src/main/java/com/acme/old/ExportarRecibosConfig.java|0' $v['E_UNICO_PERFIL_AJENO']
+  Igual 'y un perfil que si enlaza gana a ser el unico' "profile|cargarCuotasJob|${cfg}CargarCuotasConfig.java|$(& $n ($cfg + 'CargarCuotasConfig.java') '@Profile')" $v['E_PERFIL_GANA_AL_UNICO']
+  Igual 'sin ningun job en el contrato: sin enlazar' 'sin-enlazar|||0' $v['E_VACIO']
+}
+
+$Pruebas['m17 lanzadores: Get-Lanzadores junta los de la carpeta del original y los de -Lanzadores, cada uno con su id, su inventario y su enlace; los de fuera se distinguen'] = {
+  $d = Original-Enlace 'lanz-todo'
+  $fuera = Join-Path $Dir 'lanz-fuera'
+  Escribe $fuera 'otro/importar.sh' "#!/bin/sh`nexport spring_profiles_active=lote`njava -jar x.jar`n"
+  Escribe $fuera 'mvnw' "#!/bin/sh`n"
+  $codigo = @'
+$jobs = @(
+  [pscustomobject]@{ nombre = 'cargarCuotasJob'; definidoEn = 'src/main/java/com/acme/old/CargarCuotasConfig.java' },
+  [pscustomobject]@{ nombre = 'exportarRecibosJob'; definidoEn = 'src/main/java/com/acme/old/ExportarRecibosConfig.java' },
+  [pscustomobject]@{ nombre = 'avisarImpagosJob'; definidoEn = 'src/main/java/com/acme/old/AvisarImpagosConfig.java' })
+$l = @(Get-Lanzadores '{{DIR}}' '' $jobs)
+'SIN=' + $l.Count
+$l = @(Get-Lanzadores '{{DIR}}' '{{FUERA}}' $jobs)
+'CON=' + $l.Count
+'RELS=' + (@($l | ForEach-Object { $_.rel }) -join ',')
+'IDS=' + (@($l | ForEach-Object { $_.id } | Select-Object -Unique).Count)
+$x = @($l | Where-Object { $_.rel -eq 'bin/recibos.sh' })[0]
+'RECIBOS=' + $x.interprete + '|' + $x.lineas + '|' + $x.enlace.como + '|' + (@($x.enlace.jobs) -join '+') + '|' + @($x.inventario).Count + '|' + $x.ruta
+$y = @($l | Where-Object { $_.rel -like '*importar.sh' })[0]
+'FUERA=' + $y.rel + '|' + $y.enlace.como + '|' + (@($y.enlace.jobs) -join '+') + '|' + $y.ruta
+'ID=' + $x.id
+'MISMOS=' + ((@($l | ForEach-Object { $_.id }) -join ',') -eq (@(Get-Lanzadores '{{DIR}}' '{{FUERA}}' $jobs | ForEach-Object { $_.id }) -join ','))
+'FIN'
+'@
+  $r = En-Biblioteca 'lanz-todo' $codigo.Replace('{{DIR}}', $d).Replace('{{FUERA}}', $fuera)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  Igual 'solo la carpeta del original: sus 9 scripts (cargas, recibos, arranque, impagos, avisos, perfil-raro, lote, doble y trampa)' '9' $v['SIN']
+  Igual 'con -Lanzadores, uno mas (el mvnw de fuera tampoco cuenta)' '10' $v['CON']
+  Comprueba 'los de la carpeta de fuera salen al final, con su prefijo para distinguirlos' ($v['RELS'] -match ',-Lanzadores/otro/importar\.sh$') $v['RELS']
+  Igual 'ids distintos' '10' $v['IDS']
+  Igual 'el de recibos: interprete, lineas, como se enlaza, el job, cuantas lineas de inventario (cd, perfil, java) y su ruta' ('bash|4|yml|exportarRecibosJob|3|' + (Join-Path $d 'bin/recibos.sh')) $v['RECIBOS']
+  Igual 'el de fuera: el perfil lote lo enlaza con los dos jobs del .properties del original, y su ruta es la de fuera' ('-Lanzadores/otro/importar.sh|yml|cargarCuotasJob+exportarRecibosJob|' + (Join-Path $fuera 'otro/importar.sh')) $v['FUERA']
+  Comprueba 'el id es sh- y ocho cifras hex, y es el mismo en otra pasada (sale de la ruta relativa)' ($v['ID'] -match '^sh-[0-9a-f]{8}$' -and $v['MISMOS'] -eq 'True') "$($v['ID']) $($v['MISMOS'])"
 }
 
 # ================================ LANZADOR ================================
