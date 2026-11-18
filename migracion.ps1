@@ -245,7 +245,7 @@ function Invoke-FaseDiagnostico {
 }
 
 # Una fase: rondas de hasta Paralelo llamadas hasta que no quedan tareas pendientes, hay una parada o se llega
-# al -Limite (que cuenta tareas de todas las fases). Tras cada ronda: worktree limpio y original y referencia
+# al -Limite (que cuenta tareas de todas las fases). Tras cada ronda: worktree limpio y sin commits de la IA, y original y referencia
 # sin cambios. Los contadores son del script ($script:Parada, Racha, Rondas e Iniciadas): las fases los comparten.
 function Invoke-Fase($Tareas) {
   while (-not $script:Parada) {
@@ -274,7 +274,9 @@ function Invoke-Fase($Tareas) {
 
     # comprobacion tras la ronda: worktree limpio y original y referencia sin cambios
     $sucio = @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
-    if ($sucio.Count -gt 0) { Undo-Lote $rondaRama $head }
+    # un commit de la IA deja el worktree limpio: se ve porque el HEAD o la rama ya no son los de antes de la ronda
+    $movido = ((Get-Head $RepoRoot) -cne $head -or (Get-Rama $RepoRoot) -cne $rondaRama)
+    if ($sucio.Count -gt 0 -or $movido) { Undo-Lote $rondaRama $head }
     if ((Get-Huella $LegacyRoot) -ne $H0.Legacy -or (Get-Huella $PlantillaRoot) -ne $H0.Plantilla) {
       Set-Parada 'guardas' 'Ha cambiado el original o la referencia durante una lectura. Esa carpeta no se deshace desde aqui: mira con git status y git diff, y vuelve a lanzar.' $res[0].Registro
       $script:Parada = $true
@@ -282,7 +284,11 @@ function Invoke-Fase($Tareas) {
     }
     foreach ($o in $res) {
       if ($o.Estado -in @('fallo', 'tiempo')) { $script:Racha++ } else { $script:Racha = 0 }
-      if ($sucio.Count -gt 0 -and $o.Estado -in @('ok', 'invalida')) {
+      if ($movido -and $o.Estado -in @('ok', 'invalida')) {
+        $o.Estado = 'invalida'
+        $o.Motivo = 'La lectura hizo un commit en el repositorio. Lee sin cambiar nada: solo escribes el fichero de salida.'
+      }
+      elseif ($sucio.Count -gt 0 -and $o.Estado -in @('ok', 'invalida')) {
         $o.Estado = 'invalida'
         $o.Motivo = 'La lectura toco ficheros del repositorio (' + (($sucio | Select-Object -First 3) -join '; ') + '). Lee sin cambiar nada: solo escribes el fichero de salida.'
       }
