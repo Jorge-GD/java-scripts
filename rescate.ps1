@@ -573,7 +573,7 @@ function Get-Calidad($Hechos) {
 # Lo que se aprende de la plantilla.
 function Get-Calibracion([string]$Raiz) {
   $h = Get-Hechos $Raiz
-  $capas = @(); $sub2 = @{}; $dirs3 = @{}
+  $capas = @(); $sub2 = @{}; $dirs3 = @{}; $paquetes = @{}
   $excImp = @{}; $excFic = @{}; $tokens = @{}
   foreach ($f in $h.Ficheros) {
     $seg = $f.Rel.Split('/')
@@ -584,6 +584,11 @@ function Get-Calibracion([string]$Raiz) {
     }
     $n = [Math]::Min($seg.Count - 1, 3)
     if ($n -ge 1) { $dirs3[($seg[0..($n - 1)] -join '/')] = $true }
+    if ($seg.Count -ge 2) {   # paquete (ruta relativa al paquete base) -> nombres de sus clases
+      $dir = $seg[0..($seg.Count - 2)] -join '/'
+      if (-not $paquetes.ContainsKey($dir)) { $paquetes[$dir] = @() }
+      $paquetes[$dir] += [System.IO.Path]::GetFileNameWithoutExtension($seg[-1])
+    }
   }
   foreach ($v in @(Get-ViolImports $h)) { $excImp[$v.Clave] = $true }
   foreach ($u in @(Get-UsoFicheros $h)) { if (-not (Test-FicheroPermitido $u.Dir)) { $excFic[$u.Clave] = $true } }
@@ -599,13 +604,29 @@ function Get-Calibracion([string]$Raiz) {
   $calReglas = @{}
   foreach ($q in @(Get-Calidad $h)) { $calReglas[$q.Regla] = $true }
   return [pscustomobject]@{
-    Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object)
+    Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object); Paquetes = $paquetes
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
     Calidad = $calReglas; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
     YmlSftp = ($h.Yml -match 'sftp'); Pom = (Get-Pom $Raiz); Extra = $extra
   }
+}
+
+# El mapa de paquetes de la plantilla para el prompt de un plan o de un lote: una linea por paquete con hasta 4 clases (60 lineas como
+# mucho, con la ultima diciendo cuantos faltan). Sin paquetes, nada.
+function Get-TextoMapaPaquetes($Cal) {
+  $dirs = @($Cal.Paquetes.Keys | Sort-Object)
+  if ($dirs.Count -eq 0) { return @() }
+  $l = @('## Mapa de paquetes', 'Paquetes de la PLANTILLA. Cada clase nueva va en el paquete de su equivalente de esta lista. No crees paquetes que no esten aqui.')
+  $mostrar = $dirs
+  if ($dirs.Count -gt 60) { $mostrar = @($dirs | Select-Object -First 59) }
+  foreach ($d in $mostrar) {
+    $clases = @($Cal.Paquetes[$d] | Sort-Object)
+    $l += "- ${d}: " + (($clases | Select-Object -First 4) -join ', ') + $(if ($clases.Count -gt 4) { ', ...' } else { '' })
+  }
+  if ($dirs.Count -gt 60) { $l += "(y $($dirs.Count - 59) paquetes mas en la PLANTILLA)" }
+  return ($l + '')
 }
 
 # Cuanto incumple la propia plantilla (lo que se permite en el repo porque ella lo hace), en una linea.
@@ -926,10 +947,14 @@ function Show-Resumen($Hall) {
 }
 
 # ================================= FIX =================================
+# La regla de dependencias entre capas y la de adaptadores: las llevan los prompts de todos los pasos (lote y plan) y el texto del paso hexagonal.
+$TextoCapas = 'El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports).'
+$TextoAdaptadores = 'El adaptador de entrada depende del puerto, nunca de un adaptador de salida. Si la pieza comun necesita otra operacion, anadela al puerto y a todos sus adaptadores.'
+
 $TextoPaso = @{
   build      = 'Haz que el proyecto compile con Java 21 usando las mismas propiedades y plugins que el pom.xml de la PLANTILLA, sin cambiar el parent: si hace falta otro, apuntalo como duda. No copies dependencias de negocio que este repo no necesite. Corrige los errores de compilacion listados. No reestructures paquetes en este paso.'
   estructura = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover y actualizar package e imports: no cambies logica. Mueve tambien sus tests al paquete equivalente.'
-  hexagonal  = 'Elimina las dependencias prohibidas listadas. El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports). Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
+  hexagonal  = 'Elimina las dependencias prohibidas listadas. ' + $TextoCapas + ' Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
   ficheros   = 'Sustituye el acceso directo a ficheros locales por puertos de ficheros, igual que la PLANTILLA: puerto para listar y leer, puerto para el ciclo de vida del fichero, un adaptador SFTP y otro local, y seleccion por propiedad de configuracion. Usa la misma libreria SFTP que la PLANTILLA; si la PLANTILLA no tiene SFTP, crea igualmente el adaptador SFTP en infrastructure/adapters/output/sftp (con la libreria SFTP que ya use este repo) y su bloque sftp en application.yml. No dejes rutas fijas en el codigo.'
   config     = 'Elimina las referencias a la configuracion antigua (inventory). Toda la configuracion debe entrar por una clase @ConfigurationProperties validada al arranque y por application.yml leyendo variables de entorno, igual que la PLANTILLA. Ningun secreto (contrasena, token, clave) puede quedar escrito en application.yml o application.properties, ni como valor por defecto: se leen de una variable de entorno (`${NOMBRE}`). No escribas el valor en ningun otro fichero del repo; si un test lo necesita, usa un valor inventado en src/test/resources.'
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
@@ -1060,10 +1085,12 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $nu
     $l.Add('  Referencia de comportamiento: el resultado debe hacer exactamente lo mismo.')
   }
   $l.Add('')
+  if ($script:Cal) { foreach ($x in (Get-TextoMapaPaquetes $script:Cal)) { $l.Add($x) } }
   $l.Add('## Antes de tocar nada')
   $l.Add('1. Lee enteros los ficheros del lote y busca quien los usa: imports, inyeccion, configuracion y tests.')
   $l.Add('2. Lee en la PLANTILLA las clases equivalentes y copia su paquete, sus nombres y su estilo.')
   $l.Add('3. Si en este repo ya existe un puerto, un adaptador o una clase de configuracion que sirve, reutilizalo. No crees otro parecido.')
+  $l.Add('4. Respeta las dependencias entre capas. ' + $TextoCapas + ' ' + $TextoAdaptadores)
   $l.Add('')
   $rutaPlan = Get-RutaPlan $PasoId
   if (-not $SinPlan -and (Test-Path -LiteralPath $rutaPlan)) {
@@ -1340,6 +1367,49 @@ function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
   return $sal
 }
 
+# El paquete (ruta relativa al paquete base, con '/') de un nombre que la IA escribe en un plan: un nombre de clase completo, un
+# paquete o una ruta, con '.' o con '/'. $null si no se puede leer o no cuelga de una capa de la plantilla (no se comprueba).
+function Get-PaqueteDePlan([string]$Nombre, $Cal) {
+  $n = ($Nombre.Trim() -replace '[`"''*]', '')
+  if ($n -match '\.(ya?ml|xml|properties|json|md|txt|csv|sql)$') { return $null }
+  $seg = @(($n -replace '\.java$', '') -split '[./]' | Where-Object { $_ })
+  if ($seg.Count -ge 2 -and $seg[-1] -cmatch '^[A-Z]') { $seg = @($seg[0..($seg.Count - 2)]) }
+  for ($k = 0; $k -lt $seg.Count; $k++) {
+    if ($Cal.Capas -contains $seg[$k]) { return ($seg[$k..($seg.Count - 1)] -join '/') }
+  }
+  return $null
+}
+
+# Esta en la plantilla un paquete? Si tiene clases o es la carpeta de un paquete que las tiene.
+function Test-PaqueteEnPlantilla([string]$Rel, $Cal) {
+  foreach ($k in $Cal.Paquetes.Keys) { if ($k -eq $Rel -or $k.StartsWith($Rel + '/')) { return $true } }
+  return $false
+}
+
+# Los paquetes que un plan nombra y la plantilla no tiene, como 'paquete (en <nombre tal como esta escrito>)': los de '## Piezas
+# comunes' (nombres completos de clase, con '.' o con '/') y los de las lineas 'destino:' de '## Ficheros'. Lee con tolerancia: lo que
+# no se entiende, no se comprueba. Sin plantilla, nada.
+function Get-PaquetesFueraDePlantilla([string]$Plan, $Cal) {
+  if (-not $Cal -or $Cal.Paquetes.Count -eq 0) { return @() }
+  $nombres = New-Object System.Collections.Generic.List[string]
+  foreach ($x in (Get-SeccionPlan $Plan 'Piezas comunes')) {
+    foreach ($m in [regex]::Matches($x, '(?<![\w.])(?:[a-z][a-z0-9_]*\.)+[A-Z]\w*')) { $nombres.Add($m.Value) }
+    foreach ($m in [regex]::Matches($x, '(?<![\w/.])(?:[a-z][a-z0-9_]*/)+[A-Z]\w*')) { $nombres.Add($m.Value) }
+  }
+  foreach ($x in (Get-SeccionPlan $Plan 'Ficheros')) {
+    $m = [regex]::Match($x, 'destino:\s*([^|]*)')
+    if (-not $m.Success) { continue }
+    $d = @(($m.Groups[1].Value -replace '[`"''*]', '').Trim() -split '\s+')[0]
+    if ($d -and $d -ne '-') { $nombres.Add($d) }
+  }
+  $fuera = [ordered]@{}
+  foreach ($n in $nombres) {
+    $rel = Get-PaqueteDePlan $n $Cal
+    if ($rel -and -not $fuera.Contains($rel) -and -not (Test-PaqueteEnPlantilla $rel $Cal)) { $fuera[$rel] = $n }
+  }
+  return @($fuera.Keys | ForEach-Object { "$_ (en $($fuera[$_]))" })
+}
+
 # Una llamada a Copilot que solo debe leer (revision previa, consejo, reflexion) y escribir su fichero en .rescate. Si
 # toca la PLANTILLA o el ORIGINAL, para (exit 4). Si toca codigo de este repo: si estaba limpio, lo deshace; si no, avisa.
 function Invoke-SoloLectura([string]$Log, [string]$Mod, [string]$Esf, [string]$Que) {
@@ -1363,6 +1433,48 @@ function Invoke-SoloLectura([string]$Log, [string]$Mod, [string]$Esf, [string]$Q
   return $r
 }
 
+# El prompt de la revision previa de un paso, en .rescate/prompt.md. $Correccion: el motivo, si es la repeticion de un plan que no valia.
+function Save-PromptPlan([string]$PasoId, $Pend, [string]$Correccion) {
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea: revision previa del paso '$PasoId' (SOLO LECTURA)")
+  $l.Add('')
+  $l.Add('Vas a preparar el plan de un paso de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.')
+  $l.Add("No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/plan-$PasoId.md en el repositorio actual.")
+  $l.Add('')
+  foreach ($x in (Get-TextoReferencias)) { $l.Add($x) }
+  if ($script:Cal) { foreach ($x in (Get-TextoMapaPaquetes $script:Cal)) { $l.Add($x) } }
+  $l.Add('## Lo que se hara despues en este paso (ahora NO lo hagas)')
+  $l.Add($TextoPaso[$PasoId])
+  $l.Add('')
+  $l.Add('## Hallazgos del paso (todos)')
+  foreach ($x in $Pend) { $l.Add((Get-LineaHallazgo $x)) }
+  $l.Add('')
+  $l.Add('## Que tienes que revisar')
+  $l.Add('1. Lee entero cada fichero de la lista. Busca quien lo usa: imports, inyeccion, configuracion y tests.')
+  $l.Add('2. Lee en la PLANTILLA las clases equivalentes: en que paquete estan, como se llaman y que puertos y adaptadores usan.')
+  $l.Add('3. Decide que se hara con cada fichero. Las decisiones tienen que ser coherentes entre si: si varios ficheros necesitan lo mismo (un puerto, un adaptador, una clase de configuracion), se crea UNA sola pieza comun y todos la usan.')
+  $l.Add('4. Si algo no se puede resolver sin cambiar el comportamiento, no lo fuerces: apuntalo en Dudas.')
+  $l.Add('5. Como se tratan los errores (capturar y seguir, o propagar) es comportamiento: el plan no lo cambia.')
+  $l.Add('6. Respeta las dependencias entre capas. ' + $TextoCapas + ' ' + $TextoAdaptadores)
+  $l.Add('')
+  $l.Add("## Formato de .rescate/plan-$PasoId.md")
+  $l.Add("Empieza con la linea: # Plan del paso '$PasoId'")
+  $l.Add('Despues, estas cuatro secciones, con estos titulos:')
+  $l.Add('- "## Piezas comunes": una linea por cada pieza nueva que van a compartir varios ficheros, con su nombre completo (paquete incluido, uno de la lista de paquetes de la PLANTILLA), que es (puerto, adaptador, configuracion...) y para que sirve. Si no hace falta ninguna, escribe "ninguna".')
+  $l.Add('- "## Ficheros": una linea por cada fichero de la lista de hallazgos, asi:')
+  $l.Add('  - `ruta/del/Fichero.java` -> que se hace | destino: paquete o clase de destino, o "-" | riesgo: bajo, medio o alto, y por que')
+  $l.Add('- "## Orden": en que orden conviene hacerlos y por que (primero lo que otros necesitan).')
+  $l.Add('- "## Dudas": lo que deberia decidir una persona. Si no hay, escribe "ninguna".')
+  $l.Add('')
+  $l.Add('No escribas contrasenas, hosts ni datos reales. No inventes: si no has podido leer un fichero, dilo en Dudas.')
+  if ($Correccion) {
+    $l.Add('')
+    $l.Add('## CORRECCION: tu plan anterior no paso la comprobacion')
+    $l.Add($Correccion)
+  }
+  [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+}
+
 # Revision previa de un paso: la IA lee todos los ficheros con hallazgos y la
 # plantilla, y escribe el plan. No debe tocar codigo; si lo toca, se deshace.
 # Devuelve 'nuevo', 'existente' o '' (no hay plan).
@@ -1381,37 +1493,7 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
     $viejo = [System.IO.File]::ReadAllText($ruta)
     Remove-Item -LiteralPath $ruta -Force
   }
-  $l = New-Object System.Collections.Generic.List[string]
-  $l.Add("# Tarea: revision previa del paso '$PasoId' (SOLO LECTURA)")
-  $l.Add('')
-  $l.Add('Vas a preparar el plan de un paso de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.')
-  $l.Add("No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/plan-$PasoId.md en el repositorio actual.")
-  $l.Add('')
-  foreach ($x in (Get-TextoReferencias)) { $l.Add($x) }
-  $l.Add('## Lo que se hara despues en este paso (ahora NO lo hagas)')
-  $l.Add($TextoPaso[$PasoId])
-  $l.Add('')
-  $l.Add('## Hallazgos del paso (todos)')
-  foreach ($x in $pend) { $l.Add((Get-LineaHallazgo $x)) }
-  $l.Add('')
-  $l.Add('## Que tienes que revisar')
-  $l.Add('1. Lee entero cada fichero de la lista. Busca quien lo usa: imports, inyeccion, configuracion y tests.')
-  $l.Add('2. Lee en la PLANTILLA las clases equivalentes: en que paquete estan, como se llaman y que puertos y adaptadores usan.')
-  $l.Add('3. Decide que se hara con cada fichero. Las decisiones tienen que ser coherentes entre si: si varios ficheros necesitan lo mismo (un puerto, un adaptador, una clase de configuracion), se crea UNA sola pieza comun y todos la usan.')
-  $l.Add('4. Si algo no se puede resolver sin cambiar el comportamiento, no lo fuerces: apuntalo en Dudas.')
-  $l.Add('5. Como se tratan los errores (capturar y seguir, o propagar) es comportamiento: el plan no lo cambia.')
-  $l.Add('')
-  $l.Add("## Formato de .rescate/plan-$PasoId.md")
-  $l.Add("Empieza con la linea: # Plan del paso '$PasoId'")
-  $l.Add('Despues, estas cuatro secciones, con estos titulos:')
-  $l.Add('- "## Piezas comunes": una linea por cada pieza nueva que van a compartir varios ficheros, con su nombre completo (paquete incluido), que es (puerto, adaptador, configuracion...) y para que sirve. Si no hace falta ninguna, escribe "ninguna".')
-  $l.Add('- "## Ficheros": una linea por cada fichero de la lista de hallazgos, asi:')
-  $l.Add('  - `ruta/del/Fichero.java` -> que se hace | destino: paquete o clase de destino, o "-" | riesgo: bajo, medio o alto, y por que')
-  $l.Add('- "## Orden": en que orden conviene hacerlos y por que (primero lo que otros necesitan).')
-  $l.Add('- "## Dudas": lo que deberia decidir una persona. Si no hay, escribe "ninguna".')
-  $l.Add('')
-  $l.Add('No escribas contrasenas, hosts ni datos reales. No inventes: si no has podido leer un fichero, dilo en Dudas.')
-  [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+  Save-PromptPlan $PasoId $pend ''
 
   Info "Revision previa del paso '$PasoId': Copilot lee $($fichs.Count) fichero(s) y la plantilla..."
   [void](Invoke-SoloLectura (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId)")
@@ -1423,6 +1505,21 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
     }
     Aviso "Copilot no ha escrito el plan (ver .rescate/plan-$PasoId.log). Sigo sin plan."
     return ''
+  }
+  $fuera = @(Get-PaquetesFueraDePlantilla ([System.IO.File]::ReadAllText($ruta)) $script:Cal)
+  if ($fuera.Count -gt 0) {
+    $lista = $fuera -join '; '
+    Info "El plan nombra paquetes que la plantilla no tiene ($lista): lo repito una vez con el motivo."
+    $malo = [System.IO.File]::ReadAllText($ruta)
+    Remove-Item -LiteralPath $ruta -Force
+    Save-PromptPlan $PasoId $pend ("Tu plan anterior nombra paquetes que la PLANTILLA no tiene: $lista. Cada pieza comun y cada destino tiene que estar en un paquete del 'Mapa de paquetes' de arriba: si no hay equivalente, elige el paquete mas parecido o apuntalo en Dudas. Escribe el plan entero otra vez.")
+    [void](Invoke-SoloLectura (Join-Path $Work "plan-$PasoId-repeticion.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId, repeticion)")
+    if (-not (Test-Path -LiteralPath $ruta)) {
+      [System.IO.File]::WriteAllText($ruta, $malo)
+      Aviso "Copilot no ha escrito el plan repetido (ver .rescate/plan-$PasoId-repeticion.log). Me quedo con el primero."
+    }
+    $fuera = @(Get-PaquetesFueraDePlantilla ([System.IO.File]::ReadAllText($ruta)) $script:Cal)
+    if ($fuera.Count -gt 0) { Aviso ('El plan sigue nombrando paquetes que la plantilla no tiene: ' + ($fuera -join '; ') + '. Sigo con el.') }
   }
   $falta = @(Get-SinPlan $ruta $fichs)
   if ($falta.Count -gt 0) { Aviso ('El plan no nombra: ' + (($falta | Select-Object -First 8) -join ', ')) }

@@ -42,6 +42,13 @@
 #   comprueba          tras arreglar, un lote ejecuta la orden del modo comprobar que lleva su prompt (la linea 'Ejecuta: ... y corrige lo
 #                      que liste') y apunta en .rescate/comprobar-visto.log 'rc=<codigo> rescate-igual=<si no ha cambiado nada en
 #                      .rescate>' y su salida, cada linea con '> '
+#   plan-paquete-nuevo  la revision previa nombra en 'Piezas comunes' la clase com.acme.life.infrastructure.util.LeerFichero (un
+#                      paquete que la plantilla no tiene); con CORRECCION en su prompt, com.acme.life.application.ports.output.LeerFichero
+#   plan-paquete-nuevo-siempre  como plan-paquete-nuevo, con o sin CORRECCION
+#   plan-paquete-bueno  la revision previa nombra en 'Piezas comunes' un paquete que la plantilla tiene y, con ruta, la carpeta de otro
+#                      (application/ports: no tiene clases, pero cuelgan de ella paquetes de la plantilla)
+#   plan-destino-nuevo  como plan-paquete-nuevo, pero en el 'destino:' de las lineas de 'Ficheros' (infrastructure/util)
+#   plan-ilegible       'Piezas comunes' y 'destino:' sin ningun nombre de paquete que se pueda leer
 #   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
 #                      ('sin marca' si no estaba)
 $todos = $args
@@ -117,6 +124,23 @@ if ($titulo -match 'revision previa') {
   Apunta 'plan' ''
   & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
   $codigo = $LASTEXITCODE
+  $guionesPlan = @('plan-paquete-nuevo', 'plan-paquete-nuevo-siempre', 'plan-paquete-bueno', 'plan-destino-nuevo', 'plan-ilegible')
+  if (@($guiones | Where-Object { $guionesPlan -contains $_ }).Count -gt 0) {
+    $ruta = @(Get-ChildItem -LiteralPath $rescate -Filter 'plan-*.md')[0].FullName
+    $plan = [System.IO.File]::ReadAllText($ruta)
+    $corrige = ($prompt -match '## CORRECCION')
+    $malo = ($guiones -contains 'plan-paquete-nuevo-siempre') -or (($guiones -contains 'plan-paquete-nuevo' -or $guiones -contains 'plan-destino-nuevo') -and -not $corrige)
+    $fqcn = 'com.acme.life.application.ports.output.LeerFichero'; $dest = 'application/ports/output'
+    if ($malo) { $fqcn = 'com.acme.life.infrastructure.util.LeerFichero'; $dest = 'infrastructure/util' }
+    if ($guiones -contains 'plan-ilegible') { $plan = $plan -replace 'destino: -', 'destino: por decidir con el equipo' -replace '(?s)## Piezas comunes\r?\nninguna', "## Piezas comunes`n- Una clase nueva que lee los ficheros de entrada" }
+    elseif ($guiones -contains 'plan-destino-nuevo') { $plan = $plan -replace 'destino: -', "destino: $dest" }
+    else {
+      $mas = ''
+      if ($guiones -contains 'plan-paquete-bueno') { $mas = "`n- ``application/ports/Marcador`` (ruta con la carpeta de un paquete de la plantilla): marca" }
+      $plan = $plan -replace '(?s)## Piezas comunes\r?\nninguna', "## Piezas comunes`n- ``$fqcn`` (puerto): lee los ficheros de entrada$mas"
+    }
+    [System.IO.File]::WriteAllText($ruta, $plan)
+  }
   if ($guiones -contains 'duda-plan') {
     $ruta = @(Get-ChildItem -LiteralPath $rescate -Filter 'plan-*.md')[0].FullName
     $plan = [System.IO.File]::ReadAllText($ruta) -replace '(?s)## Dudas.*$', "## Dudas`n- DUDA-PLAN-MARCA: Suelta va en application o en domain?`n- Hay que cambiar el parent del pom?`n"
