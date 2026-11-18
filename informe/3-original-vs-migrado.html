@@ -1,12 +1,20 @@
 <header class="cab-prob">
   <h1>El original frente al migrado</h1>
-  <p class="lede">Es una lectura de la IA sobre el migrado tal como llegó, antes de corregir: para cada dato que se leyó del original, dice si el migrado lo hace igual, distinto o no lo hace. El script comprueba que las citas existan en los ficheros, pero esta página no sustituye a lanzar los dos batch con los mismos datos y comparar lo que dejan.</p>
+  <p class="lede">Dos comparaciones del mismo batch. Arriba, la más fiable: el original y el migrado ejecutados con las mismas entradas. Debajo, la lectura de la IA, dato a dato.</p>
 </header>
 
+{{{PRUEBALOCAL}}}
+
+<section class="panel" id="leido-ia" aria-labelledby="t-leido-ia">
+  <h2 id="t-leido-ia">Leído por la IA</h2>
+  <p>{{{ETIQUETA}}}</p>
+  {{{MOMENTO}}}
+  <p>Para cada dato que se leyó del original, dice si el migrado lo hace igual, distinto o no lo hace. El script comprueba que las citas existen en los ficheros.</p>
 {{{JOBS}}}
+</section>
 <!--TROZO titulo-comparar-->El original frente al migrado {{BATCH}}<!--FIN-->
 <!--TROZO comp-job--><section class="prob-grupo comp-grupo" id="comp-{{ID}}" aria-labelledby="g-comp-{{ID}}">
-  <header class="pg-cab"><h2 id="g-comp-{{ID}}">{{JOB}}</h2><span class="pg-num">{{{CUENTA}}}</span></header>
+  <header class="pg-cab"><h3 id="g-comp-{{ID}}">{{JOB}}</h3><span class="pg-num">{{{CUENTA}}}</span></header>
 {{{CUERPO}}}
 </section><!--FIN-->
 <!--TROZO comp-cuenta-->igual {{IGUAL}} · distinto {{DISTINTO}} · falta {{FALTA}} · no lo sé {{NOLOSE}} · sin pieza {{SINPIEZA}}<!--FIN-->
@@ -25,3 +33,50 @@
 <!--TROZO comp-iguales-uno-->1 dato igual<!--FIN-->
 <!--TROZO comp-iguales-otros-->{{N}} datos iguales<!--FIN-->
 <!--TROZO comp-job-vacio--><p class="pg-como">Ningún dato de las clases de este job se ha comparado.</p><!--FIN-->
+<!--TROZO comp-momento-antes--><p>Sobre el migrado tal como llegó, antes de corregir (commit {{COMMIT}}).</p><!--FIN-->
+<!--TROZO comp-momento-despues--><p>Sobre el migrado ya corregido (commit {{COMMIT}} de la rama de rescate).</p><!--FIN-->
+<!--TROZO pl-seccion--><section class="panel" id="prueba-local" aria-labelledby="t-prueba-local">
+  <h2 id="t-prueba-local">Probado ejecutando los dos</h2>
+{{{CUERPO}}}
+</section><!--FIN-->
+<!--TROZO pl-datos--><p>{{{ETIQUETA}}}</p>
+  <p>{{CASOS}} casos de {{JOBS}} jobs: {{IGUALES}} iguales, {{DISTINTOS}} distintos y {{SIN}} sin probar. {{LLAMADAS}} llamadas a la IA y {{MINUTOS}} min, el {{FECHA}}.</p>
+{{{AVISO}}}
+{{{TABLA}}}
+{{{CASOSDISTINTOS}}}
+{{{RESTO}}}
+{{{NOPROMETE}}}
+{{{FALLO}}}<!--FIN-->
+<!--TROZO pl-aviso-arnes--><p class="aviso">El migrado no tiene su test de prueba (la IA no pudo escribirlo): sus casos no se han ejecutado.</p><!--FIN-->
+<!--TROZO pl-tabla--><table class="tabla-pl">
+  <thead><tr><th>Job</th><th>Casos</th><th>Iguales</th><th>Distintos</th><th>Sin probar</th></tr></thead>
+  <tbody>
+{{{FILAS}}}
+  </tbody>
+</table><!--FIN-->
+<!--TROZO pl-fila-->    <tr><td><code>{{JOB}}</code></td><td>{{CASOS}}</td><td>{{IGUALES}}</td><td{{{MAL}}}>{{DISTINTOS}}</td><td>{{SIN}}</td></tr><!--FIN-->
+<!--TROZO pl-mal--> class="mal"<!--FIN-->
+<!--TROZO pl-caso--><article class="prob-grupo comp-grupo">
+  <header class="pg-cab"><h3><code>{{JOB}}</code> <code>{{CASO}}</code> {{TITULO}}</h3></header>
+  <ul class="filas">
+{{{DIFERENCIAS}}}
+  </ul>
+</article><!--FIN-->
+<!--TROZO pl-dif-->    <li class="fila s-error">{{{ESTADO}}}<span class="d"><code>{{FICHERO}}</code>: {{LINEAS}} {{{LINEAS_TEXTO}}}; la primera, la {{LINEA}}</span><div class="q"><span class="dif-l"><b>Original:</b> <code>{{ORIGINAL}}</code></span><span class="dif-l"><b>Migrado:</b> <code>{{MIGRADO}}</code></span>{{{NOTA}}}</div></li><!--FIN-->
+<!--TROZO pl-lineas-una-->línea distinta<!--FIN-->
+<!--TROZO pl-lineas-otras-->líneas distintas<!--FIN-->
+<!--TROZO pl-nota--><p class="aviso">{{NOTA}}</p><!--FIN-->
+<!--TROZO pl-resto--><div class="pg-l"><details>
+  <summary>{{{TEXTO}}}</summary>
+  <ul class="filas">
+{{{FILAS}}}
+  </ul>
+</details></div><!--FIN-->
+<!--TROZO pl-resto-uno-->1 caso sin comparar o con aviso<!--FIN-->
+<!--TROZO pl-resto-otros-->{{N}} casos sin comparar o con aviso<!--FIN-->
+<!--TROZO pl-resto-fila-->    <li class="fila {{CLASE}}"><span class="sev {{SEV}}"><svg aria-hidden="true"><use href="#{{ICONO}}"/></svg>{{RESULTADO}}</span><span class="d"><code>{{JOB}}</code> <code>{{CASO}}</code> {{TITULO}}</span>{{{MOTIVO}}}</li><!--FIN-->
+<!--TROZO pl-motivo--><span class="q">{{MOTIVO}}</span><!--FIN-->
+<!--TROZO pl-no-promete--><p class="muted">{{TEXTO}}</p><!--FIN-->
+<!--TROZO pl-fallo-linea--><p class="aviso">prueba-local.ps1 ha salido con código {{CODIGO}}: {{DETALLE}}. Registro: {{REGISTRO}}.</p><!--FIN-->
+<!--TROZO pl-sin-fallo--><div class="parada-info"><p>No se ha podido hacer la prueba en local (código {{CODIGO}}): {{DETALLE}}. Registro: {{REGISTRO}}.</p></div><!--FIN-->
+<!--TROZO pl-saltada--><p class="sin-datos">{{{ETIQUETA}}}<span>No se ha hecho: la pasada se lanzó con -SinPruebaLocal.</span></p><!--FIN-->

@@ -3,8 +3,8 @@
 #   pre          escribe un contrato sin jobs.
 #   diagnostico  escribe .rescate/hallazgos.json y diagnostico.md con "antes" y, tras un fix, con "despues" (hallazgos y md).
 #                Si no hay datos para esa vez, sale con 5.
-#   fix          escribe "ficheros" (ruta -> texto) en el repo, hace un commit por cada asunto de "commits", anade las lineas
-#                de "atascados" a .rescate/atascados.md, imprime "salida" y sale con "codigo".
+#   fix          escribe "ficheros" (ruta -> texto) en el repo, quita con git rm las rutas de "borrar", hace un commit por cada
+#                asunto de "commits", anade las lineas de "atascados" a .rescate/atascados.md, imprime "salida" y sale con "codigo".
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [string]$Modelo = '', [string]$Esfuerzo = '', [string]$EsfuerzoPlan = '', [int]$Lote = 5, [switch]$SinIA, [switch]$Si, [switch]$Todo)
 $orden = [System.IO.File]::ReadAllText($env:MOTOR_FALSO) | ConvertFrom-Json
 $llamadas = $env:MOTOR_FALSO + '.llamadas'
@@ -32,6 +32,7 @@ if ($orden.ficheros) {
     [System.IO.File]::WriteAllText($ruta, [string]$f.Value)
   }
 }
+foreach ($b in @($orden.borrar | Where-Object { $_ })) { & git -C $Repo rm -q -f -- $b 2>&1 | Out-Null }
 foreach ($c in @($orden.commits | Where-Object { $_ })) {
   & git -C $Repo add -A 2>&1 | Out-Null
   & git -C $Repo commit -q --allow-empty -m $c 2>&1 | Out-Null

@@ -55,11 +55,19 @@ borrar el worktree:   git worktree remove "{{WORKTREE}}"</pre>
 </section><!--FIN-->
 <!--TROZO area-corr--><section class="prob-grupo" aria-labelledby="g-{{ID}}">
   <header class="pg-cab"><h2 id="g-{{ID}}">{{{NOMBRE}}}</h2><span class="pg-num">{{{CUENTA}}}</span>{{{ESTADO}}}</header>
+{{{DURANTE}}}
 {{{BARRAS}}}
 {{{COMMITS}}}
 {{{ATASCADOS}}}
 {{{QUEDA}}}
 </section><!--FIN-->
+<!--TROZO area-durante--><p class="pg-como">Durante la corrección, este paso empezó con {{X}} y acabó con {{Y}}, en {{{COMMITS}}}.{{{DIF}}}</p><!--FIN-->
+<!--TROZO durante-commit-uno-->1 commit<!--FIN-->
+<!--TROZO durante-commit-otros-->{{N}} commits<!--FIN-->
+<!--TROZO durante-aparecio--> 1 apareció con los arreglos de otros pasos.<!--FIN-->
+<!--TROZO durante-aparecieron--> {{N}} aparecieron con los arreglos de otros pasos.<!--FIN-->
+<!--TROZO durante-se-fue--> 1 se fue antes, con los arreglos de otros pasos.<!--FIN-->
+<!--TROZO durante-se-fueron--> {{N}} se fueron antes, con los arreglos de otros pasos.<!--FIN-->
 <!--TROZO area-barras-->  <div class="barras" style="--max:{{MAX}}">{{{BARRAS}}}</div><!--FIN-->
 <!--TROZO area-commits-->  <h3 class="pg-t">Arreglos hechos</h3>
   <ul class="pg-l">
