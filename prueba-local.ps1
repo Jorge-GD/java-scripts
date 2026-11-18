@@ -583,6 +583,14 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
   }
 }
 
+# Ejecuta en la copia del migrado, con el arnes que ya lleva, los casos de $Listas (con sus entradas guardadas) y guarda lo que
+# dejan en prueba-local\salidas\<Nombre>.
+function Invoke-Migrado([string]$Nombre, $Listas) {
+  Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
+  foreach ($t in $Listas) { Copy-Carpeta (Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)") (Join-Ruta $CopiaMig $t.entradas.carpeta) }
+  Invoke-Salidas $CopiaMig $false $Nombre $Listas
+}
+
 # ================================ COMPARAR ================================
 # Las fechas de esta ejecucion: cada dia, en hora local y en UTC, desde $Desde hasta $Hasta. Un job que escribe la fecha en UTC puede
 # poner otro dia que el local (a las 00:30 en Espana, el de ayer): las dos cuentan como de hoy.
@@ -741,7 +749,7 @@ function Show-Resultado($Res, $PorJob) {
 # De cada caso distinto, el primer commit de la rama que se prueba donde deja de ser igual (con -Desde) y, si se pide, su
 # git revert (con -Deshacer). Todo se ejecuta en <Migrado>-prueba-local, rehecha en cada commit, con el arnes y el caso ya
 # guardados, y se compara con salidas\original: nunca se llama a Copilot.
-# Lo que usan, del main: $DirRama (la carpeta de la rama que se prueba), $DesdeCommit, $headMig, $tareasCasos y $pruebas.
+# Lo que usan, del main: $DirRama (la carpeta de la rama que se prueba), $DesdeCommit, $headMig, $tareasCasos, $listas y $pruebas.
 
 # El asunto (primera linea del mensaje) de un commit del migrado.
 function Get-Asunto([string]$Commit) { return ((Invoke-Git $MigradoRoot @('log', '-1', '--format=%s', $Commit)).Salida -join ' ').Trim() }
@@ -833,6 +841,7 @@ function Find-Culpables($Res) {
   if ($distintos.Count -eq 0) { Info 'Con -Desde: no hay casos distintos que buscar.'; return @() }
   $commits = @((Invoke-Git $DirRama @('rev-list', '--first-parent', '--reverse', ($DesdeCommit + '..' + $headMig))).Salida | Where-Object { $_ })
   Remove-Carpeta (Join-Ruta $Local 'salidas/culpable')
+  Remove-Carpeta (Join-Ruta $Local 'salidas/despues')
   Info "Buscando que commit rompe cada caso distinto ($($commits.Count) commits despues de $($DesdeCommit.Substring(0, 7)))..."
   $culpables = @()
   foreach ($r in $distintos) {
@@ -864,14 +873,31 @@ function Invoke-Revert([string]$Commit) {
   return ($que + ' y lo he abortado (el HEAD queda como estaba): ' + (Get-Resumen ($r.Salida -join "`n")))
 }
 
-# Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar sus casos en el nuevo HEAD.
-# Apunta en cada culpable si se ha deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por
-# buenos en la carpeta). Pone en su sitio, en $Res, el resultado de ahora de esos casos.
+# Vuelve a ejecutar en el migrado de $Commit todos los casos de $listas (solo Maven, nunca Copilot) y pone en $Res, caso a caso,
+# lo que sale ahora: nada se da por medido en un commit donde no se ha ejecutado.
+function Measure-Migrado([string]$Commit, $Res) {
+  $nombre = 'despues/' + $Commit.Substring(0, 12)
+  Info "Vuelvo a ejecutar todos los casos del migrado en $($Commit.Substring(0, 7))..."
+  $m = New-Copia $MigradoRoot $Commit $CopiaMig
+  if ($m) { Stop-Arranque $m }
+  Copy-Carpeta (Join-Ruta $Local 'arnes/migrado') $CopiaMig
+  Invoke-Migrado $nombre $listas
+  for ($i = 0; $i -lt $tareasCasos.Count; $i++) { $Res[$i] = Get-Resultado $tareasCasos[$i] $nombre }
+}
+
+function Get-ResultadoDe($Res, $Culpable) { return @($Res | Where-Object { $_.job -ceq $Culpable.job -and $_.caso -ceq $Culpable.caso })[0] }
+
+# Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar TODOS los casos en el nuevo HEAD
+# (Measure-Migrado): un revert puede arreglar un caso y romper otro. Un commit cuyo revert no arregla ninguno de sus casos se
+# vuelve a dejar como estaba, con otro git revert del revert (el mas nuevo primero) y otra medida. Apunta en cada culpable si
+# queda deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por buenos en la carpeta). Pone
+# en su sitio, en $Res, el resultado de ahora.
 function Undo-Culpables($Culpables, $Res) {
   $commits = @($Culpables | Sort-Object -Property indice -Descending | ForEach-Object { $_.commit } | Select-Object -Unique)
   if ($commits.Count -eq 0) { return }
   Info ''
   Info "Deshaciendo con git revert en ${DirRama}: $($commits.Count) commit(s), del mas nuevo al mas viejo..."
+  $reverts = @{}   # commit deshecho -> su commit de revert
   foreach ($commit in $commits) {
     $suyos = @($Culpables | Where-Object { $_.commit -eq $commit })
     $m = Get-NoDeshacer $commit
@@ -879,20 +905,36 @@ function Undo-Culpables($Culpables, $Res) {
     if ($m) { Aviso "No deshago $($commit.Substring(0, 7)) ($($suyos[0].asunto)): $m"; continue }
     $nuevo = Get-Head $DirRama
     $script:Reverts += $nuevo
+    $reverts[$commit] = $nuevo
     foreach ($x in $suyos) { $x.deshecho = $true }
     Bien "Deshecho $($commit.Substring(0, 7)) ($($suyos[0].asunto)) con el commit $($nuevo.Substring(0, 7))."
   }
-  $hechos = @($Culpables | Where-Object { $_.deshecho })
-  if ($hechos.Count -eq 0) { return }
+  if ($reverts.Count -eq 0) { return }
   $script:headMig = Get-Head $DirRama
-  foreach ($x in $hechos) {
-    $e = Get-EstadoEn $script:headMig (Get-TareaCaso $x.job $x.caso)
-    for ($i = 0; $i -lt $Res.Count; $i++) { if ($Res[$i].job -ceq $x.job -and $Res[$i].caso -ceq $x.caso) { $Res[$i] = $e.Resultado } }
-    if ($e.Malo) {
-      Fallo "El caso $($x.job)/$($x.caso): sigue distinto tras deshacer $($x.commit.Substring(0, 7))."
-      if ($e.Motivo) { Aviso "  $($e.Motivo)" }
+  Measure-Migrado $script:headMig $Res
+  $quitado = $false
+  $quitar = @($commits | Where-Object { $reverts.ContainsKey($_) })
+  [array]::Reverse($quitar)   # el ultimo revert, primero
+  foreach ($commit in $quitar) {
+    $corto = $commit.Substring(0, 7)
+    $suyos = @($Culpables | Where-Object { $_.commit -eq $commit })
+    foreach ($x in $suyos) {
+      $r = Get-ResultadoDe $Res $x
+      if (-not (Test-Malo $r)) { Bien "El caso $($x.job)/$($x.caso): ahora igual tras deshacer $corto."; continue }
+      Fallo "El caso $($x.job)/$($x.caso): sigue sin ser igual tras deshacer ${corto}: $($r.resultado)."
+      if ($r.resultado -ne 'distinto' -and $r.motivo) { Aviso "  $(Get-Resumen $r.motivo)" }
     }
-    else { Bien "El caso $($x.job)/$($x.caso): ahora igual tras deshacer $($x.commit.Substring(0, 7))." }
+    if (@($suyos | Where-Object { -not (Test-Malo (Get-ResultadoDe $Res $_)) }).Count -gt 0) { continue }
+    Fallo "Deshacer $corto no arregla $((@($suyos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ', '): lo vuelvo a dejar como estaba"
+    $m = Invoke-Revert $reverts[$commit]
+    if ($m) { Aviso "No he podido quitar el revert de ${corto}: $m (el revert se queda)"; continue }
+    $script:Reverts += (Get-Head $DirRama)
+    foreach ($x in $suyos) { $x.deshecho = $false }
+    $quitado = $true
+  }
+  if ($quitado) {
+    $script:headMig = Get-Head $DirRama
+    Measure-Migrado $script:headMig $Res
   }
 }
 
@@ -1098,11 +1140,7 @@ try {
   $listas = @($tareasCasos | Where-Object { $_.estado -eq 'hecha' -and -not (Test-Path -LiteralPath (Join-Ruta $Local "casos/$($_.entradas.job)/$($_.entradas.caso)/no-aplica.txt")) })
   Invoke-Salidas $CopiaOrig $true 'original' $listas
   Invoke-Salidas $CopiaOrig $true 'original-2' $listas
-  if ($ArnesMig.estado -eq 'hecha') {
-    Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
-    foreach ($t in $listas) { Copy-Carpeta (Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)") (Join-Ruta $CopiaMig $t.entradas.carpeta) }
-    Invoke-Salidas $CopiaMig $false 'migrado' $listas
-  }
+  if ($ArnesMig.estado -eq 'hecha') { Invoke-Migrado 'migrado' $listas }
 
   # 5. Comparar y contar
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
@@ -1116,7 +1154,7 @@ try {
     $culpables = @(Find-Culpables $res)
     if ($Deshacer) { Undo-Culpables $culpables $res }
     $o = Save-Resultado $res $culpables
-    if ($Deshacer -and @($culpables | Where-Object { $_.deshecho }).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
+    if ($Deshacer -and @($script:Reverts).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
   }
   Info ''
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
