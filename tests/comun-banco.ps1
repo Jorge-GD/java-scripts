@@ -86,6 +86,33 @@ function Igual([string]$Que, $Esperado, $Real) {
 
 function Cola([string]$Texto) { return ((@($Texto -split "`n") | Select-Object -Last 12) -join ' / ') }
 
+# Esta el proceso $Num? Un zombi (estado Z en /proc/<pid>/stat) ya no corre: solo espera a su padre, y cuenta como muerto.
+function Proceso-Vivo([int]$Num) {
+  if (-not (Get-Process -Id $Num -ErrorAction SilentlyContinue)) { return $false }
+  if (-not (Test-Path -LiteralPath "/proc/$Num/stat")) { return $true }
+  try { return (([System.IO.File]::ReadAllText("/proc/$Num/stat") -replace '^.*\) ', '')[0] -ne 'Z') }
+  catch { return $false }
+}
+
+# Lo que se comprueba en todo tope hecho con mvn-dormido.ps1: sus PID (el del falso y el de su hijo, en $CarpetaPids\pids.txt) ya
+# no viven (10 s de plazo), la llamada ha tardado menos de $Limite s (el falso duerme 40) y el registro lleva lo que escribio.
+function Comprueba-Tope([string]$CarpetaPids, [double]$Segundos, [int]$Limite, [string]$Registro) {
+  $nums = @()
+  $f = Join-Path $CarpetaPids 'pids.txt'
+  if (Test-Path -LiteralPath $f) { $nums = @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ } | ForEach-Object { [int]$_ }) }
+  $plazo = (Get-Date).AddSeconds(10)
+  do {
+    $vivos = @($nums | Where-Object { Proceso-Vivo $_ })
+    if ($vivos.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 200
+  } while ((Get-Date) -lt $plazo)
+  Comprueba 'el falso se colgo (anoto su PID y el de su hijo) y ninguno de los dos vive' ($nums.Count -ge 2 -and $vivos.Count -eq 0) ("PID: $($nums -join ' '), vivos: $($vivos -join ' ')")
+  Comprueba "la llamada no espero al falso: menos de $Limite s" ($Segundos -lt $Limite) "$Segundos s"
+  $texto = ''
+  if (Test-Path -LiteralPath $Registro) { $texto = [System.IO.File]::ReadAllText($Registro) }
+  Comprueba 'el registro lleva lo que Maven habia escrito' ($texto -match [regex]::Escape('[INFO] Running com.ejemplo.CuelgaTest')) "$Registro : $texto"
+}
+
 # ================================ LANZADOR ================================
 # Corre las pruebas de $Pruebas (nombre -> bloque), cuenta y sale con 0 o con 1.
 function Invoke-Banco($Pruebas, [string]$Titulo) {
