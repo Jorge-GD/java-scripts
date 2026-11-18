@@ -2659,6 +2659,43 @@ $Pruebas['m9 plan: si la repeticion vuelve a nombrar un paquete que no esta, sig
   Igual 'sale con 0' 0 $x.R.Codigo
 }
 
+# ----- M9.7: el plan no marca los paquetes que ya existen en el repo migrado -----
+# Plan-M9 con una clase del repo (ya en su commit) en este paquete de com.acme.life (ruta con '/', relativa al paquete base).
+function Plan-M97([string]$Nombre, [string]$Guion, [string]$PaqueteEnRepo) {
+  $e = Escenario-M6 $Nombre
+  $pk = 'com.acme.life.' + $PaqueteEnRepo.Replace('/', '.')
+  Escribe $e.Repo ('src/main/java/com/acme/life/' + $PaqueteEnRepo + '/Marca.java') "package $pk;`n`n/** Clase que ya estaba en el repo migrado. */`npublic class Marca {`n}`n"
+  [void](GitEn $e.Repo @('add', '--', 'src'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'un paquete mas'))
+  $r = Rescate @('-Modo', 'plan', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinBuild', '-Si') $Guion
+  return [pscustomobject]@{ E = $e; R = $r; Llamadas = @(Llamadas-M6 $e 'plan') }
+}
+
+$Pruebas['m97 plan: un paquete que la plantilla no tiene pero el repo si (carpeta con clases o carpeta de un paquete con clases) no se marca ni se repite'] = {
+  # guion, paquete que ya tiene el repo y lo que el plan nombra (el plan lista tambien la clase del repo, por eso se mira su nombre entero)
+  foreach ($c in @(@('plan-paquete-nuevo', 'infrastructure/util', 'com\.acme\.life\.infrastructure\.util\.LeerFichero'), @('plan-destino-nuevo', 'infrastructure/util', 'destino: infrastructure/util'), @('plan-paquete-nuevo', 'infrastructure/util/interno', 'com\.acme\.life\.infrastructure\.util\.LeerFichero'))) {
+    $x = Plan-M97 ('m97-plan-en-repo-' + $c[0] + '-' + $c[1].Replace('/', '-')) $c[0] $c[1]
+    $q = "$($c[0]) con el repo en $($c[1])"
+    Igual "$q`: una sola llamada de plan" 1 $x.Llamadas.Count
+    Comprueba "$q`: no habla de repetir ni de paquetes que la plantilla no tiene" ($x.R.Salida -notmatch 'lo repito una vez' -and $x.R.Salida -notmatch 'nombra paquetes que la plantilla no tiene' -and $x.R.Salida -notmatch 'sigue nombrando') (Cola $x.R.Salida)
+    Comprueba "$q`: el plan queda como lo escribio la IA, con el paquete del repo" ((Lee $x.E.Wt '.rescate/plan-estructura.md') -match $c[2]) (Cola $x.R.Salida)
+    Comprueba "$q`: dice el plan escrito" ($x.R.Salida -match 'Plan escrito') (Cola $x.R.Salida)
+    Igual "$q`: sale con 0" 0 $x.R.Codigo
+  }
+}
+
+$Pruebas['m97 plan: un paquete que no tienen ni la plantilla ni el repo se sigue marcando, aunque el repo tenga otros que la plantilla no tiene'] = {
+  # el repo tiene infrastructure/otra y el plan nombra infrastructure/util: ese no esta en ningun sitio
+  $x = Plan-M97 'm97-plan-fuera-de-los-dos' 'plan-paquete-nuevo' 'infrastructure/otra'
+  Igual 'dos llamadas de plan' 2 $x.Llamadas.Count
+  if ($x.Llamadas.Count -lt 2) { Comprueba 'salida' $false (Cola $x.R.Salida); return }
+  Comprueba 'la consola dice que lo repite y nombra el paquete y la clase' ($x.R.Salida -match 'lo repito una vez con el motivo' -and $x.R.Salida -match 'infrastructure/util \(en com\.acme\.life\.infrastructure\.util\.LeerFichero\)') (Cola $x.R.Salida)
+  Comprueba 'sin nombrar el paquete que si esta en el repo' ($x.R.Salida -notmatch 'infrastructure/otra') (Cola $x.R.Salida)
+  Comprueba 'la segunda llamada lleva el motivo' ((Prompt-M6 $x.E $x.Llamadas[1]) -match '## CORRECCION') (Cola $x.R.Salida)
+  Comprueba 'el plan que queda es el bueno' ((Lee $x.E.Wt '.rescate/plan-estructura.md') -notmatch 'com\.acme\.life\.infrastructure\.util\.LeerFichero') (Cola $x.R.Salida)
+  Igual 'sale con 0' 0 $x.R.Codigo
+}
+
 # ===== M9.2: EL MOTIVO DEL TEST QUE FALLA Y EL TEXTO DE 'estructura' =====
 # Informes de surefire como los que escribe Maven (el fallo de ArchUnit y el de una excepcion), con sus lineas 'at' con tabulador.
 $ClaseM92 = 'com.acme.life.ArquitecturaTest'

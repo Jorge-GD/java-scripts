@@ -1475,9 +1475,17 @@ function Test-PaqueteEnPlantilla([string]$Rel, $Cal) {
   return $false
 }
 
-# Los paquetes que un plan nombra y la plantilla no tiene, como 'paquete (en <nombre tal como esta escrito>)': los de '## Piezas
-# comunes' (nombres completos de clase, con '.' o con '/') y los de las lineas 'destino:' de '## Ficheros'. Lee con tolerancia: lo que
-# no se entiende, no se comprueba. Sin plantilla, nada.
+# Existe un paquete en el repo que se migra? Si su carpeta esta bajo el paquete base (src/main/java/<paquete base>/): lo que ya
+# esta alli lo dio por bueno el paso 'estructura'. El paquete base es el del ultimo diagnostico ($script:BasePkg): no se recorre
+# el repo otra vez. Antes del primer diagnostico no hay paquete base y no se encuentra nada.
+function Test-PaqueteEnRepo([string]$Rel) {
+  $base = Join-Ruta (Join-Ruta $RepoRoot 'src/main/java') ($script:BasePkg -replace '\.', '/')
+  return (Test-Path -LiteralPath (Join-Ruta $base $Rel) -PathType Container)
+}
+
+# Los paquetes que un plan nombra y ni la plantilla ni el repo tienen, como 'paquete (en <nombre tal como esta escrito>)': los de
+# '## Piezas comunes' (nombres completos de clase, con '.' o con '/') y los de las lineas 'destino:' de '## Ficheros'. Lee con
+# tolerancia: lo que no se entiende, no se comprueba. Sin plantilla, nada.
 function Get-PaquetesFueraDePlantilla([string]$Plan, $Cal) {
   if (-not $Cal -or $Cal.Paquetes.Count -eq 0) { return @() }
   $nombres = New-Object System.Collections.Generic.List[string]
@@ -1494,7 +1502,7 @@ function Get-PaquetesFueraDePlantilla([string]$Plan, $Cal) {
   $fuera = [ordered]@{}
   foreach ($n in $nombres) {
     $rel = Get-PaqueteDePlan $n $Cal
-    if ($rel -and -not $fuera.Contains($rel) -and -not (Test-PaqueteEnPlantilla $rel $Cal)) { $fuera[$rel] = $n }
+    if ($rel -and -not $fuera.Contains($rel) -and -not (Test-PaqueteEnPlantilla $rel $Cal) -and -not (Test-PaqueteEnRepo $rel)) { $fuera[$rel] = $n }
   }
   return @($fuera.Keys | ForEach-Object { "$_ (en $($fuera[$_]))" })
 }
