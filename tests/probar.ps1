@@ -2079,7 +2079,7 @@ $Pruebas['m8 consola: tras los NO PASA salen las lineas del detalle (lo roto pri
   $nuevoL = '    - ' + $LeerMovidoM8 + " - subpaquete 'infrastructure/util' no existe en la plantilla"
   Comprueba 'tras los NO PASA sale el detalle del intento' ($det.Count -gt 0 -and $c1.IndexOf('NO PASA') -ge 0 -and $c1.IndexOf('NO PASA') -lt $c1.IndexOf($det[0])) $c1
   Comprueba 'su primera linea es lo nuevo de estructura, con fichero y regla' ($det.Count -gt 0 -and $det[0].StartsWith($nuevoL)) (($det | Select-Object -First 2) -join ' / ')
-  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte\[\] o InputStream, nunca File ni Path$' }).Count -eq 1) $c1
+  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; fuera de esos adaptadores no se abre, lee, escribe, lista ni borra ningun fichero \(pasar un Path como dato si vale\)$' }).Count -eq 1) $c1
   Comprueba 'con tan pocas lineas no dice que falten' ($c1 -notmatch ' mas en ') $c1
   $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
   if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
@@ -2115,7 +2115,7 @@ $Pruebas['m8 consola: con mas de 8 lineas salen 8 y dice cuantas faltan; el lote
   Comprueba 'y la ruta de la correccion completa del ultimo intento' ($des -match 'Correccion completa del ultimo intento: \.rescate/intento-ficheros-1-2\.md') $des
   # el atascado: su nota lleva las lineas del detalle del ultimo intento
   $at = Lee $e.Wt '.rescate/atascados.md'
-  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte\[\] o InputStream, nunca File ni Path' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
+  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; fuera de esos adaptadores no se abre, lee, escribe, lista ni borra ningun fichero \(pasar un Path como dato si vale\)' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
 }
 
 $Pruebas['m8 consola: si Copilot sale con un codigo distinto de 0 salen las ultimas 5 lineas no vacias de su salida'] = {
@@ -2675,17 +2675,17 @@ $Pruebas['m92 estructura: el texto del paso manda actualizar los imports de todo
 # ===== M9.3: LA CARPETA SFTP ES DE ADAPTADORES, Y LOS TEXTOS DE FICHEROS Y DE ENTRADA/SALIDA =====
 $PkM93 = 'src/main/java/com/acme/life/'
 $PorEntradaM93 = 'un adaptador de entrada no importa uno de salida: usa la interfaz de su puerto (application/ports/output) o un caso de uso, como en la PLANTILLA'
-$FicherosM93 = 'acceso directo a ficheros locales (java.nio.file.Path): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte[] o InputStream, nunca File ni Path'
+$FicherosM93 = 'acceso directo a ficheros locales (java.nio.file.Files): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; fuera de esos adaptadores no se abre, lee, escribe, lista ni borra ningun fichero (pasar un Path como dato si vale)'
 $AdaptadorRecursoM93 = "package com.acme.life.infrastructure.adapters.output.{0};`n`nimport org.springframework.core.io.FileSystemResource;`n`n/** Adaptador de salida que abre un recurso. */`npublic class Recurso {{`n    private FileSystemResource recurso;`n}}`n"
 
 # Repo de juguete con: un adaptador de salida sftp y otro ftp que importan FileSystemResource, un tasklet de entrada que importa el adaptador de
-# salida de ficheros y un caso de uso con java.nio.file.Path. Diagnostico sin Maven: lo que sale y los hallazgos.
+# salida de ficheros y un caso de uso con java.nio.file.Files. Diagnostico sin Maven: lo que sale y los hallazgos.
 function Escenario-M93([string]$Nombre) {
   $e = Nuevo-Escenario $Nombre
   Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/output/sftp/RecursoSftp.java') ($AdaptadorRecursoM93 -f 'sftp')
   Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/output/ftp/RecursoFtp.java') ($AdaptadorRecursoM93 -f 'ftp')
   Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/input/job/CargaTasklet.java') "package com.acme.life.infrastructure.adapters.input.job;`n`nimport com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter;`n`n/** Tasklet de entrada. */`npublic class CargaTasklet {`n    private FicheroLocalAdapter ficheros;`n}`n"
-  Escribe $e.Repo ($PkM93 + 'application/usecases/RutaUseCase.java') "package com.acme.life.application.usecases;`n`nimport java.nio.file.Path;`n`n/** Caso de uso con una ruta. */`npublic class RutaUseCase {`n    private Path ruta;`n}`n"
+  Escribe $e.Repo ($PkM93 + 'application/usecases/RutaUseCase.java') "package com.acme.life.application.usecases;`n`nimport java.nio.file.Files;`n`n/** Caso de uso con una ruta. */`npublic class RutaUseCase {`n    private Files ruta;`n}`n"
   [void](GitEn $e.Repo @('add', '--', 'src/main/java'))
   [void](GitEn $e.Repo @('commit', '-q', '-m', 'm93'))
   $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
@@ -2721,6 +2721,98 @@ $Pruebas['m93 textos: el hallazgo de un adaptador de entrada y el de ficheros sa
   if ($fic.Count -eq 1) {
     Igual 'su texto es el nuevo, entero' $FicherosM93 $fic[0].Detalle
     Comprueba 'y es ASCII' ([string]$fic[0].Detalle -cmatch '^[\x20-\x7E]+$') $fic[0].Detalle
+  }
+}
+
+# ===== M9.4: EL YML DE config/ CUENTA, Y UN Path ES UN DATO, NO ACCESO A FICHEROS =====
+# Spring Boot carga tambien classpath:/config/application*: el yml de src/main/resources/config se lee igual que el de la raiz.
+# Quita el yml de la raiz de un repo de juguete y deja este texto en src/main/resources/config/application.yml, todo en un commit.
+function Mueve-Yml-A-Config([string]$Raiz, [string]$Texto) {
+  Remove-Item -LiteralPath (Get-Ruta $Raiz 'src/main/resources/application.yml') -Force
+  Escribe $Raiz 'src/main/resources/config/application.yml' $Texto
+  [void](GitEn $Raiz @('add', '--', 'src/main/resources'))
+  [void](GitEn $Raiz @('commit', '-q', '-m', 'yml en config'))
+}
+
+$Pruebas['m94 config: el yml solo en src/main/resources/config con bloque sftp no da el error de configuracion sftp; sin el bloque, si'] = {
+  $e = Nuevo-Escenario 'm94-yml-config'
+  Mueve-Yml-A-Config $e.Repo "batch:`n  nombre: ejemplo`nsftp:`n  host: `${SFTP_HOST}`n"
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'con el bloque sftp en config/ no hay error de configuracion sftp' 0 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+  Escribe $e.Repo 'src/main/resources/config/application.yml' "batch:`n  nombre: ejemplo`n"
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  Igual 'sin el bloque en el yml de config/, si salta (el fichero se lee)' 1 (Hallazgos-Sftp $e.Repo $SinYmlSftp).Count
+}
+
+$Pruebas['m94 config: un secreto en claro en config/application.yml da el mismo hallazgo que en la raiz, con el Rel de config/'] = {
+  $e = Escenario-Con-Recursos 'm94-secreto-config' @{ 'config/application.yml' = @'
+spring:
+  datasource:
+    username: life
+    password: "acme2015"   # clave de pruebas
+'@ }
+  $d = Diagnostica-Secretos $e
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Igual 'un hallazgo' 1 $d.H.Count
+  Igual 'es un error' 'error' $d.H[0].Sev
+  Igual 'del fichero de config/' 'src/main/resources/config/application.yml' $d.H[0].Fichero
+  Igual 'en su linea' 4 $d.H[0].Linea
+  Igual 'con su detalle, el de siempre' ($DetalleSecreto -f 'password') $d.H[0].Detalle
+  Comprueba 'el valor no sale ni en la consola, ni en hallazgos.json, ni en el informe' (-not (Lo-Que-Sale $e.Repo $d.R.Salida).Contains('acme2015'))
+}
+
+$Pruebas['m94 sftp: una plantilla con el yml solo en config/ y con sftp se detecta como YmlSftp (la plantilla si)'] = {
+  $e = Nuevo-Escenario 'm94-plantilla-config'
+  Mueve-Yml-A-Config $e.Plantilla "batch:`n  carpeta: `${BATCH_CARPETA:/datos}`nsftp:`n  host: `${SFTP_HOST:}`n"
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  $y = Hallazgos-Sftp $e.Repo $SinYmlSftp
+  Igual 'un error de configuracion sftp (el repo no lo tiene)' 1 $y.Count
+  Comprueba 'dice que la plantilla si lo tiene' ($y.Count -eq 1 -and $y[0].Detalle -match '\(la plantilla si\)') (Cola $r.Salida)
+}
+
+# Repo de juguete con tres tasklets de entrada: uno que solo lleva una ruta (Path y Paths), uno que ademas importa Files y uno con el
+# comodin java.nio.file.*. Diagnostico sin Maven.
+function Escenario-M94([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre
+  $pk = $PkM93 + 'infrastructure/adapters/input/job/'
+  $cab = "package com.acme.life.infrastructure.adapters.input.job;`n`n"
+  Escribe $e.Repo ($pk + 'RutaTasklet.java') ($cab + "import java.nio.file.Path;`nimport java.nio.file.Paths;`n`n/** Tasklet que lleva una ruta como dato. */`npublic class RutaTasklet {`n    private Path ruta = Paths.get(`"x`");`n}`n")
+  Escribe $e.Repo ($pk + 'FilesTasklet.java') ($cab + "import java.nio.file.Files;`nimport java.nio.file.Path;`nimport java.nio.file.Paths;`n`n/** Tasklet que abre un fichero. */`npublic class FilesTasklet {`n    private Path ruta = Paths.get(`"x`");`n    private Files abre;`n}`n")
+  Escribe $e.Repo ($pk + 'ComodinTasklet.java') ($cab + "import java.nio.file.*;`n`n/** Tasklet con el comodin. */`npublic class ComodinTasklet {`n    private Path ruta;`n}`n")
+  [void](GitEn $e.Repo @('add', '--', 'src/main/java'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'm94'))
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  return [pscustomobject]@{ E = $e; R = $r; H = @(Hallazgos $e.Repo) }
+}
+
+$Pruebas['m94 ficheros: importar solo Path y Paths no es acceso a ficheros; con Files si, y lista Files; el resto de java.nio.file sigue marcado'] = {
+  $x = Escenario-M94 'm94-path'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $f = @($x.H | Where-Object { $_.Cat -eq 'ficheros' })
+  Igual 'el tasklet que solo importa Path y Paths no tiene hallazgo de ficheros' 0 @($f | Where-Object { $_.Fichero -like '*RutaTasklet.java' }).Count
+  $con = @($f | Where-Object { $_.Fichero -like '*FilesTasklet.java' })
+  Igual 'el que importa tambien Files, si' 1 $con.Count
+  if ($con.Count -eq 1) { Comprueba 'y lista solo Files' ($con[0].Detalle -match '^acceso directo a ficheros locales \(java\.nio\.file\.Files\): ') $con[0].Detalle }
+  $com = @($f | Where-Object { $_.Fichero -like '*ComodinTasklet.java' })
+  Igual 'el del comodin java.nio.file.* sigue marcado' 1 $com.Count
+  if ($com.Count -eq 1) { Comprueba 'y lista el comodin' ($com[0].Detalle -match '^acceso directo a ficheros locales \(java\.nio\.file\.\*\): ') $com[0].Detalle }
+  # FicheroImport se sigue cambiando desde la config: con Path en la lista, el tasklet de la ruta vuelve a salir
+  Pon-Config $x.E @{ FicheroImport = '^java\.nio\.file\.Paths?$' }
+  [void](Rescate @('-Repo', $x.E.Repo, '-Plantilla', $x.E.Plantilla, '-SinBuild'))
+  $otra = @(Hallazgos $x.E.Repo | Where-Object { $_.Cat -eq 'ficheros' -and $_.Fichero -like '*RutaTasklet.java' })
+  Igual 'con FicheroImport de la config que marca Path y Paths, el tasklet de la ruta sale' 1 $otra.Count
+}
+
+$Pruebas['m94 textos: el hallazgo de ficheros sale con el texto nuevo, entero y en ASCII'] = {
+  $x = Escenario-M94 'm94-textos'
+  $fic = @($x.H | Where-Object { $_.Cat -eq 'ficheros' -and $_.Fichero -like '*FilesTasklet.java' })
+  Igual 'un hallazgo de ficheros en el tasklet con Files' 1 $fic.Count
+  if ($fic.Count -eq 1) {
+    Igual 'su texto es el nuevo, entero' $FicherosM93 $fic[0].Detalle
+    Comprueba 'y es ASCII' ([string]$fic[0].Detalle -cmatch '^[\x20-\x7E]+$') $fic[0].Detalle
+    Comprueba 'dice que pasar un Path como dato si vale' ([string]$fic[0].Detalle).EndsWith('(pasar un Path como dato si vale)') $fic[0].Detalle
   }
 }
 
