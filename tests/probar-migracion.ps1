@@ -2569,6 +2569,28 @@ $Pruebas['86 paginas de cobertura: casos de los datos (medida, sin medir, ausent
   }
 }
 
+$Pruebas['123 tope de Maven: cobertura: si el Maven de JaCoCo se pasa del tope (MinutosMaven de ajustes.json), sin medir con el mensaje y migracion sale con 0'] = {
+  $e = Nuevo-Escenario 'cob-tope' @('Clase1') @{ MvnExe = (Join-Path $falsos 'mvn-dormido.ps1'); MinutosMaven = 0.05 }
+  $carpPids = Join-Path $e.Raiz 'pids'
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  $r = Con-Entorno @{ RESCATE_MVN_CUELGA = 'jacoco-maven-plugin'; RESCATE_MVN_PIDS = $carpPids; RESCATE_MVN_SEGUNDOS = 120 } { Migra $e (Basicos $e) }
+  $seg = $reloj.Elapsed.TotalSeconds
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Cobertura-De $e 'antes'
+  Comprueba 'hay cobertura-antes.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'medida false' 'False' "$($c.medida)"
+  Comprueba 'porcentaje, cubiertas y total nulos' (($null -eq $c.porcentaje) -and ($null -eq $c.cubiertas) -and ($null -eq $c.total)) ($c | ConvertTo-Json -Compress)
+  $motivo = "$($c.motivo)"
+  Comprueba 'el motivo es el mensaje del tope (0.05: manda el ajustes.json)' ($motivo.StartsWith('Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (cobertura)). Registro: ')) $motivo
+  $reg = [regex]::Match($motivo, 'Registro: (\S+)\.(\s|$)').Groups[1].Value
+  Comprueba 'su registro es registros/cobertura-antes.log y existe' ($reg.Replace('\', '/').EndsWith('registros/cobertura-antes.log') -and (Test-Path -LiteralPath $reg)) $motivo
+  $b = Panel-De (Pagina $e.Out '2-problemas.html') 'cobertura'
+  Comprueba 'la pagina 2 dice no se ha podido medir y el motivo (el del tope)' ($b.Contains('no se ha podido medir: ' + (Html $motivo)) -and $b.Contains('no se ha podido medir: Maven se ha pasado del tope de 0.05 min')) $b
+  Comprueba 'y no pinta ningun porcentaje' ($b -notmatch '\d\s*%') $b
+  Comprueba-Tope $carpPids $seg 60 $reg
+}
+
 $Pruebas['87 dudas de job: las clases que no caben en la redaccion no van a dudas ni a la pagina de negocio; salen en la portada con su job'] = {
   $e = Escenario-Dos 'fuera' @() @{ CaracteresPorTarea = 650 }
   $r = Migra $e (Basicos $e) $GuionBase
