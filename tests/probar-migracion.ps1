@@ -3679,7 +3679,7 @@ $Pruebas['117 (P2) portada, Lo que te toca: el grupo de distintos va el primero,
 
 # Las lineas de Que ha hecho el script de una portada: la clave de la fase, su estado, su texto y su cuenta, en su orden.
 function Clave-Fase([string]$Nombre) {
-  foreach ($k in @(@('diagnostico', 'Diagn.stico'), @('clases', 'Lectura de las clases'), @('mapa', 'Mapa de jobs'), @('jobs', 'Redacci.n de cada job'), @('resumen', 'Resumen y glosario'),
+  foreach ($k in @(@('diagnostico', 'Diagn.stico'), @('clases', 'Lectura de las clases'), @('mapa', 'Mapa de jobs'), @('lanzadores', 'C.mo se lanza cada job'), @('jobs', 'Redacci.n de cada job'), @('resumen', 'Resumen y glosario'),
       @('pre', 'Guion de prueba'), @('casos', 'Casos de las reglas sin caso'), @('correccion', 'Correcci.n del migrado'), @('comparar', 'Comparaci.n con el original'), @('local', 'Prueba en local'))) {
     if ($Nombre -match $k[1]) { return $k[0] }
   }
@@ -3696,9 +3696,9 @@ $Pruebas['118 (P2) portada, Que ha hecho el script: el orden segun la respuesta,
   $d = Datos-Pagina4
   $con = (Correccion-Con (Corrida-Dos $GuionBase).E 'p2-fases-con' $d.Antes $d.Despues $d.Corr).Dir
   $sin = Local-Salida 'p2-fases-sin'
-  $corregir = 'diagnostico clases mapa jobs resumen pre casos correccion comparar local'
-  $parar = 'diagnostico clases mapa jobs resumen pre casos comparar correccion local'
-  $antes = 'diagnostico=hecha clases=hecha mapa=hecha jobs=hecha resumen=hecha pre=hecha'
+  $corregir = 'diagnostico clases mapa lanzadores jobs resumen pre casos correccion comparar local'
+  $parar = 'diagnostico clases mapa lanzadores jobs resumen pre casos comparar correccion local'
+  $antes = 'diagnostico=hecha clases=hecha mapa=hecha lanzadores=hecha jobs=hecha resumen=hecha pre=hecha'
   $parada = [ordered]@{ motivo = 'tope-de-tiempo'; detalle = 'detalle'; registro = 'registro'; ayuda = 'ayuda' }
   $filas = @(
     @{ N = 'corregir, comparando, con la correccion completa'; S = $con; C = @{ fase = 'comparar' }; L = $null; Orden = $corregir; E = "$antes correccion=hecha comparar=curso local=espera"; Arriba = 'La pasada no ha terminado: va por la fase comparar\.' },
