@@ -185,6 +185,23 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 
 /* problemas del migrado: portada (barras por area) y pagina de problemas */
 .total-l{margin-top:12px;font-size:20px}
+.areas{--max:1;container-type:inline-size;margin-top:16px}
+.area{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n e" "b b";gap:8px 16px;padding:12px 0;border-top:2px solid var(--edge);align-items:center}
+.area:first-child{border-top:0}
+.a-n{grid-area:n;font-weight:700}
+.a-e{grid-area:e;justify-self:end;color:var(--muted)}
+.a-b{grid-area:b;max-width:560px}
+.barra{display:flex;align-items:center;gap:12px}
+.b-et{width:72px;flex:none;color:var(--muted)}
+.pista{flex:1;min-width:0;display:flex;align-items:center;gap:8px}
+.rel{flex:none;display:block;height:12px;width:calc(var(--v) / var(--max) * (100% - 40px));border-radius:0 4px 4px 0}
+.barra.antes .rel{background:repeating-linear-gradient(135deg,var(--branch) 0 4px,var(--edge) 4px 8px)}
+.barra b{min-width:24px;font-variant-numeric:tabular-nums}
+.area.limpia .a-b{display:none}
+.area.limpia .a-n{color:var(--muted);font-weight:400}
+@container (min-width:720px){
+  .area{grid-template-columns:232px minmax(0,1fr) 144px;grid-template-areas:"n b e"}
+}
 .cab-prob .lede{margin-top:8px}
 .prob-grupo{margin-top:32px;background:var(--surf);border:2px solid var(--ink)}
 .pg-cab{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:12px 16px;background:var(--bg);border-bottom:2px solid var(--ink)}
@@ -194,10 +211,10 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .filas{display:grid}
 .fila{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;align-items:baseline;padding:12px 16px;border-top:2px solid var(--edge);border-left:4px solid var(--st,var(--edge))}
 .fila .q{grid-column:2;overflow-wrap:anywhere}
-.fila .d{font-weight:600}
+.fila .d{font-weight:600;overflow-wrap:anywhere}
 .s-error{--st:var(--mal)}
 .s-aviso{--st:var(--toca)}
-.sev{display:inline-flex;align-items:center;gap:8px;font-weight:700}
+.sev{display:inline-flex;align-items:center;gap:8px;min-width:80px;font-weight:700}
 .sev svg{width:20px;height:20px;flex:none}
 .sev-error{color:var(--mal)}
 .sev-aviso{color:var(--toca)}

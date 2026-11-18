@@ -1818,6 +1818,7 @@ $Pruebas['68 pagina de problemas: el estado del build, una frase por cada texto 
     $b = Panel-De $x.P 'estado-build'
     $otras = @($casos | ForEach-Object { $_[1] } | Where-Object { $_ -ne $caso[1] })
     Comprueba "'$($caso[0])' : su frase y ninguna de las otras" ($b.Contains($caso[1]) -and @($otras | Where-Object { $b.Contains($_) }).Count -eq 0) $b
+    Comprueba "'$($caso[0])' : la portada dice lo mismo" ((Panel-De $x.I 'problemas-migrado').Contains($caso[1]))
   }
 }
 
@@ -1830,11 +1831,45 @@ $Pruebas['69 pagina de problemas: sin los datos del diagnostico, la pagina y la 
   Comprueba 'Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
   foreach ($n in @('index.html', '1-batch-original.html', '2-problemas.html')) { Comprueba "$n : se genera" ((Pagina $s $n).Length -gt 0) }
   Comprueba 'la pagina de problemas lo dice' ((Pagina $s '2-problemas.html') -match 'la fase diagnostico no ha terminado')
+  $i = Pagina $s 'index.html'
+  Comprueba 'la seccion de la portada, igual' ((Panel-De $i 'problemas-migrado') -match 'la fase diagnostico no ha terminado')
+  Comprueba 'y la linea de la fase no cuenta errores' ($i -notmatch 'errores: \d')
   # tambien si lo que falta es el diagnostico.md
   $s = Copia-Salida $c.E 'diag-medias-md'
   Remove-Item -LiteralPath (Join-Path $s 'datos/diagnostico-antes.md') -Force
   $g = Genera-Informes $s
   Comprueba 'sin el .md, igual' ($g.Codigo -eq 0 -and (Pagina $s '2-problemas.html') -match 'la fase diagnostico no ha terminado')
+}
+
+$Pruebas['70 portada: seccion de problemas con total, barra por area con errores y enlace; diagnostico la primera fase; ficheros nuevos; navegacion'] = {
+  $c = Corrida-Dos $GuionBase
+  $hall = @(
+    (Hallazgo 'build' 'error' 'pom.xml' 0 'uno'), (Hallazgo 'build' 'error' 'pom.xml' 0 'dos'), (Hallazgo 'build' 'error' 'pom.xml' 0 'tres'),
+    (Hallazgo 'hexagonal' 'error' 'A.java' 1 'cuatro'), (Hallazgo 'hexagonal' 'aviso' 'A.java' 2 'cinco'), (Hallazgo 'hexagonal' 'aviso' 'A.java' 3 'seis'),
+    (Hallazgo 'tests' 'aviso' 'T.java' 1 'siete')
+  )
+  $x = Problemas-Con $c.E 'diag-portada' $hall (Md-Diagnostico 'compila: SI | tests: OK')
+  $i = $x.I
+  $sec = Panel-De $i 'problemas-migrado'
+  Comprueba 'la portada tiene la seccion Problemas del migrado' ($sec.Length -gt 0 -and $sec -match 'Problemas del migrado')
+  Comprueba 'va despues de Lo que te toca' ($i.IndexOf('id="problemas-migrado"') -gt $i.IndexOf('id="lo-que-te-toca"'))
+  Comprueba 'dice el total: 4 errores y 3 avisos' ($sec.Contains('4 errores y 3 avisos'))
+  Igual 'una linea con barra por cada area con errores' 2 ([regex]::Matches($sec, '<li class="area">').Count)
+  Igual 'las demas areas como limpia' 7 ([regex]::Matches($sec, '<li class="area limpia">').Count)
+  Comprueba 'la escala es el mayor numero de errores de un area (3)' ($sec -match '--max:3(?!\d)')
+  Comprueba 'las barras valen 3 y 1' ($sec -match '--v:3(?!\d)' -and $sec -match '--v:1(?!\d)')
+  Comprueba 'enlaza a 2-problemas.html' ($sec -match 'href="2-problemas\.html"')
+  $fases = [regex]::Match($i, '(?s)<ol class="fases">.*?</ol>').Value
+  $primera = [regex]::Match($fases, '(?s)<li>.*?</li>').Value
+  Comprueba 'Que ha hecho el script: la primera linea es el diagnostico del migrado, con su cuenta' ($primera -match 'Diagn.stico del migrado' -and $primera.Contains('errores: 4, avisos: 3')) $primera
+  $f = [regex]::Match($i, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'Que es cada fichero: 2-problemas.html, hallazgos-antes.json y diagnostico-antes.md' ($f.Contains('2-problemas.html') -and $f.Contains('datos/hallazgos-antes.json') -and $f.Contains('datos/diagnostico-antes.md')) $f
+  foreach ($par in @(@('index.html', $i), @('1-batch-original.html', (Pagina $x.Dir '1-batch-original.html')), @('2-problemas.html', $x.P))) {
+    $h = $par[1]
+    Comprueba "$($par[0]) : la navegacion lleva a las tres paginas" ($h -match 'href="index\.html"' -and $h -match 'href="1-batch-original\.html"' -and $h -match 'href="2-problemas\.html"')
+    Igual "$($par[0]) : aria-current solo en su pagina" 1 ([regex]::Matches($h, 'aria-current="page"').Count)
+    Comprueba "$($par[0]) : y es el de su enlace" ($h -match ('href="' + [regex]::Escape($par[0]) + '" aria-current="page"'))
+  }
 }
 
 $Pruebas['71 pagina de problemas: la frase de lo que pasara segun la respuesta (parar o corregir)'] = {

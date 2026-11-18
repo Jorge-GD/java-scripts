@@ -37,7 +37,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # Las fases del script, en orden, y de que tipo son sus tareas
-$FasesInforme = @(@('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'))
+$FasesInforme = @(@('diagnostico', ''), @('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'))
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -45,8 +45,9 @@ $TextosBuild = @(
 )
 # Los ficheros de la carpeta del informe: ruta, trozo que lo explica, icono y si es una pagina del informe
 $FicherosInforme = @(
-  @('index.html', 'f-index', 'f-fichero', $true), @('1-batch-original.html', 'f-original', 'f-fichero', $true),
+  @('index.html', 'f-index', 'f-fichero', $true), @('1-batch-original.html', 'f-original', 'f-fichero', $true), @('2-problemas.html', 'f-problemas', 'f-fichero', $true),
   @('datos', 'f-datos', 'f-carpeta', $false), @('datos/estado.json', 'f-estado', 'f-fichero', $false),
+  @('datos/hallazgos-antes.json', 'f-hallazgos', 'f-fichero', $false), @('datos/diagnostico-antes.md', 'f-diagnostico', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
   @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
@@ -427,7 +428,11 @@ function Get-FaseHtml($D, $T, [string]$Fase, [string]$Tipo) {
   elseif ($Fase -eq $est) { $e = 'curso' }
   $ts = @($D.Tareas | Where-Object { $_.tipo -eq $Tipo })
   $cuenta = Format-Trozo $T 'cuenta-ninguna'
-  if ($ts.Count -gt 0) {
+  if ($Fase -eq 'diagnostico') {
+    $cuenta = Format-Trozo $T 'sin-valor'
+    if ($D.Diag) { $cuenta = Format-Trozo $T 'cuenta-diagnostico' @{ ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)" } }
+  }
+  elseif ($ts.Count -gt 0) {
     $c = @{}
     foreach ($s in @('hecha', 'atascada', 'pendiente')) { $c[$s] = "$(@($ts | Where-Object { $_.estado -eq $s }).Count)" }
     $cuenta = Format-Trozo $T 'cuenta-tareas' @{ HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente'] }
@@ -555,6 +560,23 @@ function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
   return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag })
 }
 
+# La seccion "Problemas del migrado" de la portada: el estado del build, el total y una barra por area con sus errores.
+function Get-ProblemasPortada($D, $T) {
+  if (-not $D.Diag) { return (Format-Trozo $T 'sin-datos' @{ FASE = 'diagnostico'; ETIQUETA = (Format-Trozo $T 'et-sin') }) }
+  $build = Get-BuildHtml $T $D.Diag
+  $max = 1
+  foreach ($a in $D.Diag.Areas) { if (@($a.Errores).Count -gt $max) { $max = @($a.Errores).Count } }
+  $filas = @($D.Diag.Areas | ForEach-Object {
+      $n = @($_.Errores).Count
+      if ($n -gt 0) { Format-Trozo $T 'area-barra' @{ NOMBRE = (Get-NombreArea $T $_.Id); V = "$n" } }
+      else { Format-Trozo $T 'area-limpia' @{ NOMBRE = (Get-NombreArea $T $_.Id) } }
+    })
+  return (Format-Trozo $T 'prob-datos' @{
+      ETIQUETA_BUILD = $build.Etiqueta; BUILD = $build.Frase; ETIQUETA = (Format-Trozo $T 'et-medido'); ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)"
+      MAX = "$max"; AREAS = ($filas -join "`n")
+    })
+}
+
 function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
   $est = $D.Estado
   $fase = ''
@@ -579,7 +601,7 @@ function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
       MODELO = $modelo; EMPEZO = (Get-TextoFecha $T $e.creado); LLEVA = (Get-TextoDuracion $T $e.creado $e.actualizado)
       ETIQUETA = (Format-Trozo $T 'et-medido'); ETIQUETA_FASES = (Format-Trozo $T 'et-medido')
       HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente']; PARADA = $parada
-      TOCA = (Get-TocaHtml $D $T); FASES = $fases; FICHEROS = (Get-FicherosHtml $D $T)
+      TOCA = (Get-TocaHtml $D $T); PROBLEMAS = (Get-ProblemasPortada $D $T); FASES = $fases; FICHEROS = (Get-FicherosHtml $D $T)
     })
 }
 

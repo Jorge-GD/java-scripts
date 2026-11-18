@@ -24,6 +24,11 @@
   {{{TOCA}}}
 </section>
 
+<section class="panel" id="problemas-migrado" aria-labelledby="t-problemas">
+  <h2 id="t-problemas">Problemas del migrado</h2>
+  {{{PROBLEMAS}}}
+</section>
+
 <section class="panel" aria-labelledby="t-fases">
   <h2 id="t-fases">Qué ha hecho el script</h2>
   <p>{{{ETIQUETA_FASES}}}</p>
@@ -73,6 +78,7 @@
 <!--TROZO cab-job--><code>{{JOB}}</code> <!--FIN-->
 <!--TROZO cab-dato--><code>{{JOB}}</code> <code>{{DONDE}}</code> <!--FIN-->
 <!--TROZO fase-linea-->  <li><span class="fase-n">{{NOMBRE}}</span><span class="fase-e" data-e="{{ESTADO}}">{{{ESTADO_TEXTO}}}</span><span class="fase-c">{{{CUENTA}}}</span></li><!--FIN-->
+<!--TROZO fase-diagnostico-->Diagnóstico del migrado<!--FIN-->
 <!--TROZO fase-fichas-clase-->Lectura de las clases<!--FIN-->
 <!--TROZO fase-mapa-->Mapa de jobs, pasos y variables<!--FIN-->
 <!--TROZO fase-fichas-job-->Redacción de cada job<!--FIN-->
@@ -81,6 +87,7 @@
 <!--TROZO estado-fase-hecha-->Hecha<!--FIN-->
 <!--TROZO estado-fase-curso-->Por aquí va<!--FIN-->
 <!--TROZO estado-fase-espera-->Sin empezar<!--FIN-->
+<!--TROZO cuenta-diagnostico-->errores: {{ERRORES}}, avisos: {{AVISOS}}<!--FIN-->
 <!--TROZO cuenta-tareas-->hechas: {{HECHAS}}, atascadas: {{ATASCADAS}}, pendientes: {{PENDIENTES}}<!--FIN-->
 <!--TROZO cuenta-jobs-->jobs: {{JOBS}}, clases sin job: {{SINJOB}}<!--FIN-->
 <!--TROZO cuenta-ninguna-->sin tareas<!--FIN-->
@@ -92,8 +99,11 @@
 <!--TROZO nombre-codigo--><code>{{TEXTO}}</code><!--FIN-->
 <!--TROZO f-index-->Esta portada.<!--FIN-->
 <!--TROZO f-original-->Qué hace el batch original, para negocio.<!--FIN-->
+<!--TROZO f-problemas-->Los problemas del migrado, por área y con su gravedad.<!--FIN-->
 <!--TROZO f-datos-->Los datos de los que salen estas páginas.<!--FIN-->
 <!--TROZO f-estado-->En qué fase va la pasada, el modelo y, si se paró, por qué.<!--FIN-->
+<!--TROZO f-hallazgos-->Cada problema que encontró el diagnóstico del migrado: área, gravedad, fichero y línea.<!--FIN-->
+<!--TROZO f-diagnostico-->El informe del diagnóstico del migrado: estado del build y cuenta por área.<!--FIN-->
 <!--TROZO f-mapa-->Los jobs del original, sus pasos y las clases de cada uno.<!--FIN-->
 <!--TROZO f-resumen-->El resumen del batch, el orden de los jobs y el glosario.<!--FIN-->
 <!--TROZO f-variables-->Las variables de configuración del migrado y su valor por defecto.<!--FIN-->
@@ -102,3 +112,16 @@
 <!--TROZO f-fichas-->Una ficha por clase del original, con cada dato y la cita de donde sale.<!--FIN-->
 <!--TROZO f-tareas-->Cada tarea que se le pidió a la IA, con su estado y su motivo si se atascó.<!--FIN-->
 <!--TROZO f-registros-->Lo que contestó la IA en cada tarea. Para mirar si algo falla.<!--FIN-->
+<!--TROZO prob-datos--><p>{{{ETIQUETA_BUILD}}}</p>
+  <p>{{{BUILD}}}</p>
+  <p>{{{ETIQUETA}}}</p>
+  <p class="total-l"><b>{{ERRORES}} errores y {{AVISOS}} avisos</b></p>
+  <ul class="areas" style="--max:{{MAX}}">
+{{{AREAS}}}
+  </ul>
+  <p><a href="2-problemas.html">Ver los problemas, área por área</a></p><!--FIN-->
+<!--TROZO area-barra-->    <li class="area">
+      <p class="a-n">{{{NOMBRE}}}</p>
+      <div class="a-b"><div class="barra antes"><span class="b-et">antes</span><div class="pista"><span class="rel" style="--v:{{V}}"></span><b>{{V}}</b></div></div></div>
+    </li><!--FIN-->
+<!--TROZO area-limpia-->    <li class="area limpia"><p class="a-n">{{{NOMBRE}}}</p><div class="a-b"></div><p class="a-e">sin errores</p></li><!--FIN-->
