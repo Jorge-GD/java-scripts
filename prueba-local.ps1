@@ -68,15 +68,6 @@ $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
 $RutasCopia = @()   # las rutas de las dos copias, en sus formas: Get-Normal las cambia por <copia>
 $script:Base = @{}  # por copia: el commit y el arbol que se dieron por buenos (Save-Copia)
 
-# ================================ PROMPTS ================================
-# Get-Prompt (tareas.ps1) rellena cada {{CLAVE}} de la plantilla con lo que da esta funcion. Las tareas de este script
-# llevan sus valores en entradas.prompt; por eso se redefine aqui, despues de cargar tareas.ps1 (ver AVISOS).
-function Get-VariablesPrompt($T, [string]$Leer) {
-  $v = @{}
-  foreach ($p in $T.entradas.prompt.PSObject.Properties) { $v[$p.Name] = [string]$p.Value }
-  return $v
-}
-
 # ================================ COPIAS ================================
 # La ruta que guarda un fichero .git de worktree ('gitdir: <ruta>'), completa.
 function Get-GitDir([string]$Fichero, [string]$Base) {

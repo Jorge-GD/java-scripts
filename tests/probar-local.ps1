@@ -314,5 +314,27 @@ $Pruebas['12 entradas raras: carpeta vacia, caso sin efecto, IA que hace commit,
   Igual 'dos ficheros en Latin-1 que solo cambian en una letra con tilde son distintos' 'distinto' $c.resultado
 }
 
+$Pruebas['13 tareas.ps1: Get-VariablesPrompt da las claves de entradas.prompt y no cambia las tareas de siempre'] = {
+  $f = Join-Path $Dir 'variables-prompt.ps1'
+  [System.IO.File]::WriteAllText($f, @'
+param([string]$Sis)
+. (Join-Path $Sis 'comun.ps1')
+. (Join-Path $Sis 'tareas.ps1')
+$nueva = '{"id":"arnes-1","tipo":"arnes-local","entradas":{"prompt":{"JOB":"cargaJob","TEST":"src/test/java/X.java"}}}' | ConvertFrom-Json
+$ficha = '{"id":"ficha-1","tipo":"ficha-job","entradas":{"job":"cargaJob","pasos":"p","datos":"d"}}' | ConvertFrom-Json
+foreach ($t in @($nueva, $ficha)) {
+  $v = Get-VariablesPrompt $t 'leer.java'
+  $k = @($v.Keys | ForEach-Object { [string]$_ }); [Array]::Sort($k, [StringComparer]::Ordinal)
+  'CLAVES ' + $t.id + ' ' + (@($k | ForEach-Object { $_ + '=' + $v[$_] }) -join ';')
+}
+'@)
+  $r = Lanzar $f @((Split-Path -Parent $Script))
+  $nueva = @($r.Salida -split "`n" | Where-Object { $_ -like 'CLAVES arnes-1 *' })[0]
+  $ficha = @($r.Salida -split "`n" | Where-Object { $_ -like 'CLAVES ficha-1 *' })[0]
+  Comprueba 'una tarea con entradas.prompt recibe sus claves' ($nueva -match 'JOB=cargaJob;' -and $nueva -match 'TEST=src/test/java/X\.java') (Cola $r.Salida)
+  Comprueba 'y no las de ficha-clase' ($nueva -and $nueva -notmatch 'PAPELES=|FICHERO=') "$nueva"
+  Comprueba 'ficha-job sigue con sus claves de siempre' ($ficha -match '^CLAVES ficha-1 CITA_MAX=\d+;DATOS=d;JOB=cargaJob;PASOS=p;PASOS_MAX=\d+;SALIDA=\.rescate/tareas/ficha-1\.json$') "$ficha"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

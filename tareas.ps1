@@ -205,9 +205,11 @@ function Get-Plantilla([string]$Tipo) {
 }
 
 # Lo que va en cada {{CLAVE}} de la plantilla de una tarea. $Leer es el fichero del original que se lee.
+# Una tarea con entradas.prompt (las de prueba-local.ps1) trae ahi sus claves.
 function Get-VariablesPrompt($T, [string]$Leer) {
   $e = $T.entradas
   $v = @{ SALIDA = ".rescate/tareas/$($T.id).json"; CITA_MAX = "$($Cfg.CitaMax)" }
+  if ($e.prompt) { foreach ($p in $e.prompt.PSObject.Properties) { $v[$p.Name] = [string]$p.Value }; return $v }
   switch ($T.tipo) {
     'definicion-job' {
       $v.FICHERO = $Leer; $v.RELATIVO = $e.fichero; $v.LINEAS = "$($e.desde)-$($e.hasta)"
