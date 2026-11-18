@@ -38,7 +38,7 @@ $Cfg = @{
 
 # Una clave de application*.yml|properties (o una variable ${NOMBRE:valor}) es un secreto si su nombre ACABA en una de estas palabras
 # (sin distinguir mayusculas). Lista vacia = no se busca. Idea de SonarJava S2068. Es la unica lista: la usa tareas.ps1 (Test-NombreSecreto)
-# y, al juntar las ramas, rescate.ps1 ($Cfg.PalabrasSecreto).
+# y rescate.ps1 ($Cfg.PalabrasSecreto, que su config.json puede cambiar).
 $PalabrasSecreto = @('password', 'passwd', 'pwd', 'passphrase', 'secret', 'token', 'clave', 'contrasena', 'apikey', 'api-key', 'private-key')
 
 # ============================== UTILIDADES ==============================

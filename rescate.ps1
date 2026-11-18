@@ -195,9 +195,8 @@ $Cfg += @{
   PalabrasConfigAntigua = @('inventory')
   # API antigua: se marca solo si la plantilla ya no la usa
   ApiAntigua            = @('JobBuilderFactory', 'StepBuilderFactory')
-  # Una clave de application*.yml|properties es un secreto si su ultimo trozo ACABA en una de estas
-  # palabras (sin distinguir mayusculas). Lista vacia = no se busca. Idea de SonarJava S2068.
-  PalabrasSecreto       = @('password', 'passwd', 'pwd', 'passphrase', 'secret', 'token', 'clave', 'contrasena', 'apikey', 'api-key', 'private-key')
+  # Las palabras que hacen secreta una clave: la lista unica esta en comun.ps1 ($PalabrasSecreto)
+  PalabrasSecreto       = $PalabrasSecreto
   JavaxAntiguo          = '^javax\.(annotation|persistence|validation|servlet|inject|batch|transaction|ws\.rs|jms|mail|xml\.bind)\.'
   ExtTexto              = @('.java', '.yml', '.yaml', '.properties', '.xml', '.sh', '.bat', '.cmd', '.json', '.conf', '.cfg', '.ini')
   # Como se reconoce un job en el ORIGINAL (grupo 1 = nombre del job)
