@@ -1723,5 +1723,19 @@ $Pruebas['m7 ModeloB: sin el parametro, el reintento con el modelo de reserva us
   Comprueba 'con -ModeloB manda el parametro' ((@($s2 | Where-Object { $_ -match '--model=modelo-b-param' }).Count -eq 1) -and (@($s2 | Where-Object { $_ -match 'modelo-b-ajustes' }).Count -eq 0)) ($s2 -join ' / ')
 }
 
+# El paso build no sube el parent por su cuenta: es decision del equipo (el parent distinto ya es un aviso).
+$Pruebas['m7 build: el prompt del paso build no manda cambiar el parent; si hace falta otro, es una duda'] = {
+  $e = Escenario-M6 'm7-build-texto' @{ Orden = @('build', 'estructura', 'tests') }
+  Escribe $e.Repo 'pom.xml' ($Pom -replace '<java.version>21</java.version>', '<java.version>1.8</java.version>')
+  [void](GitEn $e.Repo @('commit', '-q', '-am', 'java 8'))
+  $r = Fix-M6 $e 'build' 1 @() 'consejo-nada'
+  $l = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un lote de build' ($l.Count -ge 1) (Cola $r.Salida)
+  if ($l.Count -eq 0) { return }
+  $p = Prompt-M6 $e $l[0]
+  Comprueba 'no dice que use el mismo parent que la plantilla' ($p -notmatch 'mismo parent') $p
+  Comprueba 'dice que no cambie el parent y que, si hace falta otro, lo apunte como duda' ($p -match 'sin cambiar el parent: si hace falta otro, apuntalo como duda') $p
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
