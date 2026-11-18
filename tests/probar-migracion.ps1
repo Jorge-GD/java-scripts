@@ -5227,5 +5227,131 @@ $Pruebas['m17 lanzadores: -Lanzadores <carpeta> suma los scripts de fuera (ruta 
   Comprueba 'y el mensaje nombra -Lanzadores' ($r3.Salida -match '-Lanzadores') (Cola $r3.Salida)
 }
 
+# ---- (e) el informe: Como se lanza (pagina 1), Lanzadores (pagina 3), el grupo de la portada y el texto sin .sh ----
+$MalSh = 'cuota <b>alta</b> & "baja"'
+function Lanzador-Json([string]$Id, [string]$Rel, [string[]]$Jobs, [string]$Como) {
+  return [ordered]@{ id = $Id; rel = $Rel; ruta = ('/orig/' + $Rel); interprete = 'ksh'; lineas = 46; jobs = @($Jobs); enlace = [ordered]@{ como = $Como; fichero = 'bin/x.yml'; linea = 3 }; inventario = @() }
+}
+function Item-Sh([string]$Cuando, [string]$Que, [int]$Linea, [string]$Cita, [string]$Detalle, [string]$Condicion = '', [bool]$Probado = $true) {
+  return [ordered]@{ cuando = $Cuando; condicion = $Condicion; que = $Que; detalle = $Detalle; linea = $Linea; cita = $Cita; probado = $Probado }
+}
+function Elem-Comp([int]$Accion, [string]$Estado, [string]$Fichero, [int]$Linea, [string]$Cita, [string]$Nota, [bool]$Probado, [string]$Busqueda) {
+  return [ordered]@{ accion = $Accion; estado = $Estado; fichero = $Fichero; linea = $Linea; cita = $Cita; nota = $Nota; probado = $Probado; busqueda = $Busqueda }
+}
+
+# Una salida con tres lanzadores: el de cargaJob (ficha y comparacion), el de informeJob (solo ficha, enlace unico) y uno suelto (sin ficha).
+function Salida-Lanzadores([string]$Nombre, [bool]$Con = $true) {
+  $s = Local-Salida $Nombre
+  $d = Get-Ruta $s 'datos'
+  if (-not $Con) { Guarda-Json (Join-Path $d 'lanzadores.json') ([ordered]@{ lanzadores = @() }); return $s }
+  Guarda-Json (Join-Path $d 'lanzadores.json') ([ordered]@{ lanzadores = @(
+        (Lanzador-Json 'sh-aaaaaaaa' 'bin/cargas.ksh' @('cargaJob') 'argumento'),
+        (Lanzador-Json 'sh-bbbbbbbb' 'bin/informe.sh' @('informeJob') 'unico'),
+        (Lanzador-Json 'sh-cccccccc' 'bin/raro.sh' @() 'sin-enlazar')) })
+  [void](New-Item -ItemType Directory -Path (Join-Path $d 'fichas-sh') -Force)
+  [void](New-Item -ItemType Directory -Path (Join-Path $d 'comparacion-sh') -Force)
+  $a = @(
+    (Item-Sh 'antes' 'mueve' 31 'ALTA ) for j in ls SALIDA_ALTA_*.TXT' ('Aparta a backup los ficheros de salida de alta. ' + $MalSh) 'Si el modo es ALTA.'),
+    (Item-Sh 'despues' 'borra' 41 'find /opt/acme/cargas/logs -mtime +30' 'Borra los registros de mas de 30 dias.'),
+    (Item-Sh 'despues' 'otro' 46 'esta cita no sale' 'Algo que no se pudo comprobar.' '' $false))
+  Guarda-Json (Join-Path $d 'fichas-sh/sh-aaaaaaaa.json') ([ordered]@{ id = 'sh-aaaaaaaa'; script = 'bin/cargas.ksh'; paraQue = ('Lanza la carga de cuotas ' + $MalSh)
+      parametros = @([ordered]@{ nombre = '--fecha'; obligatorio = $true; valores = 'una fecha'; formato = 'dd/MM/yyyy'; linea = 12; cita = '-f | --fecha )'; probado = $true },
+        [ordered]@{ nombre = '--modo'; obligatorio = $false; valores = 'ALTA, BAJA o PAGOS'; formato = ''; linea = 14; cita = '-m | --modo )'; probado = $true })
+      acciones = $a
+      salidas = @([ordered]@{ codigo = 1; cuando = 'Si falta la fecha.'; linea = 20; cita = 'exit 1'; probado = $true }, [ordered]@{ codigo = 0; cuando = 'Cuando todo ha ido bien.'; linea = 47; cita = 'exit 0'; probado = $true })
+      sinExplicar = @([ordered]@{ linea = 33; tipo = 'fichero'; detalle = 'cp'; texto = 'cp log/log-cargas.log logs/' }) })
+  Guarda-Json (Join-Path $d 'comparacion-sh/sh-aaaaaaaa.json') ([ordered]@{ ficha = 'sh-aaaaaaaa'; script = 'bin/cargas.ksh'; migrado = @('src/main/java/com/acme/life/Archivador.java'); momento = 'antes-de-corregir'; commit = 'abc1234'
+      acciones = @((Elem-Comp 0 'igual' 'src/main/java/com/acme/life/Archivador.java' 12 'static final String PATRON_ALTA' '' $true 'modelo'),
+        (Elem-Comp 1 'falta' '' 0 '' '' $false 'sin-candidatos')) })
+  Guarda-Json (Join-Path $d 'fichas-sh/sh-bbbbbbbb.json') ([ordered]@{ id = 'sh-bbbbbbbb'; script = 'bin/informe.sh'; paraQue = 'Lanza el informe de cobros.'; parametros = @()
+      acciones = @((Item-Sh 'antes' 'elige-job' 3 'export spring_profiles_active=informe' 'Elige el perfil del informe.')); salidas = @(); sinExplicar = @() })
+  return $s
+}
+function Pagina-Uno([string]$S) { return (Pagina $S '1-batch-original.html') }
+
+$Pruebas['m17 lanzadores: pagina 1 - la tabla lanzador a job con unico y sin-enlazar marcados, y en cada job su Como se lanza con parametros, antes y despues y codigos de salida'] = {
+  $s = Salida-Lanzadores 'm17-informe-uno'
+  $x = Local-Con $s
+  $p = Pagina-Uno $s
+  $pan = Panel-De $p 'lanzadores'
+  Comprueba 'hay un panel de lanzadores en la pagina 1' ($pan.Length -gt 0) ''
+  $filas = @([regex]::Matches($pan, '(?s)<tr><td>.*?</tr>') | ForEach-Object { Texto-De $_.Value })
+  Igual 'la tabla tiene una fila por lanzador' 3 $filas.Count
+  Comprueba 'cargas.ksh -> cargaJob, enlazado por su propio argumento' ($filas.Count -ge 1 -and $filas[0] -match '^bin/cargas\.ksh cargaJob ' -and $filas[0] -match 'dice el propio script') ($filas -join ' | ')
+  Comprueba 'informe.sh -> informeJob, marcado como unico job' ($filas.Count -ge 2 -and $filas[1] -match '^bin/informe\.sh informeJob .*\.nico job') ($filas -join ' | ')
+  Comprueba 'raro.sh sin job, marcado como sin enlazar' ($filas.Count -ge 3 -and $filas[2] -match '^bin/raro\.sh .*Sin enlazar') ($filas -join ' | ')
+  $j = [regex]::Match($p, '(?s)<article class="job" id="job-cargaJob">.*?</article>').Value
+  $l = [regex]::Match($j, '(?s)<div class="job-sec lanza">.*?</div>').Value
+  Comprueba 'el job cargaJob lleva su bloque Como se lanza' ($l -match '<h4>C.mo se lanza</h4>' -and $l.Contains('bin/cargas.ksh')) $j
+  $t = Texto-De $l
+  Comprueba 'el para que, escapado' ($l.Contains((Html ('Lanza la carga de cuotas ' + $MalSh))) -and $l -notmatch '<b>alta') $t
+  Comprueba 'los parametros: --fecha obligatorio con sus valores y su formato; --modo opcional' ($t -match '--fecha obligatorio . valores: una fecha . formato dd/MM/yyyy' -and $t -match '--modo opcional . valores: ALTA, BAJA o PAGOS') $t
+  Comprueba 'lo de antes del java, con su condicion y escapado' ($t -match 'Antes de lanzar el job Si el modo es ALTA\. Aparta a backup los ficheros de salida de alta\.' -and $l.Contains((Html $MalSh))) $t
+  Comprueba 'lo de despues: borra los de mas de 30 dias' ($t -match 'Despu.s de lanzar el job .*Borra los registros de mas de 30 dias\.') $t
+  Comprueba 'lo que no se pudo comprobar sale marcado sin comprobar' ($l -match '(?s)Algo que no se pudo comprobar\..*?Sin comprobar') $l
+  Comprueba 'los codigos de salida: 1 si falta la fecha y 0 si va bien' ($t -match 'C.mo acaba 1 Si falta la fecha\. .*0 Cuando todo ha ido bien\.') $t
+  $ji = [regex]::Match($p, '(?s)<article class="job" id="job-informeJob">.*?</article>').Value
+  Comprueba 'informeJob lleva el suyo (elige el perfil) y sin parametros' ((Texto-De $ji) -match 'bin/informe\.sh' -and (Texto-De $ji) -match 'No recibe par.metros' -and (Texto-De $ji) -match 'Elige el perfil del informe\.') (Texto-De $ji)
+  Comprueba 'el unico job lo dice en su bloque' ((Texto-De $ji) -match '.nico job') ''
+  Comprueba 'el lanzador sin enlazar no sale dentro de ningun job' ($j -notmatch 'raro\.sh' -and $ji -notmatch 'raro\.sh') ''
+  Comprueba 'pero sale suelto en el panel, con su nombre escapado y su aviso de que no hay ficha' ((Texto-De $pan) -match 'Lanzadores sin job .*bin/raro\.sh' -and (Texto-De $pan) -match 'Todav.a no hay datos: la fase lanzadores no ha terminado') (Texto-De $pan)
+  Comprueba 'ni un <script> ni una etiqueta sin escapar' ($p -notmatch '(?i)<script|<b>alta') ''
+}
+
+$Pruebas['m17 lanzadores: pagina 3 - la seccion Lanzadores con la linea fija, una fila por accion y su estado, el texto de falta, lo sin comparar y lo sin explicar'] = {
+  $s = Salida-Lanzadores 'm17-informe-tres'
+  $x = Local-Con $s
+  $sec = Panel-De $x.P3 'lanzadores'
+  Comprueba 'hay seccion Lanzadores' ($sec.Length -gt 0 -and $sec -match '<h2[^>]*>Lanzadores</h2>') ''
+  Comprueba 'lleva la linea fija: la prueba en local no pasa por los .sh' ((Texto-De $sec).Contains('La prueba en local lanza los dos jar directamente: no pasa por los .sh')) (Texto-De $sec)
+  Comprueba 'va despues de Leido por la IA' ($x.P3.IndexOf('id="lanzadores"') -gt $x.P3.IndexOf('id="leido-ia"')) ''
+  $g = [regex]::Match($sec, '(?s)<article[^>]*id="lanz-sh-aaaaaaaa".*?</article>').Value
+  Comprueba 'un grupo por lanzador con ficha: cargas.ksh con sus cuentas (1 igual, 1 falta, 1 sin comparar)' ($g -match '<h3[^>]*><code>bin/cargas\.ksh</code></h3>' -and (Texto-De $g) -match 'igual 1 . distinto 0 . falta 1 . no lo s. 0 . sin comparar 1') (Texto-De $g)
+  Igual 'una fila por accion (3)' 3 ([regex]::Matches($g, '<li class="fila').Count)
+  Comprueba 'la falta lleva el texto de la plataforma y va marcada como medida, sin llamada' ($g -match '(?s)Falta.*Borra los registros de mas de 30 dias\..*No est. en el c.digo del migrado\. Si lo hace la plataforma \(la planificaci.n o el configmap\), compru.balo all.' -and $g -match 'class="m m-medido"') (Texto-De $g)
+  Comprueba 'la que no se comparo (cita inventada) sale Sin comparar' ((Texto-De $g) -match 'Sin comparar Algo que no se pudo comprobar\.') (Texto-De $g)
+  Comprueba 'la igual, plegada, con la linea del script y la del migrado' ($g -match '(?s)<details>.*Archivador\.java:12.*PATRON_ALTA' -and $g.Contains('bin/cargas.ksh:31')) $g
+  Comprueba 'lo sin explicar sale en el grupo' ((Texto-De $g) -match 'no explic. estas l.neas del script: 33') (Texto-De $g)
+  Comprueba 'el texto escapado' ($g.Contains((Html $MalSh)) -and $g -notmatch '<b>alta') ''
+  $h = [regex]::Match($sec, '(?s)<article[^>]*id="lanz-sh-bbbbbbbb".*?</article>').Value
+  Comprueba 'informe.sh: ficha pero sin comparar: su unica accion, Sin comparar' ($h -match 'sin comparar 1' -and (Texto-De $h) -match 'Sin comparar Elige el perfil del informe\.') (Texto-De $h)
+  Comprueba 'raro.sh, sin ficha, sale con su aviso' ($sec -match 'lanz-sh-cccccccc' -and (Texto-De ([regex]::Match($sec, '(?s)<article[^>]*id="lanz-sh-cccccccc".*?</article>').Value)) -match 'Todav.a no hay datos: la fase lanzadores no ha terminado') ''
+  Comprueba 'la pagina sigue con su unico h1' ([regex]::Matches($x.P3, '<h1[ >]').Count -eq 1) ''
+}
+
+$Pruebas['m17 lanzadores: la portada - el grupo Cosas que hacian los .sh cuenta lo que falta o esta distinto mas lo sin explicar, y la fase y los ficheros de lanzadores salen'] = {
+  $s = Salida-Lanzadores 'm17-informe-portada'
+  $x = Local-Con $s
+  $toca = Toca-De $x.I
+  $titulos = @([regex]::Matches($toca, '<h3>(.*?)</h3>') | ForEach-Object { $_.Groups[1].Value })
+  Comprueba 'el grupo sale: 2 cosas (1 falta y 1 sin explicar)' (@($titulos | Where-Object { $_ -ceq ('Cosas que hac' + [char]0xED + 'an los .sh y no est' + [char]0xE1 + 'n en el migrado (2)') }).Count -eq 1) ($titulos -join ' | ')
+  $g = [regex]::Match($toca, '(?s)<h3>Cosas que hac.an los \.sh.*?</div>').Value
+  Igual 'un elemento por cosa' 2 ([regex]::Matches($g, '<li>').Count)
+  Comprueba 'la falta: el script, el estado y lo que hacia' ($g -match '(?s)<code>bin/cargas\.ksh</code>.*Falta.*Borra los registros de mas de 30 dias\.') (Texto-De $g)
+  Comprueba 'lo sin explicar: script:linea, Sin explicar y la linea' ($g -match '(?s)<code>bin/cargas\.ksh:33</code>.*Sin explicar.*cp log/log-cargas\.log logs/') (Texto-De $g)
+  Comprueba 'el texto del grupo manda a la plataforma' ((Texto-De $g) -match 'la planificaci.n o el configmap') ''
+  $fases = [regex]::Match($x.I, '(?s)<ol class="fases".*?</ol>').Value
+  Comprueba 'la lista de fases lleva la de lanzadores, despues del mapa y antes de las fichas de job' ($fases -match '(?s)Mapa de jobs.*C.mo se lanza cada job.*Redacci.n de cada job') (Texto-De $fases)
+  Comprueba 'los ficheros: lanzadores.json, fichas-sh y comparacion-sh con su frase' ($x.I -match 'datos/lanzadores\.json' -and $x.I -match 'datos/fichas-sh' -and $x.I -match 'datos/comparacion-sh') ''
+  $y = Local-Con (Salida-Lanzadores 'm17-informe-portada-sin' $false)
+  Comprueba 'sin lanzadores no hay grupo ni cosas en la portada' ((Toca-De $y.I) -notmatch 'los \.sh') (Toca-De $y.I)
+}
+
+$Pruebas['m17 lanzadores: sin .sh la pagina 1 y la 3 dicen como pasar la carpeta; sin datos de la fase, el aviso de siempre'] = {
+  $s = Salida-Lanzadores 'm17-informe-ninguno' $false
+  $x = Local-Con $s
+  $t1 = Texto-Plano (Panel-De (Pagina-Uno $s) 'lanzadores')
+  $t3 = Texto-Plano (Panel-De $x.P3 'lanzadores')
+  $frase = 'No hay lanzadores en el original. Si se lanzan con scripts que est'
+  Comprueba 'pagina 1: No hay lanzadores en el original y relanza con -Lanzadores <carpeta>' ($t1.Contains($frase) -and $t1.Contains('relanza con -Lanzadores <carpeta>')) $t1
+  Comprueba 'pagina 3: lo mismo, y la linea fija de la prueba en local' ($t3.Contains($frase) -and $t3.Contains('relanza con -Lanzadores <carpeta>') -and $t3.Contains('no pasa por los .sh')) $t3
+  Remove-Item -LiteralPath (Get-Ruta $s 'datos/lanzadores.json') -Force
+  $x = Local-Con $s
+  $t1 = Texto-Plano (Panel-De (Pagina-Uno $s) 'lanzadores')
+  $t3 = Texto-Plano (Panel-De $x.P3 'lanzadores')
+  Comprueba 'sin lanzadores.json: Todavia no hay datos, la fase lanzadores no ha terminado, en las dos' ($t1 -match 'Todav.a no hay datos: la fase lanzadores no ha terminado' -and $t3 -match 'Todav.a no hay datos: la fase lanzadores no ha terminado') "$t1 | $t3"
+  Comprueba 'y no dicen que no hay lanzadores' ($t1 -notmatch 'No hay lanzadores' -and $t3 -notmatch 'No hay lanzadores') ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
