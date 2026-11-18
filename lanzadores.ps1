@@ -25,6 +25,10 @@ $Cfg += @{
   LanzadorNoScripts = @('mvnw', 'gradlew')                   # los scripts de la herramienta de construccion no lanzan el batch
   FichaShCuando     = @('antes', 'despues', 'siempre', 'si-falla')
   FichaShQue        = @('mueve', 'copia', 'borra', 'comprime', 'envia', 'avisa', 'comprueba', 'lanza', 'elige-job', 'otro')
+  LanzadorComunMin  = 4      # una palabra que sale en mas ficheros que este numero (y que la cuarta parte de ellos) no sirve para elegir
+  LanzadorComunFraccion = 0.25
+  LanzadorFicherosPorAccion = 3
+  LanzadorPalabrasSueltas = @('opt', 'home', 'tmp', 'var', 'usr', 'bin', 'lib', 'etc', 'dev', 'null', 'mnt', 'data', 'root', 'sbin', 'proc', 'srv', 'run', 'local', 'share')
 }
 
 # ================================ FICHEROS ================================
@@ -476,5 +480,139 @@ function Save-FichasSh($Tareas) {
         id = $t.ficha; script = $t.entradas.script; paraQue = $r.paraQue; parametros = @($r.parametros); acciones = @($r.acciones)
         salidas = @($r.salidas); sinExplicar = @($r.sinExplicar)
       })
+  }
+}
+
+# =============================== COMPARAR-SH ===============================
+# Las palabras con las que buscar una accion en el migrado, de la cita de su linea del script: las partes fijas de un patron con * (de
+# SALIDA_ALTA_*.TXT, SALIDA_ALTA_), los nombres de carpeta de las rutas (sin variables ni las de LanzadorPalabrasSueltas), el nombre del
+# perfil o del job y, aparte, los dias de un find -mtime. Sin mayusculas y con - como _.
+function Get-PalabrasAccion([string]$Cita) {
+  $palabras = @()
+  $tokens = @([regex]::Split($Cita, '[\s"''`;|&()<>=]+') | Where-Object { $_ })
+  foreach ($t in $tokens) {
+    if ($t.Contains('*')) {
+      foreach ($parte in @(($t -split '/')[-1] -split '\*')) {
+        if ($parte.Length -ge 5 -and ($parte -replace '[^A-Za-z]', '').Length -ge 4) { $palabras += $parte }
+      }
+    }
+    if ($t.Contains('/')) {
+      foreach ($seg in @([regex]::Replace($t, '\$\{[^}]*\}|\$\w+', '/') -split '/')) {
+        if ($seg -match '^[A-Za-z0-9_\-]{4,}$' -and $seg -notmatch '^\d+$' -and $Cfg.LanzadorPalabrasSueltas -cnotcontains $seg) { $palabras += $seg }
+      }
+    }
+  }
+  foreach ($m in [regex]::Matches($Cita, '(?i)(?:spring[._]profiles[._]active|spring[._]batch[._]job[._]names?|job[._]names?)\s*=\s*["'']?([^\s"'';|&)]+)')) {
+    foreach ($v in @($m.Groups[1].Value -split ',')) { if ($v -and $v -notmatch '\$' -and $v.Length -ge 3) { $palabras += $v } }
+  }
+  $numeros = @([regex]::Matches($Cita, '(?i)-(?:mtime|atime|ctime|mmin|amin|cmin)\s+[+-]?(\d+)') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+  $norm = @($palabras | ForEach-Object { $_.ToLowerInvariant().Replace('-', '_') } | Select-Object -Unique)
+  return [pscustomobject]@{ Palabras = $norm; Numeros = $numeros }
+}
+
+# Los ficheros del migrado donde puede estar lo que hacia el script: los .java de src (menos los de prueba) y los application*.yml, .yaml y .properties,
+# con su texto en minusculas y con - como _.
+function Get-ArchivosMigradoSh([string]$Raiz) {
+  $res = @()
+  foreach ($f in @(Get-ArbolLanzador $Raiz)) {
+    if ($f.Rel.StartsWith('.rescate/') -or $f.Rel -match '(^|/)src/test/') { continue }
+    $config = ($f.Nombre -match '^application.*\.(?:yml|yaml|properties)$')
+    if (-not $config -and $f.Ext -ne '.java') { continue }
+    $texto = [System.IO.File]::ReadAllText($f.Ruta)
+    $res += [pscustomobject]@{ Rel = $f.Rel; Config = $config; Crudo = $texto; Texto = $texto.ToLowerInvariant().Replace('-', '_') }
+  }
+  return $res
+}
+
+# Los ficheros (de 1 a LanzadorFicherosPorAccion) del migrado donde buscar una accion: los que llevan alguna de sus palabras que no sea comun
+# (que no salga en mas ficheros que LanzadorComunMin ni que su cuarta parte). Primero los que llevan mas palabras; los dias solo suman en un fichero
+# de configuracion que ya llevaba alguna.
+function Get-CandidatosAccion($Palabras, $Archivos) {
+  $tope = [math]::Max([int]$Cfg.LanzadorComunMin, [math]::Ceiling([double]$Cfg.LanzadorComunFraccion * @($Archivos).Count))
+  $claves = @()
+  foreach ($p in @($Palabras.Palabras)) {
+    $n = @($Archivos | Where-Object { $_.Texto.Contains($p) }).Count
+    if ($n -ge 1 -and $n -le $tope) { $claves += $p }
+  }
+  $puntos = @()
+  foreach ($a in $Archivos) {
+    $s = @($claves | Where-Object { $a.Texto.Contains($_) }).Count
+    if ($s -eq 0) { continue }
+    if ($a.Config) { $s += @($Palabras.Numeros | Where-Object { $a.Crudo -match ('(?<!\d)' + $_ + '(?!\d)') }).Count }
+    $puntos += [pscustomobject]@{ Rel = $a.Rel; Puntos = $s; Config = [int]$a.Config }
+  }
+  return @($puntos | Sort-Object @{ Expression = 'Puntos'; Descending = $true }, @{ Expression = 'Config'; Descending = $true }, @{ Expression = 'Rel'; Ascending = $true } |
+      Select-Object -First ([int]$Cfg.LanzadorFicherosPorAccion) | ForEach-Object { $_.Rel })
+}
+
+# El elemento de una accion que no se busco: falta, marcada sin candidatos.
+function New-ElementoSinCandidatos([int]$Accion) {
+  return [ordered]@{ accion = $Accion; estado = 'falta'; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false; busqueda = 'sin-candidatos' }
+}
+
+# Una tarea comparar-sh por ficha hecha de datos\fichas-sh con acciones comprobadas: el script elige sin IA los ficheros del migrado de cada una;
+# las que no tienen ninguno quedan en falta sin llamada, y una ficha sin ninguna que buscar nace hecha. La huella lleva el commit del migrado.
+function Get-TareasCompararSh([bool]$ConservarAtascadas, [string]$Base) {
+  $head = Get-Head $RepoRoot
+  $momento = Get-MomentoComparar $Base
+  $archivos = $null
+  $tareas = @()
+  $dir = Join-Path $Datos 'fichas-sh'
+  if (-not (Test-Path -LiteralPath $dir)) { return $tareas }
+  foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter 'sh-*.json' | Sort-Object Name)) {
+    $x = Read-Json $f.FullName
+    $acciones = @($x.acciones)
+    $comparables = @(0..($acciones.Count - 1) | Where-Object { $_ -ge 0 -and $acciones[$_].probado -eq $true })
+    if ($comparables.Count -eq 0) { continue }
+    if ($null -eq $archivos) { $archivos = @(Get-ArchivosMigradoSh $RepoRoot) }
+    $indices = @(); $sin = @(); $migrado = @(); $lineas = @(); $todo = @()
+    foreach ($i in $comparables) {
+      $a = $acciones[$i]
+      $cands = @(Get-CandidatosAccion (Get-PalabrasAccion ([string]$a.cita)) $archivos)
+      $todo += "$($a.que)|$($a.detalle)|$($a.linea)|$($a.cita)"
+      if ($cands.Count -eq 0) { $sin += $i; continue }
+      $k = $indices.Count
+      $indices += $i
+      foreach ($c in $cands) { if ($migrado -cnotcontains $c) { $migrado += $c } }
+      $lineas += "$k. [$($a.que)] $($a.detalle)"
+      $lineas += "   Original: $($x.script):$($a.linea) | cita: $($a.cita)"
+      $lineas += '   Busca en: ' + ($cands -join ', ')
+    }
+    $entradas = [pscustomobject]@{
+      script = $x.script; migrado = @($migrado); ndatos = $indices.Count; indices = @($indices); sinCandidatos = @($sin); datos = ($lineas -join "`n")
+      huella = (Get-Hash8 (($todo -join "`n") + '|' + $head)); commit = $head.Substring(0, 7); momento = $momento
+    }
+    $t = New-TareaTipo 'comparar-sh' ('comparash-' + $x.id.Substring(3)) $x.id ('datos/comparacion-sh/' + $x.id + '.json') $entradas
+    if ($indices.Count -eq 0) {
+      $t.estado = 'hecha'
+      $t.resultado = [ordered]@{ comparacion = @($sin | ForEach-Object { New-ElementoSinCandidatos $_ }) }
+    }
+    $tareas += , (Restore-Tarea $t $ConservarAtascadas)
+  }
+  return $tareas
+}
+
+# Comprueba lo que ha escrito Copilot como la comparacion de una clase (Test-Comparar: un elemento por accion buscada, ficheros de los dados y
+# citas que salen en ellos) y lo pasa a numeros de accion del script, con las que no se buscaron en falta.
+function Test-CompararSh($T, [string]$Dir) {
+  $r = Test-Comparar $T $Dir
+  if (-not $r.Ok) { return $r }
+  $indices = @($T.entradas.indices)
+  $res = @()
+  foreach ($c in @($r.Ficha.comparacion)) {
+    $res += [ordered]@{ accion = [int]$indices[[int]$c.dato]; estado = $c.estado; fichero = $c.fichero; linea = $c.linea; cita = $c.cita; nota = $c.nota; probado = $c.probado; busqueda = 'modelo' }
+  }
+  foreach ($k in @($T.entradas.sinCandidatos)) { $res += (New-ElementoSinCandidatos ([int]$k)) }
+  return (New-Resultado $true '' ([ordered]@{ comparacion = @($res | Sort-Object { $_.accion }) }))
+}
+
+# datos\comparacion-sh\<ficha>.json de cada tarea hecha: el script, los ficheros del migrado, el momento y el commit con que se eligieron y, por accion, lo que se dijo.
+function Save-ComparacionesSh($Tareas) {
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
+    $o = [ordered]@{
+      ficha = $t.ficha; script = $t.entradas.script; migrado = @($t.entradas.migrado); momento = $t.entradas.momento; commit = $t.entradas.commit
+      acciones = @($t.resultado.comparacion)
+    }
+    Write-Json (Join-Path (Join-Path $Datos 'comparacion-sh') ($t.ficha + '.json')) $o
   }
 }
