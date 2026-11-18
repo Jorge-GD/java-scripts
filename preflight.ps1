@@ -506,13 +506,6 @@ function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cu
 # poderse comparar con el de las demas): L1 y L2 son la ficha de una clase corta y la de una larga (troceada como la trocea el
 # sistema); E1 y E2 son arreglar dos errores de compilacion y poner Javadoc, en un proyecto Maven de juguete.
 
-# Los esfuerzos que se prueban, del mas alto al mas bajo, si el modelo no admite el pedido.
-function Get-EsfuerzosMenores([string]$Esfuerzo) {
-  if ($Esfuerzo -ceq 'max') { return @('xhigh', 'high') }
-  if ($Esfuerzo -ceq 'xhigh') { return @('high') }
-  return @()
-}
-
 # Los trozos en que el sistema parte la clase larga del examen (Get-TareasFichas, segun LineasPorTarea).
 function Get-TrozosExamen {
   $fichero = Get-Item -LiteralPath (Join-Ruta $PSScriptRoot 'preflight/examen/GestorRecibos.java')

@@ -52,7 +52,8 @@ USO
   .\rescate.ps1 -Modo fix -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado `
                 -Legacy C:\ruta\life-java8 -Modelo <id-del-modelo>
 
-  # Todo seguido, sin parar: se detiene solo si un lote no pasa las comprobaciones
+  # Todo seguido, sin parar: se detiene solo si un lote no pasa las comprobaciones.
+  # Sin .rescate\contrato.json (y con -Legacy) hace antes lo del modo pre.
   .\rescate.ps1 -Modo fix ... -Todo
 
   # Con modelo de reserva: si el principal se atasca con un fichero, prueba el otro
@@ -66,7 +67,17 @@ USO
   .\rescate.ps1 -Modo fix ... -Modelo <id-del-modelo> -EsfuerzoPlan high -Esfuerzo medium
 
   # Si un lote falla: se deshace, se reintenta fichero a fichero, luego con el
-  # modelo de reserva y, si tampoco, se apunta en .rescate/atascados.md y sigue.
+  # modelo de reserva y, si tampoco, se pide consejo al modelo de las dudas: si la
+  # duda es de codigo, un intento mas con el consejo; si no pasa, o la tiene que
+  # decidir una persona, se apunta en .rescate/atascados.md (y .json) y sigue.
+  # La pasada siguiente no vuelve a intentar un atascado si su fichero no ha
+  # cambiado (-Reintentar lo fuerza).
+  # Tras cada intento que no pasa, el modelo de las dudas reflexiona (por que no
+  # paso, que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del
+  # plan tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
+  # Todo queda en .rescate/decisiones.md; lo que le toca a una persona sale al
+  # final en "Te toca decidir".
+  .\rescate.ps1 -Modo fix ... -Todo -ModeloDudas <id-fuerte> -EsfuerzoDudas max
 
   # Elegir paso, lotes mas pequenos, saltar ficheros que se atascan
   .\rescate.ps1 -Modo fix ... -Paso hexagonal -Lote 3 -Saltar 2
@@ -108,6 +119,8 @@ param(
   # Esfuerzo de razonamiento de Copilot (--effort). Vacio = el que tenga Copilot.
   [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$Esfuerzo = '',      # en los lotes de arreglo
   [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$EsfuerzoPlan = '',  # en la revision previa y en el modo pre (vacio = el de -Esfuerzo)
+  [string]$ModeloDudas = '', # modelo del consejo y la reflexion (vacio = ModeloDudas de la config o, si no, -Modelo)
+  [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$EsfuerzoDudas = '', # su esfuerzo (vacio = EsfuerzoDudas de la config: max)
   [switch]$Reintentar,      # fix: vuelve a intentar los atascados de pasadas anteriores aunque su fichero no haya cambiado
   [string]$Worktree = '',    # carpeta del worktree de rescate (por defecto <repo>-rescate, al lado del repo)
   [int]$Lote = 5,           # ficheros por llamada a Copilot (pequeno = mas fiable)
@@ -185,6 +198,13 @@ $Cfg += @{
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # lotes deshechos seguidos antes de parar (no gastar llamadas en balde)
+  # El modelo de las dudas (consejo y reflexion). Vacio = el de -Modelo. Su esfuerzo: si Copilot no admite max, baja
+  # a xhigh y luego a high.
+  ModeloDudas           = ''
+  EsfuerzoDudas         = 'max'
+  # Tras cada intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
+  Reflexionar           = $true
+  LineasDiff            = 300   # lineas del diff del intento que recibe la reflexion
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
   MvnTests              = @('-q', '-B', 'test')
@@ -910,7 +930,28 @@ $TextoCalidad = @(
   'Despues del lote el script vuelve a contar los hallazgos de calidad (Javadoc, inyeccion en campos, System.out, catch vacios). Si tu codigo anade alguno, el lote no pasa.'
 )
 
-function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
+# Un hallazgo en una linea de prompt: '- fichero:linea - detalle' ('(repo)' si no es de un fichero).
+function Get-LineaHallazgo($x) {
+  $donde = $x.Fichero
+  if ($x.Linea -gt 0) { $donde += ':' + $x.Linea }
+  if (-not $donde) { $donde = '(repo)' }
+  return "- $donde - $($x.Detalle)"
+}
+
+# La opcion que ha elegido el consejo en una duda.
+function Get-Elegida($Duda) { return "$(@($Duda.opciones)[[int]$Duda.elegida - 1])" }
+
+# Las referencias de una llamada de solo lectura (revision previa, consejo, reflexion).
+function Get-TextoReferencias {
+  $l = @('## Referencias (SOLO LECTURA)')
+  if ($PlantillaRoot) { $l += @("- PLANTILLA: $PlantillaRoot", '  Repo ya migrado y aprobado. Es la fuente de verdad para paquetes, nombres de puertos y adaptadores, configuracion y tests.') }
+  if ($LegacyRoot) { $l += @("- ORIGINAL JAVA 8: $LegacyRoot", '  Referencia de comportamiento.') }
+  return ($l + '')
+}
+
+# Prompt de un lote. $Consejo: la decision del modelo de las dudas para un atascado (va tras los hallazgos).
+# $Reflexiones: las de los intentos anteriores de estos ficheros (dentro de la CORRECCION, si la hay).
+function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
   # La orden de Maven: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
   $sep = [System.IO.Path]::DirectorySeparatorChar
   $mvn = Get-Mvn $RepoRoot
@@ -950,13 +991,15 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
   $l.Add($TextoPaso[$PasoId])
   $l.Add('')
   $l.Add('## Hallazgos de este lote (resuelve estos y nada mas)')
-  foreach ($x in $LoteH) {
-    $donde = $x.Fichero
-    if ($x.Linea -gt 0) { $donde += ':' + $x.Linea }
-    if (-not $donde) { $donde = '(repo)' }
-    $l.Add("- $donde - $($x.Detalle)")
-  }
+  foreach ($x in $LoteH) { $l.Add((Get-LineaHallazgo $x)) }
   $l.Add('')
+  if ($Consejo) {
+    $l.Add('## Consejo para este fichero (lo ha decidido un revisor: siguelo)')
+    $l.Add("Duda: $($Consejo.duda)")
+    $l.Add('Decision: ' + (Get-Elegida $Consejo))
+    $l.Add("Por que: $($Consejo.porque)")
+    $l.Add('')
+  }
   $l.Add('## Reglas obligatorias')
   $l.Add('1. No cambies la logica de negocio: mismo comportamiento que el original.')
   $l.Add('2. No toques nada fuera de este repositorio. No hagas commit ni push ni cambies de rama: de git se encarga el script.')
@@ -978,7 +1021,19 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
     $l.Add('Tus cambios siguen en el arbol de trabajo. Corrige esto sin deshacer lo que estaba bien:')
     $l.Add($Correccion)
   }
+  foreach ($x in (Get-TextoReflexiones $Reflexiones ([bool]$Correccion))) { $l.Add($x) }
   return ($l -join "`n")
+}
+
+# Las reflexiones de los intentos que no pasaron, para un prompt: una seccion (dentro de la CORRECCION si $Dentro). Los
+# titulos de cada reflexion pasan a lineas normales, para no romper las secciones del prompt.
+function Get-TextoReflexiones($Reflexiones, [bool]$Dentro) {
+  if (@($Reflexiones).Count -eq 0) { return @() }
+  $h = '##'
+  if ($Dentro) { $h = '###' }
+  $l = @('', "$h Lo que ya se intento y por que fallo", 'Un revisor ha leido los intentos de estos ficheros que no pasaron. No repitas lo que dice que no hay que hacer.')
+  foreach ($r in $Reflexiones) { $l += @('', "$h# $($r.Titulo)", ($r.Texto.Trim() -replace '(?m)^[ \t]*#+[ \t]*(.*?)[ \t\r]*$', '$1:')) }
+  return $l
 }
 
 # El programa de Copilot, buscado con la regla de comun.ps1 (Get-Lanzable: la misma del preflight y de migracion.ps1).
@@ -1017,6 +1072,10 @@ function Get-TextoModelo {
   if (-not $p) { $p = $e }
   $t = "Copilot (copilot -p): modelo $m | esfuerzo en los lotes: $e | en la revision previa: $p"
   if ($ModeloB) { $t += " | modelo de reserva: $ModeloB" }
+  $md = $script:ModDudas
+  if (-not $md) { $md = $m }
+  $t += " | modelo de las dudas (consejo y reflexion): $md, esfuerzo $($script:EsfDudas)"
+  if (-not $Cfg.Reflexionar) { $t += ' (sin reflexion)' }
   return $t
 }
 
@@ -1046,20 +1105,40 @@ function Get-SinPlan([string]$Ruta, $Fichs) {
   return @($Fichs | Where-Object { $t -notmatch (Get-RxClase $_) })
 }
 
-# Del plan, lo que toca a un lote: su primera linea, '## Piezas comunes' entera y, de
+# El titulo de una linea '## ...' de lo que escribe la IA (plan, reflexion), para compararlo sin distinguir mayusculas:
+# sin '*', sin acentos, sin espacios de mas y sin ':' ni '.' al final. $null si la linea no es un titulo '## '.
+function Get-TituloPlan([string]$Linea) {
+  if ($Linea -notmatch '^\s*##\s') { return $null }
+  $t = (((($Linea -replace '^\s*##\s+', '') -replace '\*', '' -replace '\s+', ' ').Trim()) -replace '\s*[:.]+$', '').Normalize([System.Text.NormalizationForm]::FormD)
+  return (-join @($t.ToCharArray() | Where-Object { [System.Globalization.CharUnicodeInfo]::GetUnicodeCategory($_) -ne [System.Globalization.UnicodeCategory]::NonSpacingMark }))
+}
+
+# Las lineas de una seccion '## <Titulo>' (sin el titulo), o @() si no esta.
+function Get-SeccionPlan([string]$Texto, [string]$Titulo) {
+  $sal = @(); $dentro = $false
+  foreach ($x in ($Texto -split "`r?`n")) {
+    $t = Get-TituloPlan $x
+    if ($null -ne $t) { $dentro = ($t -eq $Titulo); continue }
+    if ($dentro) { $sal += $x }
+  }
+  return $sal
+}
+
+# Del plan, lo que toca a un lote: su primera linea, '## Piezas comunes' y '## Decisiones' enteras y, de
 # '## Ficheros', las lineas que nombran un fichero del lote. Sin '## Ficheros' (formato que
-# no conozco) devuelve el plan entero. Los titulos, sin distinguir mayusculas y con espacios de mas,
-# sin '*' y sin ':' ni '.' al final; en el prompt se citan tal como los escribio el plan.
+# no conozco) devuelve el plan entero. Los titulos, como los compara Get-TituloPlan; en el prompt se citan tal como
+# los escribio el plan.
 function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
   $todo = @($Plan.Trim() -split "`r?`n")
   $rx = @($Fichs | ForEach-Object { Get-RxClase $_ })
   $sal = New-Object System.Collections.Generic.List[string]
   $sec = ''; $posF = -1; $suyas = 0
   foreach ($x in $todo) {
-    $titulo = ($x -match '^\s*##\s')
-    if ($titulo) { $sec = ((($x -replace '^\s*##\s+', '') -replace '\*', '' -replace '\s+', ' ').Trim()) -replace '\s*[:.]+$', '' }
+    $t = Get-TituloPlan $x
+    $titulo = ($null -ne $t)
+    if ($titulo) { $sec = $t }
     if ($sec -eq '') { if ($sal.Count -eq 0) { $sal.Add($x); $sal.Add('') } }
-    elseif ($sec -eq 'Piezas comunes') { $sal.Add($x) }
+    elseif ($sec -eq 'Piezas comunes' -or $sec -eq 'Decisiones') { $sal.Add($x) }
     elseif ($sec -eq 'Ficheros') {
       if ($titulo) { $posF = $sal.Count; $sal.Add($x) }
       elseif (@($rx | Where-Object { $x -match $_ }).Count -gt 0) { $sal.Add($x); $suyas++ }
@@ -1068,6 +1147,29 @@ function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
   if ($posF -lt 0) { return $todo }
   if ($suyas -eq 0) { $sal.Insert($posF + 1, '(el plan no nombra los ficheros de este lote: aplica el mismo criterio que con los demas)') }
   return $sal
+}
+
+# Una llamada a Copilot que solo debe leer (revision previa, consejo, reflexion) y escribir su fichero en .rescate. Si
+# toca la PLANTILLA o el ORIGINAL, para (exit 4). Si toca codigo de este repo: si estaba limpio, lo deshace; si no, avisa.
+function Invoke-SoloLectura([string]$Log, [string]$Mod, [string]$Esf, [string]$Que) {
+  $antes = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
+  $check = Get-Head $RepoRoot
+  $rama = Get-Rama $RepoRoot
+  $hp = Get-Huella $PlantillaRoot; $h0 = Get-Huella $LegacyRoot
+  $r = Invoke-Copilot $Log $Mod $Esf $Que
+  if ((Get-Huella $PlantillaRoot) -ne $hp -or (Get-Huella $LegacyRoot) -ne $h0) {
+    Fallo "ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL durante una llamada de solo lectura ($Que). Restauralos antes de seguir."
+    exit 4
+  }
+  $despues = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
+  if ($despues -ne $antes -or (Get-Head $RepoRoot) -ne $check) {
+    if (-not $antes) {
+      Undo-Lote $rama $check
+      Aviso "La llamada era de solo lectura ($Que) y Copilot ha tocado codigo: lo he deshecho."
+    }
+    else { Aviso "Ojo: Copilot ha tocado ficheros en una llamada de solo lectura ($Que). Mira git status." }
+  }
+  return $r
 }
 
 # Revision previa de un paso: la IA lee todos los ficheros con hallazgos y la
@@ -1094,26 +1196,12 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
   $l.Add('Vas a preparar el plan de un paso de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.')
   $l.Add("No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/plan-$PasoId.md en el repositorio actual.")
   $l.Add('')
-  $l.Add('## Referencias (SOLO LECTURA)')
-  if ($PlantillaRoot) {
-    $l.Add("- PLANTILLA: $PlantillaRoot")
-    $l.Add('  Repo ya migrado y aprobado. Es la fuente de verdad para paquetes, nombres de puertos y adaptadores, configuracion y tests.')
-  }
-  if ($LegacyRoot) {
-    $l.Add("- ORIGINAL JAVA 8: $LegacyRoot")
-    $l.Add('  Referencia de comportamiento.')
-  }
-  $l.Add('')
+  foreach ($x in (Get-TextoReferencias)) { $l.Add($x) }
   $l.Add('## Lo que se hara despues en este paso (ahora NO lo hagas)')
   $l.Add($TextoPaso[$PasoId])
   $l.Add('')
   $l.Add('## Hallazgos del paso (todos)')
-  foreach ($x in $pend) {
-    $donde = $x.Fichero
-    if ($x.Linea -gt 0) { $donde += ':' + $x.Linea }
-    if (-not $donde) { $donde = '(repo)' }
-    $l.Add("- $donde - $($x.Detalle)")
-  }
+  foreach ($x in $pend) { $l.Add((Get-LineaHallazgo $x)) }
   $l.Add('')
   $l.Add('## Que tienes que revisar')
   $l.Add('1. Lee entero cada fichero de la lista. Busca quien lo usa: imports, inyeccion, configuracion y tests.')
@@ -1133,24 +1221,8 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
   $l.Add('No escribas contrasenas, hosts ni datos reales. No inventes: si no has podido leer un fichero, dilo en Dudas.')
   [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
 
-  $antes = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
-  $check = Get-Head $RepoRoot
-  $rama = Get-Rama $RepoRoot
-  $hp = Get-Huella $PlantillaRoot; $h0 = Get-Huella $LegacyRoot
   Info "Revision previa del paso '$PasoId': Copilot lee $($fichs.Count) fichero(s) y la plantilla..."
-  [void](Invoke-Copilot (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId)")
-  if ((Get-Huella $PlantillaRoot) -ne $hp -or (Get-Huella $LegacyRoot) -ne $h0) {
-    Fallo 'ALTO: se ha modificado la PLANTILLA o el repo ORIGINAL durante la revision. Restauralos antes de seguir.'
-    exit 4
-  }
-  $despues = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
-  if ($despues -ne $antes -or (Get-Head $RepoRoot) -ne $check) {
-    if (-not $antes) {
-      Undo-Lote $rama $check
-      Aviso 'La revision era de solo lectura y Copilot ha tocado codigo: lo he deshecho.'
-    }
-    else { Aviso 'Ojo: Copilot ha tocado ficheros durante la revision (era de solo lectura). Mira git status.' }
-  }
+  [void](Invoke-SoloLectura (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId)")
   if (-not (Test-Path -LiteralPath $ruta)) {
     if ($viejo) {
       [System.IO.File]::WriteAllText($ruta, $viejo)
@@ -1164,6 +1236,178 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
   if ($falta.Count -gt 0) { Aviso ('El plan no nombra: ' + (($falta | Select-Object -First 8) -join ', ')) }
   Bien "Plan escrito: $ruta"
   return 'nuevo'
+}
+
+# ========================== CONSEJO Y REFLEXION ==========================
+# El modelo de las dudas ($script:ModDudas con $script:EsfDudas) hace dos cosas, en llamadas de solo lectura:
+# - consejo: ante una duda (las del plan, o un fichero atascado) da 3 opciones, elige una y dice si la puede aplicar el
+#   motor (codigo) o la tiene que decidir una persona. Escribe .rescate/consejo-<n>.json.
+# - reflexion: tras un intento que no pasa, dice por que y que hacer en el siguiente. Escribe
+#   .rescate/reflexion-<paso>-<lote>-<intento>.md.
+# Todo queda en .rescate/decisiones.md. Si la llamada falla o lo que escribe no vale, se sigue sin ello.
+
+function Add-Decisiones([string[]]$Lineas) { [System.IO.File]::AppendAllText((Join-Path $Work 'decisiones.md'), (($Lineas -join "`n") + "`n`n")) }
+
+# Si Copilot sale con error sin escribir $Salida, prueba el esfuerzo siguiente (Get-EsfuerzosMenores, la regla del
+# preflight). El ultimo probado se queda para las demas llamadas.
+function Invoke-Fuerte([string]$Log, [string]$Salida, [string]$Que) {
+  $lista = @($script:EsfDudas) + @(Get-EsfuerzosMenores $script:EsfDudas)
+  for ($k = 0; $k -lt $lista.Count; $k++) {
+    if ($k -gt 0) { Aviso ("  Copilot no ha aceptado el esfuerzo '$($lista[$k - 1])' del modelo de las dudas (" + (@($r.Salida) | Select-Object -Last 1) + "): pruebo '$($lista[$k])'.") }
+    $script:EsfDudas = $lista[$k]
+    $r = Invoke-SoloLectura $Log $script:ModDudas $script:EsfDudas $Que
+    if ($r.Codigo -eq 0 -or (Test-Path -LiteralPath $Salida)) { break }
+  }
+  return $r
+}
+
+# '' si el consejo tiene la forma pedida; si no, el motivo (va en la CORRECCION del reintento).
+function Test-Consejo($J, [bool]$Una) {
+  $d = @($J.dudas | Where-Object { $null -ne $_ })
+  if ($d.Count -eq 0) { return 'falta "dudas" con al menos una duda' }
+  if ($Una -and $d.Count -ne 1) { return "tiene que traer una sola duda (trae $($d.Count))" }
+  foreach ($x in $d) {
+    if (-not "$($x.duda)".Trim()) { return 'hay una duda con el texto vacio' }
+    $q = "la duda '$($x.duda)'"
+    $o = @($x.opciones | Where-Object { $null -ne $_ })
+    if ($o.Count -ne 3 -or @($o | Where-Object { "$_".Trim() }).Count -ne 3) { return "$q tiene que tener exactamente 3 opciones no vacias (tiene $($o.Count))" }
+    if ("$($x.elegida)" -notmatch '^[1-3]$') { return "en $q, elegida tiene que ser 1, 2 o 3 (es $($x.elegida))" }
+    if (-not "$($x.porque)".Trim()) { return "en $q falta el porque" }
+    if (@('codigo', 'persona') -notcontains "$($x.tipo)") { return "en $q, tipo tiene que ser codigo o persona (es '$($x.tipo)')" }
+  }
+  return ''
+}
+
+# Una llamada de consejo ($Contexto: las lineas del prompt sobre la duda). Si lo que escribe no vale, se repite una vez
+# con el motivo. Devuelve N, Dudas, Modelo y Esfuerzo, o $null (se sigue sin consejo).
+function Invoke-Consejo([string[]]$Contexto, [bool]$Una, [string]$Que) {
+  $n = 1
+  while (Test-Path -LiteralPath (Join-Path $Work "consejo-$n.json")) { $n++ }
+  $ruta = Join-Path $Work "consejo-$n.json"
+  $motivo = ''
+  for ($k = 1; $k -le 2; $k++) {
+    $l = @('# Tarea: consejo sobre dudas de una migracion (SOLO LECTURA)', '',
+      'Eres el revisor experto de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.',
+      "No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/consejo-$n.json en el repositorio actual.", '')
+    $l += @(Get-TextoReferencias) + $Contexto
+    $l += @('', '## Que tienes que hacer',
+      '1. Lee los ficheros que se nombran, la PLANTILLA y, si lo hay, el plan.',
+      '2. Para cada duda da exactamente 3 opciones distintas y realistas, elige la mejor y di por que en una o dos frases.',
+      '3. tipo "persona" si la opcion elegida cambia el comportamiento de negocio, sube versiones de framework o del parent, toca credenciales o entornos, o pide informacion que no esta en los repos. Si no, tipo "codigo": la aplica el motor.',
+      '', "## Formato de .rescate/consejo-$n.json", 'JSON valido, sin comentarios ni texto alrededor:',
+      '{ "dudas": [ { "duda": "...", "opciones": ["...", "...", "..."], "elegida": 1, "porque": "...", "tipo": "codigo" } ] }',
+      '- opciones: exactamente 3. elegida: el numero de la opcion (1, 2 o 3). porque: no vacio. tipo: "codigo" o "persona".',
+      'No escribas contrasenas, hosts ni datos reales.')
+    if ($Una) { $l += 'Una sola duda: la decision que falta para poder arreglar el fichero.' }
+    if ($motivo) { $l += @('', '## CORRECCION: tu respuesta anterior no vale', "- $motivo", "Vuelve a escribir .rescate/consejo-$n.json entero.") }
+    [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+    Info "  Pido consejo al modelo de las dudas ($Que)..."
+    $r = Invoke-Fuerte (Join-Path $Work "consejo-$n.log") $ruta "Copilot (consejo, $Que)"
+    if (-not (Test-Path -LiteralPath $ruta)) {
+      if ($r.Codigo -ne 0) { Aviso "  Copilot ha fallado (codigo $($r.Codigo), ver .rescate/consejo-$n.log): sigo sin consejo."; return $null }
+      $motivo = "no has escrito .rescate/consejo-$n.json"
+      continue
+    }
+    $j = $null
+    try { $j = [System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json; $motivo = Test-Consejo $j $Una }
+    catch { $motivo = 'no es JSON valido: ' + $_.Exception.Message }
+    if (-not $motivo) { return [pscustomobject]@{ N = $n; Dudas = @($j.dudas); Modelo = $script:ModDudas; Esfuerzo = $script:EsfDudas } }
+    Remove-Item -LiteralPath $ruta -Force
+  }
+  Aviso "  El consejo no vale ($motivo): sigo sin consejo."
+  return $null
+}
+
+# Apunta un consejo en decisiones.md: de donde viene y, por duda, las 3 opciones, la elegida, el porque, el tipo y si se
+# ha aplicado ($Aplicada: una por duda).
+function Write-Consejo($Con, [string]$Origen, [string[]]$Aplicada) {
+  $m = $Con.Modelo
+  if (-not $m) { $m = 'el que tenga Copilot' }
+  $l = @("## Consejo $($Con.N): $Origen ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))", "Modelo: $m | esfuerzo: $($Con.Esfuerzo) | respuesta: .rescate/consejo-$($Con.N).json")
+  for ($k = 0; $k -lt $Con.Dudas.Count; $k++) {
+    $d = $Con.Dudas[$k]
+    $l += @('', "### Duda: $($d.duda)")
+    for ($o = 1; $o -le 3; $o++) {
+      $t = "$o. " + @($d.opciones)[$o - 1]
+      if ($o -eq [int]$d.elegida) { $t += ' (elegida)' }
+      $l += $t
+    }
+    $l += @("Por que: $($d.porque)", "Tipo: $($d.tipo) | Aplicada: $($Aplicada[$k])")
+  }
+  Add-Decisiones $l
+}
+
+# Dudas del plan, con -Auto (sin -Auto las lee la persona al revisar el plan, como siempre). Si el plan tiene Dudas que no
+# son 'ninguna' y aun no tiene '## Decisiones', un consejo: las de codigo van al plan en '## Decisiones' (cada lote recibe
+# esa seccion); las de persona, a $script:Decidir para el final.
+function Invoke-ConsejoPlan([string]$PasoId, $Pend) {
+  $ruta = Get-RutaPlan $PasoId
+  $texto = [System.IO.File]::ReadAllText($ruta)
+  $dudas = @(Get-SeccionPlan $texto 'Dudas' | Where-Object { $_.Trim() })
+  if ($dudas.Count -eq 0 -or ($dudas.Count -eq 1 -and $dudas[0] -match '^\W*(ninguna|no hay)\b')) { return }
+  if (@($texto -split "`r?`n" | Where-Object { (Get-TituloPlan $_) -eq 'Decisiones' }).Count -gt 0) { return }
+  $todas = $dudas -join "`n"
+  $fichs = @($Pend | ForEach-Object { $_.Fichero } | Where-Object { $_ } | Select-Object -Unique | Where-Object { $todas -match (Get-RxClase $_) })
+  $ctx = @("## Dudas del plan del paso '$PasoId'", "El plan esta en .rescate/plan-$PasoId.md: leelo entero. Resuelve todas sus dudas:") + $dudas
+  if ($fichs.Count -gt 0) { $ctx += @('', '## Ficheros que nombran las dudas') + @($fichs | ForEach-Object { "- $_" }) }
+  $con = Invoke-Consejo $ctx $false "dudas del plan de '$PasoId'"
+  if (-not $con) { return }
+  $dec = @('', '## Decisiones', 'Las ha tomado un revisor sobre las Dudas de arriba: siguelas.')
+  $apl = @()
+  foreach ($d in $con.Dudas) {
+    if ($d.tipo -eq 'codigo') { $dec += "- $($d.duda) -> $(Get-Elegida $d) (por que: $($d.porque))"; $apl += 'en el plan' }
+    else { $script:Decidir += "[plan de '$PasoId'] $($d.duda) -> recomendada: $(Get-Elegida $d) (por que: $($d.porque))"; $apl += 'no, la decide una persona' }
+  }
+  $persona = @($apl | Where-Object { $_ -ne 'en el plan' }).Count
+  if ($persona -gt 0) { $dec += 'Las demas dudas del plan las decide una persona: no las resuelvas por tu cuenta.' }
+  [System.IO.File]::AppendAllText($ruta, (($dec -join "`n") + "`n"))
+  Write-Consejo $con "dudas del plan del paso '$PasoId'" $apl
+  Info "  Dudas del plan: $($apl.Count - $persona) decidida(s) en '## Decisiones' de $ruta y $persona para una persona (salen al final)."
+}
+
+# Consejo para un fichero atascado, despues del modelo de reserva: el fichero, el paso, sus hallazgos, por que no pasaron
+# sus lotes y las reflexiones de sus intentos. Una sola duda.
+function Invoke-ConsejoAtascado([string]$PasoId, [string]$Fichero, $Hall, [string[]]$Motivos, $Reflexiones) {
+  $ctx = @("## Fichero atascado en el paso '$PasoId'", "El script no ha conseguido arreglar $Fichero ni en su lote, ni solo, ni con el modelo de reserva (si lo hay).", '',
+    '## Que hay que hacer en el paso', $TextoPaso[$PasoId], '', '## Hallazgos del fichero')
+  $ctx += @($Hall | Where-Object { $_.Cat -eq $PasoId -and $_.Sev -eq 'error' -and $_.Fichero -eq $Fichero } | ForEach-Object { Get-LineaHallazgo $_ })
+  $ctx += @('', '## Por que no pasaron sus lotes') + @($Motivos | ForEach-Object { "- $_" })
+  $ctx += @(Get-TextoReflexiones $Reflexiones $false)
+  if (-not $SinPlan -and (Test-Path -LiteralPath (Get-RutaPlan $PasoId))) { $ctx += @('', "El plan del paso esta en .rescate/plan-$PasoId.md.") }
+  return (Invoke-Consejo $ctx $true "atascado $Fichero")
+}
+
+# Reflexion tras el intento $I del lote $N, que no ha pasado ($Correccion: los NO PASA con su detalle). Recibe el objetivo
+# del paso, los hallazgos del lote, el plan, el diff del intento (contra $Check, hasta LineasDiff lineas) y los ficheros
+# nuevos. Solo se comprueba la forma: las cuatro secciones con texto. Devuelve Id, Titulo, Texto y Ficheros, o nada.
+function Invoke-Reflexion([string]$PasoId, [int]$N, [int]$I, $LoteH, [string[]]$Sel, [string]$Check, [string]$Correccion) {
+  $id = "$PasoId-$N-$I"
+  $ruta = Join-Path $Work "reflexion-$id.md"
+  if (Test-Path -LiteralPath $ruta) { Remove-Item -LiteralPath $ruta -Force }
+  $max = [int]$Cfg.LineasDiff
+  $diff = @((Invoke-Git $RepoRoot @('-c', 'core.quotepath=off', 'diff', $Check)).Salida)
+  if ($diff.Count -gt $max) { $diff = @($diff | Select-Object -First $max) + "... (el diff sigue: $($diff.Count - $max) lineas mas)" }
+  $nuevos = @((Invoke-Git $RepoRoot @('-c', 'core.quotepath=off', 'ls-files', '--others', '--exclude-standard')).Salida | Where-Object { $_ })
+  $l = @('# Tarea: reflexion sobre un intento que no ha pasado (SOLO LECTURA)', '',
+    'Un modelo ha intentado arreglar unos ficheros de una migracion a medias (batch Java 8 a Java 21 con arquitectura hexagonal) y las comprobaciones del script han rechazado el intento. Explica por que y que hay que hacer en el siguiente.',
+    "No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/reflexion-$id.md en el repositorio actual.", '')
+  $l += @(Get-TextoReferencias) + @("## Objetivo del paso '$PasoId'", $TextoPaso[$PasoId], '', '## Hallazgos del lote') + @($LoteH | ForEach-Object { Get-LineaHallazgo $_ })
+  $rutaPlan = Get-RutaPlan $PasoId
+  if (-not $SinPlan -and (Test-Path -LiteralPath $rutaPlan)) { $l += @('', '## Plan del paso (la parte de este lote)') + @(Get-PlanDelLote ([System.IO.File]::ReadAllText($rutaPlan)) $Sel | ForEach-Object { '> ' + $_ }) }
+  $l += @('', '## Por que no ha pasado (lo dicen las comprobaciones del script)', $Correccion, '', '## Lo que cambio el intento (git diff; los cambios siguen en el arbol de trabajo)')
+  if ($diff.Count -gt 0) { $l += @('```diff') + $diff + '```' } else { $l += '(ningun cambio en los ficheros que git ya seguia)' }
+  if ($nuevos.Count -gt 0) { $l += @('Ficheros nuevos (leelos si hace falta):') + @($nuevos | ForEach-Object { "- $_" }) }
+  $l += @('', "## Formato de .rescate/reflexion-$id.md", 'Cuatro secciones con estos titulos, cada una con al menos una linea. Breve y concreto: ficheros, clases, paquetes.',
+    '## Que se intento', '## Por que no paso', '## Que hacer ahora', '## Que no hacer')
+  [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+  Info '  El modelo de las dudas reflexiona sobre el intento...'
+  [void](Invoke-Fuerte (Join-Path $Work "reflexion-$id.log") $ruta "Copilot (reflexion, paso $PasoId, lote $N, intento $I)")
+  if (-not (Test-Path -LiteralPath $ruta)) { Aviso "  No hay reflexion (ver .rescate/reflexion-$id.log): sigo sin ella."; return }
+  $texto = [System.IO.File]::ReadAllText($ruta)
+  $falta = @('Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer' | Where-Object { @(Get-SeccionPlan $texto $_ | Where-Object { $_.Trim() }).Count -eq 0 })
+  if ($falta.Count -gt 0) { Aviso ("  A la reflexion le falta '" + ($falta -join "', '") + "': sigo sin ella."); return }
+  Add-Decisiones (@("## Reflexion: paso '$PasoId', lote $N, intento $I ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))", ('Ficheros: ' + ($Sel -join ', ')), "Esfuerzo: $($script:EsfDudas) | fichero: .rescate/reflexion-$id.md", '') + ($texto.Trim() -replace '(?m)^[ \t]*#+[ \t]*(.*?)[ \t\r]*$', '### $1'))
+  return [pscustomobject]@{ Id = $id; Titulo = "Lote $N, intento $I"; Texto = $texto; Ficheros = $Sel }
 }
 
 # ================================= PRE =================================
@@ -1351,6 +1595,7 @@ function Invoke-Fix {
   # --- revision previa: un plan para todo el paso, antes del primer lote ---
   if (-not $SinPlan -and ($Cfg.PasosConPlan -contains $paso)) {
     $plan = Invoke-Plan $paso $hall $false
+    if ($plan -and $Auto) { Invoke-ConsejoPlan $paso @($hall | Where-Object { $_.Cat -eq $paso -and $_.Sev -eq 'error' }) }
     if ($plan -eq 'nuevo' -and -not $Auto) {
       $resp = Read-Host 'Lee el plan (puedes corregirlo). [Enter] seguir con los lotes | n = parar aqui'
       if ($resp -eq 'n') { $script:Parar = $true; return }
@@ -1358,6 +1603,9 @@ function Invoke-Fix {
   }
 
   $planB = @{}
+  $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
+  $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
+  $reflexiones = @()   # las reflexiones del paso (Id, Titulo, Texto, Ficheros)
   for ($n = 1; $n -le $MaxLotes; $n++) {
     $pend = @($hall | Where-Object { $_.Cat -eq $paso -and $_.Sev -eq 'error' })
     if ($pend.Count -eq 0) { break }
@@ -1366,8 +1614,12 @@ function Invoke-Fix {
     $fichs = @($pend | ForEach-Object { $_.Fichero } | Select-Object -Unique | Where-Object { $stuck -notcontains $_ })
     $sel = @($fichs | Select-Object -Skip $Saltar -First $loteEf)
     if ($sel.Count -eq 0) { break }
-    $mod = ''
-    if ($sel.Count -eq 1 -and $planB.ContainsKey($sel[0])) { $mod = $ModeloB }
+    # el intento con el consejo va con -Modelo, una sola vez y sin reflexion (despues no hay otro)
+    $conIntento = ($sel.Count -eq 1 -and $consejoDe.ContainsKey($sel[0]))
+    $mod = ''; $duda = $null; $intentos = $MaxIntentos
+    if ($conIntento) { $duda = $consejoDe[$sel[0]].Dudas[0]; $intentos = 1 }
+    elseif ($sel.Count -eq 1 -and $planB.ContainsKey($sel[0])) { $mod = $ModeloB }
+    $reflexionar = ($Cfg.Reflexionar -and -not $conIntento)
     $buildAntes = $script:Build
     $loteH = @($pend | Where-Object { $sel -contains $_.Fichero })
     $antes = @{}
@@ -1384,9 +1636,10 @@ function Invoke-Fix {
 
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
-    for ($i = 1; $i -le $MaxIntentos; $i++) {
-      [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion))
-      Info "  Copilot trabajando (intento $i de $MaxIntentos)..."
+    for ($i = 1; $i -le $intentos; $i++) {
+      $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
+      [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
+      Info "  Copilot trabajando (intento $i de $intentos)..."
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod '' "Copilot (paso $paso, lote $n, intento $i)"
       if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)" }
 
@@ -1407,6 +1660,7 @@ function Invoke-Fix {
       if ($cambios.Count -eq 0) {
         $problemas = @('No has cambiado ningun fichero.')
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
+        if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
         continue
       }
 
@@ -1446,33 +1700,62 @@ function Invoke-Fix {
       $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object {
-          $donde = $_.Fichero
-          if ($_.Linea -gt 0) { $donde += ':' + $_.Linea }
-          "  - $donde - $($_.Detalle)" })
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) })
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
+      if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }
 
     if (-not $ok) {
       # Nada se queda a medias: se deshace y se prueba algo mas facil.
       Undo-Lote $rama $check
       $script:Build = $buildAntes
-      Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $MaxIntentos intento(s)."
+      Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $intentos intento(s)."
       $problemas | ForEach-Object { Aviso "  - $_" }
-      $script:Fallos++
-      if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
-        Fallo "PARO: $($script:Fallos) lotes deshechos seguidos. Puede ser un problema de Copilot, de Maven o de un flag, no del codigo."
-        Info "Ultimas lineas de Copilot (.rescate/lote-$paso-$n-*.log):"
-        $rc.Salida | Select-Object -Last 8 | ForEach-Object { Info "  $_" }
-        exit 2
+      $conMod = ''
+      if ($mod) { $conMod = ", con $mod" }
+      foreach ($f in $sel) {
+        if (-not $motivos.ContainsKey($f)) { $motivos[$f] = @() }
+        $motivos[$f] += "lote $n ($($sel.Count) fichero(s)$conMod): " + ($problemas -join ' ')
+      }
+      if (-not $conIntento) {   # el intento del consejo no cuenta como lote deshecho seguido
+        $script:Fallos++
+        if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
+          Fallo "PARO: $($script:Fallos) lotes deshechos seguidos. Puede ser un problema de Copilot, de Maven o de un flag, no del codigo."
+          Info "Ultimas lineas de Copilot (.rescate/lote-$paso-$n-*.log):"
+          $rc.Salida | Select-Object -Last 8 | ForEach-Object { Info "  $_" }
+          exit 2
+        }
       }
       if ($sel.Count -gt 1) { Info '  -> lo reintento de uno en uno.'; $loteEf = 1; continue }
-      if ($ModeloB -and -not $planB.ContainsKey($sel[0])) { Info "  -> lo reintento con el modelo de reserva ($ModeloB)."; $planB[$sel[0]] = $true; continue }
-      Fallo "ATASCADO en '$paso': $($sel[0]). Lo apunto y sigo con el resto."
-      Add-Atascado $paso $sel[0] ($problemas -join ' ') $null
+      $f = $sel[0]
+      if ($ModeloB -and -not $planB.ContainsKey($f)) { Info "  -> lo reintento con el modelo de reserva ($ModeloB)."; $planB[$f] = $true; continue }
+      # consejo del modelo de las dudas: si es de codigo, un intento mas con el; si no, o si ese intento no pasa, atascado
+      $con = $null
+      if ($conIntento) { $con = $consejoDe[$f]; Write-Consejo $con "atascado en '$paso': $f" @('se intento y no paso') }
+      else {
+        $con = Invoke-ConsejoAtascado $paso $f $hall $motivos[$f] @($reflexiones | Where-Object { $_.Ficheros -contains $f })
+        if ($con -and $con.Dudas[0].tipo -eq 'codigo') {
+          Info ('  -> consejo: ' + (Get-Elegida $con.Dudas[0]) + '. Lo intento una vez mas con el (modelo de -Modelo).')
+          $consejoDe[$f] = $con
+          continue
+        }
+        if ($con) {
+          Write-Consejo $con "atascado en '$paso': $f" @('no, la decide una persona')
+          Info '  -> el consejo dice que esta duda la tiene que decidir una persona: sale al final, en Te toca decidir.'
+        }
+      }
+      Fallo "ATASCADO en '$paso': $f. Lo apunto y sigo con el resto."
+      $d0 = $null
+      $nota = "- [$paso] ${f}: " + ($problemas -join ' ') + " (registro: .rescate/lote-$paso-$n-*.log)"
+      if ($con) {
+        $d0 = $con.Dudas[0]
+        $nota += "`n  Consejo (.rescate/consejo-$($con.N).json): $($d0.duda)"
+        for ($o = 1; $o -le 3; $o++) { $nota += "`n    $o. " + @($d0.opciones)[$o - 1] }
+        $nota += "`n    recomendada: $($d0.elegida) (tipo $($d0.tipo)). Por que: $($d0.porque)"
+      }
+      Add-Atascado $paso $f ($problemas -join ' ') $d0
       Save-Atascados
-      $nota = "- [$paso] $($sel[0]): " + ($problemas -join ' ') + " (registro: .rescate/lote-$paso-$n-*.log)`n"
-      [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota)
+      [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota + "`n")
       continue
     }
 
@@ -1480,6 +1763,7 @@ function Invoke-Fix {
     $d = Get-Cuenta $hall2 $paso
     $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', "rescate($paso): lote $n, hallazgos $($antes[$paso]) a $d") + $Cfg.CommitArgs)
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado; los cambios siguen en el arbol de trabajo: ' + ($r.Salida -join ' ')); exit 3 }
+    if ($conIntento) { Write-Consejo $consejoDe[$sel[0]] "atascado en '$paso': $($sel[0])" @('si, commit ' + ((Invoke-Git $RepoRoot @('log', '-1', '--format=%h')).Salida -join '').Trim()) }
     $hall = $hall2
     $script:Fallos = 0
     Write-Informe $hall
@@ -1535,6 +1819,14 @@ if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -
 $script:Atascados = @{}   # paso -> ficheros que la IA no ha sabido arreglar
 $script:AtascadosInfo = [ordered]@{}   # 'paso|fichero' -> lo que se guarda en atascados.json
 $script:Hall = $null      # los hallazgos del ultimo estado bueno del fix
+$script:Decidir = @()     # dudas de persona de los consejos del plan (las de los atascados van en AtascadosInfo)
+# El modelo de las dudas: -ModeloDudas, si no el de la config, si no el de -Modelo. Su esfuerzo: -EsfuerzoDudas o el de
+# la config (Invoke-Fuerte lo baja si Copilot no lo admite).
+$script:ModDudas = $ModeloDudas
+if (-not $script:ModDudas) { $script:ModDudas = "$($Cfg.ModeloDudas)" }
+if (-not $script:ModDudas) { $script:ModDudas = $Modelo }
+$script:EsfDudas = $EsfuerzoDudas
+if (-not $script:EsfDudas) { $script:EsfDudas = "$($Cfg.EsfuerzoDudas)" }
 $script:Fallos = 0        # lotes deshechos seguidos
 $script:H = $null
 $script:Build = $null
@@ -1616,6 +1908,16 @@ switch ($Modo) {
       Fallo 'Se ha quedado sin arreglar (lo unico que te toca mirar):'
       foreach ($k in $Cfg.Orden) { if ($script:Atascados.ContainsKey($k)) { $script:Atascados[$k] | ForEach-Object { Fallo "  [$k] $_" } } }
       Info ('Detalle: ' + (Join-Path $Work 'atascados.md'))
+    }
+    $decidir = @($script:Decidir) + @($script:AtascadosInfo.Values | Where-Object { $_.consejo -and $_.consejo.tipo -eq 'persona' } | ForEach-Object {
+        "[$($_.paso)] $($_.fichero): $($_.consejo.duda) -> recomendada: $(Get-Elegida $_.consejo) (por que: $($_.consejo.porque))" })
+    if ($decidir.Count -gt 0) {
+      Info ''
+      Aviso 'Te toca decidir (el modelo de las dudas recomienda una opcion; el script no la ha aplicado):'
+      $decidir | ForEach-Object { Aviso "  $_" }
+      Info ('Las 3 opciones de cada duda, con su porque: ' + (Join-Path $Work 'decisiones.md'))
+    }
+    if ($script:Atascados.Count -gt 0) {
       Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano (la pasada siguiente lo intenta si el fichero cambia), o volver a lanzar con -Reintentar.'
       exit 2
     }

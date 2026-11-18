@@ -149,6 +149,13 @@ function Get-ArgsCopilot([string]$Texto, [string]$Mod, [string]$Esf, [string[]]$
   return $a
 }
 
+# Los esfuerzos que se prueban, del mas alto al mas bajo, si el modelo no admite el pedido (preflight y rescate).
+function Get-EsfuerzosMenores([string]$Esfuerzo) {
+  if ($Esfuerzo -ceq 'max') { return @('xhigh', 'high') }
+  if ($Esfuerzo -ceq 'xhigh') { return @('high') }
+  return @()
+}
+
 # Maven del repo: el de -MvnExe, el mvnw de la raiz o el mvn del PATH.
 function Get-Mvn([string]$Raiz) {
   if ($Cfg.MvnExe) { return $Cfg.MvnExe }

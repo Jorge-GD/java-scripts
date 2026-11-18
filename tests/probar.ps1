@@ -369,9 +369,9 @@ function Nuevo-Escenario([string]$Nombre) {
   Nuevo-Repo $repo
   foreach ($d in @($pl, $repo)) { Inicia-Repo $d }
   # ajustes del repo: Maven y Copilot de mentira (despues del commit: .rescate no se versiona)
-  $cfg = [pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1') }
-  Escribe $repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
-  return [pscustomobject]@{ Plantilla = $pl; Repo = $repo; Wt = ($repo + '-rescate') }
+  $e = [pscustomobject]@{ Plantilla = $pl; Repo = $repo; Wt = ($repo + '-rescate') }
+  Pon-Config $e @{}
+  return $e
 }
 
 # Nombres (ordenados y unidos con espacios) de los jobs que saca '-Modo pre -SinIA'
@@ -1066,9 +1066,10 @@ $Pruebas['plantilla incumple: con el adaptador permitido y un uso de ficheros en
 # "  ... sigue: <que> (lleva N min M s)" para que se vea que el script no esta colgado.
 function Lineas-Latido([string]$Salida) { return @($Salida -split "`r?`n" | Where-Object { $_ -match '^\s*\.\.\. sigue' }) }
 
-# El config.json del repo del escenario: Maven y Copilot, los falsos, mas estos ajustes (nombre -> valor).
+# El config.json del repo del escenario: Maven y Copilot, los falsos, y sin reflexion (estas pruebas cuentan las llamadas
+# a Copilot; la reflexion tiene las suyas, en M6), mas estos ajustes (nombre -> valor).
 function Pon-Config($E, [hashtable]$Mas) {
-  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1') }
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Reflexionar = $false }
   foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
   Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
 }
@@ -1319,7 +1320,7 @@ $Pruebas['final: con un paso atascado no dice que no quedan errores; con la pasa
 # mas estos ajustes (nombre -> valor).
 function Escenario-M6([string]$Nombre, [hashtable]$Mas = @{}) {
   $e = Nuevo-Escenario $Nombre
-  $cfg = @{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); Orden = @('estructura', 'tests'); Reflexionar = $false }
+  $cfg = @{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); Orden = @('estructura', 'tests') }
   foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
   Pon-Config $e $cfg
   return $e
