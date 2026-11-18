@@ -1269,7 +1269,7 @@ function Pon-Referencia-Que-Incumple($E) {
   Escribe $E.Plantilla ($b + 'infrastructure/config/Ajustes.java') (Clase-Con 'Ajustes' 'com.zorba.plantilla.infrastructure.config' @() @('int a = 1;'))
   Escribe $E.Plantilla ($b + 'domain/Modelo.java') (Clase-Con 'Modelo' 'com.zorba.plantilla.domain' @($inf) @('int a = 1;'))
   Escribe $E.Plantilla ($b + 'application/Caso.java') (Clase-Con 'Caso' 'com.zorba.plantilla.application' @($inf) @('int a = 1;', 'void m() { System.out.println("x"); }'))
-  Escribe $E.Plantilla ($b + 'infrastructure/adapters/output/sftp/Local.java') (Clase-Con 'Local' 'com.zorba.plantilla.infrastructure.adapters.output.sftp' @('java.io.FileReader') @('Object r = null;', 'void m() { try { r = null; } catch (Exception e) { } }'))
+  Escribe $E.Plantilla ($b + 'infrastructure/adapters/output/ftp/Local.java') (Clase-Con 'Local' 'com.zorba.plantilla.infrastructure.adapters.output.ftp' @('java.io.FileReader') @('Object r = null;', 'void m() { try { r = null; } catch (Exception e) { } }'))
   Escribe $E.Plantilla 'src/main/resources/application.yml' ("sftp:`n  password: zorba-pw-uno`n  token: zorba-tk-dos`n  api-key: zorba-ak-tres`n  clave: zorba-cl-cuatro`n")
 }
 
