@@ -991,14 +991,38 @@ function Get-TextoReferencias {
   return ($l + '')
 }
 
-# Prompt de un lote. $Consejo: la decision del modelo de las dudas para un atascado (va tras los hallazgos).
-# $Reflexiones: las de los intentos anteriores de estos ficheros (dentro de la CORRECCION, si la hay).
-function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
-  # La orden de Maven: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
+# La orden de Maven para un prompt: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
+function Get-OrdenMaven {
   $sep = [System.IO.Path]::DirectorySeparatorChar
   $mvn = Get-Mvn $RepoRoot
   if ($mvn.StartsWith($RepoRoot + $sep, [System.StringComparison]::OrdinalIgnoreCase)) { $mvn = '.' + $sep + $mvn.Substring($RepoRoot.Length + 1) }
   if ($mvn -match '\s') { $mvn = '"' + $mvn + '"' }
+  return $mvn
+}
+
+# Las reglas que llevan todos los prompts de un lote.
+$TextoReglas = @(
+  '1. No cambies la logica de negocio: mismo comportamiento que el original.',
+  '2. No toques nada fuera de este repositorio. No hagas commit ni push ni cambies de rama: de git se encarga el script.',
+  '3. No borres tests, no los desactives (@Disabled, @Ignore), no relajes aserciones ni bajes umbrales de cobertura. Si mueves una clase, mueve su test.',
+  "4. No cambies el pom.xml salvo que el paso sea 'build' o sea imprescindible. Nunca anadas dependencias que la plantilla no use.",
+  '5. No escribas contrasenas, tokens ni hosts reales en ningun fichero.',
+  '6. No hagas mejoras ni refactors que este lote no pide.',
+  '7. Si un hallazgo no se puede resolver sin romper estas reglas, dejalo como esta y explicalo al final.'
+)
+
+# Lo que el prompt de un lote pide hacer al terminar.
+function Get-TextoAlTerminar([string]$Mvn) {
+  return @("- Ejecuta: $Mvn " + ($Cfg.MvnCompilar -join ' ') + '  y corrige hasta que compile.',
+    '- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
+}
+
+# Prompt de un lote. $Consejo: la decision del modelo de las dudas para un atascado (va tras los hallazgos).
+# $Reflexiones: las de los intentos anteriores de estos ficheros (dentro de la CORRECCION, si la hay).
+# Con CORRECCION es el prompt corto de reparacion: el intento anterior sigue en el arbol y no hay que explorar de nuevo.
+function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
+  if ($Correccion) { return (New-PromptReparacion $PasoId $LoteH $Correccion $Consejo $Reflexiones) }
+  $mvn = Get-OrdenMaven
   $l = New-Object System.Collections.Generic.List[string]
   $l.Add("# Tarea de rescate de migracion: paso '$PasoId'")
   $l.Add('')
@@ -1035,35 +1059,48 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $nu
   $l.Add('## Hallazgos de este lote (resuelve estos y nada mas)')
   foreach ($x in $LoteH) { $l.Add((Get-LineaHallazgo $x)) }
   $l.Add('')
-  if ($Consejo) {
-    $l.Add('## Consejo para este fichero (lo ha decidido un revisor: siguelo)')
-    $l.Add("Duda: $($Consejo.duda)")
-    $l.Add('Decision: ' + (Get-Elegida $Consejo))
-    $l.Add("Por que: $($Consejo.porque)")
-    $l.Add('')
-  }
+  if ($Consejo) { foreach ($x in (Get-TextoConsejoLote $Consejo)) { $l.Add($x) } }
   $l.Add('## Reglas obligatorias')
-  $l.Add('1. No cambies la logica de negocio: mismo comportamiento que el original.')
-  $l.Add('2. No toques nada fuera de este repositorio. No hagas commit ni push ni cambies de rama: de git se encarga el script.')
-  $l.Add('3. No borres tests, no los desactives (@Disabled, @Ignore), no relajes aserciones ni bajes umbrales de cobertura. Si mueves una clase, mueve su test.')
-  $l.Add("4. No cambies el pom.xml salvo que el paso sea 'build' o sea imprescindible. Nunca anadas dependencias que la plantilla no use.")
-  $l.Add('5. No escribas contrasenas, tokens ni hosts reales en ningun fichero.')
-  $l.Add('6. No hagas mejoras ni refactors que este lote no pide.')
-  $l.Add('7. Si un hallazgo no se puede resolver sin romper estas reglas, dejalo como esta y explicalo al final.')
+  foreach ($x in $TextoReglas) { $l.Add($x) }
   $l.Add('')
   $l.Add('## Calidad del codigo que escribas (Java 21)')
   foreach ($x in $TextoCalidad) { $l.Add($x) }
   $l.Add('')
   $l.Add('## Al terminar')
-  $l.Add("- Ejecuta: $mvn " + ($Cfg.MvnCompilar -join ' ') + '  y corrige hasta que compile.')
-  $l.Add('- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
-  if ($Correccion) {
-    $l.Add('')
-    $l.Add('## CORRECCION: tu intento anterior no paso las comprobaciones')
-    $l.Add('Tus cambios siguen en el arbol de trabajo. Corrige esto sin deshacer lo que estaba bien:')
-    $l.Add($Correccion)
-  }
-  foreach ($x in (Get-TextoReflexiones $Reflexiones ([bool]$Correccion))) { $l.Add($x) }
+  foreach ($x in (Get-TextoAlTerminar $mvn)) { $l.Add($x) }
+  foreach ($x in (Get-TextoReflexiones $Reflexiones $false)) { $l.Add($x) }
+  return ($l -join "`n")
+}
+
+# El consejo de un revisor para un fichero atascado, para un prompt.
+function Get-TextoConsejoLote($Consejo) {
+  return @('## Consejo para este fichero (lo ha decidido un revisor: siguelo)', "Duda: $($Consejo.duda)", ('Decision: ' + (Get-Elegida $Consejo)), "Por que: $($Consejo.porque)", '')
+}
+
+# Prompt de un intento 2, 3... (o de un escalon que parte del arbol del mejor intento): el arbol ya tiene el intento anterior, asi que
+# arriba va lo que hay que arreglar, con su detalle, y debajo, en corto, los ficheros del lote, la orden de Maven y las reglas.
+function New-PromptReparacion([string]$PasoId, $LoteH, [string]$Correccion, $Consejo, $Reflexiones) {
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea de rescate de migracion: paso '$PasoId'")
+  $l.Add('')
+  $l.Add('Tu intento anterior sigue en el arbol de trabajo. No vuelvas a explorar el repo: arregla solo esto.')
+  $l.Add('')
+  $l.Add('## CORRECCION: tu intento anterior no paso las comprobaciones')
+  $l.Add('Corrige esto sin deshacer lo que estaba bien:')
+  $l.Add($Correccion)
+  foreach ($x in (Get-TextoReflexiones $Reflexiones $true)) { $l.Add($x) }
+  $l.Add('')
+  if ($Consejo) { foreach ($x in (Get-TextoConsejoLote $Consejo)) { $l.Add($x) } }
+  $l.Add('## Ficheros del lote')
+  $fichs = @($LoteH | ForEach-Object { $_.Fichero } | Where-Object { $_ } | Select-Object -Unique)
+  if ($fichs.Count -eq 0) { $fichs = @('(repo)') }
+  foreach ($f in $fichs) { $l.Add("- $f") }
+  $l.Add('')
+  $l.Add('## Al terminar')
+  foreach ($x in (Get-TextoAlTerminar (Get-OrdenMaven))) { $l.Add($x) }
+  $l.Add('')
+  $l.Add('## Reglas obligatorias')
+  foreach ($x in $TextoReglas) { $l.Add($x) }
   return ($l -join "`n")
 }
 
@@ -1705,6 +1742,34 @@ function Save-Intento([string]$PasoId, [int]$N, [string]$Commit) {
 
 function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
 
+# El arbol de trabajo de un intento (con los ficheros nuevos, sin lo ignorado) como un commit suelto sobre HEAD, que no esta en ninguna
+# rama ni toca el indice ni el arbol. Devuelve su sha, o '' si no se pudo.
+function Save-ArbolIntento {
+  $idx = Join-Path $Work 'arbol.index'
+  $env:GIT_INDEX_FILE = $idx
+  try {
+    [void](Invoke-Git $RepoRoot @('read-tree', 'HEAD'))
+    [void](Invoke-Git $RepoRoot @('add', '-A'))
+    $t = Invoke-Git $RepoRoot @('write-tree')
+    $c = $null
+    if ($t.Codigo -eq 0) { $c = Invoke-Git $RepoRoot @('commit-tree', (($t.Salida -join '').Trim()), '-p', 'HEAD', '-m', 'rescate: arbol de un intento') }
+    if (-not $c -or $c.Codigo -ne 0) { Aviso '  No he podido guardar el arbol de este intento: sigo sin el.'; return '' }
+    return (($c.Salida -join '').Trim())
+  }
+  finally {
+    Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# Deja el arbol de trabajo como el de un intento guardado: vuelve al commit bueno y pone encima lo del intento (HEAD no cambia).
+function Restore-ArbolIntento([string]$Rama, [string]$Check, [string]$Sha) {
+  Undo-Lote $Rama $Check
+  $r = Invoke-Git $RepoRoot @('read-tree', '--reset', '-u', $Sha)
+  if ($r.Codigo -ne 0) { Aviso ('  No he podido volver a ese arbol: ' + ($r.Salida -join ' ')); Undo-Lote $Rama $Check; return }
+  [void](Invoke-Git $RepoRoot @('reset', '-q', '--mixed', $Check))
+}
+
 # Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y
 # lo creado van antes a un git stash (el usuario pudo cortar la pasada y tocar algo a mano). Si la rama ya no esta en ese
 # commit, el usuario hizo el suyo: no se deshace nada.
@@ -1802,6 +1867,7 @@ function Invoke-Fix {
   }
 
   $unoAUno = @{}       # ficheros de un lote deshecho que se reintentan de uno en uno: los demas vuelven al tamano del paso
+  $mejorDe = @{}       # fichero -> el mejor intento de su ultimo lote deshecho, si compilaba y bajaba los hallazgos del paso (el escalon siguiente parte de su arbol)
   $planB = @{}
   $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
   $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
@@ -1843,18 +1909,31 @@ function Invoke-Fix {
     $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
     Save-Intento $paso $n $check   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
+    # el mejor intento del lote que no ha pasado: Sha del arbol, Peso (Problemas y Nuevos), Correccion, Intento, Lote, Base (el commit bueno), Sirve, Ref
+    $mejor = $null
+    if ($sel.Count -eq 1 -and $mejorDe.ContainsKey($sel[0])) {
+      $ini = $mejorDe[$sel[0]]
+      if ($ini.Base -eq $check) {   # si la rama ha avanzado desde que se guardo, ese arbol ya no vale
+        $mejor = $ini
+        Info "  Parto del mejor intento de antes ($($ini.Ref)): su arbol ya esta puesto."
+        Restore-ArbolIntento $rama $check $ini.Sha
+        $correccion = $ini.Correccion
+      }
+      else { $mejorDe.Remove($sel[0]) }
+    }
     for ($i = 1; $i -le $intentos; $i++) {
       $detalle = @(); $rutaCorr = ''
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
       Info "  Copilot trabajando (intento $i de $intentos)..."
+      $estadoAntes = ((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida -join "`n")
       $esf = ''
       if ($i -ge 2 -or $escalon) { $esf = Get-EsfuerzoReintento }
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i)"
       if ($rc.Codigo -ne 0) {
         Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc
         # un fallo de Copilot sin tocar nada no es un intento del modelo: se repite la llamada una vez
-        $nada = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check -and @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ }).Count -eq 0
+        $nada = (((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check) -and (((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida -join "`n") -eq $estadoAntes)
         if ($nada) {
           Aviso '  No ha cambiado nada: repito la llamada una vez (no cuenta como intento).'
           # si iba con el esfuerzo de los reintentos, puede que el modelo no lo admita: se prueba el siguiente (la regla de siempre) y se queda
@@ -1946,10 +2025,31 @@ function Invoke-Fix {
       $falloAhora = Get-ClaveFallo $problemas $nuevos
       if ($reflexionar -and ($Cfg.Reflexionar -eq 'siempre' -or ($falloAntes -and (Test-FalloRepetido $falloAntes $falloAhora)))) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
       $falloAntes = $falloAhora
+      # el mejor intento, con una cuenta: los NO PASA y, con los mismos, los hallazgos nuevos. Uno peor se descarta antes del siguiente.
+      $peso = $problemas.Count * 100 + $nuevos.Count
+      if (-not $mejor -or $peso -le $mejor.Peso) {
+        $sha = Save-ArbolIntento
+        if ($sha) {
+          $mejor = @{ Sha = $sha; Peso = $peso; Problemas = $problemas.Count; Nuevos = $nuevos.Count; Correccion = $correccion; Intento = $i; Lote = $n; Base = $check; Ref = ''
+            Sirve = ($script:Build.Compila -and $d -lt $antes[$paso]) }
+        }
+      }
+      elseif ($i -lt $intentos) {
+        $cual = "el intento $($mejor.Intento)"
+        if ($mejor.Lote -ne $n) { $cual += " del lote $($mejor.Lote)" }
+        Aviso "  El intento $i es peor que $cual ($($problemas.Count) NO PASA y $($nuevos.Count) hallazgos nuevos, frente a $($mejor.Problemas) y $($mejor.Nuevos)): vuelvo a su arbol."
+        Restore-ArbolIntento $rama $check $mejor.Sha
+        $correccion = $mejor.Correccion
+      }
     }
 
     if (-not $ok) {
-      # Nada se queda a medias: se deshace y se prueba algo mas facil.
+      # Nada se queda a medias: el arbol del mejor intento se guarda en una ref (ni rama ni commit de la rama) y se deshace.
+      $refMejor = ''
+      if ($mejor) {
+        $refMejor = "refs/rescate/$paso-$n"
+        [void](Invoke-Git $RepoRoot @('update-ref', $refMejor, $mejor.Sha))
+      }
       Undo-Lote $rama $check
       Remove-Intento   # la marca se va cuando el lote ya esta deshecho, no antes
       $script:Build = $buildAntes
@@ -1957,6 +2057,12 @@ function Invoke-Fix {
       $problemas | ForEach-Object { Aviso "  - $_" }
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
       if ($rutaCorr) { Aviso "  Correccion completa del ultimo intento: $rutaCorr" }
+      if ($refMejor) { Aviso "  El mejor intento esta guardado en git: $refMejor (para verlo: git diff $refMejor^ $refMejor)." }
+      # el escalon siguiente parte de ese arbol si compilaba y bajaba los hallazgos del paso; si no, del commit bueno
+      foreach ($x in $sel) {
+        if ($mejor -and $mejor.Sirve) { $mejorDe[$x] = @{ Sha = $mejor.Sha; Peso = $mejor.Peso; Problemas = $mejor.Problemas; Nuevos = $mejor.Nuevos; Correccion = $mejor.Correccion; Intento = $mejor.Intento; Lote = $mejor.Lote; Base = $check; Ref = $refMejor; Sirve = $true } }
+        else { $mejorDe.Remove($x) }
+      }
       $conMod = ''
       if ($mod) { $conMod = ", con $mod" }
       foreach ($f in $sel) {
@@ -1994,7 +2100,7 @@ function Invoke-Fix {
       Add-Atascado $paso $f ($problemas -join ' ') $d0
       Save-Atascados
       [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota + "`n")
-      foreach ($x in $sel) { $unoAUno.Remove($x) }
+      foreach ($x in $sel) { $unoAUno.Remove($x); $mejorDe.Remove($x) }
       # la cascada de un fichero (de uno en uno, reserva, consejo) cuenta una vez, al quedar atascado, no una por escalon
       $script:Fallos++
       if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
@@ -2017,7 +2123,7 @@ function Invoke-Fix {
     }
     $hall = $hall2
     $script:Fallos = 0
-    foreach ($f in $sel) { $unoAUno.Remove($f) }
+    foreach ($f in $sel) { $unoAUno.Remove($f); $mejorDe.Remove($f) }
     Write-Informe $hall
     Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho."
     (Invoke-Git $RepoRoot @('show', '--stat', '--oneline', '--format=%h %s', 'HEAD')).Salida | Select-Object -First 25 | ForEach-Object { Info "  $_" }

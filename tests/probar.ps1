@@ -1687,7 +1687,8 @@ $Pruebas['m7 catch: llevar el catch a un fichero nuevo pasa (la cuenta es de tod
 $Pruebas['m7 catch: un catch en un comentario o en un texto no cuenta'] = {
   $e = Escenario-M6 'm7-catch-comentario'
   $r = Fix-M6 $e 'estructura' 1 @() 'catch-en-comentario'
-  Igual 'el lote se deshace: sale con 2' 2 $r.Codigo
+  # el primer lote se deshace; el escalon siguiente parte de su arbol (compilaba y bajaba los hallazgos) con la correccion, y ahi pasa
+  Comprueba 'el primer lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
   Comprueba 'cuenta 2 -> 1: el comentario y el texto no son catch' ($r.Salida -match 'Has quitado 1 catch \(2 -> 1\)') (Cola $r.Salida)
 }
 
@@ -2123,6 +2124,52 @@ $Pruebas['m9 esfuerzo: si Copilot no admite el esfuerzo del reintento, se baja c
   Igual 'dos lotes: el intento 2 pide max, se rechaza y se repite con xhigh; en el lote siguiente el 2 ya pide xhigh' 'medium,xhigh,medium,xhigh' ((Esfuerzos-De-Lotes $e) -join ',')
   Igual 'un solo rechazo' 1 @(Llamadas-M6 $e 'rechazo').Count
   Comprueba 'lo dice' ($r.Salida -match "esfuerzo 'max'.*'xhigh'") (Cola $r.Salida)
+}
+
+# ===== M9 (parte B): REPARAR, NO REPETIR =====
+$FraseReparacion = 'Tu intento anterior sigue en el arbol de trabajo. No vuelvas a explorar el repo: arregla solo esto.'
+
+$Pruebas['m9 reparar: los intentos 2 y 3 llevan el prompt corto de reparacion; un intento peor se descarta y el siguiente parte del mejor'] = {
+  $e = Escenario-M6 'm9-reparar'
+  $r = Fix-M6 $e 'estructura' 3 @('-Lote', '1') 'mejor-peor'
+  $ls = @(Lotes-Suelta $e)
+  Comprueba 'Suelta tiene tres llamadas' ($ls.Count -eq 3) ($ls -join ' / ')
+  if ($ls.Count -lt 3) { return }
+  $p1 = Prompt-M6 $e $ls[0]; $p2 = Prompt-M6 $e $ls[1]; $p3 = Prompt-M6 $e $ls[2]
+  Comprueba 'el primero es el prompt de siempre' ($p1 -match 'resuelve estos y nada mas' -and $p1 -notmatch [regex]::Escape($FraseReparacion)) $p1
+  foreach ($q in @(@(2, $p2), @(3, $p3))) {
+    $p = $q[1]
+    Comprueba "el intento $($q[0]) empieza por la frase de reparacion" ($p -match ('(?s)^# [^\n]*\n\n' + [regex]::Escape($FraseReparacion) + '\n')) $p
+    Comprueba "el intento $($q[0]) no dice 'nada mas'" ($p -notmatch 'nada mas') $p
+    Comprueba "el intento $($q[0]) lleva la correccion completa, con el detalle" ($p -match '## CORRECCION' -and $p -match "Los hallazgos de 'estructura' no han bajado" -and $p -match 'Detalle:') $p
+    Comprueba "el intento $($q[0]) lleva los ficheros del lote, la orden de Maven y las reglas" ($p -match '(?m)^## Ficheros del lote\n- src/main/java/com/acme/life/Suelta\.java\n' -and $p -match '(?m)^- Ejecuta: .* -q -B' -and $p -match '## Reglas obligatorias') $p
+    Comprueba "el intento $($q[0]) es corto: sin el mapa de referencias ni las reglas de calidad" ($p -notmatch 'Antes de tocar nada' -and $p -notmatch 'Calidad del codigo que escribas') $p
+  }
+  Comprueba 'dice que el intento 2 es peor que el 1 y vuelve a su arbol' ($r.Salida -match 'El intento 2 es peor que el intento 1.*vuelvo a su arbol') (Cola $r.Salida)
+  Comprueba 'el 3 lleva la correccion del mejor (el 1), no la del peor' ($p3 -notmatch 'mas tests fallando') $p3
+  $v = @([System.IO.File]::ReadAllLines((Get-Ruta $e.Wt '.rescate/arbol-visto.log')))
+  Igual 'el 3 ve el arbol del 1 sin lo del 2' 'mejor=True peor=False rompe=False' ($v -join '|')
+  Comprueba 'y el lote pasa en el intento 3' ($r.Salida -match "Lote 1 OK: 'estructura'") (Cola $r.Salida)
+}
+
+$Pruebas['m9 reparar: al rendirse la ref guarda el mejor intento y el escalon siguiente parte de su arbol (pero solo si la rama no ha avanzado)'] = {
+  $e = Escenario-M6 'm9-ref'
+  $r = Fix-M6 $e 'estructura' 1 @() 'parcial-roto'
+  $ref = 'refs/rescate/estructura-1'
+  Comprueba 'dice que el lote se deshace y donde queda el mejor intento' ($r.Salida -match 'Lote 1 DESHECHO' -and $r.Salida -match [regex]::Escape($ref)) (Cola $r.Salida)
+  $refs = GitEn $e.Wt @('for-each-ref', '--format=%(refname)', 'refs/rescate/')
+  Comprueba 'existe la ref' ($refs -match [regex]::Escape($ref)) $refs
+  $arbol = GitEn $e.Wt @('ls-tree', '-r', '--name-only', $ref)
+  Comprueba 'la ref guarda el arbol del intento: Suelta movida y el test roto' ($arbol -match 'application/usecases/Suelta\.java' -and $arbol -match 'RompeTest\.java') $arbol
+  Igual 'no es un commit de la rama' '' (GitEn $e.Wt @('branch', '--contains', $ref))
+  $v = @([System.IO.File]::ReadAllLines((Get-Ruta $e.Wt '.rescate/arbol-visto.log')))
+  Comprueba 'el escalon siguiente (Suelta de uno en uno) empieza con el arbol del mejor' ($v.Count -ge 1 -and $v[0] -eq 'suelta-movida=True') ($v -join '|')
+  $ll = @(Llamadas-M6 $e 'lote')
+  Comprueba 'y lleva el prompt de reparacion' ($ll.Count -ge 2 -and (Prompt-M6 $e $ll[1]).Contains($FraseReparacion)) (Cola $r.Salida)
+  Comprueba 'el lote de Suelta pasa' ($r.Salida -match "Lote 2 OK: 'estructura'") (Cola $r.Salida)
+  Comprueba 'el del otro fichero va de cero, con el prompt de siempre: la rama habia avanzado' ($ll.Count -ge 3 -and -not (Prompt-M6 $e $ll[2]).Contains($FraseReparacion) -and (Prompt-M6 $e $ll[2]) -match 'Hallazgos de este lote') (Cola $r.Salida)
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el test roto no llego a la rama' ((GitEn $e.Wt @('ls-tree', '-r', '--name-only', 'HEAD')) -notmatch 'RompeTest')
 }
 
 # ================================ LANZADOR ================================

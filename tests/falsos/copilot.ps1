@@ -480,9 +480,9 @@ function Escribir([string]$Rel, [string]$Texto) {
 $fichs = @()
 $dentro = $false
 foreach ($l in ($prompt -split "`r?`n")) {
-  if ($l -match '^## Hallazgos') { $dentro = $true; continue }
+  if ($l -match '^## (Hallazgos|Ficheros del lote)') { $dentro = $true; continue }
   if ($dentro -and $l -match '^## ') { break }
-  if ($dentro -and $l -match '^- (\S+?)(:\d+)? - ') { $fichs += $Matches[1] }
+  if ($dentro -and $l -match '^- (\S+?)(:\d+)?( - |$)') { $fichs += $Matches[1] }
 }
 $fichs = @($fichs | Where-Object { $_ -ne '(repo)' } | Select-Object -Unique)
 

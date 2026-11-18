@@ -33,6 +33,12 @@
 #   nada-hasta-reflexion  un lote no cambia nada mientras su prompt no lleve una reflexion (REFLEXION-MARCA)
 #   fallos-distintos   un lote sin CORRECCION no cambia nada; con la CORRECCION 'No has cambiado ningun fichero' mueve LeerFichero a
 #                      infrastructure/util (el paso 'estructura' no baja); con cualquier otra la deja donde estaba y arregla como siempre
+#   mejor-peor         un lote con Suelta.java: el 1.o deja src/main/resources/mejor.txt (los hallazgos no bajan); el 2.o deja
+#                      peor.txt y un test que falla (peor que el 1.o); el 3.o apunta en .rescate/arbol-visto.log si ve mejor.txt,
+#                      peor.txt y el test, y arregla como siempre
+#   parcial-roto       el primer lote (Suelta.java y algo mas) mueve Suelta a application/usecases y deja un test que falla:
+#                      los hallazgos bajan y compila, pero no pasa. Los demas lotes apuntan en .rescate/arbol-visto.log si
+#                      Suelta ya esta movida, quitan ese test si el prompt lleva CORRECCION y arreglan como siempre
 #   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
 #                      ('sin marca' si no estaba)
 $todos = $args
@@ -128,9 +134,9 @@ if ($titulo -notmatch "rescate de migracion: paso '(\w+)'") {
 $fichs = @()
 $dentro = $false
 foreach ($l in ($prompt -split "`r?`n")) {
-  if ($l -match '^## Hallazgos') { $dentro = $true; continue }
+  if ($l -match '^## (Hallazgos|Ficheros del lote)') { $dentro = $true; continue }
   if ($dentro -and $l -match '^## ') { break }
-  if ($dentro -and $l -match '^- (\S+?)(:\d+)? - ') { $fichs += $Matches[1] }
+  if ($dentro -and $l -match '^- (\S+?)(:\d+)?( - |$)') { $fichs += $Matches[1] }
 }
 $fichs = @($fichs | Select-Object -Unique)
 Apunta 'lote' ($fichs -join ',')
@@ -160,6 +166,30 @@ if ($guiones -contains 'muchos-ficheros' -and @($fichs | Where-Object { $_ -matc
   exit 0
 }
 $conSuelta = (@($fichs | Where-Object { $_ -match 'Suelta\.java$' }).Count -gt 0)
+$rompe = 'src/test/java/com/acme/life/RompeTest.java'
+$movida = 'src/main/java/com/acme/life/application/usecases/Suelta.java'
+function Ve-Arbol([string]$Que) { [System.IO.File]::AppendAllText((Join-Path $rescate 'arbol-visto.log'), "$Que`n") }
+if ($guiones -contains 'mejor-peor' -and $conSuelta) {
+  $k = @([System.IO.File]::ReadAllLines($log) | Where-Object { $_ -match '^\d+ \| lote \|.*Suelta\.java' }).Count
+  if ($k -eq 1) { Escribir 'src/main/resources/mejor.txt' "mejor`n"; exit 0 }
+  if ($k -eq 2) { Escribir 'src/main/resources/peor.txt' "peor`n"; Escribir $rompe "class RompeTest { /* TEST_FALLA */ }`n"; exit 0 }
+  $dc = $raiz
+  Ve-Arbol ('mejor=' + (Test-Path -LiteralPath (Join-Path $dc 'src/main/resources/mejor.txt')) + ' peor=' + (Test-Path -LiteralPath (Join-Path $dc 'src/main/resources/peor.txt')) + ' rompe=' + (Test-Path -LiteralPath (Join-Path $dc $rompe)))
+}
+if ($guiones -contains 'parcial-roto') {
+  if ($primero -and $conSuelta) {
+    $orig = Join-Path $raiz 'src/main/java/com/acme/life/Suelta.java'
+    $t = [System.IO.File]::ReadAllText($orig) -replace '(?m)^package [^;]*;', 'package com.acme.life.application.usecases;'
+    Remove-Item -LiteralPath $orig -Force
+    Escribir 'src/main/java/com/acme/life/application/usecases/Suelta.java' $t
+    Escribir $rompe "class RompeTest { /* TEST_FALLA */ }`n"
+    exit 0
+  }
+  if (-not $primero) {
+    Ve-Arbol ('suelta-movida=' + (Test-Path -LiteralPath (Join-Path $raiz $movida)))
+    if ($prompt -match '## CORRECCION' -and (Test-Path -LiteralPath (Join-Path $raiz $rompe))) { Remove-Item -LiteralPath (Join-Path $raiz $rompe) -Force }
+  }
+}
 if ($guiones -contains 'atasca-siempre' -and $conSuelta) { 'no hago nada'; exit 0 }
 if ($guiones -contains 'atasca' -and $conSuelta -and $prompt -notmatch '## Consejo') { 'no hago nada'; exit 0 }
 if ($guiones -contains 'nada-sin-correccion' -and $prompt -notmatch '## CORRECCION') { 'no hago nada'; exit 0 }
