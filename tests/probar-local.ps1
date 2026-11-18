@@ -1173,5 +1173,78 @@ $Pruebas['61 m20b (h): -Deshacer quita el revert que no arregla el caso: otro re
   Igual 'el caso 1 se ha ejecutado tras el revert y tras quitarlo: la normal, -Desde, dos de la busqueda y dos de despues' 6 (Ejecuciones-Mig $e 'caso-01')
 }
 
+# Un arnes guardado que sigue valiendo no se vuelve a pedir a la IA, aunque su tarea no este hecha.
+# Cambia la huella de la tarea del arnes del $Repo (como si la plantilla hubiera cambiado) y, con $Estado, su estado.
+function Cambia-Huella($E, [string]$Repo, [string]$Estado = '') {
+  $f = Get-Ruta $E.Local "tareas/arnes-$Repo.json"
+  $t = Lee-Json $f
+  $t.entradas.huella = 'plantilla-vieja'
+  if ($Estado) { $t.estado = $Estado; $t.intentos = 2; $t.motivo = 'no compila' }
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+}
+
+# Estropea el test que el arnes del $Repo dejo guardado: ya no compila.
+function Rompe-Arnes-Guardado($E, [string]$Repo) {
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local "arnes/$Repo") -Recurse -File -Filter 'PruebaLocalTest.java')) { [System.IO.File]::AppendAllText($f.FullName, "// NO_COMPILA`n") }
+}
+
+$Pruebas['62 m20b (i): la huella del arnes cambia (la plantilla) y el test guardado sigue valiendo: se usa, sin llamar a Copilot, y la tarea queda hecha'] = {
+  $e = Nuevo-Escenario 'm20b-huella' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado }
+  $r = Prueba $e
+  Igual 'con la huella cambiada sale con 0' 0 $r.Codigo
+  Igual 'sin ninguna llamada a Copilot' $n @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) {
+    $t = Tarea-Arnes $e $lado
+    Comprueba "la tarea del $lado queda hecha, con la huella de ahora" ($t.estado -eq 'hecha' -and $t.entradas.huella -ne 'plantilla-vieja') "$($t.estado) $($t.entradas.huella)"
+    Comprueba "dice que el test de otro lanzamiento del $lado sigue valiendo" ($r.Salida -match "Arnes del ${lado}: bien \(el test de otro lanzamiento sigue valiendo\)") (Cola $r.Salida)
+  }
+  Comprueba 'no dice que lo vuelve a escribir' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
+}
+
+$Pruebas['63 m20b (j): la huella cambia y el test guardado ya no compila: se llama a la IA como hoy, solo para ese arnes y sin el aviso de volver a escribir'] = {
+  $e = Nuevo-Escenario 'm20b-huella-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado }
+  Rompe-Arnes-Guardado $e 'original'
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'una sola llamada: el arnes del original (el del migrado sigue valiendo)' ($n + 1) @(Llamadas $e).Count
+  Comprueba 'el del migrado se usa sin llamar' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'el del original no dice que se use el de antes' ($r.Salida -notmatch 'Arnes del original: bien \(el test de otro lanzamiento') (Cola $r.Salida)
+  Comprueba 'ni lo de volver a escribir (la tarea ya era nueva)' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con la IA' 'hecha' (Tarea-Arnes $e 'original').estado
+  Comprueba 'y lo guardado ahora es lo que escribio la IA, que compila' (-not ((Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'arnes/original') -Recurse -File | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join '' ).Contains('NO_COMPILA'))
+}
+
+$Pruebas['64 m20b (k): la tarea del arnes quedo atascada en otro lanzamiento y el test guardado vale: se usa, sin llamar a Copilot'] = {
+  $e = Nuevo-Escenario 'm20b-atascada' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado 'atascada' }
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin ninguna llamada a Copilot' $n @(Llamadas $e).Count
+  foreach ($lado in @('original', 'migrado')) { Igual "la tarea del $lado queda hecha" 'hecha' (Tarea-Arnes $e $lado).estado }
+}
+
+$Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale sigue como hoy: se avisa de que se vuelve a escribir'] = {
+  $e = Nuevo-Escenario 'm20b-hecha-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  Rompe-Arnes-Guardado $e 'original'
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que el test del original ya no vale y que se vuelve a escribir' ($r.Salida -match 'Arnes|test PruebaLocalTest del original de otro lanzamiento ya no vale' -and $r.Salida -match 'se vuelve a escribir') (Cola $r.Salida)
+  Igual 'una llamada: el arnes del original' ($n + 1) @(Llamadas $e).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
