@@ -1109,6 +1109,133 @@ $Pruebas['latido: con los falsos rapidos y el intervalo por defecto no sale ning
   Igual 'ninguna linea del latido' 0 (Lineas-Latido $r.Salida).Count
 }
 
+# ============================= TOPE DE MAVEN =============================
+# Pasados MinutosMaven minutos se para Maven con sus procesos hijos y la llamada cuenta como fallida. Estas pruebas lo cuelgan con
+# tests/falsos/mvn-dormido.ps1 (escribe una linea, lanza un hijo que duerme y duerme 40 s) y un tope de 0.05 min (3 s).
+
+# Esta el proceso $Num? Un zombi (estado Z en /proc/<pid>/stat) ya no corre: solo espera a su padre, y cuenta como muerto.
+function Proceso-Vivo([int]$Num) {
+  if (-not (Get-Process -Id $Num -ErrorAction SilentlyContinue)) { return $false }
+  if (-not (Test-Path -LiteralPath "/proc/$Num/stat")) { return $true }
+  try { return (([System.IO.File]::ReadAllText("/proc/$Num/stat") -replace '^.*\) ', '')[0] -ne 'Z') }
+  catch { return $false }
+}
+
+# Lo que se comprueba en todo tope hecho con mvn-dormido.ps1: sus PID (el del falso y el de su hijo, en $CarpetaPids\pids.txt) ya
+# no viven (10 s de plazo), la llamada ha tardado menos de $Limite s (el falso duerme 40) y el registro lleva lo que escribio.
+function Comprueba-Tope([string]$CarpetaPids, [double]$Segundos, [int]$Limite, [string]$Registro) {
+  $nums = @()
+  $f = Join-Path $CarpetaPids 'pids.txt'
+  if (Test-Path -LiteralPath $f) { $nums = @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ } | ForEach-Object { [int]$_ }) }
+  $plazo = (Get-Date).AddSeconds(10)
+  do {
+    $vivos = @($nums | Where-Object { Proceso-Vivo $_ })
+    if ($vivos.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 200
+  } while ((Get-Date) -lt $plazo)
+  Comprueba 'el falso se colgo (anoto su PID y el de su hijo) y ninguno de los dos vive' ($nums.Count -ge 2 -and $vivos.Count -eq 0) ("PID: $($nums -join ' '), vivos: $($vivos -join ' ')")
+  Comprueba "la llamada no espero al falso: menos de $Limite s" ($Segundos -lt $Limite) "$Segundos s"
+  $texto = ''
+  if (Test-Path -LiteralPath $Registro) { $texto = [System.IO.File]::ReadAllText($Registro) }
+  Comprueba 'el registro lleva lo que Maven habia escrito' ($texto -match [regex]::Escape('[INFO] Running com.ejemplo.CuelgaTest')) "$Registro : $texto"
+}
+
+# Un script que carga comun.ps1, pone el Maven que se le pasa y un tope de 0.05 min y llama a Invoke-MavenTope; dice lo que
+# da la funcion (una clave por linea: DEFECTO, CODIGO, TOPE, SALIDA y SEGUNDOS).
+$GuionTope = @'
+param([string]$Sis, [string]$Mvn, [string]$Carpeta, [string]$Registro)
+. (Join-Path $Sis 'comun.ps1')
+'DEFECTO ' + $Cfg.MinutosMaven
+$Cfg.MvnExe = $Mvn
+$Cfg.MinutosMaven = 0.05
+$Cfg.SegundosLatido = 0
+$reloj = [System.Diagnostics.Stopwatch]::StartNew()
+$r = Invoke-MavenTope $Carpeta @('-B', 'test') 'prueba' $Registro
+'CODIGO ' + $r.Codigo
+'TOPE ' + $r.Tope
+'SALIDA ' + ($r.Salida -join ',')
+'SEGUNDOS ' + $reloj.Elapsed.TotalSeconds
+'@
+
+# Lo que el guion de arriba ha dicho: clave -> texto.
+function Claves-Del-Guion([string]$Salida) {
+  $v = @{}
+  foreach ($l in @($Salida -split "`n")) { if ($l -cmatch '^([A-Z]+) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  return $v
+}
+
+$Pruebas['tope de Maven: comun.ps1 para a Maven y a sus hijos, la llamada falla con el mensaje y el registro guarda lo escrito'] = {
+  $f = Join-Path $Dir 'tope-guion.ps1'
+  [System.IO.File]::WriteAllText($f, $GuionTope)
+  $reg = Join-Path $Dir 'tope-t1.log'
+  $carpPids = Join-Path $Dir 'tope-t1-pids'
+  $env:RESCATE_MVN_CUELGA = '.'
+  $env:RESCATE_MVN_PIDS = $carpPids
+  try { $r = Lanzar $f @((Split-Path -Parent $Script), (Join-Path $falsos 'mvn-dormido.ps1'), $Dir, $reg) }
+  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = '' }
+  $v = Claves-Del-Guion $r.Salida
+  $tope = "Maven se ha pasado del tope de 0.05 min y se ha parado (prueba). Registro: $reg."
+  Igual 'el tope por defecto es de 30 minutos' '30' $v['DEFECTO']
+  Comprueba 'la llamada falla (codigo distinto de 0)' ($v['CODIGO'] -and $v['CODIGO'] -ne '0') (Cola $r.Salida)
+  Igual 'el tope dice que se ha pasado y donde queda el registro' $tope $v['TOPE']
+  Comprueba 'y sale tambien por la consola' (@($r.Salida -split "`n") -contains $tope) (Cola $r.Salida)
+  Comprueba-Tope $carpPids ([double]$v['SEGUNDOS']) 20 $reg
+}
+
+$Pruebas['tope de Maven: un Maven rapido sale igual: codigo, lineas y registro'] = {
+  $f = Join-Path $Dir 'tope-guion.ps1'
+  [System.IO.File]::WriteAllText($f, $GuionTope)
+  $rapido = Join-Path $Dir 'mvn-rapido.ps1'
+  [System.IO.File]::WriteAllText($rapido, "'uno'`n'dos'`n[Console]::Error.WriteLine('tres')`nexit 3`n")
+  $reg = Join-Path $Dir 'tope-t2.log'
+  $r = Lanzar $f @((Split-Path -Parent $Script), $rapido, $Dir, $reg)
+  $v = Claves-Del-Guion $r.Salida
+  Igual 'el codigo es el del Maven' '3' $v['CODIGO']
+  Igual 'las lineas: las de la salida y despues las de errores' 'uno,dos,tres' $v['SALIDA']
+  Igual 'sin tope' '' $v['TOPE']
+  Igual 'el registro lleva las tres lineas' "uno`ndos`ntres`n" ([System.IO.File]::ReadAllText($reg))
+  Comprueba 'la consola no dice nada del tope' ($r.Salida -notmatch 'se ha pasado del tope') (Cola $r.Salida)
+}
+
+$Pruebas['tope de Maven: rescate, diagnostico: el hallazgo de build lleva el mensaje (MinutosMaven de .rescate/config.json)'] = {
+  $e = Nuevo-Escenario 'tope-diagnostico'
+  Pon-Config $e @{ MvnExe = (Join-Path $falsos 'mvn-dormido.ps1'); MinutosMaven = 0.05 }
+  $carpPids = Join-Path $Dir 'tope-t3-pids'
+  $env:RESCATE_MVN_CUELGA = '[ |]test$'
+  $env:RESCATE_MVN_PIDS = $carpPids
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  try { $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) }
+  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = '' }
+  $seg = $reloj.Elapsed.TotalSeconds
+  Igual 'el diagnostico sale con 0, como con un build que falla' 0 $r.Codigo
+  $h = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'build' -and $_.Sev -eq 'error' })
+  Igual 'hay un hallazgo de build' 1 $h.Count
+  $reg = Join-Path (Join-Path $e.Repo '.rescate') 'build.log'
+  $ini = 'el build falla: Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (tests)). Registro: '
+  Comprueba 'su detalle dice que el build falla y que Maven se paso (0.05: manda el config.json)' ($h.Count -gt 0 -and $h[0].Detalle.StartsWith($ini)) (Cola $r.Salida)
+  Comprueba 'y acaba en la ruta del registro' ($h.Count -gt 0 -and $h[0].Detalle.EndsWith('build.log.')) (Cola $r.Salida)
+  Comprueba-Tope $carpPids $seg 30 $reg
+}
+
+$Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote se deshace y la consola lo dice'] = {
+  $e = Nuevo-Escenario 'tope-lote'
+  Pon-Config $e @{ MvnExe = (Join-Path $falsos 'mvn-dormido.ps1'); MinutosMaven = 0.05 }
+  $carpPids = Join-Path $Dir 'tope-t4-pids'
+  $env:RESCATE_MVN_CUELGA = '[ |]test$'
+  $env:RESCATE_MVN_PIDS = $carpPids
+  $env:RESCATE_MVN_DESDE = '2'
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  try { $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) }
+  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = ''; $env:RESCATE_MVN_DESDE = '' }
+  $seg = $reloj.Elapsed.TotalSeconds
+  $cuenta = @([System.IO.File]::ReadAllLines((Join-Path $carpPids 'cuenta.txt')))
+  Igual 'el diagnostico inicial hace una sola llamada de tests y la del lote es la segunda' 2 $cuenta.Count
+  Comprueba 'el lote 1 se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Comprueba 'y la consola dice que Maven se paso' ($r.Salida -match [regex]::Escape('Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (tests)). Registro: ')) (Cola $r.Salida)
+  Comprueba 'sin ningun commit del lote' (-not (Hay-Commit-Del-Lote $e)) (Cola $r.Salida)
+  Comprueba-Tope $carpPids $seg 30 (Join-Path (Join-Path $e.Wt '.rescate') 'build.log')
+}
+
 # ============================ SFTP COMO REGLA FIJA ============================
 # Si el batch migrado maneja ficheros, tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la
 # referencia y tambien sin ella. El interruptor ExigirSftp (por defecto true) lo apaga: entonces solo se exige lo que la referencia tiene.

@@ -350,5 +350,109 @@ $Pruebas['14 un caso por JVM: un original con estado static entre ejecuciones no
   Comprueba 'y el motivo nombra prueba.local.caso' ($t.estado -eq 'atascada' -and $t.motivo -match 'prueba\.local\.caso') "$($t.estado): $($t.motivo)"
 }
 
+# Pasados MinutosMaven minutos se para Maven con sus procesos hijos y la llamada cuenta como fallida. Estas pruebas lo cuelgan con
+# tests/falsos/mvn-dormido.ps1 (escribe una linea, lanza un hijo que duerme y duerme 40 s) y un tope de 0.05 min (3 s).
+
+# Esta el proceso $Num? Un zombi (estado Z en /proc/<pid>/stat) ya no corre: solo espera a su padre, y cuenta como muerto.
+function Proceso-Vivo([int]$Num) {
+  if (-not (Get-Process -Id $Num -ErrorAction SilentlyContinue)) { return $false }
+  if (-not (Test-Path -LiteralPath "/proc/$Num/stat")) { return $true }
+  try { return (([System.IO.File]::ReadAllText("/proc/$Num/stat") -replace '^.*\) ', '')[0] -ne 'Z') }
+  catch { return $false }
+}
+
+# Lo que se comprueba en todo tope hecho con mvn-dormido.ps1: sus PID (el del falso y el de su hijo, en $CarpetaPids\pids.txt) ya
+# no viven (10 s de plazo), la llamada ha tardado menos de $Limite s (el falso duerme 40) y el registro lleva lo que escribio.
+function Comprueba-Tope([string]$CarpetaPids, [double]$Segundos, [int]$Limite, [string]$Registro) {
+  $nums = @()
+  $f = Join-Path $CarpetaPids 'pids.txt'
+  if (Test-Path -LiteralPath $f) { $nums = @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ } | ForEach-Object { [int]$_ }) }
+  $plazo = (Get-Date).AddSeconds(10)
+  do {
+    $vivos = @($nums | Where-Object { Proceso-Vivo $_ })
+    if ($vivos.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 200
+  } while ((Get-Date) -lt $plazo)
+  Comprueba 'el falso se colgo (anoto su PID y el de su hijo) y ninguno de los dos vive' ($nums.Count -ge 2 -and $vivos.Count -eq 0) ("PID: $($nums -join ' '), vivos: $($vivos -join ' ')")
+  Comprueba "la llamada no espero al falso: menos de $Limite s" ($Segundos -lt $Limite) "$Segundos s"
+  $texto = ''
+  if (Test-Path -LiteralPath $Registro) { $texto = [System.IO.File]::ReadAllText($Registro) }
+  Comprueba 'el registro lleva lo que Maven habia escrito' ($texto -match [regex]::Escape('[INFO] Running com.ejemplo.CuelgaTest')) "$Registro : $texto"
+}
+
+# Lanza prueba-local.ps1 con el Maven que se cuelga (mvn-dormido, que pasa el resto al mvn-local) y un tope de 0.05 min en el
+# ajustes.json del escenario. Se cuelgan las llamadas cuya '<carpeta>|<argumentos>' casa con $Cuelga. Devuelve lo de Prueba, mas
+# Segundos (lo que ha tardado) y Pids (la carpeta donde el falso apunta lo suyo).
+function Prueba-Con-Tope($E, [string]$Cuelga) {
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'mvn-dormido.ps1'); SegundosPorLlamada = 60; MinutosMaven = 0.05 }
+  Escribe $E.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $pids = Join-Path $E.Raiz 'pids'
+  $env:RESCATE_MVN_FALSO = 'mvn-local.ps1'
+  $env:RESCATE_MVN_CUELGA = $Cuelga
+  $env:RESCATE_MVN_PIDS = $pids
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  try { $r = Prueba $E }
+  finally { $env:RESCATE_MVN_FALSO = ''; $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = '' }
+  return [pscustomobject]@{ Codigo = $r.Codigo; Salida = $r.Salida; Segundos = $reloj.Elapsed.TotalSeconds; Pids = $pids }
+}
+
+# El registro que dice un mensaje de tope ('... Registro: <ruta>.').
+function Registro-Del-Tope([string]$Mensaje) { return [regex]::Match($Mensaje, 'Registro: (\S+)\.(\s|$)').Groups[1].Value }
+
+$Pruebas['15 tope de Maven: prueba-local: el caso del migrado que se cuelga sale sin ejecutar con el mensaje y el siguiente se ejecuta (MinutosMaven de ajustes.json)'] = {
+  $e = Nuevo-Escenario 'tope-migrado' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-Con-Tope $e ([regex]::Escape($e.CopiaMig) + '\|.*-Dprueba\.local\.caso=caso-01( |$)')
+  Igual 'sale con 0, como siempre' 0 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  $motivo = "$($c.motivo)"
+  Igual 'el caso que se cuelga: no se pudo preparar' 'no se pudo preparar' $c.resultado
+  Comprueba 'y su motivo es el mensaje del tope (0.05: manda el ajustes.json)' ($motivo.StartsWith('Maven se ha pasado del tope de 0.05 min y se ha parado (Maven, migrado cargaJob caso-01). Registro: ')) $motivo
+  $reg = Registro-Del-Tope $motivo
+  Comprueba 'con su registro' ($reg -and (Test-Path -LiteralPath $reg)) $motivo
+  Igual 'el otro caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
+  Comprueba-Tope $r.Pids $r.Segundos 30 $reg
+}
+
+$Pruebas['16 tope de Maven: prueba-local: un caso que se cuelga en el original no se da por bueno y su motivo lleva el mensaje'] = {
+  $e = Nuevo-Escenario 'tope-original' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-Con-Tope $e ([regex]::Escape($e.CopiaOrig) + '\|.*-Dprueba\.local\.caso=caso-01( |$)')
+  $c = Caso $e 'cargaJob' 'caso-01'
+  $motivo = "$($c.motivo)"
+  Igual 'el caso que se cuelga: no se pudo preparar' 'no se pudo preparar' $c.resultado
+  Comprueba 'y su motivo lleva el mensaje del tope' ($motivo -match [regex]::Escape('Maven se ha pasado del tope de 0.05 min')) $motivo
+  Igual 'el otro caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
+  Comprueba-Tope $r.Pids $r.Segundos 30 (Registro-Del-Tope $motivo)
+}
+
+$Pruebas['17 tope de Maven: cobertura (tareas.ps1): pasado el tope, sin medida y el motivo es el mensaje'] = {
+  $f = Join-Path $Dir 'tope-cobertura.ps1'
+  [System.IO.File]::WriteAllText($f, @'
+param([string]$Sis, [string]$Mvn, [string]$Carpeta, [string]$Registro)
+. (Join-Path $Sis 'comun.ps1')
+. (Join-Path $Sis 'tareas.ps1')
+$Cfg.MvnExe = $Mvn
+$Cfg.MinutosMaven = 0.05
+$Cfg.SegundosLatido = 0
+$reloj = [System.Diagnostics.Stopwatch]::StartNew()
+$o = Get-Cobertura $Carpeta $Registro $true
+'MEDIDA ' + $o.medida
+'PORCENTAJE [' + $o.porcentaje + ']'
+'MOTIVO ' + $o.motivo
+'SEGUNDOS ' + $reloj.Elapsed.TotalSeconds
+'@)
+  $reg = Join-Path $Dir 'tope-t7.log'
+  $carpPids = Join-Path $Dir 'tope-t7-pids'
+  $env:RESCATE_MVN_CUELGA = 'jacoco'
+  $env:RESCATE_MVN_PIDS = $carpPids
+  try { $r = Lanzar $f @((Split-Path -Parent $Script), (Join-Path $falsos 'mvn-dormido.ps1'), $Dir, $reg) }
+  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = '' }
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^([A-Z]+) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'sin medida' 'False' $v['MEDIDA']
+  Igual 'y sin porcentaje' '[]' $v['PORCENTAJE']
+  Igual 'el motivo es el mensaje del tope' "Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (cobertura)). Registro: $reg." $v['MOTIVO']
+  Comprueba-Tope $carpPids ([double]$v['SEGUNDOS']) 20 $reg
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
