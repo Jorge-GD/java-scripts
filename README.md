@@ -2,6 +2,8 @@
 
 Scripts sueltos para trabajar con proyectos Java.
 
+**¿Por dónde empiezo?** [FLUJO.md](FLUJO.md): qué lanzar, en qué orden y qué hacer si te pierdes.
+
 ## Antes de la primera vez: preflight
 
 `preflight.ps1` se lanza **una vez**, antes de `migracion.ps1`, en el equipo donde se va a trabajar. Mide si ese equipo, Copilot y Maven sirven: versiones y modo de PowerShell, qué banderas conoce tu Copilot, si el modelo sabe rellenar una ficha de clase (un fichero de juguete y cinco clases tuyas), cuántas llamadas aguanta a la vez y si Maven compila, mide cobertura y refactoriza un proyecto de juguete. Con `-Modelos` hace además un examen de modelos (bloque 9, más abajo). No cambia ningún repo tuyo.
@@ -85,12 +87,6 @@ git -C C:\ruta\batch-life worktree remove C:\ruta\batch-life-rescate
 ```
 
 El resto de opciones (elegir paso, tamaño del lote, deshacer, modelo de reserva) está en la cabecera del script.
-
-### Guía con IA
-
-Si es tu primera vez, deja que una IA te acompañe. [GUIA-IA.md](GUIA-IA.md) es un prompt que le dice cómo guiarte paso a paso: comprobar el entorno, leer el diagnóstico, revisar el plan y el primer lote, y qué hacer si algo falla.
-
-La guía va por trozos para que la IA no se adelante: `GUIA-IA.md` tiene las reglas y el mapa, y cada paso está en su fichero de la carpeta [guia/](guia/), que la IA lee solo cuando toca.
 
 ### Modelo y esfuerzo
 
@@ -195,6 +191,8 @@ Prueba en local, caso a caso, que el batch migrado hace lo mismo que el original
 .\prueba-local.ps1 ... -JavaLegacy C:\jdk8      # si el original no compila con el JDK de Maven
 .\prueba-local.ps1 ... -Job cargaRecibosJob     # solo los casos de ese job
 .\prueba-local.ps1 ... -Modelo <id> -Si         # otro modelo que el de migracion.ps1; sin preguntar
+.\prueba-local.ps1 ... -Desde <tu-rama>          # de cada caso distinto, el commit de la rama de rescate que lo rompe
+.\prueba-local.ps1 ... -Desde <tu-rama> -Deshacer   # y lo deshace con git revert (solo commits nuevos encima)
 ```
 
 Lo que tiene que salir lo da el **original** al ejecutarse. La IA solo fabrica las entradas y escribe el test que ejecuta los casos; compara el script.
@@ -219,4 +217,12 @@ Lo de la IA queda en `migracion-<batch>\prueba-local\`: `arnes\`, `casos\`, `tar
 
 **Lo que no promete.** Las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) está simulado. La conexión de verdad se prueba en pre, con el guion de cada job que deja `migracion.ps1`.
 
+**El commit que rompe un caso (`-Desde`).** Para cada caso `distinto`, ejecuta el migrado en `<Desde>` y, si allí era `igual`, busca por bisección (`git rev-list --first-parent`) el primer commit donde deja de serlo. Cada commit se prueba en una copia desechable con el arnés ya guardado; el original no se repite y no se llama a Copilot. Un commit donde el caso no se puede ejecutar cuenta como malo, y se dice. Con `-Deshacer`, hace `git revert` de cada culpable, del más nuevo al más viejo, en la carpeta de la rama que se prueba (`<Migrado>-rescate` si existe; si no, la tuya), y vuelve a ejecutar esos casos. No deshace si hay cambios sin commit, si el commit es un merge o si el revert da conflicto (lo aborta). `datos\prueba-local.json` lo guarda en `culpables`.
+
 Banco de pruebas: `tests\probar-local.ps1`, con un Copilot y un Maven de mentira. Solo necesita `git`.
+
+## analisis.ps1
+
+Mide las buenas prácticas de un repo Java con analizadores reales y sin servidor: SpotBugs con fb-contrib (los mismos motores que salen en Sonar) y PMD con un ruleset corto (`analisis\pmd-sonar.xml`, cada regla con la de Sonar a la que equivale). Se lanzan por coordenadas de Maven, sin tocar el pom del repo. Solo son funciones: el preflight comprueba que se pueden descargar y el paso `sonar` las usará para comprobar que un arreglo no crea incidencias nuevas.
+
+Banco de pruebas: `tests\probar-analisis.ps1`, con un Maven de mentira y XML de un análisis real.
