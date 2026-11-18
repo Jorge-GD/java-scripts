@@ -9,6 +9,13 @@
 #   plan-toca-codigo   en la revision previa toca codigo (prohibido)
 #   lento              tarda 3 s antes de hacer nada (para probar el latido de rescate.ps1)
 #   mueve-a-infrastructure   en 'estructura' mueve las clases a infrastructure/util, un subpaquete que la plantilla no tiene
+# Paso 'sonar' (cada incidencia del prompt, '- fichero:linea - detalle', se "corrige" cambiando su linea marcada):
+#   (vacio)            le anade un comentario a la linea marcada
+#   sonar-nosonar      solo le anade '// NOSONAR'
+#   sonar-suppress     cambia la linea y anade @SuppressWarnings al final del fichero
+#   sonar-disabled     cambia la linea y anade @Disabled a un test
+#   sonar-borra-test   cambia la linea y borra un fichero de src/test
+#   sonar-sin-tocar    no toca la linea marcada: cambia otra cosa del fichero
 # Cada llamada deja una linea en .rescate/llamadas.log, con el modelo y el
 # esfuerzo que ha recibido.
 #
@@ -544,6 +551,28 @@ switch ($paso) {
       }
       $puerto += @('    void guardar(String cliente);', '}', '')
       Escribir ($base + 'application/ports/output/ClientePort.java') ($puerto -join "`n")
+    }
+  }
+  'sonar' {
+    $dentroS = $false
+    foreach ($l in ($prompt -split "`r?`n")) {
+      if ($l -match '^## (Hallazgos|Ficheros del lote)') { $dentroS = $true; continue }
+      if ($dentroS -and $l -match '^## ') { break }
+      if (-not ($dentroS -and $l -match '^- (\S+?):(\d+) - ')) { continue }
+      $f = $Matches[1]; $n = [int]$Matches[2]
+      if ($guion -eq 'sonar-sin-tocar') { Escribir $f ((Leer $f) + "`n// otro cambio: la linea marcada no se toca`n"); continue }
+      $t = @((Leer $f) -split "`r?`n")
+      $marca = ' // corregido'
+      if ($guion -eq 'sonar-nosonar') { $marca = ' // NOSONAR' }
+      $t[$n - 1] = $t[$n - 1].TrimEnd() + $marca
+      $texto = $t -join "`n"
+      if ($guion -eq 'sonar-suppress') { $texto += "`n@SuppressWarnings(`"all`")`nclass Otra {`n}`n" }
+      Escribir $f $texto
+    }
+    if ($guion -eq 'sonar-disabled' -or $guion -eq 'sonar-borra-test') {
+      $test = @(Get-ChildItem -LiteralPath (Get-Ruta 'src/test') -Recurse -File -Filter '*.java')[0]
+      if ($guion -eq 'sonar-disabled') { [System.IO.File]::WriteAllText($test.FullName, ([System.IO.File]::ReadAllText($test.FullName) -replace '@Test', "@Disabled`n    @Test")) }
+      else { Remove-Item -LiteralPath $test.FullName -Force }
     }
   }
 }

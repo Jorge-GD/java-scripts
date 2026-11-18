@@ -3139,5 +3139,605 @@ $Pruebas['m95 motivo: con dos metodos que fallan, el motivo lleva solo la linea 
   Comprueba 'ni una linea Tests run' (-not ([string]$d.H[0].Motivo).Contains('Tests run')) $d.H[0].Motivo
 }
 
+# ============================ M10: PASO SONAR ============================
+# El informe de Sonar (.xlsx) se FABRICA aqui con System.IO.Compression: nunca hay un binario en el repo. Paquetes y mensajes inventados.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+function Xml-Esc([string]$T) { return [System.Security.SecurityElement]::Escape($T) }
+function Letra-Col([int]$I) { return [string][char](65 + $I) }
+
+# Escribe un .xlsx. $Hojas: lista de @{ Nombre; Filas }. Una fila es una lista de valores (columnas A, B, C...; $null = sin celda; un entero es un
+# numero; @{ Partes = ... } es un texto enriquecido con varios <r><t>) o @{ Celdas = @(@('I', valor), @('A', valor)) }: columnas explicitas y en ese
+# orden. Las cadenas van en sharedStrings. El fichero de cada hoja se numera al reves de su posicion, para que quien lea por posicion falle.
+# $Nota entra en otro miembro del zip: cambia el hash del fichero sin tocar las hojas.
+function Nuevo-Xlsx([string]$Ruta, $Hojas, [string]$Nota = '') {
+  $comp = New-Object System.Collections.Generic.List[string]
+  $indice = @{}
+  $comparte = {
+    param([string]$Interior)
+    if (-not $indice.ContainsKey($Interior)) { $indice[$Interior] = $comp.Count; $comp.Add($Interior) }
+    return $indice[$Interior]
+  }
+  $ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+  $rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  $cab = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+  $miembros = [ordered]@{}
+  $hojasXml = ''
+  $relsXml = ''
+  $n = @($Hojas).Count
+  $i = 0
+  foreach ($h in $Hojas) {
+    $i++
+    $k = $n - $i + 1
+    $filasXml = ''
+    $num = 0
+    foreach ($f in $h.Filas) {
+      $num++
+      $pares = @()
+      if ($f -is [hashtable]) { $pares = @($f.Celdas) }
+      else { for ($c = 0; $c -lt $f.Count; $c++) { $pares += , @((Letra-Col $c), $f[$c]) } }
+      $celdas = ''
+      foreach ($p in $pares) {
+        $v = $p[1]
+        $ref = $p[0] + $num
+        if ($null -eq $v) { continue }
+        if ($v -is [int]) { $celdas += '<c r="' + $ref + '"><v>' + $v + '</v></c>'; continue }
+        if ($v -is [hashtable]) { $interior = (@($v.Partes | ForEach-Object { '<r><rPr><b/></rPr><t xml:space="preserve">' + (Xml-Esc $_) + '</t></r>' }) -join '') }
+        else { $interior = '<t xml:space="preserve">' + (Xml-Esc "$v") + '</t>' }
+        $celdas += '<c r="' + $ref + '" t="s"><v>' + (& $comparte $interior) + '</v></c>'
+      }
+      $filasXml += '<row r="' + $num + '">' + $celdas + '</row>'
+    }
+    $miembros["xl/worksheets/sheet$k.xml"] = $cab + '<worksheet xmlns="' + $ns + '"><sheetData>' + $filasXml + '</sheetData></worksheet>'
+    $hojasXml += '<sheet name="' + (Xml-Esc $h.Nombre) + '" sheetId="' + $i + '" r:id="rId' + $i + '"/>'
+    $relsXml += '<Relationship Id="rId' + $i + '" Type="' + $rel + '/worksheet" Target="worksheets/sheet' + $k + '.xml"/>'
+  }
+  $relsXml += '<Relationship Id="rId' + ($n + 1) + '" Type="' + $rel + '/sharedStrings" Target="sharedStrings.xml"/>'
+  $miembros['xl/workbook.xml'] = $cab + '<workbook xmlns="' + $ns + '" xmlns:r="' + $rel + '"><sheets>' + $hojasXml + '</sheets></workbook>'
+  $miembros['xl/_rels/workbook.xml.rels'] = $cab + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + $relsXml + '</Relationships>'
+  $miembros['xl/sharedStrings.xml'] = $cab + '<sst xmlns="' + $ns + '" count="' + $comp.Count + '" uniqueCount="' + $comp.Count + '">' + ((@($comp | ForEach-Object { '<si>' + $_ + '</si>' })) -join '') + '</sst>'
+  $miembros['[Content_Types].xml'] = $cab + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'
+  if ($Nota) { $miembros['docProps/nota.txt'] = $Nota }
+  $fs = [System.IO.File]::Create($Ruta)
+  $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+  foreach ($nombre in $miembros.Keys) {
+    $e = $zip.CreateEntry($nombre)
+    $sw = New-Object System.IO.StreamWriter($e.Open(), (New-Object System.Text.UTF8Encoding($false)))
+    $sw.Write([string]$miembros[$nombre])
+    $sw.Dispose()
+  }
+  $zip.Dispose()
+  $fs.Dispose()
+}
+
+$CabSonar = @('Severity', 'Message', 'Language', 'Issue Type', 'Resource', 'Path', 'Line Number', 'Tags')
+
+# Una incidencia (una fila de Issues Breakdown).
+function Inc([string]$Sev, [string]$Msg, [string]$Tipo, [string]$Rec, [string]$Ruta, [string]$Linea = '', [string]$Lang = 'Java') {
+  return , @($Sev, $Msg, $Lang, $Tipo, $Rec, $Ruta, $Linea, 'cwe, owasp')
+}
+
+# Un informe como el de Sonar: Summary, Issues Breakdown y Hotspots. $Incs: lista de Inc.
+function Informe-Sonar([string]$Ruta, $Incs, [string]$Nota = '') {
+  $lista = @($Incs)
+  if ($lista.Count -gt 0 -and $lista[0] -is [string]) { $lista = @(, $lista) }
+  $filas = New-Object System.Collections.ArrayList
+  [void]$filas.Add($CabSonar)
+  foreach ($x in $lista) { [void]$filas.Add($x) }
+  Nuevo-Xlsx $Ruta @(
+    @{ Nombre = 'Summary'; Filas = @(, @('Project', 'batch')) },
+    @{ Nombre = 'Issues Breakdown'; Filas = $filas.ToArray() },
+    @{ Nombre = 'Hotspots'; Filas = @(, @('Rule', 'Count')) }) $Nota
+}
+
+function Linea-De([string]$Texto, [string]$Frag) {
+  $l = @($Texto -split "`r?`n")
+  for ($i = 0; $i -lt $l.Count; $i++) { if ($l[$i].Contains($Frag)) { return ($i + 1) } }
+  return 0
+}
+
+$RutaSv = 'src/main/java/com/acme/plantillabatch/'
+$AppSonar = @'
+package com.acme.plantillabatch;
+
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+/** Arranque del batch de prueba. */
+@SpringBootApplication
+public class PlantillaBatchApplication {
+
+    /**
+     * Arranca el batch.
+     *
+     * @param args argumentos
+     */
+    public static void main(String[] args) {
+    }
+}
+'@
+$TestSonar = @'
+package com.acme.plantillabatch.service;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import org.junit.jupiter.api.Test;
+
+class TotalServiceTest {
+
+    @Test
+    void suma() {
+        assertEquals(2, 1 + 1);
+    }
+}
+'@
+
+# Una clase de servicio con su linea marcada ('int resultado = a + b;'). Con $SinDoc sale sin Javadoc (dos errores de calidad).
+function Servicio-Java([string]$Clase, [string]$Sub, [bool]$SinDoc = $false) {
+  if ($SinDoc) {
+    return @"
+package com.acme.plantillabatch.$Sub;
+
+public class $Clase {
+    public int suma(int a, int b) {
+        int resultado = a + b;
+        return resultado;
+    }
+}
+"@
+  }
+  return @"
+package com.acme.plantillabatch.$Sub;
+
+/** Calcula totales en $Clase. */
+public class $Clase {
+
+    /**
+     * Suma dos numeros.
+     *
+     * @param a primero
+     * @param b segundo
+     * @return la suma
+     */
+    public int suma(int a, int b) {
+        int resultado = a + b;
+        return resultado;
+    }
+}
+"@
+}
+
+# Ajustes de un repo de Sonar: Maven y Copilot de mentira, mas lo de $Mas (con profundidad para listas de tablas).
+function Config-Sonar($E, [hashtable]$Mas) {
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Reflexionar = $false }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg -Depth 6)
+}
+
+# Un repo Java con Maven que no es una migracion (sin plantilla): una clase por cada 'subpaquete/Clase' de $Clases, las de $SinDoc sin Javadoc y los ficheros de $Extra (ruta bajo el paquete sin .java -> texto).
+function Escenario-Sonar([string]$Nombre, [string[]]$Clases = @('service/TotalService', 'service/ReciboService'), [hashtable]$Mas = @{}, [string[]]$SinDoc = @(), [hashtable]$Extra = @{}) {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $repo = Join-Path $raiz 'batch'
+  Escribe $repo 'pom.xml' $Pom
+  Escribe $repo ($RutaSv + 'PlantillaBatchApplication.java') $AppSonar
+  Escribe $repo 'src/test/java/com/acme/plantillabatch/service/TotalServiceTest.java' $TestSonar
+  foreach ($c in $Clases) { $p = $c -split '/'; Escribe $repo ($RutaSv + $p[0] + '/' + $p[1] + '.java') (Servicio-Java $p[1] $p[0]) }
+  foreach ($c in $SinDoc) { $p = $c -split '/'; Escribe $repo ($RutaSv + $p[0] + '/' + $p[1] + '.java') (Servicio-Java $p[1] $p[0] $true) }
+  foreach ($k in $Extra.Keys) { Escribe $repo ($RutaSv + $k + '.java') $Extra[$k] }
+  Inicia-Repo $repo
+  $e = [pscustomobject]@{ Raiz = $raiz; Repo = $repo; Wt = ($repo + '-rescate'); Plantilla = ''; Xlsx = (Join-Path $raiz 'informe.xlsx') }
+  Config-Sonar $e $Mas
+  return $e
+}
+
+# Lanza rescate.ps1 sobre el repo del escenario, sin plantilla.
+function Sonar-Lanza($E, [string[]]$A, [string]$Guion = '', [string[]]$Entrada = @('')) { return (Lanzar $Script (@('-Repo', $E.Repo) + $A) $Guion $Entrada) }
+
+function Hallazgos-Sonar([string]$Raiz, [string]$Sev = '') {
+  return @(Hallazgos $Raiz | Where-Object { $_.Cat -eq 'sonar' -and ((-not $Sev) -or $_.Sev -eq $Sev) })
+}
+
+# Las funciones del lector y del filtro, para probarlas sin lanzar el script entero.
+$FnLectorSonar = @('Get-SonarPlegado', 'Get-SonarTextoRico', 'Read-SonarXml', 'Get-SonarCeldasHoja', 'Get-SonarCabecera', 'Get-SonarNumeroLinea', 'Read-SonarXlsx', 'Get-SonarFiltradas')
+$ColumnasSonar = @{
+  'Severity' = @('Severity'); 'Message' = @('Message'); 'Issue Type' = @('Issue Type'); 'Path' = @('Path')
+  'Line Number' = @('Line Number'); 'Resource' = @('Resource'); 'Tags' = @('Tags'); 'Language' = @('Language')
+}
+
+$Pruebas['m10 sonar: lector - cadenas compartidas con texto enriquecido, celdas en orden raro y una columna vacia'] = {
+  . ([scriptblock]::Create((Texto-De-Funciones $FnLectorSonar)))
+  $x = Join-Path $Dir 'm10-lector.xlsx'
+  $r = 'src/main/java/com/acme/plantillabatch/service/'
+  $filas = New-Object System.Collections.ArrayList
+  [void]$filas.Add(@('Informe de Sonar de prueba'))
+  [void]$filas.Add(@('Severity', 'Message', $null, 'Language', 'Issue Type', 'Resource', 'Path', 'Line Number', 'Tags'))
+  [void]$filas.Add(@{ Celdas = @(
+        @('I', 'cwe, security,owasp-a1'), @('A', 'CRITICAL'), @('H', 'L32'), @('G', ($r + 'TotalService.java')), @('E', 'BUG'),
+        @('F', 'TotalService.java'), @('D', 'Java'), @('B', @{ Partes = @('Refactor this ', 'method ', "it's too complex & long.") })) })
+  [void]$filas.Add(@('MAJOR', 'Remove this unused import.', $null, 'Java', 'CODE_SMELL', 'A.java', ($r + 'A.java'), '-', ''))
+  [void]$filas.Add(@('MINOR', 'Rename this field.', $null, 'Java', 'CODE_SMELL', 'B.java', ($r + 'B.java'), '40L', 'convention'))
+  [void]$filas.Add(@('INFO', 'Todo comment.', $null, 'Java', 'CODE_SMELL', 'C.java', ($r + 'C.java'), 7, 'a,b'))
+  Nuevo-Xlsx $x @(
+    @{ Nombre = 'Resumen'; Filas = @(, @('Proyecto', 'batch')) },
+    @{ Nombre = 'Issues Breakdown'; Filas = $filas.ToArray() })
+  $f = @(Read-SonarXlsx $x $ColumnasSonar)
+  Igual 'salen cuatro incidencias' 4 $f.Count
+  if ($f.Count -ne 4) { return }
+  Igual 'la primera es la fila 4 de la hoja (cabecera en la 2)' 3 $f[0].Fila
+  Igual 'el mensaje de varias partes sale entero y exacto' "Refactor this method it's too complex & long." $f[0].Mensaje
+  Igual 'la severidad' 'CRITICAL' $f[0].Severidad
+  Igual 'el tipo' 'BUG' $f[0].Tipo
+  Igual 'el lenguaje' 'Java' $f[0].Lenguaje
+  Igual 'el recurso' 'TotalService.java' $f[0].Recurso
+  Igual 'la ruta exacta' ($r + 'TotalService.java') $f[0].Ruta
+  Igual 'L32 da 32' 32 $f[0].Linea
+  Igual 'los tags quedan separados' 'cwe|security|owasp-a1' (@($f[0].Etiquetas) -join '|')
+  Igual 'el guion da linea 0' 0 $f[1].Linea
+  Igual 'sin tags no hay ninguno' 0 @($f[1].Etiquetas).Count
+  Igual '40L da 40' 40 $f[2].Linea
+  Igual 'una celda numerica da su numero' 7 $f[3].Linea
+  Igual 'la columna vacia no desplaza las demas' 'Rename this field.' $f[2].Mensaje
+}
+
+$Pruebas['m10 sonar: sin la hoja o sin una columna obligatoria, el error dice cual falta'] = {
+  $e = Escenario-Sonar 'm10-errores'
+  $d = @('-Modo', 'diagnostico', '-SinBuild', '-Sonar')
+  # ninguna hoja sirve
+  $sin = Join-Path $e.Raiz 'sin-hoja.xlsx'
+  Nuevo-Xlsx $sin @(@{ Nombre = 'Otra'; Filas = @(, @('Algo', 'Distinto')) })
+  $r1 = Sonar-Lanza $e ($d + $sin)
+  Igual 'sin la hoja sale con 1' 1 $r1.Codigo
+  Comprueba 'el error nombra la hoja que buscaba' ($r1.Salida -match "Issues Breakdown") (Cola $r1.Salida)
+  Comprueba 'y las columnas obligatorias' ($r1.Salida -match 'Severity' -and $r1.Salida -match 'Message' -and $r1.Salida -match 'Issue Type' -and $r1.Salida -match 'Path') (Cola $r1.Salida)
+  # la hoja esta pero falta Path
+  $sinp = Join-Path $e.Raiz 'sin-path.xlsx'
+  Nuevo-Xlsx $sinp @(@{ Nombre = 'Issues Breakdown'; Filas = @(@('Severity', 'Message', 'Issue Type', 'Line Number'), @('CRITICAL', 'Fix this.', 'BUG', '3L')) })
+  $r2 = Sonar-Lanza $e ($d + $sinp)
+  Igual 'sin Path sale con 1' 1 $r2.Codigo
+  Comprueba "el error dice que falta la columna 'Path'" ($r2.Salida -match "falta la columna obligatoria 'Path'") (Cola $r2.Salida)
+  Comprueba 'y no inventa otra' ($r2.Salida -notmatch "falta la columna obligatoria 'Severity'" -and $r2.Salida -notmatch "falta la columna obligatoria 'Message'") (Cola $r2.Salida)
+  # no es un xlsx y no existe
+  $txt = Join-Path $e.Raiz 'texto.xlsx'
+  [System.IO.File]::WriteAllText($txt, 'esto no es un zip')
+  $r3 = Sonar-Lanza $e ($d + $txt)
+  Igual 'un fichero que no es un xlsx sale con 1' 1 $r3.Codigo
+  Comprueba 'y lo dice' ($r3.Salida -match 'no es un \.xlsx') (Cola $r3.Salida)
+  $r4 = Sonar-Lanza $e ($d + (Join-Path $e.Raiz 'no-existe.xlsx'))
+  Igual 'un informe que no existe sale con 1' 1 $r4.Codigo
+  Comprueba 'y lo dice' ($r4.Salida -match 'No existe el informe de Sonar') (Cola $r4.Salida)
+  Comprueba 'con -Paso sonar y sin -Sonar tambien hay un error claro' ((Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Paso', 'sonar')).Salida -match "necesita -Sonar") 'sin -Sonar'
+}
+
+$Pruebas['m10 sonar: filtro - BUG, VULNERABILITY, BLOCKER y CRITICAL; MAJOR solo con -SonarMayores; MINOR e INFO nunca; solo Java'] = {
+  . ([scriptblock]::Create((Texto-De-Funciones $FnLectorSonar)))
+  $Cfg = @{ SonarTipos = @('BUG', 'VULNERABILITY'); SonarSeveridades = @('BLOCKER', 'CRITICAL') }
+  function F([int]$N, [string]$Tipo, [string]$Sev, [string]$Lang = 'Java', [string]$Ruta = 'src/main/java/A.java') {
+    return [pscustomobject]@{ Fila = $N; Severidad = $Sev; Mensaje = 'm'; Lenguaje = $Lang; Tipo = $Tipo; Recurso = 'A.java'; Ruta = $Ruta; Linea = 1; Etiquetas = @() }
+  }
+  $filas = @(
+    (F 1 'BUG' 'MAJOR'), (F 2 'VULNERABILITY' 'CRITICAL'), (F 3 'CODE_SMELL' 'CRITICAL'), (F 4 'CODE_SMELL' 'BLOCKER'),
+    (F 5 'CODE_SMELL' 'MAJOR'), (F 6 'CODE_SMELL' 'MINOR'), (F 7 'CODE_SMELL' 'INFO'), (F 8 'BUG' 'MINOR'),
+    (F 9 'BUG' 'CRITICAL' 'JavaScript' 'src/main/webapp/a.js'), (F 10 'BUG' 'CRITICAL' '' 'src/main/resources/a.xml'), (F 11 'BUG' 'CRITICAL' '' 'src/main/java/B.java'))
+  $filtra = { param($Mayores) (@(Get-SonarFiltradas $filas $Mayores | ForEach-Object { $_.Fila }) -join ' ') }
+  Igual 'por defecto: BUG, VULNERABILITY, BLOCKER y CRITICAL (y Java por la ruta si no hay lenguaje)' '1 2 3 4 11' (& $filtra $false)
+  Igual 'con -SonarMayores entran tambien los MAJOR' '1 2 3 4 5 11' (& $filtra $true)
+  $Cfg.SonarSeveridades = @('BLOCKER', 'CRITICAL', 'MINOR')
+  Igual 'MINOR solo entra si esta en la lista de severidades (INFO sigue fuera)' '1 2 3 4 6 8 11' (& $filtra $false)
+  $Cfg = @{ SonarTipos = @('VULNERABILITY'); SonarSeveridades = @('BLOCKER', 'CRITICAL') }
+  Igual 'con otra lista de tipos entra lo de esa lista y lo de las severidades' '2 3 4 11' (& $filtra $false)
+}
+
+$Pruebas['m10 sonar: la tabla del diagnostico no cambia sin -Sonar y con -Sonar lleva la fila sonar con sus errores'] = {
+  $e = Escenario-Sonar 'm10-tabla'
+  $total = $RutaSv + 'service/TotalService.java'
+  $recibo = $RutaSv + 'service/ReciboService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"),
+    (Inc 'MAJOR' 'Reduce this method.' 'CODE_SMELL' 'ReciboService.java' $recibo "${ln}L"),
+    (Inc 'MINOR' 'Rename this field.' 'CODE_SMELL' 'ReciboService.java' $recibo "${ln}L"),
+    (Inc 'INFO' 'Todo comment.' 'CODE_SMELL' 'ReciboService.java' $recibo "${ln}L"),
+    (Inc 'CRITICAL' 'Script issue.' 'BUG' 'app.js' 'src/main/webapp/app.js' '3L' 'JavaScript'))
+  $r0 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild')
+  Igual 'sin -Sonar sale con 0' 0 $r0.Codigo
+  Igual 'la tabla tiene sus nueve pasos de siempre' 9 ([regex]::Matches($r0.Salida, '(?m)^(build|estructura|hexagonal|ficheros|config|paridad|e2e|tests|calidad)\s+\d+\s+\d+\s*$')).Count
+  Comprueba 'sin fila sonar en la consola' ($r0.Salida -notmatch '(?m)^sonar\s') (Cola $r0.Salida)
+  Comprueba 'ni en diagnostico.md' ((Lee $e.Repo '.rescate/diagnostico.md') -notmatch '\| sonar \|')
+  Igual 'ni hallazgos sonar' 0 (Hallazgos-Sonar $e.Repo).Count
+  Comprueba 'ni la frase de Sonar en el resumen' ($r0.Salida -notmatch 'Sonar: ')
+
+  $r1 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
+  Igual 'con -Sonar sale con 0' 0 $r1.Codigo
+  Comprueba 'la consola lleva la fila sonar con 1 error' ($r1.Salida -match '(?m)^sonar\s+1\s+0\s*$') (Cola $r1.Salida)
+  Comprueba 'y diagnostico.md tambien' ((Lee $e.Repo '.rescate/diagnostico.md') -match '\| sonar \| 1 \| 0 \|')
+  $hs = @(Hallazgos-Sonar $e.Repo)
+  Igual 'un hallazgo sonar (MAJOR, MINOR, INFO y JavaScript fuera)' 1 $hs.Count
+  if ($hs.Count -eq 1) {
+    Igual 'su fichero' $total $hs[0].Fichero
+    Igual 'su linea' $ln $hs[0].Linea
+    Igual 'su detalle, con tipo y severidad' 'Fix this null dereference. [BUG CRITICAL]' $hs[0].Detalle
+    Igual 'es un error' 'error' $hs[0].Sev
+  }
+  Comprueba 'el resumen dice cuantas lleva resueltas y que la prueba es volver a pasar Sonar' ($r1.Salida -match 'Sonar: 0 resueltas aqui\. La prueba de verdad es volver a pasar Sonar y relanzar con el xlsx nuevo\.') (Cola $r1.Salida)
+  $r2 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx, '-SonarMayores')
+  Comprueba 'con -SonarMayores la fila sonar cuenta 2' ($r2.Salida -match '(?m)^sonar\s+2\s+0\s*$') (Cola $r2.Salida)
+}
+
+$Pruebas['m10 sonar: -Paso sonar con el Copilot falso que cambia la linea marcada hace el lote y un commit'] = {
+  $e = Escenario-Sonar 'm10-fix' @('service/TotalService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  Informe-Sonar $e.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba "Lote 1 OK: 'sonar' 1 -> 0" ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+  Comprueba 'hay un commit del lote' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(sonar\): lote 1, hallazgos 1 a 0') (GitEn $e.Wt @('log', '--format=%s'))
+  Comprueba 'la linea marcada ha cambiado' ((Lee $e.Wt $total) -match 'int resultado = a \+ b; // corregido')
+  Igual 'sonar queda a 0 en el worktree' 0 (Hallazgos-Sonar $e.Wt 'error').Count
+  Comprueba 'el resumen cuenta 1 resuelta' ($r.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r.Salida)
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt lleva el texto del paso' ($prompt -match 'Corrige cada incidencia de Sonar listada SIN cambiar el comportamiento') $prompt
+  Comprueba 'y la incidencia con su fichero y su linea' ($prompt.Contains("- ${total}:${ln} - Fix this null dereference. [BUG CRITICAL]")) $prompt
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m10 sonar: un Copilot falso que no toca la linea marcada deja el lote sin bajar y el fichero atascado'] = {
+  $e = Escenario-Sonar 'm10-sin-tocar' @('service/TotalService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  Informe-Sonar $e.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1') 'sonar-sin-tocar'
+  Igual 'sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'el intento dice que los hallazgos no han bajado' ($r.Salida -match "Los hallazgos de 'sonar' no han bajado \(1 -> 1\)") (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Comprueba 'el fichero queda atascado' ($r.Salida -match "ATASCADO en 'sonar'") (Cola $r.Salida)
+  Comprueba 'y apuntado' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/atascados.md'))
+  Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m10 sonar: un fichero movido se encuentra por su nombre; con el nombre repetido o sin fichero sale el aviso y no entra en lotes'] = {
+  $e = Escenario-Sonar 'm10-movido' @('service/Mover', 'a/Repetida', 'b/Repetida')
+  $real = $RutaSv + 'service/Mover.java'
+  $ln = Linea-De (Lee $e.Repo $real) 'int resultado'
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'Moved bug.' 'BUG' 'Mover.java' ($RutaSv + 'vieja/Mover.java') "${ln}L"),
+    (Inc 'CRITICAL' 'Ambiguous bug.' 'BUG' 'Repetida.java' ($RutaSv + 'c/Repetida.java') "${ln}L"),
+    (Inc 'CRITICAL' 'Missing bug.' 'BUG' 'Nada.java' ($RutaSv + 'c/Nada.java') "${ln}L"))
+  $r = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
+  Igual 'sale con 0' 0 $r.Codigo
+  $err = @(Hallazgos-Sonar $e.Repo 'error')
+  $av = @(Hallazgos-Sonar $e.Repo 'aviso')
+  Igual 'solo el movido es un error' 1 $err.Count
+  if ($err.Count -eq 1) { Igual 'y apunta al fichero de verdad' $real $err[0].Fichero }
+  Igual 'los otros dos son avisos' 2 $av.Count
+  Comprueba 'que dicen que no encuentran el fichero' (@($av | Where-Object { $_.Detalle -like 'no encuentro el fichero*' }).Count -eq 2) (($av | ForEach-Object { $_.Detalle }) -join ' / ')
+  Comprueba 'la tabla cuenta 1 error y 2 avisos' ($r.Salida -match '(?m)^sonar\s+1\s+2\s*$') (Cola $r.Salida)
+  Comprueba 'el resumen no da por resueltas las que no encuentra' ($r.Salida -match 'Sonar: 0 resueltas aqui\.') (Cola $r.Salida)
+}
+
+$Pruebas['m10 sonar: la base guarda la linea marcada y el hash; sin cambios la incidencia se da por resuelta y un xlsx nuevo rehace la base'] = {
+  $e = Escenario-Sonar 'm10-base' @('service/TotalService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  $incs = @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
+  Informe-Sonar $e.Xlsx $incs
+  $d = @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
+  $r1 = Sonar-Lanza $e $d
+  $b1 = (Lee $e.Repo '.rescate/sonar-base.json') | ConvertFrom-Json
+  Igual 'la base lleva el hash del xlsx' (Get-FileHash -LiteralPath $e.Xlsx -Algorithm SHA256).Hash "$($b1.hash)"
+  $i1 = @($b1.incidencias | Where-Object { $_.fichero -eq $total })
+  Igual 'la base lleva la incidencia' 1 $i1.Count
+  if ($i1.Count -eq 1) {
+    Igual 'su linea marcada sin espacios exteriores' 'int resultado = a + b;' "$($i1[0].texto)"
+    Igual 'su linea' $ln "$($i1[0].linea)"
+  }
+  Igual 'al principio hay un error' 1 (Hallazgos-Sonar $e.Repo 'error').Count
+  # cambia la linea marcada (sin commit): la incidencia ya no esta, y el mismo xlsx no rehace la base
+  Escribe $e.Repo $total ((Lee $e.Repo $total).Replace('int resultado = a + b;', 'int resultado = b + a;'))
+  $r2 = Sonar-Lanza $e $d
+  Igual 'sin la linea marcada no hay error' 0 (Hallazgos-Sonar $e.Repo 'error').Count
+  Comprueba 'y el resumen cuenta 1 resuelta' ($r2.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r2.Salida)
+  $b2 = (Lee $e.Repo '.rescate/sonar-base.json') | ConvertFrom-Json
+  Igual 'el mismo xlsx conserva la base (la linea de antes)' 'int resultado = a + b;' "$(@($b2.incidencias)[0].texto)"
+  # otro xlsx (otro hash, mismas filas): la base se rehace con lo que hay ahora en el fichero
+  Informe-Sonar $e.Xlsx $incs 'otra pasada de Sonar'
+  $h2 = (Get-FileHash -LiteralPath $e.Xlsx -Algorithm SHA256).Hash
+  Comprueba 'el xlsx nuevo tiene otro hash' ($h2 -ne $b1.hash)
+  $r3 = Sonar-Lanza $e $d
+  $b3 = (Lee $e.Repo '.rescate/sonar-base.json') | ConvertFrom-Json
+  Igual 'la base lleva el hash nuevo' $h2 "$($b3.hash)"
+  Igual 'y la linea de ahora' 'int resultado = b + a;' "$(@($b3.incidencias)[0].texto)"
+  Igual 'la incidencia vuelve a contar como pendiente' 1 (Hallazgos-Sonar $e.Repo 'error').Count
+}
+
+$Pruebas['m10 sonar: el texto de calidad sobre inyeccion pide un unico constructor, campos final y sin estado mutable'] = {
+  $e = Escenario-Sonar 'm10-calidad' @('service/TotalService') @{} @('service/SinDoc1', 'service/SinDoc2')
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'calidad', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'nada'
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt de calidad lleva la frase nueva' ($prompt.Contains('inyeccion por un unico constructor, campos final, sin estado mutable en el componente')) $prompt
+  Comprueba 'y sigue pidiendo inyeccion por constructor' ($prompt.Contains('@Autowired en un campo: pasa a inyeccion por constructor con campos private final'))
+  Comprueba 'sin -Sonar y sin plantilla el aviso de siempre sigue' ($r.Salida -match 'Sin -Plantilla el arreglo va a ciegas') (Cola $r.Salida)
+}
+
+$Pruebas['m10 sonar: solo -Repo y -Sonar hace el paso sonar entero, sin parar a preguntar y sin tocar calidad'] = {
+  $cl = @('service/TotalService', 'service/ReciboService', 'service/PagoService', 'service/CobroService', 'service/AjusteService', 'service/CierreService')
+  $e = Escenario-Sonar 'm10-corto' $cl @{} @('service/SinDoc1')
+  $incs = @()
+  foreach ($c in $cl) {
+    $nombre = ($c -split '/')[1]
+    $ruta = $RutaSv + $c + '.java'
+    $incs += , (Inc 'CRITICAL' "Fix this bug in $nombre." 'BUG' ($nombre + '.java') $ruta ((Linea-De (Lee $e.Repo $ruta) 'int resultado').ToString() + 'L'))
+  }
+  Informe-Sonar $e.Xlsx $incs
+  $r0 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild')
+  $calidad0 = (Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' }).Count
+  Comprueba 'el repo tiene errores de calidad' ($calidad0 -ge 2) "$calidad0"
+  # la unica respuesta es 's' al 'Seguir?' de crear el worktree; despues no debe preguntar nada
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Sonar', $e.Xlsx) '' @('s')
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'va directo al paso sonar aunque calidad tenga errores' ($r.Salida -match "=== Paso 'sonar' en lotes de 5 ===") (Cola $r.Salida)
+  Comprueba "primer lote: 'sonar' 6 -> 1" ($r.Salida -match "Lote 1 OK: 'sonar' 6 -> 1") (Cola $r.Salida)
+  Comprueba "segundo lote: 'sonar' 1 -> 0, sin que nadie diga que siga" ($r.Salida -match "Lote 2 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+  Comprueba 'no pregunta entre lotes' ($r.Salida -notmatch 'siguiente lote') (Cola $r.Salida)
+  $log = GitEn $e.Wt @('log', '--format=%s')
+  Comprueba 'hay dos commits de sonar' ($log -match 'rescate\(sonar\): lote 1' -and $log -match 'rescate\(sonar\): lote 2') $log
+  Comprueba 'y ninguno de calidad' ($log -notmatch 'rescate\(calidad\)') $log
+  Igual 'los errores de calidad siguen como estaban' $calidad0 (@(Hallazgos $e.Wt | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' })).Count
+  Comprueba 'sin plantilla no hay aviso de que el arreglo va a ciegas' ($r.Salida -notmatch 'a ciegas') (Cola $r.Salida)
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt de sonar no habla de la plantilla ni de la migracion' ($prompt -notmatch 'PLANTILLA|migracion|hexagonal') $prompt
+  Comprueba 'ni lleva hallazgos de calidad' ($prompt -notmatch 'javadoc-') $prompt
+}
+
+$Pruebas['m10 sonar: con -Todo se encadenan los pasos y sonar va el ultimo'] = {
+  $modelo = @'
+package com.acme.plantillabatch.domain;
+
+import org.springframework.stereotype.Component;
+
+/** Modelo de dominio de prueba. */
+@Component
+public class Modelo {
+}
+'@
+  # Orden de la config reducido a hexagonal: -Sonar le anade sonar al final
+  $e = Escenario-Sonar 'm10-todo' @('service/TotalService') @{ Orden = @('hexagonal') } @() @{ 'domain/Modelo' = $modelo }
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  Informe-Sonar $e.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Todo', '-Sonar', $e.Xlsx, '-Si', '-SinPlan', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  $pasos = @([regex]::Matches($r.Salida, "(?m)^=== Paso '(\w+)' en lotes") | ForEach-Object { $_.Groups[1].Value })
+  Igual 'primero hexagonal y sonar el ultimo' 'hexagonal sonar' ($pasos -join ' ')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { return }
+  $log = GitEn $e.Wt @('log', '--format=%s')
+  Comprueba 'hay un commit de cada paso' ($log -match 'rescate\(hexagonal\): lote 1' -and $log -match 'rescate\(sonar\): lote 1') $log
+}
+
+$Pruebas['m10 sonar: la receta de una regla sale una sola vez aunque se repita en el lote y solo si casa con algun mensaje'] = {
+  $rec = @(
+    @{ Rx = 'cognitive complexity'; Texto = 'RECETA-PRUEBA-UNO: extrae un metodo privado.' },
+    @{ Rx = 'remove this unused'; Texto = 'RECETA-PRUEBA-DOS: borra lo que sobra.' })
+  $e = Escenario-Sonar 'm10-recetas' @('service/TotalService', 'service/ReciboService', 'service/PagoService') @{ SonarRecetas = $rec }
+  $incs = @()
+  $msgs = @('Refactor this method to reduce its Cognitive Complexity from 25 to the 15 allowed.', 'Refactor this method to reduce its Cognitive Complexity from 18 to the 15 allowed.', 'Replace this generic exception with a more specific one.')
+  $i = 0
+  foreach ($n in @('TotalService', 'ReciboService', 'PagoService')) {
+    $ruta = $RutaSv + 'service/' + $n + '.java'
+    $incs += , (Inc 'CRITICAL' $msgs[$i] 'BUG' ($n + '.java') $ruta ((Linea-De (Lee $e.Repo $ruta) 'int resultado').ToString() + 'L'))
+    $i++
+  }
+  Informe-Sonar $e.Xlsx $incs
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'nada'
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Igual 'la receta de complejidad sale una vez (dos mensajes de la misma regla)' 1 ([regex]::Matches($prompt, 'RECETA-PRUEBA-UNO')).Count
+  Comprueba 'la otra, sin mensaje que case, no sale' ($prompt -notmatch 'RECETA-PRUEBA-DOS') $prompt
+  Comprueba 'va debajo del texto general del paso' ($prompt.IndexOf('RECETA-PRUEBA-UNO') -gt $prompt.IndexOf('Corrige cada incidencia de Sonar')) $prompt
+}
+
+$Pruebas['m10 sonar: no se vale silenciar a Sonar ni quitar tests: el intento cuenta como fallido aunque la linea haya cambiado'] = {
+  foreach ($caso in @('sonar-nosonar', 'sonar-suppress', 'sonar-disabled', 'sonar-borra-test')) {
+    $e = Escenario-Sonar ('m10-trampa-' + $caso) @('service/TotalService', 'service/ReciboService')
+    $incs = @()
+    foreach ($n in @('TotalService', 'ReciboService')) {
+      $ruta = $RutaSv + 'service/' + $n + '.java'
+      $incs += , (Inc 'CRITICAL' "Fix this bug in $n." 'BUG' ($n + '.java') $ruta ((Linea-De (Lee $e.Repo $ruta) 'int resultado').ToString() + 'L'))
+    }
+    Informe-Sonar $e.Xlsx $incs
+    $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '2', '-MaxLotes', '1') $caso
+    if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba "$caso : existe el worktree" $false (Cola $r.Salida); continue }
+    Comprueba "$caso : el intento no pasa por silenciar a Sonar o quitar tests" ($r.Salida -match 'NO PASA: No se vale silenciar a Sonar ni quitar tests: corrige el codigo') (Cola $r.Salida)
+    Comprueba "$caso : el lote se deshace" ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+    Igual "$caso : no hay commits nuevos" 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+    if ($caso -eq 'sonar-nosonar') {
+      Comprueba 'con solo un NOSONAR los hallazgos si habian bajado (la linea ha cambiado) y aun asi no pasa' ($r.Salida -notmatch "no han bajado") (Cola $r.Salida)
+      $prompt = Lee $e.Wt '.rescate/prompt.md'
+      Comprueba 'el motivo va al siguiente intento' ($prompt -match '## CORRECCION' -and $prompt -match 'No se vale silenciar a Sonar ni quitar tests: corrige el codigo') $prompt
+      Comprueba 'con el fichero y la linea que lo silencia' ($prompt -match 'TotalService\.java') $prompt
+    }
+  }
+}
+
+$Pruebas['m10 sonar: sin plantilla ni migracion, el paso funciona en un repo Java cualquiera'] = {
+  $e = Escenario-Sonar 'm10-general' @('service/TotalService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  Informe-Sonar $e.Xlsx @(, (Inc 'BLOCKER' 'Fix this blocker.' 'CODE_SMELL' 'TotalService.java' $total "${ln}L"))
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Sonar', $e.Xlsx) '' @('s')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba "Lote 1 OK: 'sonar' 1 -> 0" ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+  Comprueba 'sin plantilla no avisa de que va a ciegas' ($r.Salida -notmatch 'a ciegas') (Cola $r.Salida)
+  Comprueba 'ni pide plantilla ni original' ($r.Salida -notmatch 'Plantilla incumple') (Cola $r.Salida)
+}
+
+$Pruebas['m10 sonar: columnas por alias en espanol y la primera hoja con las columnas cuando no hay Issues Breakdown'] = {
+  $e = Escenario-Sonar 'm10-alias' @('service/TotalService')
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  $lin = 'L' + [char]0x00ED + 'nea'
+  $sev = 'Severidad'
+  # otra hoja primero, sin Issues Breakdown, cabeceras en espanol (con tilde, mayusculas y espacios), sin columna de lenguaje
+  $x1 = Join-Path $e.Raiz 'alias.xlsx'
+  Nuevo-Xlsx $x1 @(
+    @{ Nombre = 'Portada'; Filas = @(, @('Informe', 'batch')) },
+    @{ Nombre = 'Hallazgos'; Filas = @(
+        @(" $sev ", 'MENSAJE', 'Tipo', ' ruta', $lin, ' RECURSO ', 'Etiquetas'),
+        @('CRITICAL', 'Corrige este fallo.', 'BUG', $total, $ln, 'TotalService.java', 'cwe'),
+        @('MINOR', 'Un menor.', 'CODE_SMELL', $total, $ln, 'TotalService.java', 'x')) })
+  $d = @('-Modo', 'diagnostico', '-SinBuild', '-Sonar')
+  $r1 = Sonar-Lanza $e ($d + $x1)
+  Igual 'con otra hoja y cabeceras en espanol sale con 0' 0 $r1.Codigo
+  $h1 = @(Hallazgos-Sonar $e.Repo 'error')
+  Igual 'entra la incidencia (Java por el .java de la ruta)' 1 $h1.Count
+  if ($h1.Count -eq 1) {
+    Igual 'su mensaje' 'Corrige este fallo. [BUG CRITICAL]' $h1[0].Detalle
+    Igual 'su linea (una celda numerica)' $ln $h1[0].Linea
+  }
+  # si Issues Breakdown esta, manda aunque haya otra hoja anterior con las columnas
+  $x2 = Join-Path $e.Raiz 'primero.xlsx'
+  Nuevo-Xlsx $x2 @(
+    @{ Nombre = 'Datos'; Filas = @(@('Severity', 'Message', 'Issue Type', 'Path', 'Line Number'), @('CRITICAL', 'De la otra hoja.', 'BUG', $total, "${ln}L")) },
+    @{ Nombre = 'Issues Breakdown'; Filas = @(@('Severity', 'Message', 'Issue Type', 'Path', 'Line Number'), @('BLOCKER', 'De Issues Breakdown.', 'CODE_SMELL', $total, "${ln}L")) })
+  $r2 = Sonar-Lanza $e ($d + $x2)
+  $h2 = @(Hallazgos-Sonar $e.Repo 'error')
+  Igual 'con Issues Breakdown entra una sola incidencia' 1 $h2.Count
+  if ($h2.Count -eq 1) { Igual 'y es la de Issues Breakdown' 'De Issues Breakdown. [CODE_SMELL BLOCKER]' $h2[0].Detalle }
+  # sin Issues Breakdown ni hoja con las columnas, el error dice cuales buscaba
+  $x3 = Join-Path $e.Raiz 'nada.xlsx'
+  Nuevo-Xlsx $x3 @(@{ Nombre = 'Datos'; Filas = @(, @('Severidad', 'Mensaje')) })
+  $r3 = Sonar-Lanza $e ($d + $x3)
+  Igual 'sin ninguna hoja valida sale con 1' 1 $r3.Codigo
+  Comprueba 'y dice que columnas buscaba' ($r3.Salida -match 'Severity' -and $r3.Salida -match 'Issue Type' -and $r3.Salida -match 'Path') (Cola $r3.Salida)
+}
+
+$Pruebas['m10 sonar: el filtro sale de SonarTipos y SonarSeveridades de .rescate/config.json'] = {
+  $e = Escenario-Sonar 'm10-filtro-config' @('service/TotalService') @{ SonarTipos = @('VULNERABILITY'); SonarSeveridades = @('BLOCKER') }
+  $total = $RutaSv + 'service/TotalService.java'
+  $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'Bug critico.' 'BUG' 'TotalService.java' $total "${ln}L"),
+    (Inc 'MAJOR' 'Vulnerabilidad mayor.' 'VULNERABILITY' 'TotalService.java' $total "${ln}L"),
+    (Inc 'BLOCKER' 'Olor bloqueante.' 'CODE_SMELL' 'TotalService.java' $total "${ln}L"),
+    (Inc 'MAJOR' 'Olor mayor.' 'CODE_SMELL' 'TotalService.java' $total "${ln}L"))
+  $r1 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx)
+  Igual 'con la config entran la vulnerabilidad y el bloqueante' 'Olor bloqueante. [CODE_SMELL BLOCKER]|Vulnerabilidad mayor. [VULNERABILITY MAJOR]' ((@(Hallazgos-Sonar $e.Repo 'error' | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
+  $r2 = Sonar-Lanza $e @('-Modo', 'diagnostico', '-SinBuild', '-Sonar', $e.Xlsx, '-SonarMayores')
+  Igual '-SonarMayores solo anade MAJOR a las severidades' 3 (Hallazgos-Sonar $e.Repo 'error').Count
+}
+
+$Pruebas['m10 sonar: todo en ASCII (el script, el banco y los falsos)'] = {
+  foreach ($f in @($Script, (Join-Path $aqui 'probar.ps1'), (Join-Path $falsos 'copilot.ps1'))) {
+    $malos = @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
+    Igual ('sin bytes fuera de ASCII en ' + (Split-Path $f -Leaf)) 0 $malos
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
