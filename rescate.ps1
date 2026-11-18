@@ -266,7 +266,9 @@ $Cfg += @{
   SonarProhibido        = $SonarProhibidoReal
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
-  MvnTests              = @('-q', '-B', 'test')
+  # con tests: siempre se ejecutan y un fallo no se ignora (como prueba-local.ps1); un <skipTests> en la <configuration> del pom gana al -D:
+  # por eso Invoke-Build lee tambien los informes de surefire cuando Maven sale con 0
+  MvnTests              = @('-q', '-B', '-DskipTests=false', '-Dmaven.test.skip=false', '-Dmaven.test.failure.ignore=false', 'test')
 }
 
 # ============================== UTILIDADES ==============================
@@ -1884,8 +1886,63 @@ function Get-MotivoFallo([string]$Texto) {
   return $t
 }
 
+# Lo que dicen los informes de surefire de $Rep: cuantos tests se ejecutan (los que corren, sin los saltados) y, por cada test que falla, un hallazgo
+# 'tests' (el motivo, de Get-MotivoFallo, va aparte). Se lee el TEST-<clase>.xml, con un <testcase> por metodo: 'falla <metodo> en <clase>'. Sin XML
+# (o ilegible) se lee el <clase>.txt, que no trae los metodos: 'test <k> de <n> que fallan en <clase>', para que dos hallazgos no tengan la misma
+# clave (Get-ClaveHallazgo). Devuelve Ejecutados y Fallan.
+function Read-InformesTests([string]$Rep) {
+  $ejecutados = 0; $fallan = 0
+  $vistas = @{}
+  if (-not (Test-Path -LiteralPath $Rep)) { return [pscustomobject]@{ Ejecutados = 0; Fallan = 0 } }
+  foreach ($f in @(Get-ChildItem -LiteralPath $Rep -File -Filter 'TEST-*.xml')) {
+    $doc = New-Object System.Xml.XmlDocument
+    try { $doc.Load($f.FullName) } catch { continue }
+    $clase = ([System.IO.Path]::GetFileNameWithoutExtension($f.Name) -replace '^TEST-', '')
+    $vistas[$clase] = $true
+    $rel = 'src/test/java/' + ($clase -replace '\.', '/') + '.java'
+    if (-not (Test-Path -LiteralPath (Join-Ruta $RepoRoot $rel))) { $rel = $clase }
+    $rotos = 0; $nombres = @{}
+    foreach ($tc in @($doc.SelectNodes('//testcase'))) {
+      if ($tc.SelectSingleNode('skipped')) { continue }
+      $ejecutados++
+      $fallo = $tc.SelectSingleNode('failure | error')
+      if (-not $fallo) { continue }
+      $nombre = $tc.GetAttribute('name')
+      if ($nombres.ContainsKey($nombre)) { $nombres[$nombre]++; $nombre += " ($($nombres[$nombre]))" } else { $nombres[$nombre] = 1 }
+      $texto = $fallo.InnerText
+      if (-not $texto.Trim()) { $texto = $fallo.GetAttribute('message') }
+      Add-Hallazgo 'tests' 'error' $rel 0 "falla $nombre en $clase" (Get-MotivoFallo ("<<< FAILURE!`n" + $texto))
+      $rotos++
+    }
+    # un fallo de la clase entera (sin <testcase> que lo lleve) tambien cuenta
+    $total = [int]$doc.DocumentElement.GetAttribute('failures') + [int]$doc.DocumentElement.GetAttribute('errors')
+    for ($k = $rotos + 1; $k -le $total; $k++) { Add-Hallazgo 'tests' 'error' $rel 0 "test $k de $total que fallan en $clase" }
+    $fallan += [Math]::Max($rotos, $total)
+  }
+  foreach ($f in @(Get-ChildItem -LiteralPath $Rep -File -Filter '*.txt')) {
+    $clase = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
+    if ($vistas.ContainsKey($clase)) { continue }
+    $t = [System.IO.File]::ReadAllText($f.FullName)
+    $m = [regex]::Match($t, 'Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)(?:,\s*Skipped:\s*(\d+))?')
+    if (-not $m.Success) { continue }
+    $nf = [int]$m.Groups[2].Value + [int]$m.Groups[3].Value
+    $saltados = 0
+    if ($m.Groups[4].Success) { $saltados = [int]$m.Groups[4].Value }
+    $ejecutados += [int]$m.Groups[1].Value - $saltados
+    $rel = 'src/test/java/' + ($clase -replace '\.', '/') + '.java'
+    if (-not (Test-Path -LiteralPath (Join-Ruta $RepoRoot $rel))) { $rel = $clase }
+    for ($k = 1; $k -le $nf; $k++) {
+      $motivo = ''
+      if ($k -eq 1) { $motivo = Get-MotivoFallo $t }
+      Add-Hallazgo 'tests' 'error' $rel 0 "test $k de $nf que fallan en $clase" $motivo
+    }
+    $fallan += $nf
+  }
+  return [pscustomobject]@{ Ejecutados = $ejecutados; Fallan = $fallan }
+}
+
 function Invoke-Build([bool]$ConTests) {
-  $b = [pscustomobject]@{ Ejecutado = $true; Compila = $true; TestsEjecutados = $false; TestsOk = $false }
+  $b = [pscustomobject]@{ Ejecutado = $true; Compila = $true; TestsEjecutados = $false; TestsOk = $false; TestsN = 0 }
   $rep = Join-Ruta $RepoRoot 'target/surefire-reports'
   if ($ConTests -and (Test-Path -LiteralPath $rep)) { Remove-Item -LiteralPath $rep -Recurse -Force }
   if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
@@ -1901,7 +1958,15 @@ function Invoke-Build([bool]$ConTests) {
   # es un build que falla: el detalle entra en la correccion del lote porque casa con ^(no compila|el build falla)
   if ($r.Tope) { $b.Compila = $false; Add-Hallazgo 'build' 'error' 'pom.xml' 0 ('el build falla: ' + $r.Tope); return $b }
   if ($r.Codigo -eq 0) {
-    if ($ConTests) { $b.TestsEjecutados = $true; $b.TestsOk = $true }
+    if ($ConTests) {
+      # Maven con 0 no dice que los tests pasen (testFailureIgnore, skipTests en la configuracion del plugin): se miran los informes
+      $inf = Read-InformesTests $rep
+      $b.TestsEjecutados = $true; $b.TestsN = $inf.Ejecutados; $b.TestsOk = ($inf.Fallan -eq 0)
+      if ($inf.Fallan -eq 0 -and $inf.Ejecutados -eq 0 -and @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java')).Count -gt 0) {
+        $b.TestsOk = $false
+        Add-Hallazgo 'tests' 'error' 'pom.xml' 0 'Hay tests en src/test/java, pero Maven no ha ejecutado ninguno: mira skipTests, testFailureIgnore, excludes o el perfil del pom'
+      }
+    }
     return $b
   }
   # 1) errores de compilacion
@@ -1925,21 +1990,7 @@ function Invoke-Build([bool]$ConTests) {
   }
   # 2) tests que fallan
   $fallan = 0
-  if ($ConTests -and (Test-Path -LiteralPath $rep)) {
-    foreach ($f in @(Get-ChildItem -LiteralPath $rep -File -Filter '*.txt')) {
-      $t = [System.IO.File]::ReadAllText($f.FullName)
-      if ($t -match 'Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)') {
-        $nf = [int]$Matches[2] + [int]$Matches[3]
-        if ($nf -gt 0) {
-          $clase = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
-          $rel = 'src/test/java/' + ($clase -replace '\.', '/') + '.java'
-          if (-not (Test-Path -LiteralPath (Join-Ruta $RepoRoot $rel))) { $rel = $clase }
-          Add-Hallazgo 'tests' 'error' $rel 0 "$nf test(s) fallan en $clase (ver target/surefire-reports)" (Get-MotivoFallo $t)
-          $fallan++
-        }
-      }
-    }
-  }
+  if ($ConTests) { $inf = Read-InformesTests $rep; $fallan = $inf.Fallan; $b.TestsN = $inf.Ejecutados }
   if ($fallan -gt 0) { $b.TestsEjecutados = $true; $b.TestsOk = $false; return $b }
   # 3) otra cosa (parent que no resuelve, plugin, etc.)
   $primera = @($r.Salida | Where-Object { $_ -match '\[ERROR\]' } | Select-Object -First 1) -join ''
@@ -1950,7 +2001,7 @@ function Invoke-Build([bool]$ConTests) {
 
 function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   $script:H = New-Object System.Collections.Generic.List[object]
-  $script:Build = [pscustomobject]@{ Ejecutado = $false; Compila = $true; TestsEjecutados = $false; TestsOk = $false }
+  $script:Build = [pscustomobject]@{ Ejecutado = $false; Compila = $true; TestsEjecutados = $false; TestsOk = $false; TestsN = 0 }
   $cal = $script:Cal
   $h = Get-Hechos $RepoRoot
   $script:BasePkg = $h.BasePkg
@@ -2334,6 +2385,8 @@ function Get-TextoAlTerminar([string]$Mvn, [string]$PasoId) {
   $a = $Cfg.MvnCompilar; $fin = 'y corrige hasta que compile.'
   if (Get-ConTests $PasoId) { $a = $Cfg.MvnTests; $fin = 'y corrige los tests que fallen.' }
   $l1 = "- Ejecuta: $(Get-OrdenComprobar)  y corrige lo que liste (como mucho 3 veces)."
+  # PowerShell parte -Dmaven.test.skip=false en dos argumentos si no va entre comillas
+  $a = @($a | ForEach-Object { if ($_ -match '^-D.*\.') { '"' + $_ + '"' } else { $_ } })
   $l2 = "- Ejecuta: $Mvn $($a -join ' ')  $fin"
   return @($l1, $l2, '- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
 }
@@ -2547,11 +2600,13 @@ function Get-TextoModelo {
 
 function Get-Guardas {
   $tests = @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java'))
-  $des = 0; $ase = 0
+  $des = 0; $ase = 0; $met = 0
   foreach ($f in $tests) {
     $t = [System.IO.File]::ReadAllText($f.FullName)
     $des += [regex]::Matches($t, '@(Disabled|Ignore)\b').Count
     $ase += [regex]::Matches($t, '\b(assert\w*|verify)\s*\(').Count
+    # los metodos de test, sin comentarios ni textos (un @Test comentado no cuenta): borrar o comentar uno baja la cuenta aunque el fichero se quede
+    $met += [regex]::Matches((Get-Limpio $t), '@(?:\w+\.)*(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b').Count
   }
   # los catch de src/main/java, sin comentarios ni textos (ruta -> cuenta): quitar uno cambia como se tratan los errores
   $catchDe = @{}; $nc = 0
@@ -2559,7 +2614,7 @@ function Get-Guardas {
     $k = $script:RxCatch.Matches((Get-Limpio ([System.IO.File]::ReadAllText($f.FullName)))).Count
     if ($k -gt 0) { $catchDe[(Get-Rel $RepoRoot $f.FullName)] = $k; $nc += $k }
   }
-  return [pscustomobject]@{ Tests = $tests.Count; Desactivados = $des; Aserciones = $ase; Catch = $nc; CatchDe = $catchDe; Plantilla = (Get-Huella $PlantillaRoot); Legacy = (Get-Huella $LegacyRoot) }
+  return [pscustomobject]@{ Tests = $tests.Count; Metodos = $met; Desactivados = $des; Aserciones = $ase; Catch = $nc; CatchDe = $catchDe; Plantilla = (Get-Huella $PlantillaRoot); Legacy = (Get-Huella $LegacyRoot) }
 }
 
 # ================================ PLAN ================================
@@ -3433,6 +3488,7 @@ function Invoke-Fix {
       # -- puertas: decide el script, no la IA --
       $problemas = @(); $blandos = @()
       if ($g1.Tests -lt $g0.Tests) { $problemas += "Has borrado tests ($($g0.Tests) -> $($g1.Tests) ficheros). Restauralos." }
+      if ($g1.Metodos -lt $g0.Metodos) { $problemas += "Has borrado $($g0.Metodos - $g1.Metodos) metodos de test ($($g0.Metodos) -> $($g1.Metodos)). Restauralos." }
       if ($g1.Desactivados -gt $g0.Desactivados) { $problemas += 'Has desactivado tests con @Disabled/@Ignore. Quitalo.' }
       if ($g1.Aserciones -lt $g0.Aserciones) { $blandos += "hay menos aserciones en los tests ($($g0.Aserciones) -> $($g1.Aserciones))" }
       # cuenta de todo el repo: llevar un catch a otro fichero no la baja
@@ -3442,6 +3498,7 @@ function Invoke-Fix {
         $catchMenos = @($g0.CatchDe.Keys | Sort-Object | Where-Object { [int]$g1.CatchDe[$_] -lt $g0.CatchDe[$_] } | ForEach-Object { "  - $_ - catch: $($g0.CatchDe[$_]) -> $([int]$g1.CatchDe[$_])" })
       }
       $tocados = @($cambios | ForEach-Object { ($_.Substring(3) -replace '^"|"$', '') })
+      # solo un aviso: lo que un pom roto haga a los tests ya lo cazan los informes de surefire (Invoke-Build) y la puerta de tests ejecutados; bloquearlo pararia lotes legitimos
       if ($paso -ne 'build' -and ($tocados -contains 'pom.xml')) { $blandos += 'ha tocado pom.xml' }
       $fuera = @($tocados | Where-Object { -not $_.StartsWith('src/') -and $_ -ne 'pom.xml' })
       if ($fuera.Count -gt 0) { $blandos += ('ha tocado ficheros fuera de src: ' + (($fuera | Select-Object -First 6) -join ', ')) }
@@ -3476,6 +3533,10 @@ function Invoke-Fix {
       $ft = Get-Cuenta $hall2 'tests'
       # sin 'tests' en Orden no hay cuenta de antes: no se compara
       if ($conTests -and $paso -ne 'tests' -and $antes.ContainsKey('tests') -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
+      # con tests antes y despues, no se ejecutan menos: borrar, saltar (@DisabledOnOs, assumeTrue) o excluir un test baja los fallos pero tambien los que corren
+      if ($conTests -and $buildAntes.TestsEjecutados -and $script:Build.TestsEjecutados -and $script:Build.TestsN -lt $buildAntes.TestsN) {
+        $problemas += "Se ejecutan menos tests que antes ($($buildAntes.TestsN) -> $($script:Build.TestsN)). No borres, saltes ni excluyas tests."
+      }
       # el codigo nuevo sale ya con Javadoc y sin malas practicas: la cuenta de calidad no sube
       $qc = Get-Cuenta $hall2 'calidad'
       if ($paso -ne 'calidad' -and $qc -gt $antes['calidad']) {
