@@ -1580,6 +1580,14 @@ switch ($Modo) {
     $script:Siguiente = ''
     $previo = ''
     Read-Atascados
+    # -Todo sin lista de jobs: primero lo del modo pre (sin -Legacy no se puede; paridad lo avisa en el informe)
+    $sinRevisar = ''
+    if ($Todo -and $LegacyRoot -and -not (Test-Path -LiteralPath (Join-Path $Work 'contrato.json'))) {
+      Info 'No hay lista de jobs del original (.rescate/contrato.json): hago antes lo del modo pre.'
+      Invoke-Pre
+      $sinRevisar = 'La lista de jobs no la ha revisado nadie: ' + (Join-Path $Work 'contrato.json') + ' (si sobra o falta alguno, editala).'
+      Aviso ($sinRevisar + ' Sigo con el arreglo.')
+    }
     while ($true) {
       Invoke-Fix
       if (-not $Todo -or $Paso -or $script:Parar -or -not $script:Siguiente) { break }
@@ -1601,6 +1609,7 @@ switch ($Modo) {
         }
       }
     }
+    if ($sinRevisar) { Info ''; Aviso $sinRevisar }
     Remove-AtascadosResueltos
     if ($script:Atascados.Count -gt 0) {
       Fallo ''
