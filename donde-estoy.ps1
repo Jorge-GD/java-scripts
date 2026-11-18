@@ -10,7 +10,8 @@ QUE HACE
                (Get-SiguientePaso y Get-SiguienteHtml de informe.ps1): este script no los reescribe, solo los pasa a texto plano.
                Si la pasada esta parada y estado.json trae su ayuda (parada.ayuda), debajo va "Para pegar en Copilot:" y el texto.
     Despues    solo si la cobertura medida (la de despues de corregir o, si no la hay, la de antes) esta por debajo de
-               CoberturaMinima: lo dice y da el comando de rescate.ps1 -Cobertura.
+               CoberturaMinima: dice cuando se midio (la fecha de su fichero), da el comando de rescate.ps1 -Cobertura y,
+               debajo, donde mirar si ya se lanzo despues de esa fecha (<migrado>-rescate\.rescate\cobertura-faltan.md).
   Un batch sin datos\estado.json esta "sin empezar": da el comando de migracion.ps1 con -SoloInforme.
   Si junto a los scripts no esta preflight-resultado.txt, empieza diciendo que falta pasar el preflight. Acaba mandando a FLUJO.md.
   Si un batch tiene varias carpetas migracion-*, usa la del estado.json mas reciente.
@@ -126,13 +127,17 @@ function Get-LineasBatch($Item, $T) {
     $l += (Get-LineasComando @(([string]$D.Estado.parada.ayuda) -split "\r?\n"))
   }
   $c = $D.CobDespues
-  if ($null -eq $c) { $c = $D.CobAntes }
+  $fichero = 'cobertura-despues.json'
+  if ($null -eq $c) { $c = $D.CobAntes; $fichero = 'cobertura-antes.json' }
   if ($c -and $c.medida -eq $true -and $null -ne $c.porcentaje -and [double]$c.porcentaje -lt [double]$Cfg.CoberturaMinima) {
     $migrado = [string]$D.Estado.migrado
     if (-not $migrado) { $migrado = Split-Path $salida -Parent }
     $pct = Format-Trozo $T 'cob-pct' @{ PCT = "$($c.porcentaje)".Replace('.', ',') }
-    $l += (Get-Campo "Despu${e_}s" "La cobertura es $pct (m${i_}nimo $($Cfg.CoberturaMinima) %).")
+    # la medida puede ser vieja (el usuario pudo lanzar rescate.ps1 -Cobertura despues): lleva la fecha de su fichero, que no trae otra
+    $medida = (Get-Item -LiteralPath (Join-Ruta $datos $fichero)).LastWriteTime.ToString('dd-MM-yyyy HH:mm', [System.Globalization.CultureInfo]::InvariantCulture)
+    $l += (Get-Campo "Despu${e_}s" "La cobertura medida el $medida es $pct (m${i_}nimo $($Cfg.CoberturaMinima) %).")
     $l += (Get-LineasComando @('.\rescate.ps1 -Repo "' + $migrado + '" -Cobertura'))
+    $l += "Si ya lo has lanzado despu${e_}s de esa fecha, mira el resultado en ${migrado}-rescate\.rescate\cobertura-faltan.md."
   }
   return $l
 }
