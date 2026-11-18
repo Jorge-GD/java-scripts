@@ -108,6 +108,7 @@ param(
   # Esfuerzo de razonamiento de Copilot (--effort). Vacio = el que tenga Copilot.
   [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$Esfuerzo = '',      # en los lotes de arreglo
   [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$EsfuerzoPlan = '',  # en la revision previa y en el modo pre (vacio = el de -Esfuerzo)
+  [switch]$Reintentar,      # fix: vuelve a intentar los atascados de pasadas anteriores aunque su fichero no haya cambiado
   [string]$Worktree = '',    # carpeta del worktree de rescate (por defecto <repo>-rescate, al lado del repo)
   [int]$Lote = 5,           # ficheros por llamada a Copilot (pequeno = mas fiable)
   [int]$Saltar = 0,         # salta los N primeros ficheros pendientes del paso
@@ -1243,6 +1244,55 @@ function Invoke-Pre {
   Info ('Ajustes propios de este repo (palabras de la config antigua, comandos Maven...): ' + $cfgRepo)
 }
 
+# ============================== ATASCADOS ==============================
+# Lo que la IA no ha sabido arreglar queda en .rescate/atascados.json (paso, fichero, motivo, huella del contenido del
+# fichero y, si lo hay, el consejo) para no gastar llamadas en el en la pasada siguiente: se vuelve a intentar con
+# -Reintentar o si el fichero ha cambiado. $script:Atascados (paso -> ficheros) es lo que saltan los lotes y
+# Get-SiguientePaso; $script:AtascadosInfo ('paso|fichero' -> entrada) es lo que se guarda.
+function Get-HuellaFichero([string]$Rel) {
+  $p = Join-Ruta $RepoRoot $Rel
+  if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return '' }
+  return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash
+}
+
+function Save-Atascados { [System.IO.File]::WriteAllText((Join-Path $Work 'atascados.json'), (ConvertTo-Json -InputObject @($script:AtascadosInfo.Values) -Depth 6)) }
+
+function Add-Atascado([string]$PasoId, [string]$Fichero, [string]$Motivo, $Duda) {
+  if (-not $script:Atascados.ContainsKey($PasoId)) { $script:Atascados[$PasoId] = @() }
+  if ($script:Atascados[$PasoId] -notcontains $Fichero) { $script:Atascados[$PasoId] += $Fichero }
+  $script:AtascadosInfo["$PasoId|$Fichero"] = [pscustomobject]@{ paso = $PasoId; fichero = $Fichero; motivo = $Motivo; huella = (Get-HuellaFichero $Fichero); consejo = $Duda }
+}
+
+# Al empezar el fix: los atascados de pasadas anteriores cuyo fichero no ha cambiado no se vuelven a intentar (salvo
+# -Reintentar). Los demas salen de la lista: si se vuelven a atascar, se apuntan de nuevo.
+function Read-Atascados {
+  $p = Join-Path $Work 'atascados.json'
+  if (-not (Test-Path -LiteralPath $p)) { return }
+  try { $todos = @([System.IO.File]::ReadAllText($p) | ConvertFrom-Json | ForEach-Object { $_ }) }
+  catch { Aviso 'atascados.json no es JSON valido: lo ignoro.'; return }
+  foreach ($a in $todos) {
+    if ($Reintentar -or -not $a.paso -or -not $a.fichero -or (Get-HuellaFichero $a.fichero) -ne "$($a.huella)") { continue }
+    Add-Atascado $a.paso $a.fichero "$($a.motivo)" $a.consejo
+  }
+  Save-Atascados
+  if ($script:AtascadosInfo.Count -gt 0) { Info "$($script:AtascadosInfo.Count) ficheros atascados de antes: no los reintento (usa -Reintentar)" }
+}
+
+# Al acabar: fuera de la lista lo que ya no tiene errores en su paso (lo ha arreglado otro lote, o una persona). Los de
+# 'tests' solo si los tests se han ejecutado.
+function Remove-AtascadosResueltos {
+  if ($null -eq $script:Hall) { return }
+  foreach ($k in @($script:AtascadosInfo.Keys)) {
+    $a = $script:AtascadosInfo[$k]
+    if ($a.paso -eq 'tests' -and -not $script:Build.TestsEjecutados) { continue }
+    if (@($script:Hall | Where-Object { $_.Cat -eq $a.paso -and $_.Sev -eq 'error' -and $_.Fichero -eq $a.fichero }).Count -gt 0) { continue }
+    $script:AtascadosInfo.Remove($k)
+    $script:Atascados[$a.paso] = @($script:Atascados[$a.paso] | Where-Object { $_ -ne $a.fichero })
+    if ($script:Atascados[$a.paso].Count -eq 0) { $script:Atascados.Remove($a.paso) }
+  }
+  Save-Atascados
+}
+
 # Lo que dice el script cuando ya no hay paso que arreglar: que no quedan errores, o, si hay atascados, que no quedan
 # pasos que arregle solo (lo atascado le toca al usuario y sale en la lista del final).
 function Show-SinPasos([string]$Pie) {
@@ -1277,6 +1327,7 @@ function Invoke-Fix {
   # --- diagnostico inicial ---
   Info 'Diagnostico inicial (compilando)...'
   $hall = @(Invoke-Diagnostico $true (-not $SinTests))
+  $script:Hall = $hall
   Write-Informe $hall
   Show-Resumen $hall
 
@@ -1418,8 +1469,8 @@ function Invoke-Fix {
       if ($sel.Count -gt 1) { Info '  -> lo reintento de uno en uno.'; $loteEf = 1; continue }
       if ($ModeloB -and -not $planB.ContainsKey($sel[0])) { Info "  -> lo reintento con el modelo de reserva ($ModeloB)."; $planB[$sel[0]] = $true; continue }
       Fallo "ATASCADO en '$paso': $($sel[0]). Lo apunto y sigo con el resto."
-      if (-not $script:Atascados.ContainsKey($paso)) { $script:Atascados[$paso] = @() }
-      $script:Atascados[$paso] += $sel[0]
+      Add-Atascado $paso $sel[0] ($problemas -join ' ') $null
+      Save-Atascados
       $nota = "- [$paso] $($sel[0]): " + ($problemas -join ' ') + " (registro: .rescate/lote-$paso-$n-*.log)`n"
       [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota)
       continue
@@ -1443,6 +1494,7 @@ function Invoke-Fix {
     }
   }
 
+  $script:Hall = $hall
   Show-Resumen $hall
   $sig = Get-SiguientePaso $hall
   $script:Siguiente = $sig
@@ -1481,6 +1533,8 @@ $Work = Join-Path $RepoRoot '.rescate'
 if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
 
 $script:Atascados = @{}   # paso -> ficheros que la IA no ha sabido arreglar
+$script:AtascadosInfo = [ordered]@{}   # 'paso|fichero' -> lo que se guarda en atascados.json
+$script:Hall = $null      # los hallazgos del ultimo estado bueno del fix
 $script:Fallos = 0        # lotes deshechos seguidos
 $script:H = $null
 $script:Build = $null
@@ -1525,6 +1579,7 @@ switch ($Modo) {
     $script:Parar = $false
     $script:Siguiente = ''
     $previo = ''
+    Read-Atascados
     while ($true) {
       Invoke-Fix
       if (-not $Todo -or $Paso -or $script:Parar -or -not $script:Siguiente) { break }
@@ -1546,12 +1601,13 @@ switch ($Modo) {
         }
       }
     }
+    Remove-AtascadosResueltos
     if ($script:Atascados.Count -gt 0) {
       Fallo ''
       Fallo 'Se ha quedado sin arreglar (lo unico que te toca mirar):'
       foreach ($k in $Cfg.Orden) { if ($script:Atascados.ContainsKey($k)) { $script:Atascados[$k] | ForEach-Object { Fallo "  [$k] $_" } } }
       Info ('Detalle: ' + (Join-Path $Work 'atascados.md'))
-      Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano, o volver a lanzar.'
+      Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano (la pasada siguiente lo intenta si el fichero cambia), o volver a lanzar con -Reintentar.'
       exit 2
     }
   }
