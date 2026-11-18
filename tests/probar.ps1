@@ -1284,5 +1284,17 @@ $Pruebas['ajustes: un nombre a secas que en el PATH solo es un .ps1 se lanza por
   Comprueba 'el arreglo hace su commit del lote' (Hay-Commit-Del-Lote $e) (Cola $r.Salida)
 }
 
+# ======================= EL REINTENTO Y EL FINAL =======================
+$Pruebas['reintento: el detalle de la correccion lleva los hallazgos de la ruta nueva, con los paquetes que valen'] = {
+  $e = Nuevo-Escenario 'reintento-ruta-nueva'
+  # el Copilot de mentira mueve la clase a infrastructure/util: un subpaquete que la plantilla no tiene (alli: adapters)
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '2') 'mueve-a-infrastructure')
+  $ll = Lee $e.Wt '.rescate/llamadas.log'
+  Igual 'dos llamadas a Copilot, la segunda con la correccion' 2 @($ll -split "`n" | Where-Object { $_ -match 'correccion=' }).Count
+  $p = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt del segundo intento lleva la correccion' ($p -match '## CORRECCION') $p
+  Comprueba 'y el hallazgo de la ruta nueva, con los paquetes que valen' ($p -match "- src/main/java/com/acme/life/infrastructure/util/\w+\.java - subpaquete 'infrastructure/util' no existe en la plantilla \(alli: [^)]*adapters[^)]*\)") $p
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

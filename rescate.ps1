@@ -1377,10 +1377,11 @@ function Invoke-Fix {
 
       if ($problemas.Count -eq 0) { $ok = $true; break }
       $problemas | ForEach-Object { Aviso "  NO PASA: $_" }
+      # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva)
       $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and $sel -contains $_.Fichero)) } | Select-Object -First 20) + $calNuevos) | ForEach-Object {
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object {
           $donde = $_.Fichero
           if ($_.Linea -gt 0) { $donde += ':' + $_.Linea }
           "  - $donde - $($_.Detalle)" })

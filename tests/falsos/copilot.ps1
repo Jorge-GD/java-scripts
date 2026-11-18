@@ -8,6 +8,7 @@
 #   toca-plantilla     ademas escribe en la plantilla (prohibido)
 #   plan-toca-codigo   en la revision previa toca codigo (prohibido)
 #   lento              tarda 3 s antes de hacer nada (para probar el latido de rescate.ps1)
+#   mueve-a-infrastructure   en 'estructura' mueve las clases a infrastructure/util, un subpaquete que la plantilla no tiene
 # Cada llamada deja una linea en .rescate/llamadas.log, con el modelo y el
 # esfuerzo que ha recibido.
 #
@@ -454,13 +455,15 @@ if ($guion -eq 'toca-plantilla' -and $prompt -match '(?m)^- PLANTILLA: (.+)$') {
 $base = 'src/main/java/com/acme/life/'
 switch ($paso) {
   'estructura' {
-    # mueve cada clase a application/usecases y le cambia el package
+    # mueve cada clase a application/usecases (o a infrastructure/util) y le cambia el package
+    $destino = 'application/usecases'
+    if ($guion -eq 'mueve-a-infrastructure') { $destino = 'infrastructure/util' }
     foreach ($f in $fichs) {
-      if (-not $f.StartsWith($base) -or -not $f.EndsWith('.java')) { continue }
+      if (-not $f.StartsWith($base) -or -not $f.EndsWith('.java') -or -not (Test-Path -LiteralPath (Get-Ruta $f))) { continue }
       $nombre = $f.Split('/')[-1]
-      $texto = (Leer $f) -replace '(?m)^package [^;]*;', 'package com.acme.life.application.usecases;'
+      $texto = (Leer $f) -replace '(?m)^package [^;]*;', ('package com.acme.life.' + $destino.Replace('/', '.') + ';')
       Remove-Item -LiteralPath (Get-Ruta $f) -Force
-      Escribir ($base + 'application/usecases/' + $nombre) $texto
+      Escribir ($base + $destino + '/' + $nombre) $texto
     }
   }
   'hexagonal' {
