@@ -605,6 +605,13 @@ function New-Tarea([string]$Id, [string]$Ficha, [string]$Rel, [int]$Desde, [int]
   return (New-TareaTipo 'ficha-clase' $Id $Ficha "datos/fichas/$Ficha.json" ([pscustomobject]@{ fichero = $Rel; desde = $Desde; hasta = $Hasta }))
 }
 
+# Cuantas tareas hay hechas, atascadas y pendientes.
+function Get-CuentasTareas($Tareas) {
+  $n = @{}
+  foreach ($e in @('hecha', 'atascada', 'pendiente')) { $n[$e] = @($Tareas | Where-Object { $_.estado -eq $e }).Count }
+  return $n
+}
+
 function Save-Tarea($T) { Write-Json (Join-Path (Join-Path $Datos 'tareas') ($T.id + '.json')) $T }
 
 # Guarda la tarea y devuelve la que queda: la de un lanzamiento anterior si esta hecha (o atascada, con

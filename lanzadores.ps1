@@ -616,3 +616,25 @@ function Save-ComparacionesSh($Tareas) {
     Write-Json (Join-Path (Join-Path $Datos 'comparacion-sh') ($t.ficha + '.json')) $o
   }
 }
+
+# =============================== LINEAS DE CONSOLA ===============================
+# La linea de la fase lanzadores: cuantos scripts, cuantos enlazados con un job y como van sus fichas. Sin ninguno, como pasar la carpeta.
+function Get-LineaLanzadores($Lanzadores, $Cuentas) {
+  $z = @($Lanzadores)
+  if ($z.Count -eq 0) { return 'Lanzadores: no hay ninguno en el original. Si se lanzan con scripts que estan en otro sitio, relanza con -Lanzadores <carpeta>.' }
+  $enlazados = @($z | Where-Object { [string]$_.enlace.como -cne 'sin-enlazar' }).Count
+  $l = "Lanzadores: $($z.Count) scripts, $enlazados enlazados con un job. Fichas: $($Cuentas.hecha) hechas, $($Cuentas.atascada) atascadas"
+  if ($Cuentas.pendiente -gt 0) { $l += ", $($Cuentas.pendiente) pendientes" }
+  return $l
+}
+
+# La linea de comparar para los scripts: cuantos se han comparado y cuantas de sus acciones salen en cada estado.
+function Get-LineaCompararSh($Tareas) {
+  $n = Get-CuentasTareas $Tareas
+  $l = "Lanzadores frente al migrado: $($n.hecha) scripts comparados"
+  if ($n.atascada -gt 0) { $l += ", $($n.atascada) atascados" }
+  if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
+  $c = [ordered]@{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0 }
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) { foreach ($a in @($t.resultado.comparacion)) { $c[[string]$a.estado]++ } }
+  return "$l. Acciones: $($c['igual']) igual, $($c['distinto']) distinto, $($c['falta']) falta, $($c['no-lo-se']) no lo se."
+}

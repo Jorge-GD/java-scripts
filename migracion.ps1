@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, informe.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -21,7 +21,7 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
   si falla otra vez la tarea queda atascada y se sigue.
   Orden de las fases (datos\estado.json lleva la fase en que va; cada tarea hecha se salta al relanzar, y una fase se
   hace aunque la anterior tenga atascadas). Con la respuesta "corregir":
-    fichas-clase, mapa, fichas-job, resumen, pruebas-pre, casos-pre, lectura-hecha, correccion, comparar y prueba-local.
+    fichas-clase, mapa, lanzadores, fichas-job, resumen, pruebas-pre, casos-pre, lectura-hecha, correccion, comparar y prueba-local.
   Con "parar" (o -SoloInforme): las mismas fases de lectura, comparar, lectura-hecha y prueba-local. Si la correccion
   se para, o hay tareas pendientes (-Limite), no se sigue con nada mas. Al acabar todo, sin parada ni pendientes, la
   fase es hecha, y estado.json lleva fin (vacio mientras corre; la hora al salir, de cualquier forma).
@@ -29,6 +29,12 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 .rescate\contrato.json), sus pasos (una tarea de definicion por fichero que
                 define jobs) y sus clases, que calcula el script: datos\mapa.json; y las
                 variables de application*.yml/.properties del migrado: datos\variables.json
+    lanzadores  los .sh, .ksh y .bash que lanzan el batch (y los ficheros sin extension que empiezan por #! de sh, bash o ksh): el
+                script los busca en el original y, si das -Lanzadores <carpeta>, tambien en esa carpeta (datos\lanzadores.json: su
+                inventario sin IA y el job con el que se enlazan) y una tarea ficha-sh por script cuenta, con citas del propio script, sus
+                parametros, lo que hace antes y despues del java y sus codigos de salida: datos\fichas-sh\<id>.json. Sin ningun .sh
+                no hay tareas y la consola dice como pasar la carpeta. Va detras de mapa y se hace tambien en un batch que ya paso por
+                el; las tareas hechas no se repiten
     fichas-job  una redaccion por job, sin leer codigo, con las listas que monta el script
                 con los datos de las fichas de clase: datos\jobs\<job>.json
     resumen     una tarea con todos los jobs: datos\resumen.json
@@ -47,7 +53,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 dato, si estan igual, distintos o faltan; las citas las comprueba el script: datos\comparacion\<ficha>.json, con el
                 commit del worktree y el momento (antes-de-corregir o despues-de-corregir, segun git). Sin ficheros del migrado
                 no hay llamada y sus datos salen 'sin-pieza'. Es una lectura sin cambiar nada. Se rehace si el worktree tiene un
-                commit nuevo.
+                commit nuevo. Con lanzadores hay ademas una tarea por script: la IA busca en el migrado lo que hacia cada accion
+                del .sh (los ficheros donde buscar los elige el script) y dice igual, distinto, falta o no lo se, con citas de los dos
+                lados: datos\comparacion-sh\<id>.json. Las acciones que no se parecen a nada del migrado salen en falta sin llamada.
     prueba-local  prueba-local.ps1 -Si (con el mismo modelo, y -JavaLegacy si lo das) ejecuta el original y el migrado con las
                 mismas entradas: datos\prueba-local.json y registros\prueba-local.log; su salida sale por la consola mientras
                 corre. Siempre se lanza (al relanzar reutiliza lo hecho) salvo con -SinPruebaLocal. Un fallo se avisa y la
@@ -75,6 +83,7 @@ USO
   .\migracion.ps1 ... -Reintentar      # vuelve a llamar a las tareas atascadas de antes
   .\migracion.ps1 ... -SinPruebaLocal # no hace la ultima fase (ejecutar el original y el migrado)
   .\migracion.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original para prueba-local.ps1, si no compila con el de Maven
+  .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).
   Los ajustes de ajustes.json (y de .rescate\config.json del migrado) pisan las claves
@@ -93,12 +102,14 @@ param(
   [int]$Limite = 0,           # 0 = sin limite; N = en este lanzamiento solo las N primeras tareas pendientes
   [switch]$Reintentar,        # volver a intentar las tareas atascadas de un lanzamiento anterior
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
-  [string]$JavaLegacy = ''    # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
+  [string]$JavaLegacy = '',   # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
+  [string]$Lanzadores = ''    # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
 . (Join-Path $PSScriptRoot 'tareas.ps1')
 . (Join-Path $PSScriptRoot 'informe.ps1')
+. (Join-Path $PSScriptRoot 'lanzadores.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -320,11 +331,17 @@ function Get-TareasFase([string]$Fase, [bool]$Conservar) {
       if (-not (Test-Path -LiteralPath (Join-Path $Datos 'variables.json'))) { Write-Json (Join-Path $Datos 'variables.json') @(Get-Variables) }
       return @(Get-TareasDefinicion @(Get-JobsContrato) $Conservar)
     }
+    'lanzadores' {
+      # el inventario se escribe siempre (aunque no haya ninguno): el informe y la consola lo leen de datos\lanzadores.json
+      $z = @(Get-Lanzadores $LegacyRoot $LanzadoresRoot @(Get-JobsContrato))
+      Save-Lanzadores $z
+      return @(Get-TareasFichaSh $z $Conservar)
+    }
     'fichas-job' { return @(Get-TareasJob (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'resumen' { return @(Get-TareasResumen (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'pruebas-pre' { return @(Get-TareasPrueba (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'casos-pre' { return @(Get-TareasCaso (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
-    'comparar' { return @(Get-TareasComparar $Conservar $RamaMigrado) }
+    'comparar' { return @(@(Get-TareasComparar $Conservar $RamaMigrado) + @(Get-TareasCompararSh $Conservar $RamaMigrado)) }
   }
 }
 
@@ -334,18 +351,21 @@ function Save-Fase([string]$Fase, $Tareas) {
   switch ($Fase) {
     'fichas-clase' { Save-Fichas $Tareas }
     'mapa' { if ($pendientes -eq 0) { Write-Json (Join-Path $Datos 'mapa.json') (Get-Mapa @(Get-JobsContrato) $Tareas $batch) } }
+    'lanzadores' { Save-FichasSh $Tareas }
     'fichas-job' { Save-Jobs (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'resumen' { if (@($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count -gt 0) { Write-Json (Join-Path $Datos 'resumen.json') $Tareas[0].resultado } }
     'pruebas-pre' { Save-Pruebas (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'casos-pre' { Save-Casos (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
-    'comparar' { Save-Comparaciones $Tareas }
+    'comparar' {
+      Save-Comparaciones @($Tareas | Where-Object { $_.tipo -eq 'comparar-pieza' })
+      Save-ComparacionesSh @($Tareas | Where-Object { $_.tipo -eq 'comparar-sh' })
+    }
   }
 }
 
 # La linea de consola de una fase.
 function Get-LineaFase([string]$Fase, $Tareas) {
-  $n = @{}
-  foreach ($e in @('hecha', 'atascada', 'pendiente')) { $n[$e] = @($Tareas | Where-Object { $_.estado -eq $e }).Count }
+  $n = Get-CuentasTareas $Tareas
   switch ($Fase) {
     'fichas-clase' { return "Lectura de clases: $($n.hecha) hechas, $($n.atascada) atascadas, $($n.pendiente) pendientes de $(@($Tareas).Count) tareas." }
     'mapa' {
@@ -354,6 +374,7 @@ function Get-LineaFase([string]$Fase, $Tareas) {
       $sin = @($m.sinJob).Count
       return "Mapa: $(@($m.jobs).Count) jobs, $($Fuentes.Count - $sin) clases con job, $sin sin job"
     }
+    'lanzadores' { return (Get-LineaLanzadores @(Read-Lanzadores) $n) }
     'fichas-job' {
       $l = "Fichas de job: $($n.hecha) hechas, $($n.atascada) atascadas"
       if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
@@ -378,13 +399,18 @@ function Get-LineaFase([string]$Fase, $Tareas) {
       return $l
     }
     'comparar' {
-      if (@($Tareas).Count -eq 0) { return 'Comparacion con el original: ninguna clase con datos que comparar' }
+      $sh = @($Tareas | Where-Object { $_.tipo -eq 'comparar-sh' })
+      $Tareas = @($Tareas | Where-Object { $_.tipo -eq 'comparar-pieza' })
+      $n = Get-CuentasTareas $Tareas
+      if (@($Tareas).Count -eq 0) { $l = 'Comparacion con el original: ninguna clase con datos que comparar'; if ($sh.Count -gt 0) { $l += "`n" + (Get-LineaCompararSh $sh) }; return $l }
       $l = "Comparacion con el original: $($n.hecha) clases comparadas"
       if ($n.atascada -gt 0) { $l += ", $($n.atascada) atascadas" }
       if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
       $c = [ordered]@{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-pieza' = 0 }
       foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) { foreach ($d in @($t.resultado.comparacion)) { $c[[string]$d.estado]++ } }
-      return "$l. Datos: $($c['igual']) igual, $($c['distinto']) distinto, $($c['falta']) falta, $($c['no-lo-se']) no lo se, $($c['sin-pieza']) sin pieza."
+      $l = "$l. Datos: $($c['igual']) igual, $($c['distinto']) distinto, $($c['falta']) falta, $($c['no-lo-se']) no lo se, $($c['sin-pieza']) sin pieza."
+      if ($sh.Count -gt 0) { $l += "`n" + (Get-LineaCompararSh $sh) }
+      return $l
     }
   }
 }
@@ -609,6 +635,16 @@ $Registros = Join-Path $Salida 'registros'
 foreach ($d in @($Datos, $Registros)) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
 $previo = $null
 if (Test-Path -LiteralPath (Join-Path $Datos 'estado.json')) { try { $previo = Read-Json (Join-Path $Datos 'estado.json') } catch { $previo = $null } }
+# la carpeta de los .sh: la que se da, o la del lanzamiento anterior si ya no esta en la linea de comandos
+$LanzadoresRoot = ''
+if ($Lanzadores) {
+  if (-not (Test-Path -LiteralPath $Lanzadores -PathType Container)) { Stop-Arranque "-Lanzadores no es una carpeta que exista: $Lanzadores" }
+  $LanzadoresRoot = Resolve-Dir $Lanzadores
+}
+elseif ($previo -and $previo.lanzadores) {
+  $LanzadoresRoot = [string]$previo.lanzadores
+  if (-not (Test-Path -LiteralPath $LanzadoresRoot -PathType Container)) { Aviso "La carpeta de -Lanzadores del lanzamiento anterior ya no existe ($LanzadoresRoot): sigo sin ella."; $LanzadoresRoot = '' }
+}
 
 # 3. Modelo: -Modelo, el del lanzamiento anterior o el menu
 if ($PSBoundParameters.ContainsKey('Modelo')) { $ModeloElegido = $Modelo }
@@ -647,7 +683,7 @@ $RepoRoot = $dirWt
 Read-Config $RepoRoot
 $Estado = [ordered]@{
   version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
-  worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
+  worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; lanzadores = $LanzadoresRoot; modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
   fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null
 }
 # En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
@@ -664,7 +700,7 @@ try {
   $script:Quedan = 0
   Invoke-FaseDiagnostico
   # con la respuesta corregir, comparar va despues de la correccion; con parar, antes de lectura-hecha
-  $fases = @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
+  $fases = @('fichas-clase', 'mapa', 'lanzadores', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   if ($respuesta -ne 'corregir') { $fases += 'comparar' }
   $sigue = -not $script:Parada
   foreach ($fase in $fases) { if ($sigue) { $sigue = Invoke-FaseTareas $fase } }
