@@ -3691,6 +3691,8 @@ $Pruebas['120 (P2) portada, Que es cada fichero: datos/prueba-local.json, la car
   foreach ($n in @('datos/prueba-local.json', 'prueba-local', 'registros/prueba-local.log')) {
     Comprueba "$n sale con su frase" ($f -match ('(?s)<li>(?:(?!</li>).)*<code>' + [regex]::Escape($n) + '</code></p><p>[^<]{20,}</p>')) $f
   }
+  $p3 = [regex]::Match($f, '(?s)<li>(?:(?!</li>).)*3-original-vs-migrado\.html.*?</li>').Value
+  Comprueba 'la frase de la pagina 3 dice las dos comparaciones, no "tal como llego"' ($p3 -match 'ejecutando los dos' -and $p3 -match 'lectura de la IA' -and $p3 -notmatch 'tal como lleg') $p3
 }
 
 $Pruebas['121 (P2) pagina 4: cada area con commits dice con cuantos hallazgos empezo y con cuantos acabo, y lo que aparecio o se fue con los arreglos de otros pasos; sin asuntos que casen no hay linea'] = {
