@@ -3811,8 +3811,8 @@ function Siguiente($Est, $D = @{}) {
 # Un estado.json de una pasada acabada con la respuesta parar y la prueba en local hecha; $Cambios lo pisa campo a campo.
 function Estado-Siguiente([hashtable]$Cambios = @{}) {
   $e = [ordered]@{
-    version = 1; batch = 'batch-life'; legacy = 'C:\ruta\original'; migrado = 'C:\ruta\migrado'; plantilla = 'C:\ruta\referencia'
-    worktree = 'C:\ruta\migrado-rescate'; rama = 'rescate/feat-life-20261118-0900'; ramaOrigen = 'feat/life'; javaLegacy = ''
+    version = 1; batch = 'batch-recibos'; legacy = 'C:\ruta\original'; migrado = 'C:\ruta\migrado'; plantilla = 'C:\ruta\referencia'
+    worktree = 'C:\ruta\migrado-rescate'; rama = 'rescate/feat-recibos-20261118-0900'; ramaOrigen = 'feat/recibos'; javaLegacy = ''
     modelo = 'claude-sonnet-5.5'; aptitud = 'claude-sonnet-5.5'; respuesta = 'parar'; fase = 'hecha'
     creado = '2026-11-18T09:00:00'; actualizado = '2026-11-18T10:00:00'; fin = '2026-11-18T10:00:00'; parada = $null
     pruebaLocal = [ordered]@{ resultado = 'hecha'; codigo = 0; minutos = 3.2; detalle = ''; registro = 'registros/prueba-local.log' }
@@ -3836,7 +3836,7 @@ function Datos-Siguiente([int]$Distintos = 0, $Correccion = $null, [int]$Errores
 
 function Correccion-Siguiente([bool]$Completa = $true, [int]$Commits = 2) {
   return [ordered]@{
-    completa = $Completa; codigo = 0; rama = 'rescate/feat-life-20261118-0900'; base = 'feat/life'
+    completa = $Completa; codigo = 0; rama = 'rescate/feat-recibos-20261118-0900'; base = 'feat/recibos'
     commits = @(if ($Commits -gt 0) { 1..$Commits | ForEach-Object { [ordered]@{ hash = ('abc123' + $_); paso = 'estructura'; asunto = 'rescate(estructura): lote 1' } } }); atascados = @(); resueltos = @(); variablesNuevas = @()
   }
 }
@@ -3869,11 +3869,11 @@ $Pruebas['m16 siguiente: fila 3, casos distintos y hubo correccion: deshacer con
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente))
   Igual 'caso distinto-corregido' 'distinto-corregido' $s.Caso
   Igual 'cuenta los casos distintos' 2 $s.N
-  Igual 'el comando' '.\prueba-local.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Desde feat/life -Deshacer' $s.Comando
+  Igual 'el comando' '.\prueba-local.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Desde feat/recibos -Deshacer' $s.Comando
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; javaLegacy = 'C:\jdk8' }) (Datos-Siguiente 1 (Correccion-Siguiente))
-  Igual 'con -JavaLegacy' '.\prueba-local.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Desde feat/life -Deshacer -JavaLegacy "C:\jdk8"' $s.Comando
+  Igual 'con -JavaLegacy' '.\prueba-local.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Desde feat/recibos -Deshacer -JavaLegacy "C:\jdk8"' $s.Comando
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; ramaOrigen = '' }) (Datos-Siguiente 1 (Correccion-Siguiente))
-  Igual 'un estado.json de antes, sin ramaOrigen: la base de correcciones.json' 'feat/life' ([regex]::Match($s.Comando, '-Desde (\S+)').Groups[1].Value)
+  Igual 'un estado.json de antes, sin ramaOrigen: la base de correcciones.json' 'feat/recibos' ([regex]::Match($s.Comando, '-Desde (\S+)').Groups[1].Value)
 }
 
 $Pruebas['m16 siguiente: fila 4, casos distintos sin correccion: mirarlos en la pagina 3, sin comando'] = {
@@ -3923,12 +3923,12 @@ $Pruebas['m16 siguiente: fila 7, correccion completa: las 3 lineas de git del pa
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 0 (Correccion-Siguiente) 0)
   Igual 'caso corregido' 'corregido' $s.Caso
   $esperado = @(
-    'git -C "C:\ruta\migrado" log --oneline feat/life..rescate/feat-life-20261118-0900',
-    'git -C "C:\ruta\migrado" diff --stat feat/life...rescate/feat-life-20261118-0900',
-    'git -C "C:\ruta\migrado" merge rescate/feat-life-20261118-0900') -join "`n"
+    'git -C "C:\ruta\migrado" log --oneline feat/recibos..rescate/feat-recibos-20261118-0900',
+    'git -C "C:\ruta\migrado" diff --stat feat/recibos...rescate/feat-recibos-20261118-0900',
+    'git -C "C:\ruta\migrado" merge rescate/feat-recibos-20261118-0900') -join "`n"
   Igual 'las 3 lineas de git' $esperado ($s.Comando -replace "`r", '')
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; ramaOrigen = '' }) (Datos-Siguiente 0 (Correccion-Siguiente))
-  Comprueba 'sin ramaOrigen, la base de correcciones.json' ($s.Comando -match 'log --oneline feat/life\.\.rescate') $s.Comando
+  Comprueba 'sin ramaOrigen, la base de correcciones.json' ($s.Comando -match 'log --oneline feat/recibos\.\.rescate') $s.Comando
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente) 0)
   Igual 'con casos distintos gana la fila 3' 'distinto-corregido' $s.Caso
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 0 (Correccion-Siguiente $true 0))
@@ -4014,7 +4014,7 @@ $Pruebas['m16 siguiente: la portada de una parada, de una pasada con problemas p
   $c = Correccion-Siguiente
   $i = Salida-Siguiente 'siguiente-corregido' (Estado-Siguiente @{ respuesta = 'corregir' }) @{ 'correcciones.json' = $c; 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
   $t = Texto-Plano (Panel-De $i 'siguiente-paso')
-  Comprueba 'corregido: revisa y trae los cambios, con las 3 lineas de git' ($t -match 'Revisa los cambios y tr.elos a tu rama' -and $t -match 'log --oneline feat/life\.\.rescate/feat-life-20261118-0900' -and $t -match 'diff --stat feat/life\.\.\.rescate' -and $t -match 'merge rescate/feat-life-20261118-0900') $t
+  Comprueba 'corregido: revisa y trae los cambios, con las 3 lineas de git' ($t -match 'Revisa los cambios y tr.elos a tu rama' -and $t -match 'log --oneline feat/recibos\.\.rescate/feat-recibos-20261118-0900' -and $t -match 'diff --stat feat/recibos\.\.\.rescate' -and $t -match 'merge rescate/feat-recibos-20261118-0900') $t
   $i = Salida-Siguiente 'siguiente-pre' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
   $s = Panel-De $i 'siguiente-paso'
   Comprueba 'pre: sin comando y con la pagina 1' ($s -notmatch '<pre' -and (Texto-Plano $s) -match 'Pru.balo en pre: cada job tiene su guion en la p.gina 1' -and $s -match 'href="1-batch-original\.html"') $s
