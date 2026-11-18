@@ -23,18 +23,25 @@ QUE HACE
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
   4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada).
-  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas ni la fecha de hoy:
-     igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar o sin
-     probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
-     diferencia del JDK, sin esconderlo.
+  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
+     de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
+     fecha de hoy: igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
+     o sin probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
+     diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
+     pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
+     prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
+     lanzamiento los escriba otra vez con ese motivo.
   6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
      <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
      cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
      lo compara con lo que dejo el original, con las mismas reglas del paso 5. Un commit donde el caso no se puede
-     ejecutar (no compila...) cuenta como malo, y se dice. Con -Deshacer, ademas, revierte esos commits con git revert
-     (del mas nuevo al mas viejo) en la carpeta de la rama que se prueba y vuelve a ejecutar los casos: ahora igual o
-     sigue distinto. No deshace si esa carpeta tiene cambios sin commit, si el commit es un merge o si el revert da
-     conflicto (lo aborta y no deja nada a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
+     ejecutar (no compila, Maven se pasa del tope...) ni es bueno ni es malo: se salta, como git bisect skip, y se dice. Si
+     solo quedan commits saltados antes del malo, no se da culpable y no se deshace nada. Con -Deshacer, ademas, revierte
+     esos commits con git revert (del mas nuevo al mas viejo) en la carpeta de la rama que se prueba y vuelve a ejecutar
+     TODOS los casos en el HEAD nuevo (un revert puede arreglar un caso y romper otro): ahora igual o sigue distinto. Si el
+     revert de un commit no arregla ninguno de sus casos, lo quita con otro git revert (y lo dice en rojo). No deshace si
+     esa carpeta tiene cambios sin commit, si el commit es un merge o si el revert da conflicto (lo aborta y no deja nada
+     a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -48,7 +55,8 @@ USO
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
 
-  Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno).
+  Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno, o el
+  test no le pasa las entradas a un job).
   Con -Deshacer, la salida es la del estado de despues de deshacer.
   Antes de darlo por bueno, pasa tests\probar-local.ps1.
 #>
