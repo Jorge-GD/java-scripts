@@ -643,7 +643,7 @@ function Get-FilasLanzador($T, $V) {
     $nota = $notaIa
     if ($estado -ceq 'falta') { $nota = (($notaIa + ' ' + (Format-Trozo $T 'lanz-falta-plataforma')).Trim()) }
     $filas += [pscustomobject]@{
-      Job = ''; Clase = $V.Rel; Estado = $estado; Texto = (([string]$a.condicion + ' ' + [string]$a.detalle).Trim()); Original = "$($V.Rel):$($a.linea)"
+      Job = ''; Clase = [string]$a.que; Estado = $estado; Texto = (([string]$a.condicion + ' ' + [string]$a.detalle).Trim()); Original = "$($V.Rel):$($a.linea)"
       CitaOriginal = [string]$a.cita; Migrado = $migrado; CitaMigrado = $citaM; Nota = $nota; NotaIa = $notaIa; Probado = $probado; Medido = $medido
     }
     $i++
