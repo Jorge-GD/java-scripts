@@ -87,6 +87,7 @@ $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
 $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
 $RutasCopia = @()   # las rutas de las dos copias, en sus formas: Get-Normal las cambia por <copia>
+$Hoy = @()          # las fechas de la ejecucion (Get-Hoy): Get-Resultado las pone al dia en cada comparacion
 $script:Base = @{}  # por copia: el commit y el arbol que se dieron por buenos (Save-Copia)
 
 # ================================ COPIAS ================================
@@ -572,13 +573,26 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
 }
 
 # ================================ COMPARAR ================================
-# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las horas
-# (las mismas reglas que comparar-salidas.py, y sus fracciones de segundo) y la fecha de hoy en sus formatos de siempre
-# (cada formato con su marca: un cambio de formato se sigue viendo), con la hora pegada detras (aaaammdd_hhmmss).
+# Las fechas de esta ejecucion: cada dia, en hora local y en UTC, desde $Desde hasta $Hasta. Un job que escribe la fecha en UTC puede
+# poner otro dia que el local (a las 00:30 en Espana, el de ayer): las dos cuentan como de hoy.
+function Get-Hoy([datetime]$Desde, [datetime]$Hasta) {
+  $dias = @()
+  foreach ($p in @(@($Desde, $Hasta), @($Desde.ToUniversalTime(), $Hasta.ToUniversalTime()))) {
+    for ($d = $p[0].Date; $d -le $p[1].Date; $d = $d.AddDays(1)) { $dias += $d }
+  }
+  return @($dias | Select-Object -Unique)
+}
+
+# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las fechas con hora de la
+# ejecucion ($Hoy: la fecha y la hora juntas pasan a <hora>), las horas sueltas (HH:mm:ss y sus fracciones, sin fecha delante: tambien
+# pasan a <hora>) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato se sigue viendo), con la
+# hora pegada detras (aaaammdd_hhmmss). Una fecha con hora que no es de $Hoy es un dato del negocio y se queda como esta, hora incluida:
+# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta.
 function Get-Normal([string]$Texto) {
   $t = $Texto
   foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
-  $t = $t -replace '\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?|\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
+  foreach ($d in $Hoy) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
+  $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
   foreach ($d in $Hoy) {
     foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
   }
@@ -665,6 +679,7 @@ function Compare-Caso([string]$A, [string]$B) {
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
 # $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde).
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
+  $script:Hoy = @(Get-Hoy $Inicio (Get-Date))   # la busqueda de -Desde puede pasar de medianoche
   $j = $T.entradas.job
   $c = $T.entradas.caso
   $o = [ordered]@{ job = $j; caso = $c; titulo = $T.entradas.titulo; resultado = 'no se pudo preparar'; motivo = ''; diferencias = @() }
@@ -959,7 +974,6 @@ $script:Mavens = 0
 $script:Maven = @{}
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Reverts = @()   # -Deshacer: los commits de revert que ha hecho
-$Hoy = @($Inicio.Date)
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -1037,7 +1051,6 @@ try {
   }
 
   # 5. Comparar y contar
-  $Hoy = @(@($Inicio.Date, (Get-Date).Date) | Select-Object -Unique)
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
   $o = Save-Resultado $res @()
   Show-Resultado $res $o.jobs
