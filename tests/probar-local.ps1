@@ -732,5 +732,58 @@ $Pruebas['32 culpable (k): -Deshacer no tapa otros cambios en la carpeta de resc
   Comprueba 'y dice que ha cambiado una carpeta' ($r.Salida -match 'Ha cambiado durante la prueba') (Cola $r.Salida)
 }
 
+# Prueba con el Maven falso de culpable-mvn.ps1 y un tope de 0.05 min (3 s) en el ajustes.json del escenario: un commit con
+# cuelga.txt en la raiz cuelga a Maven. Devuelve lo de Prueba, mas Segundos (lo que ha tardado) y Pids (donde apunta lo suyo).
+function Prueba-Con-Cuelgue($E, [string[]]$A) {
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'culpable-mvn.ps1'); SegundosPorLlamada = 60; MinutosMaven = 0.05 }
+  Escribe $E.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $pids = Join-Path $E.Raiz 'pids'
+  $env:RESCATE_MVN_PIDS = $pids
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  try { $r = Prueba $E $A }
+  finally { $env:RESCATE_MVN_PIDS = '' }
+  return [pscustomobject]@{ Codigo = $r.Codigo; Salida = $r.Salida; Segundos = $reloj.Elapsed.TotalSeconds; Pids = $pids }
+}
+
+$Pruebas['33 culpable (o): un commit en el que Maven se cuelga (pasa del tope) cuenta como malo: el culpable es el que cuelga, y el mensaje lo dice'] = {
+  $e = Nuevo-Escenario 'culpable-o' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  $c3 = Commit-En $e.Wt 'cuelga.txt' "el job no acaba`n" 'un lector que devuelve una lista vacia y el job no acaba'
+  [void](GitEn $e.Wt @('rm', '-q', 'cuelga.txt'))
+  Escribe $e.Wt 'regla.txt' "minimo=5.01`n"
+  [void](GitEn $e.Wt @('add', '--', 'regla.txt'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'quita el bucle y cambia el limite'))
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba-Con-Cuelgue $e @('-Desde', $desde)
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el culpable es el que cuelga a Maven (no el siguiente, que ya no cuelga pero sigue distinto)' ($r.Salida.Contains("se rompe en $(Corto $c3) (un lector que devuelve una lista vacia y el job no acaba).")) (Cola $r.Salida)
+  Comprueba 'y el mensaje dice que ahi no se pudo ejecutar, por el tope de Maven' ($r.Salida -match 'no se pudo ejecutar' -and $r.Salida -match 'se ha pasado del tope de 0\.05 min') (Cola $r.Salida)
+  Igual 'culpables: el que cuelga' $c3 "$(@(Culpables $e)[0].commit)"
+  Comprueba-Tope $r.Pids $r.Segundos 60 (Registro-Del-Tope $r.Salida)
+}
+
+$Pruebas['34 culpable (p): la busqueda recorre solo la primera linea de la rama (--first-parent): un merge con dos commits laterales cuenta como uno'] = {
+  $e = Nuevo-Escenario 'culpable-p' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  [void](GitEn $e.Wt @('checkout', '-q', '-b', 'lado'))
+  $s1 = Commit-En $e.Wt 'notas/lado-1.txt' "lado 1`n" 'primer commit de la rama lateral'
+  $s2 = Commit-En $e.Wt 'notas/lado-2.txt' "lado 2`n" 'segundo commit de la rama lateral'
+  [void](GitEn $e.Wt @('checkout', '-q', 'rescate/main-1'))
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  [void](GitEn $e.Wt @('merge', '-q', '--no-ff', '-m', 'une la rama lateral', 'lado'))
+  $m = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c4 = Commit-En $e.Wt 'regla.txt' "minimo=5.01`n" 'cambia el limite'
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba $e @('-Desde', $desde)
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'cuenta cinco commits (c1, c2, el merge, c4, c5), no siete' ($r.Salida -match '\(5 commits despues de ') (Cola $r.Salida)
+  Comprueba 'ningun commit de la rama lateral sale como probado' ($r.Salida -notmatch "en $(Corto $s1)" -and $r.Salida -notmatch "en $(Corto $s2)") (Cola $r.Salida)
+  Comprueba 'el culpable es el cuarto de la primera linea' ($r.Salida.Contains("se rompe en $(Corto $c4) (cambia el limite).")) (Cola $r.Salida)
+  Igual 'sin sumar a la busqueda mas ejecuciones que Desde y dos del medio' 3 ((Ejecuciones-Mig $e 'caso-01') - 1)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
