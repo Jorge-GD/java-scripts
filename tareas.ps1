@@ -1299,7 +1299,7 @@ function Select-FicherosMigrado([string]$Clase, $Java, $Mapa) {
 }
 
 # Si la rama del worktree ya lleva commits de arreglo (rescate(<paso>): ...) desde $Base: 'despues-de-corregir'; si no, 'antes-de-corregir'.
-function Get-MomentoComparar([string]$Base) {
+function Get-MomentoRama([string]$Base) {
   if (@((Invoke-Git $RepoRoot @('log', '--format=%s', "$Base..HEAD")).Salida | Where-Object { $_ -match '^rescate\(' }).Count -gt 0) { return 'despues-de-corregir' }
   return 'antes-de-corregir'
 }
@@ -1312,7 +1312,7 @@ function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
   $java = @(Get-JavaOriginal $RepoRoot)
   $mapa = Get-MapaMovidos $RepoRoot $Base
   $head = Get-Head $RepoRoot
-  $momento = Get-MomentoComparar $Base
+  $momento = Get-MomentoRama $Base
   $tareas = @()
   foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $Datos 'fichas') -File -Filter 'clase-*.json' | Sort-Object Name)) {
     $x = Read-Json $f.FullName

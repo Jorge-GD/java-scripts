@@ -554,7 +554,7 @@ function New-ElementoSinCandidatos([int]$Accion) {
 # las que no tienen ninguno quedan en falta sin llamada, y una ficha sin ninguna que buscar nace hecha. La huella lleva el commit del migrado.
 function Get-TareasCompararSh([bool]$ConservarAtascadas, [string]$Base) {
   $head = Get-Head $RepoRoot
-  $momento = Get-MomentoComparar $Base
+  $momento = Get-MomentoRama $Base
   $archivos = $null
   $tareas = @()
   $dir = Join-Path $Datos 'fichas-sh'
