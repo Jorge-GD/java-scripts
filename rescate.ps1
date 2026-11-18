@@ -1728,7 +1728,8 @@ function Invoke-Fix {
         if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)." }
       }
       $ft = Get-Cuenta $hall2 'tests'
-      if ($conTests -and $paso -ne 'tests' -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
+      # sin 'tests' en Orden no hay cuenta de antes: no se compara
+      if ($conTests -and $paso -ne 'tests' -and $antes.ContainsKey('tests') -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
       # el codigo nuevo sale ya con Javadoc y sin malas practicas: la cuenta de calidad no sube
       $calNuevos = @()
       $qc = Get-Cuenta $hall2 'calidad'

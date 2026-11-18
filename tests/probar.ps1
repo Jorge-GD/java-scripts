@@ -1737,5 +1737,15 @@ $Pruebas['m7 build: el prompt del paso build no manda cambiar el parent; si hace
   Comprueba 'dice que no cambie el parent y que, si hace falta otro, lo apunte como duda' ($p -match 'sin cambiar el parent: si hace falta otro, apuntalo como duda') $p
 }
 
+# Con un Orden sin 'tests' y los tests activos no hay cuenta de antes: la puerta de tests no compara (antes comparaba
+# con nada y no pasaba ningun lote).
+$Pruebas['m7 orden sin tests: la puerta de tests solo compara si hay cuenta de antes'] = {
+  $e = Nuevo-Escenario 'm7-orden-sin-tests'
+  Pon-Config $e @{ Orden = @('estructura') }
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
+  Comprueba 'sale con 0' ($r.Codigo -eq 0) ("$($r.Codigo) | " + (Cola $r.Salida))
+  Comprueba 'no dice que hay mas tests fallando' ($r.Salida -notmatch 'Hay mas tests fallando') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
