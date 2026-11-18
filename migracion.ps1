@@ -49,7 +49,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 mismas entradas: datos\prueba-local.json y registros\prueba-local.log; su salida sale por la consola mientras
                 corre. Siempre se lanza (al relanzar reutiliza lo hecho) salvo con -SinPruebaLocal. Un fallo se avisa y la
                 pasada sigue: el codigo de salida no depende de esta fase. estado.json lleva pruebaLocal (resultado hecha,
-                fallo o saltada, codigo, minutos, detalle y registro); hasta llegar a la fase vale null.
+                fallo o saltada, codigo, minutos, detalle, jdkOriginal -true si el original no compila con el JDK de Maven- y registro); hasta llegar
+                a la fase vale null. estado.json lleva tambien ramaOrigen (la rama del migrado de la que sale la de rescate) y javaLegacy (el
+                valor de -JavaLegacy, o vacio): con ellos la portada monta el comando del siguiente paso.
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
   que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
   migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato) y 4-correcciones.html (que se ha
@@ -523,7 +525,7 @@ function Invoke-FaseCorreccion {
 # y se sigue. estado.pruebaLocal lo cuenta.
 function Invoke-FasePruebaLocal {
   if ($SinPruebaLocal) {
-    $Estado['pruebaLocal'] = [ordered]@{ resultado = 'saltada'; codigo = $null; minutos = 0; detalle = ''; registro = '' }
+    $Estado['pruebaLocal'] = [ordered]@{ resultado = 'saltada'; codigo = $null; minutos = 0; detalle = ''; jdkOriginal = $false; registro = '' }
     return
   }
   $Estado['fase'] = 'prueba-local'
@@ -543,7 +545,9 @@ function Invoke-FasePruebaLocal {
   if (-not $hecha) { $detalle = Get-UltimasLineas $r.Salida }
   $resultado = 'fallo'
   if ($hecha) { $resultado = 'hecha' }
-  $Estado['pruebaLocal'] = [ordered]@{ resultado = $resultado; codigo = $r.Codigo; minutos = $minutos; detalle = $detalle; registro = 'registros/prueba-local.log' }
+  # el original que no compila con el JDK de Maven: prueba-local.ps1 lo dice en su primera linea de error y el detalle solo guarda las ultimas
+  $jdk = ((-not $hecha) -and (@(Get-SinColor $r.Salida | Where-Object { $_ -match 'no compila con el JDK de Maven' }).Count -gt 0))
+  $Estado['pruebaLocal'] = [ordered]@{ resultado = $resultado; codigo = $r.Codigo; minutos = $minutos; detalle = $detalle; jdkOriginal = $jdk; registro = 'registros/prueba-local.log' }
   $json = Join-Path $Datos 'prueba-local.json'
   if (-not $hecha) { Aviso "Prueba en local: ha salido con codigo $($r.Codigo): $detalle. Registro: $registro" }
   elseif (Test-Path -LiteralPath $json) {
@@ -632,7 +636,7 @@ $RepoRoot = $dirWt
 Read-Config $RepoRoot
 $Estado = [ordered]@{
   version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
-  worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
+  worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
   fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null
 }
 # En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
