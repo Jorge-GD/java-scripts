@@ -1376,7 +1376,7 @@ $Pruebas['50 paginas: todo texto de los datos sale escapado (un script es texto,
 
 $Pruebas['51 paginas: sin nada externo (ni http, ni script, ni import) y sus enlaces llevan a sitios que existen'] = {
   $c = Corrida-Dos $GuionBase
-  foreach ($n in @('index.html', '1-batch-original.html', '2-problemas.html', '4-correcciones.html')) {
+  foreach ($n in @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html')) {
     $h = Pagina $c.E.Out $n
     Comprueba "$n : existe" ($h.Length -gt 0)
     Comprueba "$n : ni http:// ni https://" ($h -notmatch 'https?://')
@@ -1416,7 +1416,7 @@ $Pruebas['52 paginas: a medias se generan y dicen que fase falta; tambien al par
 $Pruebas['53 paginas: dos llamadas seguidas dejan los mismos bytes'] = {
   $c = Corrida-Dos $GuionBase
   $s = Copia-Salida $c.E 'idempotente'
-  $paginas = @('index.html', '1-batch-original.html', '2-problemas.html', '4-correcciones.html')
+  $paginas = @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html')
   $g = Genera-Informes $s
   Igual 'la primera sale con 0' 0 $g.Codigo
   $antes = @{}
@@ -2611,6 +2611,358 @@ $Pruebas['89 correccion: al acabar el motor se guarda estado.json, y actualizado
   $fin = (Get-Item -LiteralPath (Get-Ruta $e.Out 'registros/correccion.log')).LastWriteTime
   $act = [datetime]$s.actualizado
   Comprueba 'actualizado no es anterior al final del motor (el registro de la correccion se escribe al acabar)' ($act -ge $fin.AddSeconds(-1)) "actualizado $($s.actualizado), registro $($fin.ToString('s'))"
+}
+
+# ====================== E: EL ORIGINAL FRENTE AL MIGRADO ======================
+# Una clase del migrado: 4 lineas que acaban en ; (la 5, la 6, la 9 y la 10).
+function Clase-Migrada([string]$Nombre) {
+  return "package com.acme.life;`n`n/** Clase $Nombre migrada. */`npublic class $Nombre {`n    private int valor = 1;`n    private int tope = 2;`n`n    public int dobla(int x) {`n        int r = x * 2;`n        return r;`n    }`n}`n"
+}
+
+# Clases con esos nombres en el repo migrado (antes de la primera corrida: el worktree sale de el).
+function Migrado-Con($E, [string[]]$Nombres) {
+  foreach ($n in $Nombres) { Escribe $E.Migrado "src/main/java/com/acme/life/$n.java" (Clase-Migrada $n) }
+  [void](GitEn $E.Migrado @('add', '-A'))
+  [void](GitEn $E.Migrado @('commit', '-q', '-m', 'clases migradas'))
+}
+
+$script:CorridasComparar = @{}
+# Una corrida entera del escenario de dos jobs con cuatro clases en el migrado (las otras salen sin pieza) y ese guion de comparar.
+# Auxiliar1 a 3 no se migran a proposito: un Auxiliar1.java migrado compartiria la palabra Auxiliar con los tres.
+function Corrida-Comparar([string]$Guion = '') {
+  if (-not $script:CorridasComparar.ContainsKey($Guion)) {
+    $e = Escenario-Dos ('cmp' + $script:CorridasComparar.Count)
+    Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter', 'JobsConfig')
+    $g = $GuionBase
+    if ($Guion) { $g += ';' + $Guion }
+    $script:CorridasComparar[$Guion] = [pscustomobject]@{ E = $e; R = (Migra $e (Basicos $e) $g) }
+  }
+  return $script:CorridasComparar[$Guion]
+}
+
+$RutaMigrado = 'src/main/java/com/acme/life'
+$Punto = [string][char]0xB7
+function Comparacion-De($E, $Ficha) { return (Lee-Json (Get-Ruta $E.Out ('datos/comparacion/' + $Ficha.id + '.json'))) }
+function Grupo-Comp([string]$Html, [string]$Job) { return [regex]::Match($Html, '(?s)<section[^>]*id="comp-' + [regex]::Escape($Job) + '".*?</section>').Value }
+function Ficha-De($E, [string]$Clase) { return @(Fichas $E | Where-Object { $_.fichero -like "*/$Clase.java" })[0] }
+
+# Las cuentas de comparacion de un job del mapa, leidas de los datos/comparacion de $Salida, y su texto de cabecera.
+function Cuentas-Job([string]$Salida, $Job) {
+  $n = [ordered]@{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-pieza' = 0 }
+  foreach ($cl in @($Job.clases)) {
+    $x = Lee-Json (Get-Ruta $Salida ('datos/comparacion/' + $cl.ficha + '.json'))
+    if (-not $x) { continue }
+    foreach ($d in @($x.datos)) { $n[[string]$d.estado]++ }
+  }
+  return $n
+}
+function Texto-Cuentas($N) {
+  return ("igual $($N['igual']) $Punto distinto $($N['distinto']) $Punto falta $($N['falta']) $Punto no lo s$([char]0xE9) $($N['no-lo-se']) $Punto sin pieza $($N['sin-pieza'])")
+}
+
+$Pruebas['90 comparar: una tarea por ficha con datos, sin llamar por las clases sin pieza; cada datos/comparacion/<ficha>.json con un elemento por dato; la linea de consola, la fase despues de pruebas-pre y la pagina 3 con sus cuentas'] = {
+  $c = Corrida-Comparar ''
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $fichas = @(Fichas $e | Where-Object { @($_.datos).Count -gt 0 })
+  $t = Tareas $e 'comparar-pieza'
+  Comprueba 'hay fichas con datos' ($fichas.Count -ge 5) "$($fichas.Count)"
+  Igual 'una tarea por ficha con datos' $fichas.Count $t.Count
+  Igual 'todas hechas' $t.Count (Cuenta-Estado $t 'hecha')
+  Comprueba 'el id es comparar-<ficha> y la salida datos/comparacion/<ficha>.json' (@($t | Where-Object { $_.id -ceq ('comparar-' + $_.ficha) -and $_.salida -ceq ('datos/comparacion/' + $_.ficha + '.json') }).Count -eq $t.Count)
+  $conPieza = @('CargaReader', 'CargaValidator', 'InformeWriter', 'JobsConfig')
+  foreach ($f in $fichas) {
+    $n = $f.clase
+    $x = Comparacion-De $e $f
+    Comprueba "$n : existe su datos/comparacion" ($null -ne $x)
+    if ($null -eq $x) { continue }
+    Igual "$n : ficha, clase y fichero original" "$($f.id)|$($f.clase)|$($f.fichero)" "$($x.ficha)|$($x.clase)|$($x.ficheroOriginal)"
+    Igual "$n : un elemento por dato, en orden" ((0..(@($f.datos).Count - 1)) -join ',') (@($x.datos | ForEach-Object { $_.dato }) -join ',')
+    if ($conPieza -contains $n) {
+      Igual "$n : migrado = el fichero del mismo nombre" "$RutaMigrado/$n.java" (@($x.migrado) -join ',')
+      Comprueba "$n : todos igual, probados, con fichero, linea y cita del migrado" (@($x.datos | Where-Object { $_.estado -ceq 'igual' -and $_.probado -eq $true -and $_.fichero -ceq "$RutaMigrado/$n.java" -and $_.linea -ge 1 -and $_.cita }).Count -eq @($f.datos).Count) (ConvertTo-Json -InputObject $x -Depth 5 -Compress)
+    }
+    else {
+      Igual "$n : sin ningun fichero del migrado" 0 @($x.migrado).Count
+      Comprueba "$n : todos sin-pieza, sin cita" (@($x.datos | Where-Object { $_.estado -ceq 'sin-pieza' -and -not $_.cita -and -not $_.fichero }).Count -eq @($f.datos).Count) (ConvertTo-Json -InputObject $x -Depth 5 -Compress)
+    }
+  }
+  $ll = Llamadas-De (Llamadas $e.Wt) 'comparar-'
+  Igual 'solo se llama a la IA por las cuatro clases con pieza' 4 $ll.Count
+  Comprueba 'cada llamada lee el original (--add-dir) con esfuerzo de lectura' (@($ll | Where-Object { $_.flags -match '--add-dir=\S*life-java8' -and $_.flags -match '--effort=medium' }).Count -eq 4) (($ll | ForEach-Object { $_.flags }) -join ' | ')
+  $p = Prompt-De $e (@($t | Where-Object { $_.entradas.clase -ceq 'CargaReader' })[0])
+  $reader = Ficha-De $e 'CargaReader'
+  Comprueba 'el prompt lleva el tipo, los ficheros del migrado y un dato numerado por cada dato de la ficha' ($p -match '(?m)^TIPO: comparar-pieza$' -and $p -match "(?m)^MIGRADO: $RutaMigrado/CargaReader\.java$" -and [regex]::Matches($p, '(?m)^\d+\. \[').Count -eq @($reader.datos).Count) $p
+  Igual 'la estado.json acaba en lectura-hecha' 'lectura-hecha' (Estado $e).fase
+  Igual 'el worktree queda limpio tras la fase' '' (GitEn $e.Wt @('status', '--porcelain'))
+  $sal = $c.R.Salida
+  $pre = $sal.IndexOf('Pruebas en pre:')
+  $cmp = $sal.IndexOf('Comparacion con el original:')
+  Comprueba 'la consola lleva la linea de comparar despues de la de pruebas en pre' ($pre -ge 0 -and $cmp -gt $pre) (Cola $sal)
+  $linea = [regex]::Match($sal, 'Comparacion con el original: [^\r\n]*').Value
+  $iguales = 0; $sinPieza = 0
+  foreach ($f in $fichas) { foreach ($d in @((Comparacion-De $e $f).datos)) { if ($d.estado -ceq 'igual') { $iguales++ } else { $sinPieza++ } } }
+  Igual 'la linea cuenta las clases y los datos de cada estado' "Comparacion con el original: $($fichas.Count) clases comparadas. Datos: $iguales igual, 0 distinto, 0 falta, 0 no lo se, $sinPieza sin pieza." $linea
+  $mapa = Mapa $e
+  $pg = Pagina $e.Out '3-original-vs-migrado.html'
+  Comprueba 'la pagina 3 existe con un solo h1' ($pg.Length -gt 0 -and [regex]::Matches($pg, '<h1[ >]').Count -eq 1)
+  foreach ($j in @($mapa.jobs)) {
+    $g = Grupo-Comp $pg $j.job
+    Comprueba "$($j.job) : tiene su grupo en la pagina 3" ($g.Length -gt 0)
+    if (-not $g) { continue }
+    $cab = Texto-Cuentas (Cuentas-Job $e.Out $j)
+    Comprueba "$($j.job) : la cabecera dice las cuentas ($cab)" ($g.Contains($cab)) $g
+  }
+  $orden = @($mapa.jobs | ForEach-Object { $pg.IndexOf('id="comp-' + $_.job + '"') })
+  Comprueba 'los jobs salen en el orden del mapa' ($orden[0] -ge 0 -and $orden[0] -lt $orden[1]) ($orden -join ' ')
+}
+
+$Pruebas['91 comparar: eleccion de ficheros del migrado (mismo nombre; si no, por palabras con 3 como mucho; sin ninguno, sin-pieza y sin llamada)'] = {
+  $e = Nuevo-Escenario 'cmp-eleccion' @('CargaReader', 'InformeWriter', 'Suelta', 'ProcesoTope')
+  Migrado-Con $e @('LectorCarga', 'CargaFichero', 'InformeWriter', 'TopeProceso', 'ProcesoDos', 'ProcesoTres', 'ProcesoUno')
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = Tareas $e 'comparar-pieza'
+  Igual 'cuatro tareas' 4 $t.Count
+  $reader = @($t | Where-Object { $_.entradas.clase -ceq 'CargaReader' })[0]
+  $writer = @($t | Where-Object { $_.entradas.clase -ceq 'InformeWriter' })[0]
+  $suelta = @($t | Where-Object { $_.entradas.clase -ceq 'Suelta' })[0]
+  $tope = @($t | Where-Object { $_.entradas.clase -ceq 'ProcesoTope' })[0]
+  Igual 'CargaReader: sin el mismo nombre, salen los dos que comparten Carga (por ruta)' (("CargaFichero", "LectorCarga" | ForEach-Object { "$RutaMigrado/$_.java" }) -join ',') (@($reader.entradas.migrado) -join ',')
+  Igual 'InformeWriter: con el mismo nombre, solo ese' "$RutaMigrado/InformeWriter.java" (@($writer.entradas.migrado) -join ',')
+  Igual 'ProcesoTope: tres como mucho, primero el que comparte dos palabras y despues por ruta' (("TopeProceso", "ProcesoDos", "ProcesoTres" | ForEach-Object { "$RutaMigrado/$_.java" }) -join ',') (@($tope.entradas.migrado) -join ',')
+  Igual 'Suelta: sin nada en comun, ninguno' 0 @($suelta.entradas.migrado).Count
+  Igual 'Suelta: hecha sin llamar a la IA' 'hecha' $suelta.estado
+  Igual 'Suelta: todos sus datos sin-pieza' @($suelta.resultado.comparacion).Count (@($suelta.resultado.comparacion | Where-Object { $_.estado -ceq 'sin-pieza' }).Count)
+  $ll = Llamadas-De (Llamadas $e.Wt) 'comparar-'
+  Igual 'tres llamadas (CargaReader, InformeWriter y ProcesoTope), ninguna por Suelta' 3 $ll.Count
+  Comprueba 'ninguna llamada es de Suelta' (@($ll | Where-Object { $_.id -ceq $suelta.id }).Count -eq 0)
+  foreach ($k in @($reader, $tope)) {
+    $p = Prompt-De $e $k
+    Comprueba "$($k.entradas.clase) : el prompt lista sus ficheros del migrado, uno por linea y en orden" ((([regex]::Matches($p, '(?m)^MIGRADO: (.+?)\s*$') | ForEach-Object { $_.Groups[1].Value }) -join ',') -ceq (@($k.entradas.migrado) -join ',')) $p
+  }
+}
+
+$Pruebas['92 comparar: citas inventadas, un dato que falta, un fichero que no le dieron y un distinto sin nota se rechazan, con reintento y el motivo; atascada y a la portada'] = {
+  $c = Corrida-Comparar 'comparar-inventada:^comparar-pieza:CargaReader$;comparar-falta-dato:^comparar-pieza:CargaValidator$;comparar-fichero-ajeno:^comparar-pieza:InformeWriter$;comparar-sin-nota:^comparar-pieza:JobsConfig$'
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $t = Tareas $e 'comparar-pieza'
+  $esperado = @(
+    @('CargaReader', 'Mas de la mitad de las citas'),
+    @('CargaValidator', 'Pero faltan'),
+    @('InformeWriter', 'NoMeHanDado\.java'),
+    @('JobsConfig', 'comparacion\[0\]\.nota')
+  )
+  foreach ($x in $esperado) {
+    $n = $x[0]
+    $k = @($t | Where-Object { $_.entradas.clase -ceq $n })[0]
+    Igual "$n : atascada" 'atascada' $k.estado
+    Igual "$n : dos intentos" 2 $k.intentos
+    Comprueba "$n : el motivo dice por que ($($x[1]))" ($k.motivo -match $x[1]) $k.motivo
+    $ll = Llamadas-De (Llamadas $e.Wt) $k.id
+    Comprueba "$n : el reintento lleva la correccion con el motivo y esfuerzo high" ($ll.Count -eq 2 -and $ll[1].correccion -eq 'True' -and $ll[0].correccion -eq 'False' -and $ll[1].flags -match '--effort=high' -and (Prompt-De $e $k) -match ('(?s)## CORRECCI.*' + $x[1])) (($ll | ForEach-Object { $_.correccion }) -join ' ')
+    Comprueba "$n : no deja datos/comparacion" (-not (Test-Path -LiteralPath (Get-Ruta $e.Out ('datos/comparacion/' + $k.ficha + '.json'))))
+  }
+  Igual 'las otras cuatro clases con datos siguen hechas' 4 (Cuenta-Estado $t 'hecha')
+  Comprueba 'la fase termina: estado lectura-hecha' ((Estado $e).fase -eq 'lectura-hecha')
+  $toca = Toca-De (Pagina $e.Out 'index.html')
+  Comprueba 'la portada lista las cuatro tareas atascadas de comparar' ($toca -match 'Tareas atascadas \(4\)' -and ([regex]::Matches($toca, 'comparar-clase-[0-9a-f]{8}').Count -eq 4)) $toca
+  Comprueba 'la pagina 3 se monta igual' ((Pagina $e.Out '3-original-vs-migrado.html').Length -gt 0)
+}
+
+$Pruebas['93 comparar: un dato distinto sale primero en su job, con las dos citas y la nota, y la portada lo lista en Diferencias con el original'] = {
+  $c = Corrida-Comparar 'comparar-distinto:^comparar-pieza:CargaReader$'
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $f = Ficha-De $e 'CargaReader'
+  $x = Comparacion-De $e $f
+  $d0 = $x.datos[0]
+  Comprueba 'el primer dato queda distinto, con nota y la cita encontrada en el migrado' ($d0.estado -ceq 'distinto' -and $d0.nota -match 'constante' -and $d0.probado -eq $true -and $d0.cita -and $d0.fichero -ceq "$RutaMigrado/CargaReader.java") (ConvertTo-Json -InputObject $d0 -Compress)
+  $h = $f.datos[0]
+  $g = Grupo-Comp (Pagina $e.Out '3-original-vs-migrado.html') 'cargaJob'
+  $iDist = $g.IndexOf((Html $d0.nota))
+  $iDet = $g.IndexOf('<details')
+  Comprueba 'en su job, el distinto sale antes de los iguales plegados' ($iDist -ge 0 -and $iDet -gt $iDist) $g
+  $fila = [regex]::Match($g, '(?s)<li class="fila s-error">.*?</li>').Value
+  Comprueba 'la fila lleva el texto del dato, el original (fichero:linea y cita), el migrado (fichero:linea y cita) y la nota' ($fila.Contains((Html $h.texto)) -and $fila.Contains((Html "$($f.fichero):$($h.linea)")) -and $fila.Contains((Html $h.cita)) -and $fila.Contains((Html "$($d0.fichero):$($d0.linea)")) -and $fila.Contains((Html $d0.cita)) -and $fila.Contains((Html $d0.nota))) $fila
+  Comprueba 'y dice Distinto, con la etiqueta de leido por la IA con prueba' ($fila -match 'Distinto' -and $fila -match 'Le.do por la IA, con prueba') $fila
+  Comprueba 'la cabecera del job cuenta 1 distinto' ($g -match ('distinto 1 ' + $Punto))
+  $toca = Toca-De (Pagina $e.Out 'index.html')
+  $gd = [regex]::Match($toca, '(?s)<h3>Diferencias con el original \(1\)</h3>.*?</div>').Value
+  Comprueba 'la portada tiene el grupo Diferencias con el original (1)' ($gd.Length -gt 0) $toca
+  Comprueba 'con el job, la clase, el texto del dato y la nota' ($gd.Contains('cargaJob') -and $gd.Contains('CargaReader') -and $gd.Contains((Html $h.texto)) -and $gd.Contains((Html $d0.nota))) $gd
+  Comprueba 'sin ningun distinto ni falta (la corrida normal) la portada no lo lleva' ((Toca-De (Pagina (Corrida-Comparar '').E.Out 'index.html')) -notmatch 'Diferencias con el original')
+}
+
+$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree haya cambiado (un fichero tocado y otro movido)'] = {
+  $e = Escenario-Dos 'cmp-relanza'
+  Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter')
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la primera sale con 0' 0 $r.Codigo
+  $antes = @(Llamadas-De (Llamadas $e.Wt) 'comparar-')
+  Igual 'la primera vez, tres llamadas de comparar' 3 $antes.Count
+  $t0 = Tareas $e 'comparar-pieza'
+  Escribe $e.Wt "$RutaMigrado/CargaReader.java" ((Lee $e.Wt "$RutaMigrado/CargaReader.java") + "// cambiado despues`n")
+  [void](GitEn $e.Wt @('mv', "$RutaMigrado/InformeWriter.java", "$RutaMigrado/InformeWriterMovido.java"))
+  [void](GitEn $e.Wt @('add', '-A'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'cambio del migrado'))
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  $despues = @(Llamadas-De (Llamadas $e.Wt) 'comparar-')
+  Igual 'la segunda vez no hay ninguna llamada mas de comparar' 3 $despues.Count
+  $t1 = Tareas $e 'comparar-pieza'
+  Igual 'las tareas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  Igual 'y con los mismos ficheros del migrado de la primera vez' ((@($t0 | ForEach-Object { @($_.entradas.migrado) -join ',' })) -join ' | ') ((@($t1 | ForEach-Object { @($_.entradas.migrado) -join ',' })) -join ' | ')
+  Comprueba 'los datos/comparacion siguen' (@(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/comparacion') -File).Count -eq $t1.Count)
+}
+
+$Pruebas['95 comparar: la lectura no toca codigo: si lo toca se deshace, la tarea se atasca y el worktree queda limpio'] = {
+  $e = Nuevo-Escenario 'cmp-toca' @('Primera', 'Segunda')
+  Migrado-Con $e @('Primera')
+  $r = Migra $e (Basicos $e) 'toca-codigo:^comparar-pieza:Primera$'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'el fichero del migrado sigue como estaba' (Lee $e.Migrado "$RutaMigrado/Primera.java") (Lee $e.Wt "$RutaMigrado/Primera.java")
+  $t = Tareas $e 'comparar-pieza'
+  $c1 = @($t | Where-Object { $_.entradas.clase -ceq 'Primera' })[0]
+  $c2 = @($t | Where-Object { $_.entradas.clase -ceq 'Segunda' })[0]
+  Igual 'Primera: atascada' 'atascada' $c1.estado
+  Comprueba 'Primera: el motivo dice que la lectura toco ficheros' ($c1.motivo -match 'toco') $c1.motivo
+  Igual 'Segunda (sin pieza): hecha' 'hecha' $c2.estado
+}
+
+# Datos de mentira para la pagina 3 y la portada: tres clases (A en cargaJob, B en los dos jobs, C en informeJob) con datos en todos los estados.
+$script:Mentira = $null
+function Comp-Fake($Ficha, [string[]]$Estados, [string]$Nota, [string]$Cita) {
+  $n = @($Ficha.datos).Count
+  $ds = @()
+  $fichero = ''
+  if ($Estados[0] -cne 'sin-pieza') { $fichero = "$RutaMigrado/$($Ficha.clase).java" }
+  for ($i = 0; $i -lt $n; $i++) {
+    $est = $Estados[[Math]::Min($i, $Estados.Count - 1)]
+    $d = [ordered]@{ dato = $i; estado = $est; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false }
+    if ($est -ceq 'igual' -or $est -ceq 'distinto') { $d.fichero = $fichero; $d.linea = 5 + $i; $d.cita = "$Cita $i"; $d.probado = ($i -ne ($n - 1)) }
+    if ($est -ceq 'distinto' -or $est -ceq 'no-lo-se') { $d.nota = "$Nota $i" }
+    $ds += $d
+  }
+  $mig = @()
+  if ($fichero) { $mig = @($fichero) }
+  return [ordered]@{ ficha = $Ficha.id; clase = $Ficha.clase; ficheroOriginal = $Ficha.fichero; migrado = $mig; datos = $ds }
+}
+
+function Comparar-Mentira {
+  if ($script:Mentira) { return $script:Mentira }
+  $c = Corrida-Comparar ''
+  $s = Copia-Salida $c.E 'comp-mentira'
+  $mapa = Lee-Json (Get-Ruta $s 'datos/mapa.json')
+  $todas = @($mapa.jobs | ForEach-Object { @($_.clases) })
+  $a = @($todas | Where-Object { $_.clase -ceq 'CargaReader' })[0]
+  $b = @($todas | Where-Object { $_.clase -ceq 'CargaValidator' })[0]
+  $d = @($todas | Where-Object { $_.clase -ceq 'InformeWriter' })[0]
+  $x1 = @($todas | Where-Object { $_.clase -ceq 'Auxiliar1' })[0]
+  (Del-Job $mapa 'cargaJob').clases = @($a, $b)
+  (Del-Job $mapa 'informeJob').clases = @($b, $d, $x1)
+  Guarda-Json (Get-Ruta $s 'datos/mapa.json') $mapa
+  $q = [string][char]39
+  $fa = Lee-Json (Get-Ruta $s ('datos/fichas/' + $a.ficha + '.json'))
+  $fa.datos[0].texto = 'Texto <b>negrita</b> & "comillas" ' + $q + 'simples' + $q
+  $fa.datos[0].cita = 'x < y & "z"'
+  Guarda-Json (Get-Ruta $s ('datos/fichas/' + $a.ficha + '.json')) $fa
+  $fb = Lee-Json (Get-Ruta $s ('datos/fichas/' + $b.ficha + '.json'))
+  $fd = Lee-Json (Get-Ruta $s ('datos/fichas/' + $d.ficha + '.json'))
+  $fx = Lee-Json (Get-Ruta $s ('datos/fichas/' + $x1.ficha + '.json'))
+  $carpeta = Get-Ruta $s 'datos/comparacion'
+  if (Test-Path -LiteralPath $carpeta) { Remove-Item -LiteralPath $carpeta -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $carpeta -Force)
+  $nota = '<script>alert(1)</script> & "x" nota'
+  $cita = 'if (a < b && c == "x") {'
+  Guarda-Json (Join-Path $carpeta ($a.ficha + '.json')) (Comp-Fake $fa @('distinto', 'falta', 'igual') $nota $cita)
+  Guarda-Json (Join-Path $carpeta ($b.ficha + '.json')) (Comp-Fake $fb @('no-lo-se', 'igual', 'falta') 'nota de B' $cita)
+  Guarda-Json (Join-Path $carpeta ($d.ficha + '.json')) (Comp-Fake $fd @('sin-pieza') '' '')
+  Guarda-Json (Join-Path $carpeta ($x1.ficha + '.json')) (Comp-Fake $fx @('falta') '' '')
+  $g = Genera-Informes $s
+  Comprueba 'comparar con datos de mentira: Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $script:Mentira = [pscustomobject]@{ Dir = $s; E = $c.E; Mapa = $mapa; A = $a; B = $b; D = $d; FA = $fa; Nota = $nota; Cita = $cita; P3 = (Pagina $s '3-original-vs-migrado.html'); I = (Pagina $s 'index.html') }
+  return $script:Mentira
+}
+
+$Pruebas['96 pagina 3 con datos de mentira: orden de estados, etiquetas, iguales plegados, una clase en dos jobs, todo escapado, un solo h1 y sin datos dice que no ha terminado'] = {
+  $m = Comparar-Mentira
+  $p = $m.P3
+  Igual 'un solo h1' 1 ([regex]::Matches($p, '<h1[ >]').Count)
+  Comprueba 'sin JavaScript ni nada externo' ($p -notmatch '(?i)<script|<img|<iframe|<link|https?://')
+  $g1 = Grupo-Comp $p 'cargaJob'
+  $g2 = Grupo-Comp $p 'informeJob'
+  Comprueba 'los dos jobs, en su orden' ($g1.Length -gt 0 -and $g2.Length -gt 0 -and $p.IndexOf($g1) -lt $p.IndexOf($g2))
+  foreach ($par in @(@('cargaJob', $g1), @('informeJob', $g2))) {
+    $j = Del-Job $m.Mapa $par[0]
+    $cab = Texto-Cuentas (Cuentas-Job $m.Dir $j)
+    Comprueba "$($par[0]) : cabecera con las cuentas ($cab)" ($par[1].Contains($cab)) $par[1]
+  }
+  $iDis = $g1.IndexOf('Distinto</span>'); $iFal = $g1.IndexOf('Falta</span>'); $iNo = $g1.IndexOf('No lo s'); $iDet = $g1.IndexOf('<details')
+  Comprueba 'cargaJob: primero distinto, despues falta, despues no lo se y al final los iguales plegados' ($iDis -ge 0 -and $iFal -gt $iDis -and $iNo -gt $iFal -and $iDet -gt $iNo) "$iDis $iFal $iNo $iDet"
+  Comprueba 'los iguales van en un solo details con su cuenta' ([regex]::Matches($g1, '<details').Count -eq 1 -and $g1 -match '<summary>\d+ datos iguales</summary>') $g1
+  $nIg = (Cuentas-Job $m.Dir (Del-Job $m.Mapa 'cargaJob'))['igual']
+  Comprueba 'y esa cuenta es la de la cabecera' ($g1 -match "<summary>$nIg datos iguales</summary>")
+  Comprueba 'informeJob: un solo igual, en su details, en singular' ($g2 -match '<summary>1 dato igual</summary>')
+  Comprueba 'etiquetas: Leido por la IA con prueba, Sin comprobar y Medido' ($g1 -match 'Le.do por la IA, con prueba' -and $g1 -match 'Sin comprobar' -and $g2 -match 'Medido')
+  $fDis = [regex]::Match($g1, '(?s)<li class="fila s-error">.*?</li>').Value
+  Comprueba 'el distinto lleva la etiqueta de con prueba y su nota' ($fDis -match 'Le.do por la IA, con prueba' -and $fDis -match 'nota') $fDis
+  $fFal = [regex]::Match($g1, '(?s)<li class="fila s-aviso">(?:(?!</li>).)*Falta</span>.*?</li>').Value
+  Comprueba 'la falta lleva Sin comprobar y no tiene migrado' ($fFal -match 'Sin comprobar' -and $fFal -notmatch 'Migrado:') $fFal
+  $fSin = [regex]::Match($g2, '(?s)<li class="fila s-aviso">(?:(?!</li>).)*Sin pieza</span>.*?</li>').Value
+  Comprueba 'el sin pieza lleva Medido' ($fSin -match 'Medido') $fSin
+  $ultimoIgual = [regex]::Matches($g1, '(?s)<details.*?</details>').Value
+  Comprueba 'el ultimo dato igual de la clase A no tiene su cita encontrada: sale como Sin comprobar dentro de los iguales' ($ultimoIgual -match 'Sin comprobar') $ultimoIgual
+  Comprueba 'una clase en dos jobs sale en los dos (la nota de B, dos veces)' ([regex]::Matches($p, 'nota de B 0').Count -eq 2) ([regex]::Matches($p, 'nota de B 0').Count)
+  Comprueba 'la nota con script, & y comillas sale escapada' ($p.Contains((Html ($m.Nota + ' 0'))) -and $p -notmatch '<script')
+  Comprueba 'la cita del migrado con < y & y comillas sale escapada' ($p.Contains((Html ($m.Cita + ' 0'))))
+  Comprueba 'el texto del dato y la cita del original, tambien' ($p.Contains((Html $m.FA.datos[0].texto)) -and $p.Contains((Html 'x < y & "z"')))
+  Comprueba 'la frase de arriba dice que es una lectura de la IA, antes de corregir, y que no sustituye a lanzar los dos batch' ($p -match 'lectura de la IA' -and $p -match 'antes de corregir' -and $p -match 'no sustituye')
+  # sin datos
+  $c = Corrida-Comparar ''
+  $s = Copia-Salida $c.E 'comp-sin-datos'
+  if (Test-Path -LiteralPath (Get-Ruta $s 'datos/comparacion')) { Remove-Item -LiteralPath (Get-Ruta $s 'datos/comparacion') -Recurse -Force }
+  $g = Genera-Informes $s
+  Comprueba 'sin datos/comparacion: Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $v = Pagina $s '3-original-vs-migrado.html'
+  Comprueba 'la pagina dice que la fase comparar no ha terminado y no lleva grupos' ($v -match 'la fase comparar no ha terminado' -and $v -notmatch 'id="comp-') $v
+  Igual 'y sigue con un solo h1' 1 ([regex]::Matches($v, '<h1[ >]').Count)
+}
+
+$Pruebas['97 portada y marco: navegacion a Original frente a migrado, Diferencias con el original (uno por dato distinto o falta, por job), la fase y los ficheros'] = {
+  $m = Comparar-Mentira
+  $i = $m.I
+  $toca = Toca-De $i
+  $gd = [regex]::Match($toca, '(?s)<h3>Diferencias con el original \(\d+\)</h3>.*?</div>').Value
+  $a = Cuentas-Job $m.Dir (Del-Job $m.Mapa 'cargaJob')
+  $b = Cuentas-Job $m.Dir (Del-Job $m.Mapa 'informeJob')
+  $n = $a['distinto'] + $a['falta'] + $b['distinto'] + $b['falta']
+  Comprueba "el grupo dice ($n)" ($gd -match "Diferencias con el original \($n\)") $toca
+  Igual 'con un elemento por dato' $n ([regex]::Matches($gd, '<li>').Count)
+  Comprueba 'cada uno lleva el job, la clase, el texto del dato y la nota' ($gd.Contains('cargaJob') -and $gd.Contains('informeJob') -and $gd.Contains('CargaReader') -and $gd.Contains('Auxiliar1') -and $gd.Contains((Html $m.FA.datos[0].texto)) -and $gd.Contains((Html ($m.Nota + ' 0')))) $gd
+  Comprueba 'los sin pieza no salen: InformeWriter no esta' (-not $gd.Contains('InformeWriter'))
+  $fases = [regex]::Match($i, '(?s)<ol class="fases">.*?</ol>').Value
+  $lis = @([regex]::Matches($fases, '(?s)<li>.*?</li>') | ForEach-Object { $_.Value })
+  $ip = @($lis | Where-Object { $_ -match 'Guion de prueba en pre' })[0]
+  $ic = @($lis | Where-Object { $_ -match 'Comparaci.n con el original' })[0]
+  $ir = @($lis | Where-Object { $_ -match 'Correcci.n del migrado' })[0]
+  Comprueba 'Que ha hecho el script: la fase va entre el guion de prueba y la correccion' ($ic -and ([array]::IndexOf($lis, $ip) + 1) -eq [array]::IndexOf($lis, $ic) -and ([array]::IndexOf($lis, $ic) + 1) -eq [array]::IndexOf($lis, $ir)) $fases
+  $nt = @(Tareas $m.E 'comparar-pieza').Count
+  Comprueba 'con su cuenta de tareas' ($ic -match "hechas: $nt, atascadas: 0, pendientes: 0") $ic
+  $f = [regex]::Match($i, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'Que es cada fichero: la pagina 3 (con enlace) y datos/comparacion' ($f.Contains('href="3-original-vs-migrado.html"') -and $f.Contains('datos/comparacion')) $f
+  foreach ($par in @(@('index.html', $i), @('1-batch-original.html', (Pagina $m.Dir '1-batch-original.html')), @('2-problemas.html', (Pagina $m.Dir '2-problemas.html')), @('3-original-vs-migrado.html', $m.P3), @('4-correcciones.html', (Pagina $m.Dir '4-correcciones.html')))) {
+    $h = $par[1]
+    Comprueba "$($par[0]) : la navegacion lleva a Original frente a migrado" ($h -match 'href="3-original-vs-migrado\.html"' -and $h -match '>Original frente a migrado<')
+    Igual "$($par[0]) : aria-current solo en su pagina" 1 ([regex]::Matches($h, 'aria-current="page"').Count)
+    Comprueba "$($par[0]) : y es el de su enlace" ($h -match ('href="' + [regex]::Escape($par[0]) + '" aria-current="page"'))
+  }
+  $n = Nuevo-Escenario 'cmp-nada' @('Clase1')
+  [void](Migra $n (Basicos $n))
+  $t3 = Toca-De (Pagina $n.Out 'index.html')
+  Comprueba 'sin nada que revisar, lo que te toca nombra tambien las diferencias con el original' ($t3 -match 'Nada que revisar' -and $t3 -match 'ninguna diferencia con el original') $t3
 }
 
 # ================================ LANZADOR ================================
