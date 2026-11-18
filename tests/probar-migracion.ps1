@@ -25,9 +25,11 @@ $falsos = Join-Path $aqui 'falsos'
 . (Join-Path $aqui 'comun-banco.ps1')
 
 # ============================== UTILIDADES ==============================
-# Lanza migracion.ps1 con RESCATE_HOME en la carpeta del escenario: nunca toca los ajustes reales.
+# Lanza migracion.ps1 con RESCATE_HOME en la carpeta del escenario: nunca toca los ajustes reales. Sin la orden de la prueba en local de
+# mentira ($env:PRUEBA_LOCAL_FALSA, ver Migra-Motor) agrega -SinPruebaLocal: el banco no ejecuta nunca el prueba-local.ps1 de verdad.
 function Migra($E, [string[]]$A, [string]$Guion = '', [string[]]$Entrada = @(''), [string]$Programa = '') {
   if (-not $Programa) { $Programa = $Script }
+  if (-not $env:PRUEBA_LOCAL_FALSA -and $A -notcontains '-SinPruebaLocal') { $A = $A + '-SinPruebaLocal' }
   $env:RESCATE_HOME = $E.Home
   try { return Lanzar $Programa $A $Guion $Entrada }
   finally { $env:RESCATE_HOME = '' }
@@ -291,7 +293,7 @@ $Pruebas['3 fichas: cinco clases con el falso lento, nunca mas de 4 a la vez'] =
   Igual 'cinco llamadas' 5 $ll.Count
   Igual 'como mucho 4 a la vez, y llegan a 4' 4 (Max-Simultaneas $ll)
   Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
-  Igual 'estado: fase' 'lectura-hecha' (Estado $e).fase
+  Igual 'estado: fase' 'hecha' (Estado $e).fase
   Comprueba 'las 5 lecturas llevan --no-custom-instructions' (@($ll | Where-Object { $_.flags -match '--no-custom-instructions' }).Count -eq 5) (($ll | ForEach-Object { $_.flags }) -join ' | ')
   $la = @(Llamadas (Get-Ruta $e.Out 'registros/aptitud'))
   Comprueba 'la prueba de aptitud tambien' ($la.Count -eq 1 -and $la[0].flags -match '--no-custom-instructions') (($la | ForEach-Object { $_.flags }) -join ' | ')
@@ -570,6 +572,7 @@ $Pruebas['18 error interno: una excepcion deja parada error-interno y sale con 2
   Igual 'parada: registro es la carpeta de registros' (Get-Ruta $e.Out 'registros') $s.parada.registro
   Comprueba 'parada: la ayuda nombra el motivo' ($s.parada.ayuda -match 'error-interno')
   Comprueba 'la salida dice la parada' ($r.Salida -match 'error-interno') (Cola $r.Salida)
+  Comprueba 'fin es una hora tambien con un error interno' (Es-Hora $s.fin) "$($s.fin)"
 }
 
 $Pruebas['19 original: sin .java falla al arrancar; con varios modulos lee todos'] = {
@@ -624,7 +627,7 @@ $Pruebas['20 limite: -Limite N hace solo N tareas, sin parada, y relanzar hace e
   Igual 'relanzado sin limite sale con 0' 0 $r.Codigo
   Igual 'ahora estan las 5 hechas' 5 (Cuenta-Estado (Tareas $e) 'hecha')
   Igual 'cinco llamadas en total: las dos primeras no se repiten' 5 (Llamadas-De (Llamadas $e.Wt) 'clase-').Count
-  Igual 'la fase acaba' 'lectura-hecha' (Estado $e).fase
+  Igual 'la fase acaba' 'hecha' (Estado $e).fase
 }
 
 $Pruebas['21 racha: una llamada buena la pone a 0 y un tiempo agotado cuenta como fallo'] = {
@@ -757,7 +760,7 @@ $Pruebas['27 definicion con una clase fuera de la lista: reintento con correccio
     Comprueba "$n lleva una duda que lo dice" (@($j.dudas).Count -eq 1 -and "$($j.dudas[0])" -match 'pasos') "$($j.dudas -join ' / ')"
     Comprueba "$n sin probar y sin linea" ($j.probado -eq $false -and $j.linea -eq 0)
   }
-  Igual 'las fases siguientes se hacen igual' 'lectura-hecha' (Estado $e).fase
+  Igual 'las fases siguientes se hacen igual' 'hecha' (Estado $e).fase
 }
 
 $Pruebas['28 contrato sin jobs: un solo job con el nombre del batch, todas las clases (con tope) y su duda'] = {
@@ -914,13 +917,13 @@ $Pruebas['35 resumen: valido; si falta un job en el orden es invalido; sin redac
   Igual 'sin un job en el orden: atascada tras dos intentos' 'atascada 2' "$($t2[0].estado) $($t2[0].intentos)"
   Comprueba 'el motivo nombra el job que falta (aunque no tenga redaccion: el orden es de los jobs del mapa)' ($t2[0].motivo -match 'informeJob') $t2[0].motivo
   Comprueba 'no se escribe resumen.json' (-not (Test-Path -LiteralPath (Get-Ruta $c2.E.Out 'datos/resumen.json')))
-  Igual 'y la fase acaba' 'lectura-hecha' (Estado $c2.E).fase
+  Igual 'y la fase acaba' 'hecha' (Estado $c2.E).fase
   # ninguna redaccion hecha: no hay tarea
   $c3 = Corrida-Dos 'json-roto:^ficha-job:'
   Igual 'sin ninguna ficha de job hecha: ninguna llamada de resumen' 0 (Llamadas-De (Llamadas $c3.E.Wt) 'resumen').Count
   Comprueba 'ni resumen.json' (-not (Test-Path -LiteralPath (Get-Ruta $c3.E.Out 'datos/resumen.json')))
   Igual 'ni tarea' 0 @(Tareas $c3.E 'resumen').Count
-  Igual 'la fase acaba' 'lectura-hecha' (Estado $c3.E).fase
+  Igual 'la fase acaba' 'hecha' (Estado $c3.E).fase
 }
 
 $Pruebas['36 variables.json: yml, yaml y properties del worktree, con y sin valor por defecto'] = {
@@ -966,7 +969,7 @@ $Pruebas['37 reanudar: cortar tras el mapa no repite llamadas; cinco jobs, nunca
   $ll = Llamadas $e.Wt
   Igual 'catorce llamadas en total (8 clases, 1 definicion, 2 jobs, 1 resumen, 2 pruebas)' 14 $ll.Count
   Igual 'ninguna tarea se repitio' 14 @($ll | Select-Object -ExpandProperty id -Unique).Count
-  Igual 'la fase acaba' 'lectura-hecha' (Estado $e).fase
+  Igual 'la fase acaba' 'hecha' (Estado $e).fase
   # cinco jobs con el falso lento
   $e = Nuevo-Escenario 'cinco' @('Clase1')
   Escribe-Original $e @{ JobsConfig = (Jobs-Config @('job1:p1Step', 'job2:p2Step', 'job3:p3Step', 'job4:p4Step', 'job5:p5Step')) }
@@ -1005,10 +1008,10 @@ $Pruebas['38 guardas en los tipos nuevos: lo que ensucia el worktree se deshace 
   Igual 'las fichas de job siguen hechas' 'hecha hecha' ((Job-De $e 'cargaJob').redaccion + ' ' + (Job-De $e 'informeJob').redaccion)
 }
 
-$Pruebas['39 fases: fichas-clase, mapa, fichas-job, resumen, pruebas-pre y lectura-hecha; con una clase atascada se hacen igual'] = {
+$Pruebas['39 fases: fichas-clase, mapa, fichas-job, resumen, pruebas-pre y hecha; con una clase atascada se hacen igual'] = {
   $e = Escenario-Dos 'fases'
   $g = 'json-roto:^Auxiliar1$'
-  $esperadas = @(@('2', 'fichas-clase'), @('6', 'mapa'), @('1', 'fichas-job'), @('2', 'resumen'), @('1', 'pruebas-pre'), @('', 'lectura-hecha'))
+  $esperadas = @(@('2', 'fichas-clase'), @('6', 'mapa'), @('1', 'fichas-job'), @('2', 'resumen'), @('1', 'pruebas-pre'), @('', 'hecha'))
   foreach ($x in $esperadas) {
     $a = Basicos $e
     if ($x[0]) { $a += @('-Limite', $x[0]) }
@@ -1290,7 +1293,7 @@ $Pruebas['48 prueba-pre: la fase va despues del resumen; relanzar no repite las 
   Comprueba 'ni datos/pruebas' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/pruebas')) -or @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/pruebas') -File).Count -eq 0)
   $r = Migra $e (Basicos $e)
   Igual 'relanzado sale con 0' 0 $r.Codigo
-  Igual 'la fase acaba' 'lectura-hecha' (Estado $e).fase
+  Igual 'la fase acaba' 'hecha' (Estado $e).fase
   Igual 'dos llamadas de prueba-pre, una por job' 2 (Llamadas-De (Llamadas $e.Wt) 'prueba-').Count
   Igual 'catorce en total (8 clases, 1 definicion, 2 jobs, 1 resumen, 2 pruebas)' 14 (Llamadas $e.Wt).Count
   $r = Migra $e (Basicos $e)
@@ -1904,7 +1907,7 @@ function Commits-Rescate($E) {
 
 function Errores-De($Hall, [string]$Cat) { return @($Hall | Where-Object { $_.Cat -eq $Cat -and $_.Sev -eq 'error' }).Count }
 
-# Una copia del sistema (solo una vez) con el rescate.ps1 de mentira de tests/falsos en lugar del motor.
+# Una copia del sistema (solo una vez) con el rescate.ps1 y el prueba-local.ps1 de mentira de tests/falsos en lugar del motor y de la prueba en local.
 function Sistema-Motor {
   $sis = Join-Path $Dir 'sistema-motor'
   if (-not (Test-Path -LiteralPath $sis)) {
@@ -1912,18 +1915,24 @@ function Sistema-Motor {
     $raiz = Split-Path -Parent $Script
     foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
+    Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
   return (Join-Path $sis 'migracion.ps1')
 }
 
-# Lanza migracion.ps1 con el motor falso; $Orden dice que hace (ver tests/falsos/rescate.ps1).
-function Migra-Motor($E, $Orden, [string[]]$A, [string]$Programa = '') {
+# Lanza migracion.ps1 con el motor falso; $Orden dice que hace (ver tests/falsos/rescate.ps1). Con $Local, tambien la prueba en local
+# de mentira hace lo que diga (ver tests/falsos/prueba-local.ps1); sin $Local no tiene orden y sale con 1.
+function Migra-Motor($E, $Orden, [string[]]$A, [string]$Programa = '', $Local = $null) {
   if (-not $Programa) { $Programa = Sistema-Motor }
   $ctrl = Get-Ruta $E.Raiz 'motor-falso.json'
   Guarda-Json $ctrl $Orden
   $env:MOTOR_FALSO = $ctrl
+  if ($null -ne $Local) {
+    Guarda-Json (Get-Ruta $E.Raiz 'prueba-local-falsa.json') $Local
+    $env:PRUEBA_LOCAL_FALSA = Get-Ruta $E.Raiz 'prueba-local-falsa.json'
+  }
   try { return (Migra $E $A '' @('') $Programa) }
-  finally { $env:MOTOR_FALSO = '' }
+  finally { $env:MOTOR_FALSO = ''; $env:PRUEBA_LOCAL_FALSA = '' }
 }
 
 # El mismo sistema, con el motor de mentira esperando 3 s antes de arreglar (la correccion dura algo).
@@ -2030,7 +2039,7 @@ $Pruebas['72 correccion con el motor de verdad: commits rescate( con su paso, co
   Comprueba '2-problemas.html sigue ensenando los hallazgos de antes' ((Pagina $e.Out '2-problemas.html').Contains((Html $detalle)))
   $p = Pagina $e.Out '4-correcciones.html'
   Comprueba '4-correcciones.html lleva el commit y la rama' ($p.Contains($commits[0].Split('|')[0]) -and $p.Contains((Html $c.rama))) (Cola $r.Salida)
-  Igual 'estado.json: la fase es correccion y no hay parada' 'correccion ' ((Estado $e).fase + ' ' + (Estado $e).parada)
+  Igual 'estado.json: la fase acaba en hecha y no hay parada' 'hecha ' ((Estado $e).fase + ' ' + (Estado $e).parada)
 }
 
 $Pruebas['73 correccion: con -SoloInforme (parar) no se corrige nada, no hay registro ni correcciones.json y la pagina 4 dice que pediste parar'] = {
@@ -2693,7 +2702,7 @@ $Pruebas['90 comparar: una tarea por ficha con datos, sin llamar por las clases 
   $p = Prompt-De $e (@($t | Where-Object { $_.entradas.clase -ceq 'CargaReader' })[0])
   $reader = Ficha-De $e 'CargaReader'
   Comprueba 'el prompt lleva el tipo, los ficheros del migrado y un dato numerado por cada dato de la ficha' ($p -match '(?m)^TIPO: comparar-pieza$' -and $p -match "(?m)^MIGRADO: $RutaMigrado/CargaReader\.java$" -and [regex]::Matches($p, '(?m)^\d+\. \[').Count -eq @($reader.datos).Count) $p
-  Igual 'la estado.json acaba en lectura-hecha' 'lectura-hecha' (Estado $e).fase
+  Igual 'la estado.json acaba en hecha' 'hecha' (Estado $e).fase
   Igual 'el worktree queda limpio tras la fase' '' (GitEn $e.Wt @('status', '--porcelain'))
   $sal = $c.R.Salida
   $pre = $sal.IndexOf('Pruebas en pre:')
@@ -2765,7 +2774,7 @@ $Pruebas['92 comparar: citas inventadas, un dato que falta, un fichero que no le
     Comprueba "$n : no deja datos/comparacion" (-not (Test-Path -LiteralPath (Get-Ruta $e.Out ('datos/comparacion/' + $k.ficha + '.json'))))
   }
   Igual 'las otras cuatro clases con datos siguen hechas' 4 (Cuenta-Estado $t 'hecha')
-  Comprueba 'la fase termina: estado lectura-hecha' ((Estado $e).fase -eq 'lectura-hecha')
+  Comprueba 'la fase termina: estado hecha' ((Estado $e).fase -eq 'hecha')
   $toca = Toca-De (Pagina $e.Out 'index.html')
   Comprueba 'la portada lista las cuatro tareas atascadas de comparar' ($toca -match 'Tareas atascadas \(4\)' -and ([regex]::Matches($toca, 'comparar-clase-[0-9a-f]{8}').Count -eq 4)) $toca
   Comprueba 'la pagina 3 se monta igual' ((Pagina $e.Out '3-original-vs-migrado.html').Length -gt 0)
@@ -2795,7 +2804,7 @@ $Pruebas['93 comparar: un dato distinto sale primero en su job, con las dos cita
   Comprueba 'sin ningun distinto ni falta (la corrida normal) la portada no lo lleva' ((Toca-De (Pagina (Corrida-Comparar '').E.Out 'index.html')) -notmatch 'Diferencias con el original')
 }
 
-$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree haya cambiado (un fichero tocado y otro movido)'] = {
+$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga cambios sin commit (un fichero tocado y otro movido): la huella es el commit, no los ficheros'] = {
   $e = Escenario-Dos 'cmp-relanza'
   Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter')
   $r = Migra $e (Basicos $e) $GuionBase
@@ -2806,7 +2815,6 @@ $Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree
   Escribe $e.Wt "$RutaMigrado/CargaReader.java" ((Lee $e.Wt "$RutaMigrado/CargaReader.java") + "// cambiado despues`n")
   [void](GitEn $e.Wt @('mv', "$RutaMigrado/InformeWriter.java", "$RutaMigrado/InformeWriterMovido.java"))
   [void](GitEn $e.Wt @('add', '-A'))
-  [void](GitEn $e.Wt @('commit', '-q', '-m', 'cambio del migrado'))
   $r = Migra $e (Basicos $e) $GuionBase
   Igual 'la segunda sale con 0' 0 $r.Codigo
   $despues = @(Llamadas-De (Llamadas $e.Wt) 'comparar-')
@@ -3083,7 +3091,13 @@ $Pruebas['100 paginas: un dato o un paso sin cita encontrada sale como Sin compr
 
 $Pruebas['101 paginas: al acabar la lectura la portada dice que ha terminado, aunque no se corrija nada'] = {
   $c = Corrida-Dos $GuionBase
-  Igual 'la fase acaba en lectura-hecha' 'lectura-hecha' (Estado $c.E).fase
+  $s = Estado $c.E
+  Igual 'la fase acaba en hecha' 'hecha' $s.fase
+  # informe.ps1 aun no conoce la fase hecha (pieza E3): se comprueba con la fase que si conoce, la de la lectura terminada
+  $s.fase = 'lectura-hecha'
+  Guarda-Json (Get-Ruta $c.E.Out 'datos/estado.json') $s
+  $g = Genera-Informes $c.E.Out
+  Comprueba 'Write-Informes sale bien' ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
   $i = Pagina $c.E.Out 'index.html'
   Comprueba 'la portada dice que la lectura del original ha terminado' ($i -match 'La lectura del original ha terminado') (Cola $c.R.Salida)
   Comprueba 'y no que la pasada va por una fase' ($i -notmatch 'La pasada no ha terminado')
@@ -3147,6 +3161,283 @@ foreach ($k in $m.Keys) { 'MAPA|' + $k + '|' + (@($m[$k]) -join ',') }
   Comprueba 'es un diccionario con orden ordinal (Zeta antes que alfa)' ($r.Salida -match 'TIPO=SortedDictionary') (Cola $r.Salida)
   Comprueba 'sin commits entre la base y HEAD el mapa sale vacio' ($r.Salida -match '(?m)^SIN-CAMBIOS=0\r?$') (Cola $r.Salida)
   Comprueba 'con una base que no existe, vacio y sin romper' ($r.Salida -match '(?m)^GIT-FALLA=0\r?$' -and $r.Salida -match '(?m)^FIN\r?$') (Cola $r.Salida)
+}
+
+# Una clase Java de mentira: el paquete, el nombre y una linea con sangria por cada texto.
+function Texto-Java([string]$Clase, [string[]]$Lineas, [string]$Paquete = 'com.acme.life') {
+  return ("package $Paquete;`n`npublic class $Clase {`n" + (($Lineas | ForEach-Object { "    $_`n" }) -join '') + "}`n")
+}
+
+# True si es una hora en formato 's' (PowerShell 7 lee las fechas ISO de un JSON como datetime).
+function Es-Hora($V) { return (($V -is [datetime]) -or ("$V" -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')) }
+
+# Los 7 primeros caracteres del HEAD de un repo o worktree.
+function Head-Corto([string]$D, [string]$Rama = 'HEAD') { return (GitEn $D @('rev-parse', $Rama)).Substring(0, 7) }
+
+# Los datos/comparacion/<ficha>.json de una salida.
+function Comparaciones($E) {
+  $d = Get-Ruta $E.Out 'datos/comparacion'
+  if (-not (Test-Path -LiteralPath $d)) { return @() }
+  return @(Get-ChildItem -LiteralPath $d -File -Filter '*.json' | Sort-Object Name | ForEach-Object { Lee-Json $_.FullName })
+}
+
+# Las llamadas que apunto la prueba en local de mentira: Legacy|Migrado|Modelo|JavaLegacy|Si.
+function Llamadas-Local($E) {
+  $l = Get-Ruta $E.Raiz 'prueba-local-falsa.json.llamadas'
+  if (-not (Test-Path -LiteralPath $l)) { return @() }
+  return @([System.IO.File]::ReadAllLines($l))
+}
+
+# Cuantas veces se llamo a Copilot para comparar (una llamada por tarea con pieza y por intento).
+function Llamadas-Comparar($E) { return (Llamadas-De (Llamadas $E.Wt) 'comparar-').Count }
+
+# El escenario de los movidos: el original con Utils, Conexion y Parser y el migrado con los mismos tres. El motor falso, al corregir,
+# renombra Utils a Formatos, borra Conexion y pone 3 de sus lineas en Repositorio y borra Parser y pone 1 de sus lineas en Varios.
+$LineasUtils = @('static String formatoFecha = "dd/MM/yyyy";', 'static String formatoHora = "HH:mm:ss";', 'static String separador = ",";', 'static String decimales = "0.00";', 'static String vacio = "";')
+$LineasConexion = @('String servidor = "sftp.ejemplo.invalid";', 'int puerto = 2222;', 'String usuario = "carga-recibos";', 'String carpeta = "/entrada/recibos";', 'int reintentos = 3;')
+$LineasParser = @('int cabeceras = 1;', 'char delimitador = ''|'';', 'String comentario = "#";', 'boolean estricto = true;', 'int maxColumnas = 40;')
+$script:CorridaMovidos = $null
+function Corrida-Movidos {
+  if (-not $script:CorridaMovidos) {
+    $e = Nuevo-Escenario 'movidos' @('Utils', 'Conexion', 'Parser')
+    Escribe $e.Migrado "$RutaMigrado/Utils.java" (Texto-Java 'Utils' $LineasUtils)
+    Escribe $e.Migrado "$RutaMigrado/Conexion.java" (Texto-Java 'Conexion' $LineasConexion)
+    Escribe $e.Migrado "$RutaMigrado/Parser.java" (Texto-Java 'Parser' $LineasParser)
+    [void](GitEn $e.Migrado @('add', '-A'))
+    [void](GitEn $e.Migrado @('commit', '-q', '-m', 'clases migradas'))
+    $o = Orden-Base
+    $o.ficheros = [ordered]@{
+      "$RutaMigrado/Formatos.java" = (Texto-Java 'Formatos' $LineasUtils)
+      "$RutaMigrado/Repositorio.java" = (Texto-Java 'Repositorio' (@($LineasConexion[0..2]) + @(1..12 | ForEach-Object { "String tabla$_ = ""tabla-$_-recibos"";" })))
+      'src/main/java/com/acme/otro/Varios.java' = (Texto-Java 'Varios' (@($LineasParser[0]) + @(1..12 | ForEach-Object { "String varios$_ = ""valor-$_-varios"";" })) 'com.acme.otro')
+    }
+    $o.borrar = @("$RutaMigrado/Utils.java", "$RutaMigrado/Conexion.java", "$RutaMigrado/Parser.java")
+    $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+    $script:CorridaMovidos = [pscustomobject]@{ E = $e; R = (Migra-Motor $e $o (Corrige $e)) }
+  }
+  return $script:CorridaMovidos
+}
+
+function Tarea-Clase($E, [string]$Clase) { return @(Tareas $E 'comparar-pieza' | Where-Object { $_.entradas.clase -ceq $Clase })[0] }
+
+$Pruebas['103 (E2) comparar sigue los ficheros movidos: un renombrado va a su nuevo nombre, un borrado a donde fueron 2 o mas de sus lineas y el que solo dejo 1 queda sin pieza y sin llamada'] = {
+  $c = Corrida-Movidos
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  Igual 'el motor falso corrigio' 1 (Llamadas-Motor $e 'fix').Count
+  Comprueba 'el worktree ya no tiene Utils, Conexion ni Parser y si Formatos y Repositorio' ((-not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$RutaMigrado/Utils.java"))) -and (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$RutaMigrado/Parser.java"))) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$RutaMigrado/Formatos.java")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$RutaMigrado/Repositorio.java"))) (Cola $c.R.Salida)
+  $u = Tarea-Clase $e 'Utils'
+  $k = Tarea-Clase $e 'Conexion'
+  $p = Tarea-Clase $e 'Parser'
+  Comprueba 'hay una tarea por clase' ($u -and $k -and $p) (Cola $c.R.Salida)
+  if (-not ($u -and $k -and $p)) { return }
+  Igual 'Utils (renombrada): migrado = Formatos.java' "$RutaMigrado/Formatos.java" (@($u.entradas.migrado) -join ',')
+  Igual 'Conexion (borrada, 3 lineas a Repositorio): migrado = Repositorio.java' "$RutaMigrado/Repositorio.java" (@($k.entradas.migrado) -join ',')
+  Igual 'Parser (borrada, 1 linea a Varios): ningun fichero' 0 @($p.entradas.migrado).Count
+  Igual 'Parser nace hecha' 'hecha' $p.estado
+  Comprueba 'Parser: todos sus datos sin-pieza' (@($p.resultado.comparacion | Where-Object { $_.estado -ceq 'sin-pieza' }).Count -eq [int]$p.entradas.ndatos) (ConvertTo-Json -InputObject $p.resultado -Depth 5 -Compress)
+  Igual 'Parser: ninguna llamada' 0 (Llamadas-De (Llamadas $e.Wt) ($p.id)).Count
+  Igual 'Utils y Conexion: una llamada cada una' 1 (Llamadas-De (Llamadas $e.Wt) ($u.id)).Count
+  Comprueba 'el prompt de Utils da el fichero nuevo' ((Prompt-De $e $u).Contains("MIGRADO: $RutaMigrado/Formatos.java")) (Prompt-De $e $u)
+  $x = @(Comparaciones $e | Where-Object { $_.clase -ceq 'Utils' })[0]
+  Comprueba 'datos/comparacion de Utils: migrado Formatos y todos igual con su cita' ($x -and @($x.migrado) -join ',' -ceq "$RutaMigrado/Formatos.java" -and @($x.datos | Where-Object { $_.estado -ceq 'igual' -and $_.fichero -ceq "$RutaMigrado/Formatos.java" -and $_.cita }).Count -eq @($x.datos).Count) (ConvertTo-Json -InputObject $x -Depth 5 -Compress)
+}
+
+$Pruebas['104 (E2) con corregir, comparar va despues del arreglo: la consola lo cuenta despues, las tareas llevan el commit del worktree y el momento despues-de-corregir'] = {
+  $c = Corrida-Movidos
+  $e = $c.E
+  $cor = $c.R.Salida.IndexOf('Correccion: ')
+  $cmp = $c.R.Salida.IndexOf('Comparacion con el original:')
+  Comprueba 'la consola cuenta la correccion antes que la comparacion' ($cor -ge 0 -and $cmp -gt $cor) (Cola $c.R.Salida)
+  $despues = Head-Corto $e.Wt
+  Comprueba 'el HEAD del worktree no es el de antes de corregir' ($despues -ne (Head-Corto $e.Migrado 'main')) $despues
+  $cs = @(Comparaciones $e)
+  Comprueba 'hay un datos/comparacion por ficha con datos' ($cs.Count -ge 3) "$($cs.Count)"
+  Igual 'todos con el momento despues-de-corregir' $cs.Count @($cs | Where-Object { $_.momento -ceq 'despues-de-corregir' }).Count
+  Igual 'todos con el commit del HEAD del worktree' $cs.Count @($cs | Where-Object { $_.commit -ceq $despues }).Count
+  $t = @(Tareas $e 'comparar-pieza')
+  Igual 'las tareas llevan el mismo commit y momento' $t.Count @($t | Where-Object { $_.entradas.commit -ceq $despues -and $_.entradas.momento -ceq 'despues-de-corregir' }).Count
+  Igual 'la fase acaba en hecha' 'hecha' (Estado $e).fase
+}
+
+$Pruebas['105 (E2) con -SoloInforme, comparar va antes de lectura-hecha y dice antes-de-corregir; si luego se corrige se rehace, y una relanzada con -SoloInforme tras corregir sigue diciendo despues'] = {
+  $e = Nuevo-Escenario 'orden' @('Utils', 'Conexion')
+  Migrado-Con $e @('Utils', 'Conexion')
+  $o = Orden-Base
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  $r = Migra-Motor $e $o (Basicos $e)
+  Igual 'con -SoloInforme sale con 0' 0 $r.Codigo
+  $inicio = Head-Corto $e.Migrado 'main'
+  $cs = @(Comparaciones $e)
+  Comprueba 'hay comparaciones' ($cs.Count -ge 2) (Cola $r.Salida)
+  Igual 'momento antes-de-corregir' $cs.Count @($cs | Where-Object { $_.momento -ceq 'antes-de-corregir' }).Count
+  Igual 'con el commit de partida' $cs.Count @($cs | Where-Object { $_.commit -ceq $inicio }).Count
+  Igual 'ninguna llamada fix del motor' 0 (Llamadas-Motor $e 'fix').Count
+  $cmp = $r.Salida.IndexOf('Comparacion con el original:')
+  $par = $r.Salida.IndexOf('No se corrige nada')
+  Comprueba 'la comparacion sale antes que el paso de la correccion, que va despues de lectura-hecha' ($cmp -ge 0 -and $par -gt $cmp) (Cola $r.Salida)
+  Igual 'la fase acaba en hecha' 'hecha' (Estado $e).fase
+  $antes = Llamadas-Comparar $e
+  # ahora se corrige: la comparacion se rehace con el HEAD nuevo y dice despues
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'corregir despues sale con 0' 0 $r.Codigo
+  $fin = Head-Corto $e.Wt
+  $cs = @(Comparaciones $e)
+  Igual 'ahora el momento es despues-de-corregir' $cs.Count @($cs | Where-Object { $_.momento -ceq 'despues-de-corregir' -and $_.commit -ceq $fin }).Count
+  Comprueba 'se llamo otra vez a Copilot para comparar' ((Llamadas-Comparar $e) -gt $antes) "$antes -> $(Llamadas-Comparar $e)"
+  $antes = Llamadas-Comparar $e
+  # relanzada con -SoloInforme tras una correccion completa: el momento sale de git, no del orden de las fases
+  $r = Migra-Motor $e $o (Basicos $e)
+  Igual 'con -SoloInforme otra vez sale con 0' 0 $r.Codigo
+  $cs = @(Comparaciones $e)
+  Igual 'sigue diciendo despues-de-corregir' $cs.Count @($cs | Where-Object { $_.momento -ceq 'despues-de-corregir' -and $_.commit -ceq $fin }).Count
+  Igual 'y no vuelve a llamar a Copilot' $antes (Llamadas-Comparar $e)
+}
+
+$Pruebas['106 (E2) relanzar: el mismo comando no vuelve a comparar; con un commit nuevo en el worktree la comparacion se rehace'] = {
+  $e = Nuevo-Escenario 'relanza' @('Utils', 'Conexion')
+  Migrado-Con $e @('Utils', 'Conexion')
+  $o = Orden-Base
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'la primera sale con 0' 0 $r.Codigo
+  $n1 = Llamadas-Comparar $e
+  Comprueba 'compara con Copilot' ($n1 -ge 2) "$n1"
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'la segunda no llama a Copilot para comparar' $n1 (Llamadas-Comparar $e)
+  Igual 'ni vuelve a corregir' 1 (Llamadas-Motor $e 'fix').Count
+  [void](GitEn $e.Wt @('commit', '-q', '--allow-empty', '-m', 'rescate(estructura): otro arreglo'))
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'la tercera sale con 0' 0 $r.Codigo
+  Igual 'con un commit nuevo se vuelven a llamar las mismas tareas' (2 * $n1) (Llamadas-Comparar $e)
+  $cs = @(Comparaciones $e)
+  Igual 'y llevan el commit nuevo' $cs.Count @($cs | Where-Object { $_.commit -ceq (Head-Corto $e.Wt) }).Count
+}
+
+$Pruebas['107 (E2) parada en la correccion: no hay comparar despues, sale con 2 y fin lleva la hora'] = {
+  $e = Nuevo-Escenario 'para-correccion' @('Utils')
+  Migrado-Con $e @('Utils')
+  $o = Orden-Base
+  $o.codigo = 3
+  $o.salida = @('git commit ha fallado')
+  $r = Migra-Motor $e $o (Corrige $e) '' ([ordered]@{ codigo = 0; salida = @('no deberia llamarse') })
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Igual 'parada: git' 'git' $s.parada.motivo
+  Igual 'la prueba en local no se llama' 0 @(Llamadas-Local $e).Count
+  Comprueba 'y su estado sigue en null' ($s.PSObject.Properties.Name -contains 'pruebaLocal' -and $null -eq $s.pruebaLocal)
+  Igual 'ninguna tarea de comparar' 0 @(Tareas $e 'comparar-pieza').Count
+  Igual 'ningun datos/comparacion' 0 @(Comparaciones $e).Count
+  Comprueba 'la consola no cuenta la comparacion' ($r.Salida -notmatch 'Comparacion con el original:') (Cola $r.Salida)
+  Comprueba 'fin es una hora' (Es-Hora $s.fin) "$($s.fin)"
+  Comprueba 'la fase no es hecha' ($s.fase -ne 'hecha') $s.fase
+}
+
+$Pruebas['108 (E2) fin: vale vacio mientras corre y una hora al acabar, con parada, con -Limite y con error interno'] = {
+  $e = Nuevo-Escenario 'fin' @('Clase1')
+  $ctrl = Get-Ruta $e.Raiz 'motor-falso.json'
+  Guarda-Json $ctrl (Orden-Base)
+  $lista = @(@('-NoProfile', '-File', (Sistema-Motor-Lento)) + (Corrige $e) | ForEach-Object { '"' + $_ + '"' })
+  $env:RESCATE_HOME = $e.Home
+  $env:MOTOR_FALSO = $ctrl
+  try {
+    $p = Start-Process -FilePath $ps -ArgumentList $lista -RedirectStandardOutput (Get-Ruta $e.Raiz 'fin-salida.txt') -RedirectStandardError (Get-Ruta $e.Raiz 'fin-error.txt') -PassThru
+    $vista = $null
+    for ($i = 0; $i -lt 480 -and -not $p.HasExited; $i++) {
+      Start-Sleep -Milliseconds 250
+      $s = $null
+      try { $s = Estado $e } catch { $s = $null }
+      if ($s -and $s.fase -eq 'correccion') { $vista = $s; break }
+    }
+    $p.WaitForExit()
+  }
+  finally { $env:RESCATE_HOME = ''; $env:MOTOR_FALSO = '' }
+  Comprueba 'se vio el estado.json mientras el motor corregia' ($null -ne $vista) (Get-Content -LiteralPath (Get-Ruta $e.Raiz 'fin-salida.txt') -Tail 8 | Out-String)
+  if ($null -ne $vista) { Comprueba 'mientras corre, fin vale vacio' ($vista.PSObject.Properties.Name -contains 'fin' -and "$($vista.fin)" -ceq '') "'$($vista.fin)'" }
+  $s = Estado $e
+  Comprueba 'al acabar bien, fin es una hora' (Es-Hora $s.fin) "$($s.fin)"
+  Igual 'y la fase es hecha' 'hecha' $s.fase
+  $f = Nuevo-Escenario 'fin-limite' @('Clase1', 'Clase2')
+  $r = Migra $f ((Basicos $f) + @('-Limite', '1'))
+  Igual 'con -Limite sale con 0' 0 $r.Codigo
+  $s = Estado $f
+  Comprueba 'con -Limite, fin es una hora' (Es-Hora $s.fin) "$($s.fin)"
+  Comprueba 'y la fase no es hecha: quedan tareas' ($s.fase -ne 'hecha') $s.fase
+}
+
+$JobsLocal = @([ordered]@{ job = 'cargaJob'; casos = 3; iguales = 2; distintos = 1; sinProbar = 0 }, [ordered]@{ job = 'informeJob'; casos = 2; iguales = 1; distintos = 1; sinProbar = 0 })
+
+$Pruebas['109 (E2) fase prueba-local: una llamada con -Si, el modelo y las carpetas de la pasada, despues de comparar; el codigo 2 es hecha, deja registro y la consola da las cuentas'] = {
+  $e = Nuevo-Escenario 'local' @('Utils')
+  Migrado-Con $e @('Utils')
+  $o = Orden-Base
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  $l = [ordered]@{ codigo = 2; salida = @('LINEA-DEL-FALSO'); json = [ordered]@{ jobs = $JobsLocal } }
+  $r = Migra-Motor $e $o (Corrige $e) '' $l
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  $ll = @(Llamadas-Local $e)
+  Igual 'el falso se llama una vez' 1 $ll.Count
+  Igual 'con el -Legacy y el -Migrado de la pasada, el modelo, sin -JavaLegacy y con -Si' "$($s.legacy)|$($s.migrado)|modelo-x||True" $ll[0]
+  Comprueba 'estado.pruebaLocal es un objeto' ($null -ne $s.pruebaLocal) (Cola $r.Salida)
+  if ($null -eq $s.pruebaLocal) { return }
+  Igual 'resultado hecha' 'hecha' $s.pruebaLocal.resultado
+  Igual 'codigo 2' 2 $s.pruebaLocal.codigo
+  Comprueba 'minutos es un numero' ($s.pruebaLocal.minutos -is [double] -or $s.pruebaLocal.minutos -is [int] -or $s.pruebaLocal.minutos -is [decimal]) "$($s.pruebaLocal.minutos)"
+  Igual 'sin detalle (solo se cuenta en un fallo)' '' "$($s.pruebaLocal.detalle)"
+  Igual 'el registro es registros/prueba-local.log' 'registros/prueba-local.log' $s.pruebaLocal.registro
+  Comprueba 'el registro existe y lleva la salida del falso' ((Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/prueba-local.log')) -and (Lee $e.Out 'registros/prueba-local.log').Contains('LINEA-DEL-FALSO'))
+  Igual 'la fase acaba en hecha' 'hecha' $s.fase
+  $cmp = $r.Salida.IndexOf('Comparacion con el original:')
+  $viva = $r.Salida.IndexOf('LINEA-DEL-FALSO')
+  $linea = $r.Salida.IndexOf('Prueba en local: 5 casos, 3 iguales, 2 distintos (')
+  Comprueba 'la consola: primero la comparacion, luego la salida en vivo del falso y al final la linea con las cuentas' ($cmp -ge 0 -and $viva -gt $cmp -and $linea -gt $viva) (Cola $r.Salida)
+  Comprueba 'la linea acaba con el detalle: la pagina 3' ($r.Salida -match 'min\)\. Detalle: [^\r\n]*3-original-vs-migrado\.html') (Cola $r.Salida)
+  Comprueba 'el falso dejo datos/prueba-local.json' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/prueba-local.json'))
+}
+
+$Pruebas['110 (E2) prueba-local que falla: un aviso con el codigo, las tres ultimas lineas con texto y el registro; resultado fallo, fase hecha y salida 0'] = {
+  $e = Nuevo-Escenario 'local-falla' @('Clase1')
+  $l = [ordered]@{ codigo = 1; salida = @('uno', 'dos', '', 'tres', 'no compila') }
+  $r = Migra-Motor $e (Orden-Base) (Corrige $e) '' $l
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  Comprueba 'estado.pruebaLocal es un objeto' ($null -ne $s.pruebaLocal) (Cola $r.Salida)
+  if ($null -eq $s.pruebaLocal) { return }
+  Igual 'resultado fallo' 'fallo' $s.pruebaLocal.resultado
+  Igual 'codigo 1' 1 $s.pruebaLocal.codigo
+  Igual 'detalle: las tres ultimas lineas con texto' 'dos / tres / no compila' $s.pruebaLocal.detalle
+  Igual 'la fase acaba en hecha: un fallo no para la pasada' 'hecha' $s.fase
+  Comprueba 'la consola avisa con el codigo, el detalle y el registro' ($r.Salida -match 'Prueba en local: [^\r\n]*codigo 1[^\r\n]*dos / tres / no compila[^\r\n]*prueba-local\.log') (Cola $r.Salida)
+  Comprueba 'y no da cuentas: no hay datos/prueba-local.json' ($r.Salida -notmatch 'Prueba en local: \d+ casos')
+}
+
+$Pruebas['111 (E2) prueba-local: -SinPruebaLocal no llama al falso y deja saltada; -JavaLegacy llega al falso'] = {
+  $e = Nuevo-Escenario 'local-saltada' @('Clase1')
+  $o = Orden-Base
+  $l = [ordered]@{ codigo = 0; salida = @('LINEA-DEL-FALSO') }
+  $r = Migra-Motor $e $o ((Corrige $e) + '-SinPruebaLocal') '' $l
+  Igual 'con -SinPruebaLocal sale con 0' 0 $r.Codigo
+  Igual 'el falso no se llama' 0 @(Llamadas-Local $e).Count
+  $s = Estado $e
+  Comprueba 'estado.pruebaLocal es un objeto' ($null -ne $s.pruebaLocal) (Cola $r.Salida)
+  if ($null -eq $s.pruebaLocal) { return }
+  Igual 'resultado saltada' 'saltada' $s.pruebaLocal.resultado
+  Comprueba 'codigo null' ($null -eq $s.pruebaLocal.codigo)
+  Igual 'la fase acaba en hecha' 'hecha' $s.fase
+  Comprueba 'no hay registro de la prueba en local' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/prueba-local.log')))
+  # sin -SinPruebaLocal, y con el JDK del original, se lanza aunque ya hubiera una pasada: siempre se llama
+  $r = Migra-Motor $e $o ((Corrige $e) + @('-JavaLegacy', 'jdk8-x')) '' $l
+  Igual 'con -JavaLegacy sale con 0' 0 $r.Codigo
+  $ll = @(Llamadas-Local $e)
+  Igual 'el falso se llama una vez y recibe el -JavaLegacy tal cual' "$((Estado $e).legacy)|$((Estado $e).migrado)|modelo-x|jdk8-x|True" ($ll -join ';')
+  Igual 'ahora el resultado es hecha' 'hecha' (Estado $e).pruebaLocal.resultado
+}
+
+$Pruebas['112 (E2) el banco nunca ejecuta el prueba-local.ps1 de verdad: ninguna carpeta *-prueba-local en el banco ni debajo de los escenarios'] = {
+  $c = @(Get-ChildItem -LiteralPath $Dir -Directory -Recurse -Depth 2 -Filter '*-prueba-local')
+  Igual 'ninguna carpeta *-prueba-local' '' ($c | ForEach-Object { $_.FullName }) 
 }
 
 # ================================ LANZADOR ================================

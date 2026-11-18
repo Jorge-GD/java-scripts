@@ -1151,11 +1151,18 @@ function Get-MapaMovidos([string]$Dir, [string]$Base) {
 }
 
 # Los ficheros del migrado (de $Java, los .java del worktree) que lee la comparacion de una clase del original: los que se
-# llaman como ella; si no hay ninguno, los que comparten alguna palabra de su nombre, los que mas primero y luego por ruta.
+# llaman como ella; si no hay ninguno, los de ahora a los que fue el fichero que se llamaba como ella (el mapa de lo que movio la
+# correccion, en su orden); si sigue sin haber, los que comparten alguna palabra de su nombre, los que mas primero y luego por ruta.
 # FicherosComparar como mucho. Sin ninguno, la clase no se compara con IA.
-function Select-FicherosMigrado([string]$Clase, $Java) {
+function Select-FicherosMigrado([string]$Clase, $Java, $Mapa) {
+  $rutas = @($Java | ForEach-Object { Get-Rel $RepoRoot $_.FullName })
   $mismos = @($Java | Where-Object { $_.BaseName -ceq $Clase } | ForEach-Object { Get-Rel $RepoRoot $_.FullName } | Sort-Object)
   if ($mismos.Count -gt 0) { return @($mismos | Select-Object -First ([int]$Cfg.FicherosComparar)) }
+  $movidos = @()
+  foreach ($vieja in $Mapa.Keys) {
+    if ([System.IO.Path]::GetFileNameWithoutExtension($vieja) -ceq $Clase) { $movidos += @($Mapa[$vieja] | Where-Object { $rutas -ccontains $_ }) }
+  }
+  if ($movidos.Count -gt 0) { return @($movidos | Select-Object -Unique | Select-Object -First ([int]$Cfg.FicherosComparar)) }
   $palabras = @(Get-PalabrasClase $Clase)
   $candidatos = @()
   foreach ($f in $Java) {
@@ -1165,11 +1172,16 @@ function Select-FicherosMigrado([string]$Clase, $Java) {
   return @($candidatos | Sort-Object @{ Expression = 'N'; Descending = $true }, Rel | Select-Object -First ([int]$Cfg.FicherosComparar) | ForEach-Object { $_.Rel })
 }
 
-# Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea. Sin ninguno
-# no hay llamada: la tarea nace hecha, con todos sus datos 'sin-pieza'. La huella es la de los datos de la ficha, no la de las rutas:
-# una tarea hecha sigue valiendo aunque la correccion mueva ficheros del worktree.
-function Get-TareasComparar([bool]$ConservarAtascadas) {
+# Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea, con el
+# commit del worktree con el que se eligieron y el momento: despues-de-corregir si hay algun commit rescate( entre <Base> y HEAD (lo
+# dice git, no el orden de las fases), antes-de-corregir si no. Sin ficheros no hay llamada: la tarea nace hecha, con todos sus datos
+# 'sin-pieza'. La huella lleva el HEAD ademas de los datos de la ficha: con un commit nuevo la comparacion se rehace y con el mismo no.
+function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
   $java = @(Get-JavaOriginal $RepoRoot)
+  $mapa = Get-MapaMovidos $RepoRoot $Base
+  $head = Get-Head $RepoRoot
+  $momento = 'antes-de-corregir'
+  if (@((Invoke-Git $RepoRoot @('log', '--format=%s', "$Base..HEAD")).Salida | Where-Object { $_ -match '^rescate\(' }).Count -gt 0) { $momento = 'despues-de-corregir' }
   $tareas = @()
   foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $Datos 'fichas') -File -Filter 'clase-*.json' | Sort-Object Name)) {
     $x = Read-Json $f.FullName
@@ -1181,8 +1193,11 @@ function Get-TareasComparar([bool]$ConservarAtascadas) {
       $lineas += "   Original: $($x.fichero):$($lista[$k].linea) | cita: $($lista[$k].cita)"
     }
     $texto = $lineas -join "`n"
-    $migrado = @(Select-FicherosMigrado $x.clase $java)
-    $entradas = [pscustomobject]@{ clase = $x.clase; fichero = $x.fichero; migrado = $migrado; ndatos = $lista.Count; datos = $texto; huella = (Get-Hash8 $texto) }
+    $migrado = @(Select-FicherosMigrado $x.clase $java $mapa)
+    $entradas = [pscustomobject]@{
+      clase = $x.clase; fichero = $x.fichero; migrado = $migrado; ndatos = $lista.Count; datos = $texto
+      huella = (Get-Hash8 ($texto + '|' + $head)); commit = $head.Substring(0, 7); momento = $momento
+    }
     $t = New-TareaTipo 'comparar-pieza' ('comparar-' + $x.id) $x.id ('datos/comparacion/' + $x.id + '.json') $entradas
     if ($migrado.Count -eq 0) {
       $t.estado = 'hecha'
@@ -1237,10 +1252,11 @@ function Test-Comparar($T, [string]$Dir) {
   return (New-Resultado $true '' ([ordered]@{ comparacion = @($lista | Sort-Object { $_.dato }) }))
 }
 
-# Escribe datos\comparacion\<ficha>.json de cada tarea hecha: la clase, su fichero del original, los del migrado y, por dato, lo que se dijo.
+# Escribe datos\comparacion\<ficha>.json de cada tarea hecha: la clase, su fichero del original, los del migrado, el momento y el commit con que se
+# eligieron y, por dato, lo que se dijo.
 function Save-Comparaciones($Tareas) {
   foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
-    $o = [ordered]@{ ficha = $t.ficha; clase = $t.entradas.clase; ficheroOriginal = $t.entradas.fichero; migrado = @($t.entradas.migrado); datos = @($t.resultado.comparacion) }
+    $o = [ordered]@{ ficha = $t.ficha; clase = $t.entradas.clase; ficheroOriginal = $t.entradas.fichero; migrado = @($t.entradas.migrado); momento = $t.entradas.momento; commit = $t.entradas.commit; datos = @($t.resultado.comparacion) }
     Write-Json (Join-Path (Join-Path $Datos 'comparacion') ($t.ficha + '.json')) $o
   }
 }

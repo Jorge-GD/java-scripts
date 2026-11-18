@@ -151,6 +151,21 @@ Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 20
 - Las comprobaciones son por imports y texto: avisan de lo evidente. No sustituyen la revisión de una persona.
 - El worktree no trae los ficheros que git ignora (configuración local, `.env`). El script los lista al crearlo.
 
+## migracion.ps1
+
+Migración desatendida de un batch Java: lee el original, mide el migrado, lo corrige, compara y prueba. Un comando, dos preguntas (modelo y qué hacer al acabar el informe) y las cinco páginas del informe en `<Migrado>\migracion-<batch>\`. Las cabeceras del script explican cada fase.
+
+```powershell
+.\migracion.ps1 -Legacy C:\ruta\life-java8 -Migrado C:\ruta\batch-life -Si       # lee, corrige, compara y prueba en local
+.\migracion.ps1 -Legacy ... -Migrado ... -SoloInforme                                # lee y compara; no corrige
+.\migracion.ps1 ... -SinPruebaLocal                                                  # sin la prueba en local del final
+.\migracion.ps1 ... -JavaLegacy C:\jdk8                                              # el JDK del original, si no compila con el de Maven
+```
+
+El orden con la respuesta `corregir` (`-Si`): diagnóstico, lectura (`fichas-clase`, `mapa`, `fichas-job`, `resumen`, `pruebas-pre`), `lectura-hecha`, `correccion`, **`comparar`** y **`prueba-local`**. Con `parar` (`-SoloInforme`), `comparar` va antes de `lectura-hecha`, sobre el migrado tal como llegó, y no hay corrección. Si la corrección se para, no se sigue con nada más. `comparar` sigue con git lo que la corrección movió: el renombrado de un fichero (`git diff -M`) y, de un fichero borrado, los ficheros donde aparecen 2 o más de sus líneas. Cada comparación dice con qué commit y en qué momento (`antes-de-corregir` o `despues-de-corregir`) se hizo, y se rehace si el worktree tiene un commit nuevo.
+
+La última fase llama a `prueba-local.ps1` (con el mismo modelo y `-Si`) y su salida sale por la consola y queda en `registros\prueba-local.log`. Un fallo se avisa y la pasada sigue: el código de salida de `migracion.ps1` no depende de esta fase (0 bien, 1 no pudo arrancar, 2 se paró). `datos\estado.json` lleva `pruebaLocal` (`resultado`: `hecha`, `fallo` o `saltada`, y el código, los minutos, el detalle y el registro), `fase` (`hecha` al acabar todo, sin parada ni tareas pendientes) y `fin` (vacío mientras corre; la hora al salir, también con parada).
+
 ## prueba-local.ps1
 
 Prueba en local, caso a caso, que el batch migrado hace lo mismo que el original. Se lanza **después** de `migracion.ps1`, que deja los casos de cada job (el camino feliz y los límites) en `<Migrado>\migracion-<batch>\datos\pruebas\<job>.json`. Si no están, para y dice que se lance antes `migracion.ps1`. Necesita `comun.ps1`, `tareas.ps1` y `tareas\` junto al script, `git`, Maven y Copilot CLI.
