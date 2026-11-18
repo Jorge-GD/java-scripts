@@ -118,8 +118,18 @@ function Comprueba-Tope([string]$CarpetaPids, [double]$Segundos, [int]$Limite, [
 function Invoke-Banco($Pruebas, [string]$Titulo) {
   Write-Host ('Script: ' + $Titulo)
   Write-Host ('Carpeta de pruebas: ' + $Dir)
+  # BANCO_PARTE=i/n corre solo una de n partes (las pruebas i, i+n, i+2n...), para lanzar las partes a la vez.
+  # (nombres raros a proposito: los bloques de las pruebas ven las variables de esta funcion)
+  $bancoParte = 0; $bancoPartes = 1
+  if ("$env:BANCO_PARTE" -match '^(\d+)/(\d+)$' -and [int]$Matches[2] -gt 1 -and [int]$Matches[1] -ge 1 -and [int]$Matches[1] -le [int]$Matches[2]) {
+    $bancoParte = [int]$Matches[1] - 1; $bancoPartes = [int]$Matches[2]
+    Write-Host ('Parte ' + $env:BANCO_PARTE)
+  }
+  $bancoIndice = -1
   foreach ($nombre in $Pruebas.Keys) {
     if ($Solo -and $nombre -notlike ('*' + $Solo + '*')) { continue }
+    $bancoIndice++
+    if (($bancoIndice % $bancoPartes) -ne $bancoParte) { continue }
     Write-Host ''
     Write-Host $nombre
     try { & $Pruebas[$nombre] }
