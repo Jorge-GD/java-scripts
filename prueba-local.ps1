@@ -142,7 +142,7 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
 }
 
 # Lo que sirve para entender un fallo de Maven: las primeras lineas [ERROR] o, si no hay, las ultimas.
-function Get-ErrorMaven($Salida) {
+function Get-FalloMaven($Salida) {
   $e = @($Salida | Where-Object { $_ -match '^\[ERROR\]' } | Select-Object -First ([int]$Cfg.LineasError))
   if ($e.Count -eq 0) { $e = @($Salida | Select-Object -Last ([int]$Cfg.LineasError)) }
   return ($e -join "`n")
@@ -159,7 +159,7 @@ function Get-Porque([string]$Sal, $Maven) {
   $err = Join-Path $Sal 'error.txt'
   if (Test-Path -LiteralPath $err) { return ('error.txt: ' + (@([System.IO.File]::ReadAllLines($err) | Select-Object -First ([int]$Cfg.LineasError)) -join "`n")) }
   if ($null -eq $Maven) { return 'no ha dejado estado.txt.' }
-  return ("no ha dejado estado.txt. Maven dice:`n" + (Get-ErrorMaven $Maven.Salida))
+  return ("no ha dejado estado.txt. Maven dice:`n" + (Get-FalloMaven $Maven.Salida))
 }
 
 # ================================ TAREAS ================================
@@ -240,7 +240,8 @@ function Get-Ejemplos([string]$Dir) {
   return @()
 }
 
-# La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado.
+# La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado. El
+# commit no entra en la huella: un arnes de antes se vuelve a comprobar en el commit de ahora (Use-ArnesGuardado).
 function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$Jobs) {
   $ejemplos = @(Get-Ejemplos $Dir)
   $lista = '(No hay tests de ejemplo: escribe el test desde cero.)'
@@ -250,7 +251,7 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $pom = 'no'
   if ($Repo -eq 'original') { $pom = 'si' }
   $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom }
-  $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = (Get-Hash8 ((Get-Head $Dir) + '|' + $Test + '|' + ($Jobs -join ','))); prompt = $prompt }
+  $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = (Get-Hash8 ($Test + '|' + ($Jobs -join ','))); prompt = $prompt }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
 }
@@ -295,7 +296,7 @@ function Test-Arnes($T, [string[]]$Jobs) {
     if ($m) { return $m }
   }
   $r = Invoke-Maven $dir $esOrig @('test-compile') "arnes $($T.entradas.repo), compilar"
-  if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-ErrorMaven $r.Salida)) }
+  if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r.Salida)) }
   foreach ($j in $Jobs) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/vacio") -Force) }
   Remove-Carpeta (Join-Ruta $dir 'target/prueba-local')
   $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest') "arnes $($T.entradas.repo), caso vacio"
@@ -314,6 +315,18 @@ function Save-Arnes($T) {
   Remove-Carpeta $dest
   foreach ($rel in @(Get-Cambios $dir)) { Copy-Fichero (Join-Ruta $dir $rel) (Join-Ruta $dest $rel) }
   Save-Copia $dir
+}
+
+# Pone en su copia el arnes hecho en otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede
+# ser otro). Si ya no la pasa, se deshace y la tarea vuelve a empezar.
+function Use-ArnesGuardado($T, [string[]]$Jobs) {
+  Copy-Carpeta (Join-Ruta $Local "arnes/$($T.entradas.repo)") $T.entradas.copia
+  $m = Test-Arnes $T $Jobs
+  if (-not $m) { Save-Copia $T.entradas.copia; return }
+  Undo-Copia $T.entradas.copia
+  Aviso "El test PruebaLocalTest del $($T.entradas.repo) de otro lanzamiento ya no vale en este commit ($(($m -split "`n")[0])): se vuelve a escribir."
+  $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
+  Save-Tarea $T
 }
 
 # Las tareas de arnes pendientes, a la vez; cada una con su comprobacion y, si falla, su reintento con el motivo.
@@ -465,7 +478,7 @@ function Get-Normal([string]$Texto) {
 }
 
 # Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea).
-function Get-Lineas([string]$Ruta) {
+function Get-LineasNormales([string]$Ruta) {
   $l = @((Get-Normal ($Utf8.GetString([System.IO.File]::ReadAllBytes($Ruta)))) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   return $l
@@ -492,8 +505,8 @@ function Get-NotaJdk([string]$A, [string]$B) {
 # distintas, posicion a posicion), Linea (la primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota.
 function Compare-Fichero([string]$A, [string]$B) {
   $x = @(); $y = @()
-  if ($A) { $x = @(Get-Lineas $A) }
-  if ($B) { $y = @(Get-Lineas $B) }
+  if ($A) { $x = @(Get-LineasNormales $A) }
+  if ($B) { $y = @(Get-LineasNormales $B) }
   $n = 0
   $primera = -1
   for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count); $i++) {
@@ -649,11 +662,11 @@ try {
   Info "Copias: $CopiaOrig y $CopiaMig"
   $r = Invoke-Maven $CopiaOrig $true @('test-compile') 'compilar el original'
   if ($r.Codigo -ne 0) {
-    if ($JavaLegacy) { Stop-Arranque ("El original no compila ni con -JavaLegacy ${JavaLegacy}:`n" + (Get-ErrorMaven $r.Salida)) }
-    Stop-Arranque ("El original no compila con el JDK de Maven. Vuelve a lanzar con -JavaLegacy <carpeta del JDK del original (8 u 11)>. Maven dice:`n" + (Get-ErrorMaven $r.Salida))
+    if ($JavaLegacy) { Stop-Arranque ("El original no compila ni con -JavaLegacy ${JavaLegacy}:`n" + (Get-FalloMaven $r.Salida)) }
+    Stop-Arranque ("El original no compila con el JDK de Maven. Vuelve a lanzar con -JavaLegacy <carpeta del JDK del original (8 u 11)>. Maven dice:`n" + (Get-FalloMaven $r.Salida))
   }
   $r = Invoke-Maven $CopiaMig $false @('test-compile') 'compilar el migrado'
-  if ($r.Codigo -ne 0) { Stop-Arranque ("El migrado no compila. Maven dice:`n" + (Get-ErrorMaven $r.Salida)) }
+  if ($r.Codigo -ne 0) { Stop-Arranque ("El migrado no compila. Maven dice:`n" + (Get-FalloMaven $r.Salida)) }
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()
@@ -661,7 +674,7 @@ try {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs
-    if ($t.estado -eq 'hecha') { Copy-Carpeta (Join-Ruta $Local "arnes/$($x[0])") $x[1]; Save-Copia $x[1] }
+    if ($t.estado -eq 'hecha') { Use-ArnesGuardado $t $todosJobs }
     $arneses += , $t
   }
   $ArnesOrig = $arneses[0]

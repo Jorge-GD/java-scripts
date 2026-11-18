@@ -180,7 +180,7 @@ Lo que tiene que salir lo da el **original** al ejecutarse. La IA solo fabrica l
 
 Por consola saca una tabla por job (casos, iguales, distintos, sin probar) y el detalle de lo que no es igual. El resultado queda en `migracion-<batch>\datos\prueba-local.json`. Sale con 0 si todo lo comparado es igual, con 2 si hay casos distintos y con 1 si no ha podido (o no ha podido comparar ninguno).
 
-Lo de la IA queda en `migracion-<batch>\prueba-local\`: `arnes\`, `casos\`, `tareas\`, las salidas (`salidas\original`, `original-2` y `migrado`) y los registros de cada llamada y de cada Maven. Al relanzar no repite lo hecho, si no han cambiado sus entradas: solo vuelve a ejecutar y a comparar. Para rehacer un caso, borra su carpeta de `prueba-local\casos\`.
+Lo de la IA queda en `migracion-<batch>\prueba-local\`: `arnes\`, `casos\`, `tareas\`, las salidas (`salidas\original`, `original-2` y `migrado`) y los registros de cada llamada y de cada Maven. Al relanzar no repite lo hecho, si no han cambiado sus entradas: solo vuelve a ejecutar y a comparar. Un arnés de antes se vuelve a comprobar en el commit de ahora (por ejemplo, tras un arreglo en la rama de rescate) y solo se vuelve a escribir si ya no pasa. Para rehacer un caso, borra su carpeta de `prueba-local\casos\`.
 
 **Lo que no promete.** Las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) está simulado. La conexión de verdad se prueba en pre, con el guion de cada job que deja `migracion.ps1`.
 

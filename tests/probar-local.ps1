@@ -280,5 +280,18 @@ $Pruebas['10 JDK: -JavaLegacy solo para el original, -Job solo ese job y un orig
   Igual 'sin llamar a Copilot' 0 @(Llamadas $e).Count
 }
 
+$Pruebas['11 arreglo: un commit nuevo en la rama de rescate se prueba sin volver a llamar a Copilot'] = {
+  $e = Nuevo-Escenario 'arreglo' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  Escribe $e.Wt 'regla.txt' "minimo=5.01`n"
+  [void](GitEn $e.Wt @('commit', '-q', '-a', '-m', 'cambia el limite'))
+  $r = Prueba $e
+  Igual 'con el limite cambiado en la rama de rescate sale con 2' 2 $r.Codigo
+  Igual 'el caso del limite sale distinto' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+  Igual 'sin llamar otra vez a Copilot (el arnes del migrado sigue valiendo)' $n @(Llamadas $e).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
