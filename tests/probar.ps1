@@ -4864,9 +4864,10 @@ function Pon-Ficheros-De-Plantilla($E, [bool]$EnGit) {
   Escribe $E.Plantilla 'salida-x/graph.json' "{}`n"
 }
 
-$Pruebas['m18 plantilla (h): la referencia con git solo cuenta lo que esta en git y no es de datos: Dockerfile si; graph.json (fuera de git), datos.txt e INFORME.md no'] = {
+$Pruebas['m18 plantilla (h): la referencia con git solo cuenta lo que esta en git y no es de datos: Dockerfile si; graph.json y herramienta-out/config.yml (fuera de git), datos.txt e INFORME.md no'] = {
   $e = Nuevo-Escenario 'm18-h'
   Pon-Ficheros-De-Plantilla $e $true
+  Escribe $e.Plantilla 'herramienta-out/config.yml' "a: b`n"   # fuera de git y que no es de datos: con git, tampoco cuenta
   Igual 'solo avisa del Dockerfile' 'ficheros que la plantilla tiene y aqui faltan: Dockerfile' (Faltan-De-La-Plantilla $e)
 }
 

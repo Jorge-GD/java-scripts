@@ -912,6 +912,7 @@ $Pruebas['48 m18 arnes (f): el arnes atascado dice donde esta el registro de la 
   $reg = Get-Ruta $e.Local 'registros/arnes-original-2.log'
   Comprueba 'el registro de la ultima llamada existe' (Test-Path -LiteralPath $reg) $reg
   Comprueba 'el mensaje de atascado lleva su ruta' ($r.Salida.Contains($reg)) (Cola $r.Salida)
+  Comprueba 'en su propia linea: lo que dijo Copilot en la ultima llamada esta ahi, para abrirlo o mandarlo' ($r.Salida.Contains("Lo que dijo Copilot en la ultima llamada esta en ${reg}: abrelo o mandalo.")) (Cola $r.Salida)
   $linea = @($r.Salida -split "`n" | Where-Object { $_.Contains('ha quedado atascado') -or $_.Contains('Estoy ejecutando prueba-local.ps1') })
   Comprueba 'tambien el texto para pegar en Copilot' (@($linea | Where-Object { $_.Contains('Estoy ejecutando prueba-local.ps1') -and $_.Contains($reg) }).Count -eq 1) (Cola $r.Salida)
 }
@@ -953,6 +954,43 @@ $Pruebas['51 m18 arnes (k2): si la llamada no se corto por tiempo (sale con codi
   Comprueba 'y no dice que el intento se corto por tiempo' ($p2 -notmatch 'se cort. por tiempo') $p2
   Comprueba 'ni deja marcas de la plantilla en el prompt' ($p2 -notmatch '<!--no-->|\{\{') $p2
   Comprueba 'el motivo lleva el codigo de salida y el error de Maven' ($p2 -match 'Copilot salio con codigo 3' -and $p2 -match 'simbolo de mentira no encontrado') $p2
+}
+
+$Pruebas['52 m18 arnes (e3): si Maven dice lo de Surefire 2.x (timeout or other error in the fork), el motivo tambien es el concreto'] = {
+  $e = Nuevo-Escenario 'm18-e3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $env:RESCATE_ARNES_SUREFIRE = '2x'
+  try { $r = Prueba $e }
+  finally { $env:RESCATE_ARNES_SUREFIRE = '' }
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  $motivo = 'Con un caso vacio, el test no termina en 300 s: el job intenta conectar con algo de verdad (base de datos, SFTP, correo, HTTP). Simulalo en el test.'
+  Comprueba 'el motivo del atasco es el concreto' ($r.Salida.Contains($motivo)) (Cola $r.Salida)
+  Comprueba 'sin el texto de que no ha dejado estado.txt' ($r.Salida -notmatch 'no ha dejado estado\.txt') (Cola $r.Salida)
+}
+
+$Pruebas['53 m18 arnes (k3): en el ULTIMO intento una llamada cortada por tiempo con un test que no vale lo deshace todo: el test no queda en la copia y la tarea queda atascada'] = {
+  $e = Nuevo-Escenario 'm18-k3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-siempre:arnes-original'
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda atascada tras dos intentos' 'atascada/2' "$($t.estado)/$($t.intentos)"
+  Comprueba 'las dos llamadas se pasaron del tope' ((Registro-Arnes $e 'original' 1) -match 'tiempo agotado' -and (Registro-Arnes $e 'original' 2) -match 'tiempo agotado')
+  Comprueba 'el test de la ultima llamada ya no esta en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaOrig 'src/test/java/com/acme/viejo/PruebaLocalTest.java'))) (Cola $r.Salida)
+  Igual 'la copia queda como su base: sin cambios' '' (GitEn $e.CopiaOrig @('status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).rescate', ':(exclude)target'))
+}
+
+$Pruebas['54 m18 arnes (k4): la llamada cortada escribio el test (permitido) y toco src/main (prohibido): en la 2.a, el test sigue en la copia y src/main esta como en la base'] = {
+  $e = Nuevo-Escenario 'm18-k4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-toca-main:arnes-original'
+  Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
+  $p2 = Registro-Arnes $e 'original' 2
+  Comprueba 'el motivo de la 1.a nombra el fichero de src/main que toco' ($p2 -match 'Tocado\.java') $p2
+  $f = Join-Path $e.Llamadas 'arnes-original.reintento'
+  $v = ''
+  if (Test-Path -LiteralPath $f) { $v = ([System.IO.File]::ReadAllLines($f) -join ' ') }
+  Igual 'al empezar la 2.a llamada: el test sigue en la copia y src/main/java/Tocado.java no' 'test=True tocado=False' $v
 }
 
 # ================================ LANZADOR ================================

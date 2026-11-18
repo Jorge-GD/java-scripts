@@ -10,6 +10,10 @@
 #   colgado-parcial  no escribe ningun fichero, dice 'salida parcial...' y se cuelga
 #   sale-mal-bueno   escribe un test que vale y sale con codigo 3
 #   sale-mal-malo    escribe un test que no compila y sale con codigo 3
+#   colgado-siempre  como colgado-malo, y tambien en el reintento (no lo arregla: escribe otra vez un test que no compila y se cuelga)
+#   colgado-toca-main  escribe un test que vale y src/main/java/Tocado.java (prohibido) y se cuelga
+# En un reintento de arnes deja en RESCATE_LLAMADAS (si esta) <id>.reintento con lo que encontro en la copia: test=<True|False>
+# (el test de ESCRIBIR) y tocado=<True|False> (src/main/java/Tocado.java).
 $texto = ''
 for ($i = 0; $i -lt $args.Count; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
 if ($texto -notmatch 'tareas/([\w\-]+)\.prompt\.md') { 'no entiendo el prompt'; exit 1 }
@@ -24,10 +28,15 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
 }
 $base = Join-Path $PSScriptRoot 'copilot-local.ps1'
 $reintento = ($prompt -match 'intento anterior no pas')
-$mio = @('colgado-bueno', 'colgado-malo', 'colgado-nada', 'colgado-parcial', 'sale-mal-bueno', 'sale-mal-malo')
-if ($tipo -ne 'arnes-local' -or $mio -notcontains $guion -or $reintento) {
+$mio = @('colgado-bueno', 'colgado-malo', 'colgado-nada', 'colgado-parcial', 'sale-mal-bueno', 'sale-mal-malo', 'colgado-siempre', 'colgado-toca-main')
+$previo = ''
+if ($tipo -eq 'arnes-local') { $previo = Join-Path (Get-Location).Path (([regex]::Match($prompt, '(?m)^ESCRIBIR: (.*?)\s*$')).Groups[1].Value) }
+if ($tipo -eq 'arnes-local' -and $reintento -and $env:RESCATE_LLAMADAS) {
+  [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
+  [System.IO.File]::WriteAllLines((Join-Path $env:RESCATE_LLAMADAS ($id + '.reintento')), [string[]]@(('test=' + (Test-Path -LiteralPath $previo -PathType Leaf)), ('tocado=' + (Test-Path -LiteralPath (Join-Path (Get-Location).Path 'src/main/java/Tocado.java')))))
+}
+if ($tipo -ne 'arnes-local' -or $mio -notcontains $guion -or ($reintento -and $guion -ne 'colgado-siempre')) {
   if ($mio -contains $guion) { $env:RESCATE_FALSO = '' }
-  $previo = Join-Path (Get-Location).Path (([regex]::Match($prompt, '(?m)^ESCRIBIR: (.*?)\s*$')).Groups[1].Value)
   if ($tipo -eq 'arnes-local' -and $reintento -and (Test-Path -LiteralPath $previo -PathType Leaf)) {
     [System.IO.File]::WriteAllText($previo, [System.IO.File]::ReadAllText($previo).Replace('NO_COMPILA', 'ARREGLADO'))
     'he seguido desde el test que habia'
@@ -37,8 +46,9 @@ if ($tipo -ne 'arnes-local' -or $mio -notcontains $guion -or $reintento) {
   exit $LASTEXITCODE
 }
 $env:RESCATE_FALSO = ''
-if ($guion -in @('colgado-malo', 'sale-mal-malo')) { $env:RESCATE_FALSO = 'arnes-no-compila' }
-if ($guion -in @('colgado-bueno', 'colgado-malo', 'sale-mal-bueno', 'sale-mal-malo')) { & $base @args | Out-Null }
+if ($guion -in @('colgado-malo', 'colgado-siempre', 'sale-mal-malo')) { $env:RESCATE_FALSO = 'arnes-no-compila' }
+if ($guion -eq 'colgado-toca-main') { $env:RESCATE_FALSO = 'arnes-toca-main' }
+if ($guion -in @('colgado-bueno', 'colgado-malo', 'colgado-siempre', 'colgado-toca-main', 'sale-mal-bueno', 'sale-mal-malo')) { & $base @args | Out-Null }
 $env:RESCATE_FALSO = ''
 if ($guion -in @('sale-mal-bueno', 'sale-mal-malo')) { 'Copilot se ha caido: sin red'; exit 3 }
 if ($guion -eq 'colgado-parcial') { 'salida parcial: leyendo el job cargaRecibosJob' }
