@@ -9,6 +9,7 @@
 #   arnes-toca-main      el arnes escribe ademas src/main/java/Tocado.java (prohibido)
 #   arnes-dep-sin-test   el arnes anade al pom.xml una dependencia sin <scope>test</scope> (prohibido)
 #   arnes-no-compila     el test lleva NO_COMPILA (mvn-local.ps1 no lo compila)
+#   arnes-sin-filtro     el test lleva IGNORA_CASO (mvn-local.ps1 no hace caso de -Dprueba.local.caso)
 #   caso-fuera           el caso escribe ademas src/main/resources/fuera.txt (prohibido), en todos los intentos
 #   caso-no-aplica       el caso solo escribe no-aplica.txt con una frase
 #   caso-nada            el caso no escribe nada
@@ -51,6 +52,7 @@ function Escribir([string]$Rel, [string]$Texto) {
 if ($tipo -eq 'arnes-local') {
   $test = "// PruebaLocalTest de mentira: mvn-local.ps1 hace lo que haria`nclass PruebaLocalTest {}`n"
   if ($guion -eq 'arnes-no-compila') { $test += "// NO_COMPILA`n" }
+  if ($guion -eq 'arnes-sin-filtro') { $test += "// IGNORA_CASO`n" }
   Escribir (Linea 'ESCRIBIR') $test
   $pom = Join-Path $raiz 'pom.xml'
   $dep = '<dependency><groupId>org.ejemplo</groupId><artifactId>prueba</artifactId><version>1.0</version><scope>test</scope></dependency>'

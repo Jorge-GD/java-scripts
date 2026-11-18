@@ -336,5 +336,19 @@ foreach ($t in @($nueva, $ficha)) {
   Comprueba 'ficha-job sigue con sus claves de siempre' ($ficha -match '^CLAVES ficha-1 CITA_MAX=\d+;DATOS=d;JOB=cargaJob;PASOS=p;PASOS_MAX=\d+;SALIDA=\.rescate/tareas/ficha-1\.json$') "$ficha"
 }
 
+$Pruebas['14 un caso por JVM: un original con estado static entre ejecuciones no da distintos falsos; el arnes debe filtrar por caso'] = {
+  $e = Nuevo-Escenario 'estatico' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) "minimo=5.00`nestatico=si"
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  $tests = @([System.IO.File]::ReadAllLines((Join-Path $e.Llamadas 'mvn.log')) | Where-Object { $_ -match 'prueba\.local\.job=' })
+  Comprueba 'cada Maven de los casos lleva un solo caso (-Dprueba.local.caso)' ($tests.Count -gt 0 -and @($tests | Where-Object { $_ -notmatch '-Dprueba\.local\.caso=caso-\d+' }).Count -eq 0) ($tests -join ' / ')
+  $e = Nuevo-Escenario 'sin-filtro' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() 'arnes-sin-filtro:arnes-original'
+  Igual 'un arnes que no filtra por caso no vale: sale con 1' 1 $r.Codigo
+  $t = Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')
+  Comprueba 'y el motivo nombra prueba.local.caso' ($t.estado -eq 'atascada' -and $t.motivo -match 'prueba\.local\.caso') "$($t.estado): $($t.motivo)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

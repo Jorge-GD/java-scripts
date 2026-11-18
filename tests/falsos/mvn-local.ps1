@@ -1,13 +1,16 @@
 # mvn-local.ps1 - Maven de mentira para tests/probar-local.ps1 (prueba-local.ps1).
 # test-compile: falla si algun .java de src contiene NO_COMPILA.
-# test -Dtest=PruebaLocalTest [-Dprueba.local.job=<job>]: hace lo que haria el PruebaLocalTest del contrato. Por cada
-# carpeta src/test/resources/prueba-local/<job>/<caso>/ (de ese job, si se pide) deja target/prueba-local/<job>/<caso>/
+# test -Dtest=PruebaLocalTest [-Dprueba.local.job=<job>] [-Dprueba.local.caso=<caso>]: hace lo que haria el
+# PruebaLocalTest del contrato (si el test lleva IGNORA_CASO, no hace caso de prueba.local.caso). Por cada carpeta
+# src/test/resources/prueba-local/<job>/<caso>/ (de ese job y ese caso, si se piden) deja target/prueba-local/<job>/<caso>/
 # con estado.txt y, si el caso trae ficheros/, ficheros/salida/resultado_<aaaammdd de hoy>.txt: una linea por linea
 # de entrada, con 'aceptado' o 'rechazado' segun el importe=<n> de la linea frente al 'minimo' de regla.txt (en la
 # raiz del repo). regla.txt (clave=valor) tambien lleva 'segundos': la hora que se apunta va desplazada esos segundos.
 # Una linea de entrada con AZAR deja ademas un numero al azar; con LATIN, la linea acaba en una enie (mayuscula si
 # regla.txt lleva mayus=si) y el fichero se escribe en Latin-1. El fichero lleva tambien la carpeta donde se ejecuta
 # (ruta completa). Con datos.sql, tablas/DATOS.csv: sus lineas ordenadas, con la misma regla del minimo.
+# Con estatico=si en regla.txt, el batch guarda estado entre ejecuciones de la misma JVM (como un campo static): a partir
+# del segundo caso de un mismo 'test', el resultado lleva una linea mas con los casos que arrastra.
 # Cada 'test' anade una linea a logs/mvn.log en la raiz del repo (fuera de target, como un log de verdad).
 # Cada llamada anade a RESCATE_LLAMADAS/mvn.log (si esta) una linea: carpeta|JAVA_HOME|argumentos.
 $raiz = (Get-Location).Path
@@ -25,7 +28,13 @@ if ($malos.Count -gt 0) {
 if ($args -notcontains 'test') { exit 0 }
 if (@($javas | Where-Object { $_.Name -eq 'PruebaLocalTest.java' }).Count -eq 0) { '[ERROR] No tests matching pattern "PruebaLocalTest" were executed!'; exit 1 }
 $soloJob = ''
-foreach ($a in $args) { if ("$a" -match '^-Dprueba\.local\.job=(.+)$') { $soloJob = $Matches[1] } }
+$soloCaso = ''
+foreach ($a in $args) {
+  if ("$a" -match '^-Dprueba\.local\.job=(.+)$') { $soloJob = $Matches[1] }
+  if ("$a" -match '^-Dprueba\.local\.caso=(.+)$') { $soloCaso = $Matches[1] }
+}
+if (@($javas | Where-Object { [System.IO.File]::ReadAllText($_.FullName) -match 'IGNORA_CASO' }).Count -gt 0) { $soloCaso = '' }
+$arrastra = 0
 [void](New-Item -ItemType Directory -Path (Join-Path $raiz 'logs') -Force)
 [System.IO.File]::AppendAllText((Join-Path $raiz 'logs/mvn.log'), ('test ' + [DateTime]::UtcNow.Ticks + "`n"))
 $regla = @{ minimo = '0'; segundos = '0'; mayus = 'no' }
@@ -41,6 +50,7 @@ function Veredicto([string]$l) {
 foreach ($dj in @(Get-ChildItem -LiteralPath $casos -Directory | Sort-Object Name)) {
   if ($soloJob -and $dj.Name -ne $soloJob) { continue }
   foreach ($dc in @(Get-ChildItem -LiteralPath $dj.FullName -Directory | Sort-Object Name)) {
+    if ($soloCaso -and $dc.Name -ne $soloCaso) { continue }
     $out = Join-Path $raiz ('target/prueba-local/' + $dj.Name + '/' + $dc.Name)
     [void](New-Item -ItemType Directory -Path $out -Force)
     $entradas = @()
@@ -57,6 +67,8 @@ foreach ($dj in @(Get-ChildItem -LiteralPath $casos -Directory | Sort-Object Nam
           if ($l -match 'AZAR') { $res += ('azar ' + [System.Guid]::NewGuid().ToString('N')) }
         }
       }
+      if ($regla.estatico -eq 'si' -and $arrastra -gt 0) { $res += "arrastra el estado de $arrastra casos" }
+      $arrastra++
       $ahora = (Get-Date).AddSeconds([int]$regla.segundos)
       $res += ('hecho el ' + $ahora.ToString('dd/MM/yyyy HH:mm:ss', $inv) + ' (' + $ahora.ToString('HH:mm:ss', $inv) + ')')
       $sal = Join-Path $out 'ficheros/salida'

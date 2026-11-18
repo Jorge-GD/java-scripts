@@ -25,7 +25,7 @@ Pueden ser de otra versión de Spring Boot o de Java: usa solo lo que exista en 
 
 ## Qué hace el test
 
-1. Busca las carpetas `src/test/resources/prueba-local/<job>/<caso>/` (ruta relativa a la carpeta del proyecto, la del `pom.xml`) en orden alfabético. `<job>` es el nombre de un job del batch (uno de JOBS). Si la propiedad de sistema `prueba.local.job` tiene valor, solo las de ese job. Si no hay ninguna carpeta, el test acaba bien sin hacer nada.
+1. Busca las carpetas `src/test/resources/prueba-local/<job>/<caso>/` (ruta relativa a la carpeta del proyecto, la del `pom.xml`) en orden alfabético. `<job>` es el nombre de un job del batch (uno de JOBS). Si la propiedad de sistema `prueba.local.job` tiene valor, solo las de ese job. Si la propiedad `prueba.local.caso` tiene valor, solo las carpetas `<caso>` con ese nombre: el script lanza cada caso en su propio Maven, en una JVM nueva, como cada ejecución en producción. Si no hay ninguna carpeta, el test acaba bien sin hacer nada.
 2. Para cada caso, en este orden:
    1. **Base de datos limpia**: cada tabla del batch como recién creada (sin filas y con los contadores autonuméricos desde el principio) y con los datos que el batch carga al arrancar (su `data.sql` o lo que use). Las tablas de Spring Batch (`BATCH_...`) se pueden quedar como estén. Usa una base en memoria; si el código abre su propia conexión con una URL fija, usa esa misma base, dentro de `target/`.
    2. Si el caso tiene `datos.sql`, ejecútalo en esa base.

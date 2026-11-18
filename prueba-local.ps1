@@ -173,10 +173,12 @@ function Get-FalloMaven($Salida) {
   return ($e -join "`n")
 }
 
-# Ejecuta en una copia los casos de un job (con su salida anterior borrada).
-function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Nombre, [string]$Que) {
-  Remove-Carpeta (Join-Ruta $Dir "target/prueba-local/$Nombre")
-  return (Invoke-Maven $Dir $EsOriginal @('test', '-Dtest=PruebaLocalTest', "-Dprueba.local.job=$Nombre") $Que)
+# Ejecuta en una copia un caso de un job (con su salida anterior borrada), en su propio Maven: cada caso en una JVM
+# nueva, como cada ejecucion en produccion. En la misma JVM, lo que el batch deja en campos static (un fichero abierto,
+# un contador) pasaria de un caso al siguiente.
+function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
+  Remove-Carpeta (Join-Ruta $Dir "target/prueba-local/$Job/$Caso")
+  return (Invoke-Maven $Dir $EsOriginal @('test', '-Dtest=PruebaLocalTest', "-Dprueba.local.job=$Job", "-Dprueba.local.caso=$Caso") $Que)
 }
 
 # Por que un caso no ha dejado estado.txt en $Sal: su error.txt o, si no hay, el error de Maven.
@@ -332,13 +334,14 @@ function Test-Arnes($T, [string[]]$Jobs) {
   }
   $r = Invoke-Maven $dir $esOrig @('test-compile') "arnes $($T.entradas.repo), compilar"
   if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r.Salida)) }
-  foreach ($j in $Jobs) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/vacio") -Force) }
+  foreach ($j in $Jobs) { foreach ($c in @('vacio', 'otro')) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/$c") -Force) } }
   Remove-Carpeta (Join-Ruta $dir 'target/prueba-local')
-  $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest') "arnes $($T.entradas.repo), caso vacio"
+  $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio') "arnes $($T.entradas.repo), caso vacio"
   Remove-Carpeta (Join-Ruta $dir $Casos)
   foreach ($j in $Jobs) {
     $sal = Join-Ruta $dir "target/prueba-local/$j/vacio"
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
+    if (Test-Path -LiteralPath (Join-Ruta $dir "target/prueba-local/$j/otro")) { return "Con -Dprueba.local.caso=vacio, el test ha ejecutado tambien $Casos/$j/otro. Si la propiedad prueba.local.caso tiene valor, ejecuta solo los casos con ese nombre: cada caso se lanza en su propio Maven." }
   }
   if ($esOrig) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
@@ -469,7 +472,6 @@ function Invoke-Casos($Tareas) {
       continue
     }
     $motivos = @{}
-    $correr = @{}
     for ($i = 0; $i -lt $lote.Count; $i++) {
       $t = $lote[$i]
       $dirCaso = Join-Ruta $CopiaOrig $t.entradas.carpeta
@@ -478,15 +480,14 @@ function Invoke-Casos($Tareas) {
         $m = "No has escrito ningun fichero en CARPETA ($($t.entradas.carpeta)); las carpetas vacias no cuentan. Si el caso no necesita ninguna entrada, escribe solo sin-entrada.txt con una frase que lo diga."
       }
       $motivos[$t.id] = $m
-      if (-not $m -and -not (Test-Path -LiteralPath (Join-Path $dirCaso 'no-aplica.txt'))) { $correr[$t.entradas.job] = $true }
     }
-    foreach ($j in @($correr.Keys)) {
-      $r = Invoke-Job $CopiaOrig $true $j "casos de $j en el original"
-      foreach ($t in @($lote | Where-Object { $_.entradas.job -eq $j -and -not $motivos[$_.id] })) {
-        if (Test-Path -LiteralPath (Join-Path (Join-Ruta $CopiaOrig $t.entradas.carpeta) 'no-aplica.txt')) { continue }
-        $sal = Join-Ruta $CopiaOrig "target/prueba-local/$j/$($t.entradas.caso)"
-        if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { $motivos[$t.id] = 'El caso no corre en el original: ' + (Get-Porque $sal $r) }
-      }
+    foreach ($t in @($lote | Where-Object { -not $motivos[$_.id] })) {
+      if (Test-Path -LiteralPath (Join-Path (Join-Ruta $CopiaOrig $t.entradas.carpeta) 'no-aplica.txt')) { continue }
+      $j = $t.entradas.job
+      $c = $t.entradas.caso
+      $r = Invoke-Job $CopiaOrig $true $j $c "caso $j/$c en el original"
+      $sal = Join-Ruta $CopiaOrig "target/prueba-local/$j/$c"
+      if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { $motivos[$t.id] = 'El caso no corre en el original: ' + (Get-Porque $sal $r) }
     }
     foreach ($t in $lote) {
       $m = $motivos[$t.id]
@@ -498,15 +499,17 @@ function Invoke-Casos($Tareas) {
 }
 
 # ================================ EJECUCION ================================
-# Ejecuta los casos de $Jobs en una copia y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>.
-function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, [string[]]$Jobs) {
+# Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>.
+function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas) {
   $dest = Join-Ruta $Local "salidas/$Nombre"
   Remove-Carpeta $dest
-  foreach ($j in $Jobs) {
+  foreach ($j in @($Listas | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
     Info "Ejecutando los casos de $j ($Nombre)..."
-    $script:Maven["$Nombre|$j"] = Invoke-Job $Dir $EsOriginal $j "$Nombre $j"
-    $sal = Join-Ruta $Dir "target/prueba-local/$j"
-    if (Test-Path -LiteralPath $sal) { Copy-Carpeta $sal (Join-Ruta $dest $j) }
+    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
+      $c = $t.entradas.caso
+      $script:Maven["$Nombre|$j|$c"] = Invoke-Job $Dir $EsOriginal $j $c "$Nombre $j $c"
+      Copy-Carpeta (Join-Ruta $Dir "target/prueba-local/$j/$c") (Join-Ruta $dest "$j/$c")
+    }
   }
 }
 
@@ -609,7 +612,7 @@ function Get-Resultado($T) {
   $noAplica = Join-Ruta $Local "casos/$j/$c/no-aplica.txt"
   if ($T.estado -ne 'hecha') { $o.motivo = "La IA no ha podido preparar sus entradas: $($T.motivo)"; return $o }
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
-  if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j"]); return $o }
+  if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j|$c"]); return $o }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
   $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c"))
   $sinContar = @($azar | ForEach-Object { Get-Normal $_.fichero })
@@ -769,13 +772,12 @@ try {
 
   # 4. Ejecutar: el original dos veces y el migrado una, con los mismos casos
   $listas = @($tareasCasos | Where-Object { $_.estado -eq 'hecha' -and -not (Test-Path -LiteralPath (Join-Ruta $Local "casos/$($_.entradas.job)/$($_.entradas.caso)/no-aplica.txt")) })
-  $jobsListos = @($listas | ForEach-Object { $_.entradas.job } | Select-Object -Unique)
-  Invoke-Salidas $CopiaOrig $true 'original' $jobsListos
-  Invoke-Salidas $CopiaOrig $true 'original-2' $jobsListos
+  Invoke-Salidas $CopiaOrig $true 'original' $listas
+  Invoke-Salidas $CopiaOrig $true 'original-2' $listas
   if ($ArnesMig.estado -eq 'hecha') {
     Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
     foreach ($t in $listas) { Copy-Carpeta (Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)") (Join-Ruta $CopiaMig $t.entradas.carpeta) }
-    Invoke-Salidas $CopiaMig $false 'migrado' $jobsListos
+    Invoke-Salidas $CopiaMig $false 'migrado' $listas
   }
 
   # 5. Comparar y contar
