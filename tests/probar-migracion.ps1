@@ -5127,5 +5127,105 @@ $j = Read-Json (Join-Path $Datos 'comparacion-sh/sh-bbbbbbbb.json')
   Igual 'ficha, script, momento, commit corto y la accion en falta' 'sh-bbbbbbbb|bin/recibos.sh|antes-de-corregir|7|1|falta|0' $v['B']
 }
 
+# ---- (f, g, h) la pasada entera: la fase lanzadores, comparar-sh dentro de comparar, relanzar y -Lanzadores ----
+# El Copilot falso de estas pruebas es copilot-m6.ps1: escribe la ficha de un script y su comparacion con el migrado, y le pasa lo demas a copilot.ps1.
+$ScriptLimpia = @'
+#!/bin/sh
+cd /opt/zeta/tmp
+rm -f /opt/zeta/tmp/zork_*.dat
+'@
+function Escenario-Pasada([string]$Nombre, $Scripts) {
+  $e = Escenario-Lanzadores $Nombre @{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1') } $Scripts
+  Escribe $e.Migrado 'src/main/resources/application.yml' "spring:`n  profiles: exportar_recibos`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'configuracion'))
+  Migrado-Con $e @('CargarReader')
+  return $e
+}
+function Lanzadores-De($E) { return @((Lee-Json (Get-Ruta $E.Out 'datos/lanzadores.json')).lanzadores | Where-Object { $null -ne $_ }) }
+
+$Pruebas['m17 lanzadores: sin ningun .sh en el original no hay tareas ni fase rota; la consola dice como pasar la carpeta con -Lanzadores y estado.json lo deja vacio'] = {
+  $e = Escenario-Pasada 'm17-sin-sh' ([ordered]@{})
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la fase acaba en hecha' 'hecha' (Estado $e).fase
+  Igual 'ninguna tarea ficha-sh' 0 (Tareas $e 'ficha-sh').Count
+  Igual 'ninguna tarea comparar-sh' 0 (Tareas $e 'comparar-sh').Count
+  Comprueba 'las demas fases siguen: hay tareas de comparar-pieza hechas' ((Tareas $e 'comparar-pieza').Count -ge 1) (Cola $r.Salida)
+  Igual 'datos/lanzadores.json existe y no lleva ninguno' 0 (Lanzadores-De $e).Count
+  Comprueba 'no hay carpeta datos/fichas-sh con nada dentro' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/fichas-sh')) -or @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/fichas-sh') -File).Count -eq 0)
+  $sal = $r.Salida
+  $linea = [regex]::Match($sal, 'Lanzadores: [^\r\n]*').Value
+  Comprueba 'la consola lleva la linea de Lanzadores con el texto de -Lanzadores <carpeta>' ($linea -match 'no hay' -and $linea.Contains('relanza con -Lanzadores <carpeta>')) $linea
+  $m = $sal.IndexOf('Mapa:')
+  $l = $sal.IndexOf('Lanzadores: ')
+  $f = $sal.IndexOf('Fichas de job:')
+  Comprueba 'y sale despues del mapa y antes de las fichas de job' ($m -ge 0 -and $l -gt $m -and $f -gt $l) (Cola $sal)
+  Comprueba 'no hay linea de comparar-sh' ($sal -notmatch 'Lanzadores frente al migrado') (Cola $sal)
+  Comprueba 'estado.json lleva lanzadores vacio' ((Estado $e).PSObject.Properties.Name -contains 'lanzadores' -and [string](Estado $e).lanzadores -eq '') ''
+}
+
+$Pruebas['m17 lanzadores: relanzar un batch que ya paso por mapa y comparar crea y hace solo las tareas nuevas (ficha-sh y comparar-sh); la tercera vez no repite ninguna'] = {
+  $e = Escenario-Pasada 'm17-relanza' ([ordered]@{})
+  $r1 = Migra $e (Basicos $e)
+  Igual 'la primera pasada, sin scripts, sale con 0' 0 $r1.Codigo
+  $antes = @(Llamadas $e.Wt)
+  $piezas = @(Tareas $e 'comparar-pieza')
+  Comprueba 'ya hay una pasada completa: fichas de clase y comparar-pieza hechas' ($antes.Count -ge 5 -and $piezas.Count -ge 1 -and (Cuenta-Estado $piezas 'hecha') -eq $piezas.Count) "$($antes.Count) llamadas"
+  # llegan dos scripts: el de recibos (su perfil esta en el application.yml del migrado) y uno que no se parece a nada del migrado
+  Escribe $e.Legacy 'bin/recibos.sh' $FormaB
+  Escribe $e.Legacy 'bin/limpia.sh' $ScriptLimpia
+  [void](GitEn $e.Legacy @('add', '-A'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'llegan los scripts'))
+  $r2 = Migra $e (Basicos $e)
+  Igual 'la segunda pasada sale con 0' 0 $r2.Codigo
+  $ll2 = @(Llamadas $e.Wt)
+  Igual 'llamadas nuevas: una ficha-sh por script y una comparar-sh (la del script sin candidatos no llama)' ($antes.Count + 3) $ll2.Count
+  Igual 'dos de ficha-sh' 2 (Llamadas-De $ll2 'fichash-').Count
+  Igual 'una de comparar-sh' 1 (Llamadas-De $ll2 'comparash-').Count
+  Comprueba 'las llamadas de antes no se repiten (mismos ids y pids)' ((@($antes | ForEach-Object { $_.id + '/' + $_.pid }) -join ',') -ceq (@($ll2 | Where-Object { $_.id -notlike 'fichash-*' -and $_.id -notlike 'comparash-*' } | ForEach-Object { $_.id + '/' + $_.pid }) -join ',')) ''
+  $fi = @(Tareas $e 'ficha-sh')
+  $cs = @(Tareas $e 'comparar-sh')
+  Igual 'dos tareas ficha-sh hechas' '2|2' "$($fi.Count)|$(Cuenta-Estado $fi 'hecha')"
+  Igual 'dos tareas comparar-sh hechas' '2|2' "$($cs.Count)|$(Cuenta-Estado $cs 'hecha')"
+  $cfi = @(Llamadas-De $ll2 'fichash-')
+  Comprueba 'la ficha-sh se escribe con esfuerzo alto y sin leer el original (el script va en el prompt)' (@($cfi | Where-Object { $_.flags -match '--effort=high' -and $_.flags -notmatch '--add-dir' }).Count -eq 2) (($cfi | ForEach-Object { $_.flags }) -join ' / ')
+  $ccs = @(Llamadas-De $ll2 'comparash-')
+  Comprueba 'la comparar-sh es una lectura: esfuerzo de lectura' ($ccs[0].flags -match '--effort=medium') $ccs[0].flags
+  $sin = @($cs | Where-Object { @($_.entradas.indices).Count -eq 0 })
+  Igual 'la de limpia.sh nacio hecha, sin llamada, con su accion en falta sin candidatos' '1|True|falta|sin-candidatos' "$($sin.Count)|$(@($ll2 | Where-Object { $_.id -ceq $sin[0].id }).Count -eq 0)|$($sin[0].resultado.comparacion[0].estado)|$($sin[0].resultado.comparacion[0].busqueda)"
+  Comprueba 'datos/fichas-sh y datos/comparacion-sh llevan los dos ficheros' (@(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/fichas-sh') -File).Count -eq 2 -and @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/comparacion-sh') -File).Count -eq 2)
+  $sal = $r2.Salida
+  Comprueba 'la consola cuenta los dos scripts, uno enlazado con su job, y las fichas hechas' ($sal -match 'Lanzadores: 2 scripts, 1 enlazados con un job\. Fichas: 2 hechas, 0 atascadas') (Cola $sal)
+  Comprueba 'y la comparacion de los scripts: dos comparados, una igual y una falta' ($sal -match 'Lanzadores frente al migrado: 2 scripts comparados\. Acciones: 1 igual, 0 distinto, 1 falta, 0 no lo se\.') (Cola $sal)
+  Comprueba 'la linea de comparar de las clases sigue contando solo las clases' ($sal -match 'Comparacion con el original: \d+ clases comparadas\. Datos: ') (Cola $sal)
+  $r3 = Migra $e (Basicos $e)
+  Igual 'la tercera pasada sale con 0' 0 $r3.Codigo
+  Igual 'y no llama a nadie mas' $ll2.Count (@(Llamadas $e.Wt)).Count
+  Comprueba 'las tareas de lanzadores siguen hechas' ((Cuenta-Estado (Tareas $e 'ficha-sh') 'hecha') -eq 2 -and (Cuenta-Estado (Tareas $e 'comparar-sh') 'hecha') -eq 2) ''
+}
+
+$Pruebas['m17 lanzadores: -Lanzadores <carpeta> suma los scripts de fuera (ruta -Lanzadores/...), se enlaza con los jobs del original y se guarda en estado.json; relanzar sin el parametro lo mantiene'] = {
+  $e = Escenario-Pasada 'm17-fuera' ([ordered]@{})
+  $fuera = Join-Path $e.Raiz 'scripts-fuera'
+  Escribe $fuera 'importar.sh' $FormaB
+  $r = Migra $e ((Basicos $e) + @('-Lanzadores', $fuera))
+  Igual 'sale con 0' 0 $r.Codigo
+  $z = @(Lanzadores-De $e)
+  Igual 'un lanzador, con la ruta de fuera' '1|-Lanzadores/importar.sh' "$($z.Count)|$($z[0].rel)"
+  Igual 'enlazado por el yml del original con su job' 'yml|exportarRecibosJob' "$($z[0].enlace.como)|$(@($z[0].jobs) -join ',')"
+  $fi = @(Tareas $e 'ficha-sh')
+  Igual 'una tarea ficha-sh hecha de ese script' '1|1|-Lanzadores/importar.sh' "$($fi.Count)|$(Cuenta-Estado $fi 'hecha')|$($fi[0].entradas.script)"
+  Igual 'estado.json guarda la carpeta' $fuera ([string](Estado $e).lanzadores)
+  $n1 = @(Llamadas $e.Wt).Count
+  $r2 = Migra $e (Basicos $e)
+  Igual 'relanzar sin el parametro sale con 0' 0 $r2.Codigo
+  Igual 'sigue habiendo el mismo script, sin llamadas nuevas' "1|$n1" "$((Lanzadores-De $e).Count)|$(@(Llamadas $e.Wt).Count)"
+  Igual 'y estado.json sigue guardando la carpeta' $fuera ([string](Estado $e).lanzadores)
+  $r3 = Migra $e ((Basicos $e) + @('-Lanzadores', (Join-Path $e.Raiz 'no-existe')))
+  Igual 'una carpeta que no existe no deja arrancar' 1 $r3.Codigo
+  Comprueba 'y el mensaje nombra -Lanzadores' ($r3.Salida -match '-Lanzadores') (Cola $r3.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
