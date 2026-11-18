@@ -23,7 +23,9 @@ BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
                   cual). Si SpotBugs y PMD no se descargan es un aviso, no un fallo: el paso sonar va sin ellos
   7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
                   diagnostico de rescate.ps1, con cuantas reglas incumple la propia referencia
-                  (solo numeros y palabras fijas)
+                  (solo numeros y palabras fijas). El diagnostico corre sobre un clon temporal del
+                  ultimo commit del migrado (sin tus cambios sin commitear), que se borra al acabar:
+                  tu carpeta no se toca mientras sigues trabajando en ella. Tope: MinutosDiagnostico
   8 clases reales 5 clases del original por tamano: la ficha de cada una
   9 examen        con cada modelo de -Modelos y cada esfuerzo de -Esfuerzos (medium por defecto): la ficha de
                   una clase corta y de una larga, y arreglar un Maven de juguete y ponerle Javadoc. Cuenta
@@ -841,6 +843,11 @@ $ModeloElegido = $Modelo
 if (-not $ModeloElegido -and $ModelosN.Count -gt 0) { $ModeloElegido = $ModelosN[0] }
 $LegacyRoot = ''
 
+# Las claves de solo el preflight (comun.ps1 lleva las de los dos scripts): hay que declararlas antes de leer ajustes.json.
+$Cfg += @{
+  MinutosDiagnostico = 30   # tope del diagnostico de rescate.ps1 del bloque 7, en minutos (admite decimales); pasado, se para con sus procesos hijos
+}
+
 # ajustes.json pisa $Cfg. Read-CfgFile sale con 1 si el JSON no vale: se mira antes.
 $AjustesEstado = 'no hay'
 $rutaAjustes = Get-RutaAjustes
@@ -1106,18 +1113,43 @@ try {
     foreach ($r in $repos) { Add-DatosRepo $r[0] $r[1] }
     if ($SinMaven) { Add-Linea 'diagnostico: saltado (-SinMaven)'; return }
     if (-not $Migrado -or -not $Plantilla) { Add-Linea 'diagnostico: saltado (faltan -Migrado y -Plantilla)'; return }
-    $a = Get-ArgsPowerShell @((Join-Path $PSScriptRoot 'rescate.ps1'), '-Repo', (Resolve-Dir $Migrado), '-Plantilla', (Resolve-Dir $Plantilla), '-SinWorktree')
-    $r = Invoke-Proceso (Get-PowerShellExe) $a $PSScriptRoot 1800
-    if ($r.Agotado) { Add-Linea 'diagnostico: tiempo agotado'; return }
-    Add-Linea "diagnostico: codigo $($r.Codigo) en $($r.Segundos) s"
-    $t = [regex]::Replace($r.Texto, '\x1b\[[0-9;]*m', '')
-    foreach ($m in [regex]::Matches($t, '(?m)^([a-z0-9]+)\s+(\d+)\s+(\d+)\s*$')) {
-      Add-Linea ("$($m.Groups[1].Value): $($m.Groups[2].Value) errores, $($m.Groups[3].Value) avisos")
+    # El diagnostico va sobre un clon temporal del migrado, no sobre la carpeta de la persona: rescate.ps1 escribe .rescate/ y
+    # .git/info/exclude, y su Maven pasa Remove-Ruido (git clean y git checkout) mientras ella sigue trabajando en su IDE.
+    # El nombre es corto por el limite de 260 caracteres de las rutas de Windows. Se borra siempre (finally).
+    $raizMigrado = Resolve-Dir $Migrado
+    $clon = Join-Path ([System.IO.Path]::GetTempPath()) ('pf-' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8))
+    try {
+      $c = Invoke-Nativo 'git' @('clone', '--quiet', '--no-hardlinks', $raizMigrado, $clon)
+      if ($c.Codigo -ne 0) {
+        $motivo = @($c.Salida | Where-Object { "$_" -match '^(fatal|error):' } | Select-Object -First 1)
+        if ($motivo.Count -eq 0) { $motivo = @($c.Salida | Where-Object { "$_".Trim() } | Select-Object -First 1) }
+        Add-Linea ('diagnostico: no se pudo clonar el migrado: ' + (Get-Seguro "$($motivo -join '')"))
+        return
+      }
+      # lo que la persona ha puesto en su .rescate/config.json (Maven, reglas) manda tambien en la copia
+      $configMigrado = Join-Path (Join-Path $raizMigrado '.rescate') 'config.json'
+      if (Test-Path -LiteralPath $configMigrado) {
+        $rescateClon = New-Carpeta (Join-Path $clon '.rescate')
+        Copy-Item -LiteralPath $configMigrado -Destination $rescateClon
+      }
+      $a = Get-ArgsPowerShell @((Join-Path $PSScriptRoot 'rescate.ps1'), '-Repo', $clon, '-Plantilla', (Resolve-Dir $Plantilla), '-SinWorktree')
+      $r = Invoke-Proceso (Get-PowerShellExe) $a $PSScriptRoot ([int][Math]::Ceiling([double]$Cfg.MinutosDiagnostico * 60))
+      if ($r.Agotado) { Add-Linea 'diagnostico: tiempo agotado'; return }
+      Add-Linea "diagnostico: codigo $($r.Codigo) en $($r.Segundos) s | del ultimo commit, sin los cambios sin commitear"
+      $t = [regex]::Replace($r.Texto, '\x1b\[[0-9;]*m', '')
+      foreach ($m in [regex]::Matches($t, '(?m)^([a-z0-9]+)\s+(\d+)\s+(\d+)\s*$')) {
+        Add-Linea ("$($m.Groups[1].Value): $($m.Groups[2].Value) errores, $($m.Groups[3].Value) avisos")
+      }
+      # cuanto incumple la propia referencia (lo que ella hace se permite en el migrado): solo digitos
+      $ref = [regex]::Match($t, '(?m)^Plantilla incumple: capas ([0-9]+) \| ficheros ([0-9]+) \| calidad ([0-9]+) \| secretos ([0-9]+)\s*$')
+      if ($ref.Success) { Add-Linea "plantilla incumple: capas $($ref.Groups[1].Value) | ficheros $($ref.Groups[2].Value) | calidad $($ref.Groups[3].Value) | secretos $($ref.Groups[4].Value)" }
+      else { Add-Linea 'plantilla incumple: desconocido' }
     }
-    # cuanto incumple la propia referencia (lo que ella hace se permite en el migrado): solo digitos
-    $ref = [regex]::Match($t, '(?m)^Plantilla incumple: capas ([0-9]+) \| ficheros ([0-9]+) \| calidad ([0-9]+) \| secretos ([0-9]+)\s*$')
-    if ($ref.Success) { Add-Linea "plantilla incumple: capas $($ref.Groups[1].Value) | ficheros $($ref.Groups[2].Value) | calidad $($ref.Groups[3].Value) | secretos $($ref.Groups[4].Value)" }
-    else { Add-Linea 'plantilla incumple: desconocido' }
+    finally {
+      # los objetos de .git son de solo lectura en Windows: -Force. Si no se puede, la linea dice cual es (sin ruta: lleva el usuario)
+      try { Remove-Item -LiteralPath $clon -Recurse -Force -ErrorAction Stop }
+      catch { if (Test-Path -LiteralPath $clon) { Add-Linea ('diagnostico: no se pudo borrar la copia temporal; borra a mano la carpeta ' + (Split-Path $clon -Leaf) + ' de la carpeta temporal del sistema (TEMP)') } }
+    }
   } $true
 
   # ----------------------------------- 8 -----------------------------------
