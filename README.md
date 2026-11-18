@@ -166,6 +166,8 @@ El orden con la respuesta `corregir` (`-Si`): diagnóstico, lectura (`fichas-cla
 
 La última fase llama a `prueba-local.ps1` (con el mismo modelo y `-Si`) y su salida sale por la consola y queda en `registros\prueba-local.log`. Un fallo se avisa y la pasada sigue: el código de salida de `migracion.ps1` no depende de esta fase (0 bien, 1 no pudo arrancar, 2 se paró). `datos\estado.json` lleva `pruebaLocal` (`resultado`: `hecha`, `fallo` o `saltada`, y el código, los minutos, el detalle y el registro), `fase` (`hecha` al acabar todo, sin parada ni tareas pendientes) y `fin` (vacío mientras corre; la hora al salir, también con parada).
 
+Lo que dicen las páginas de esa última fase: la página 3 (`3-original-vs-migrado.html`) empieza por «Probado ejecutando los dos», que sale de `datos\prueba-local.json` (las cuentas por job, cada caso distinto con sus líneas y lo que no se pudo comparar), y debajo va la lectura de la IA con el momento en que se hizo. La portada pone primero, en «Lo que te toca», los casos distintos al ejecutar los dos; muestra «Duró» cuando la pasada ha acabado (`fin`) y «Lleva» mientras corre; y lista la fase «Prueba en local» con su cuenta. La página 4 dice, por área, con cuántos hallazgos empezó y acabó la corrección.
+
 ## prueba-local.ps1
 
 Prueba en local, caso a caso, que el batch migrado hace lo mismo que el original. Se lanza **después** de `migracion.ps1`, que deja los casos de cada job (el camino feliz y los límites) en `<Migrado>\migracion-<batch>\datos\pruebas\<job>.json`. Si no están, para y dice que se lance antes `migracion.ps1`. Necesita `comun.ps1`, `tareas.ps1` y `tareas\` junto al script, `git`, Maven y Copilot CLI.

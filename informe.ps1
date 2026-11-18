@@ -11,7 +11,7 @@ desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
     Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, comparacion\, variables.json,
-    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md y correcciones.json) y escribe
+    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md, correcciones.json y prueba-local.json) y escribe
     <Salida>\index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
@@ -37,8 +37,8 @@ $IconosTipo = @{
   'config'          = @('f-param', 'param')
   'externo'         = @('f-correo', 'externo')
 }
-# Las fases del script, en orden, y de que tipo son sus tareas
-$FasesInforme = @(@('diagnostico', ''), @('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'), @('comparar', 'comparar-pieza'), @('correccion', ''))
+# De que tipo son las tareas de cada fase del script (las demas fases no tienen tareas)
+$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'comparar' = 'comparar-pieza' }
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -52,12 +52,13 @@ $FicherosInforme = @(
   @('datos/hallazgos-antes.json', 'f-hallazgos', 'f-fichero', $false), @('datos/diagnostico-antes.md', 'f-diagnostico', 'f-fichero', $false),
   @('datos/hallazgos-despues.json', 'f-hallazgos-despues', 'f-fichero', $false), @('datos/diagnostico-despues.md', 'f-diagnostico-despues', 'f-fichero', $false),
   @('datos/cobertura-antes.json', 'f-cobertura-antes', 'f-fichero', $false), @('datos/cobertura-despues.json', 'f-cobertura-despues', 'f-fichero', $false),
-  @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false),
+  @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false), @('datos/prueba-local.json', 'f-prueba-local-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
   @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/comparacion', 'f-comparacion', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
   @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false),
-  @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false),
+  @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false), @('prueba-local', 'f-prueba-local', 'f-carpeta', $false),
+  @('registros/prueba-local.log', 'f-prueba-local-log', 'f-fichero', $false),
   @('registros/cobertura-antes.log', 'f-cobertura-antes-log', 'f-fichero', $false), @('registros/cobertura-despues.log', 'f-cobertura-despues-log', 'f-fichero', $false)
 )
 
@@ -110,7 +111,7 @@ function Format-Lista($Trozos, [string]$Nombre, $Lista, [scriptblock]$Valores) {
 # ================================== DATOS ==================================
 # Las comparaciones de datos\comparacion\<ficha>.json, por ficha.
 function Read-Comparaciones([string]$Carpeta) {
-  $r = @{}
+  $r = [ordered]@{}
   $dir = Join-Path $Carpeta 'comparacion'
   if (-not (Test-Path -LiteralPath $dir)) { return $r }
   foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter 'clase-*.json' | Sort-Object Name)) {
@@ -264,7 +265,7 @@ function Read-DatosInforme([string]$Salida) {
     Salida = $Salida; Estado = (Read-JsonSuave (Join-Path $datos 'estado.json')); Mapa = (Read-JsonSuave (Join-Path $datos 'mapa.json'))
     Resumen = (Read-JsonSuave (Join-Path $datos 'resumen.json')); Variables = @(Read-JsonSuave (Join-Path $datos 'variables.json') | Where-Object { $null -ne $_ })
     Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos); Despues = (Read-Diagnostico $datos 'despues')
-    Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json'))
+    Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json')); PruebaLocal = (Read-JsonSuave (Join-Path $datos 'prueba-local.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
     Comparacion = (Read-Comparaciones $datos)
   }
@@ -487,11 +488,120 @@ function Get-GrupoComparar($D, $T, $J) {
   return (Format-Trozo $T 'comp-job' @{ ID = (Get-NombreJob $J.job); JOB = $J.job; CUENTA = $cuenta; CUERPO = $cuerpo })
 }
 
+# La linea de momento de la lectura de la IA: sale de la primera comparacion que lleve momento (antes o despues de corregir) y su commit.
+function Get-MomentoComparar($D, $T) {
+  foreach ($c in @($D.Comparacion.Values)) {
+    if ($c.momento -ceq 'antes-de-corregir') { return (Format-Trozo $T 'comp-momento-antes' @{ COMMIT = [string]$c.commit }) }
+    if ($c.momento -ceq 'despues-de-corregir') { return (Format-Trozo $T 'comp-momento-despues' @{ COMMIT = [string]$c.commit }) }
+  }
+  return ''
+}
+
+# ============================== LA PRUEBA EN LOCAL ==============================
+# Lo que dice la pasada de su ultima fase (estado.json, pruebaLocal.resultado): hecha, fallo, saltada o '' si aun no hay nada.
+function Get-ResultadoLocal($D) {
+  if ($D.Estado -and $D.Estado.pruebaLocal) { return [string]$D.Estado.pruebaLocal.resultado }
+  return ''
+}
+
+# Los casos que dio por distintos el original ejecutado frente al migrado ejecutado (datos\prueba-local.json).
+function Get-CasosDistintos($PL) {
+  return @($PL.casos | Where-Object { $null -ne $_ -and $_.resultado -ceq 'distinto' })
+}
+
+# Las cuentas de todos los jobs de prueba-local.json.
+function Get-CuentasLocal($PL) {
+  $c = @{ Jobs = 0; Casos = 0; Iguales = 0; Distintos = 0; Sin = 0 }
+  foreach ($j in @($PL.jobs | Where-Object { $null -ne $_ })) {
+    $c.Jobs++; $c.Casos += [int]$j.casos; $c.Iguales += [int]$j.iguales; $c.Distintos += [int]$j.distintos; $c.Sin += [int]$j.sinProbar
+  }
+  return $c
+}
+
+function Get-DifLocalHtml($T, $Dif) {
+  $nota = ''
+  if ($Dif.nota) { $nota = Format-Trozo $T 'pl-nota' @{ NOTA = $Dif.nota } }
+  $lineas = Format-Trozo $T 'pl-lineas-otras'
+  if ([int]$Dif.lineas -eq 1) { $lineas = Format-Trozo $T 'pl-lineas-una' }
+  return (Format-Trozo $T 'pl-dif' @{
+      ESTADO = (Format-Trozo $T 'comp-est-distinto'); FICHERO = $Dif.fichero; LINEAS = "$($Dif.lineas)"; LINEAS_TEXTO = $lineas; LINEA = "$($Dif.linea)"
+      ORIGINAL = $Dif.original; MIGRADO = $Dif.migrado; NOTA = $nota
+    })
+}
+
+function Get-CasoLocalHtml($T, $C) {
+  $difs = @($C.diferencias | Where-Object { $null -ne $_ } | ForEach-Object { Get-DifLocalHtml $T $_ })
+  return (Format-Trozo $T 'pl-caso' @{ JOB = $C.job; CASO = $C.caso; TITULO = $C.titulo; DIFERENCIAS = ($difs -join "`n") })
+}
+
+# Los casos que no son iguales (sin probar, no deterministas...) y los iguales que traen un motivo, plegados.
+function Get-RestoLocalHtml($T, $PL) {
+  $resto = @($PL.casos | Where-Object { $null -ne $_ -and $_.resultado -cne 'distinto' -and ($_.resultado -cne 'igual' -or $_.motivo) })
+  if ($resto.Count -eq 0) { return '' }
+  $filas = @()
+  foreach ($c in $resto) {
+    $v = @{ CLASE = 's-aviso'; SEV = 'sev-aviso'; ICONO = 'e-aviso' }
+    if ($c.resultado -ceq 'igual') { $v = @{ CLASE = ''; SEV = ''; ICONO = 'e-ia' } }
+    $motivo = ''
+    if ($c.motivo) { $motivo = Format-Trozo $T 'pl-motivo' @{ MOTIVO = $c.motivo } }
+    $filas += (Format-Trozo $T 'pl-resto-fila' @{
+        CLASE = $v.CLASE; SEV = $v.SEV; ICONO = $v.ICONO; RESULTADO = $c.resultado; JOB = $c.job; CASO = $c.caso; TITULO = $c.titulo; MOTIVO = $motivo
+      })
+  }
+  $texto = Format-Trozo $T 'pl-resto-otros' @{ N = "$($resto.Count)" }
+  if ($resto.Count -eq 1) { $texto = Format-Trozo $T 'pl-resto-uno' }
+  return (Format-Trozo $T 'pl-resto' @{ TEXTO = $texto; FILAS = ($filas -join "`n") })
+}
+
+# Lo que lleva la seccion cuando hay datos\prueba-local.json.
+function Get-DatosLocalHtml($D, $T) {
+  $pl = $D.PruebaLocal
+  $c = Get-CuentasLocal $pl
+  $minutos = ([math]::Round([double]$pl.minutos, 1)).ToString([System.Globalization.CultureInfo]::InvariantCulture).Replace('.', ',')
+  $aviso = ''
+  if ($pl.arneses.migrado -cne 'hecha') { $aviso = Format-Trozo $T 'pl-aviso-arnes' }
+  $filas = Format-Lista $T 'pl-fila' @($pl.jobs | Where-Object { $null -ne $_ }) {
+    param($j)
+    $mal = ''
+    if ([int]$j.distintos -gt 0) { $mal = Format-Trozo $T 'pl-mal' }
+    @{ JOB = $j.job; CASOS = "$($j.casos)"; IGUALES = "$($j.iguales)"; DISTINTOS = "$($j.distintos)"; SIN = "$($j.sinProbar)"; MAL = $mal }
+  }
+  $noPromete = ''
+  if ($pl.noPromete) { $noPromete = Format-Trozo $T 'pl-no-promete' @{ TEXTO = $pl.noPromete } }
+  $fallo = ''
+  if ((Get-ResultadoLocal $D) -ceq 'fallo') {
+    $e = $D.Estado.pruebaLocal
+    $fallo = Format-Trozo $T 'pl-fallo-linea' @{ CODIGO = "$($e.codigo)"; DETALLE = $e.detalle; REGISTRO = $e.registro }
+  }
+  return (Format-Trozo $T 'pl-datos' @{
+      ETIQUETA = (Format-Trozo $T 'et-medido-ia'); CASOS = "$($c.Casos)"; JOBS = "$($c.Jobs)"; IGUALES = "$($c.Iguales)"; DISTINTOS = "$($c.Distintos)"; SIN = "$($c.Sin)"
+      LLAMADAS = "$($pl.llamadas)"; MINUTOS = $minutos; FECHA = (Get-TextoFecha $T $pl.fin); AVISO = $aviso
+      TABLA = (Format-Trozo $T 'pl-tabla' @{ FILAS = $filas })
+      CASOSDISTINTOS = (@(Get-CasosDistintos $pl | ForEach-Object { Get-CasoLocalHtml $T $_ }) -join "`n")
+      RESTO = (Get-RestoLocalHtml $T $pl); NOPROMETE = $noPromete; FALLO = $fallo
+    })
+}
+
+# La seccion "Probado ejecutando los dos": con datos, el fallo de la fase sin datos, saltada, o el sin-datos de siempre.
+function Get-PruebaLocalHtml($D, $T) {
+  $r = Get-ResultadoLocal $D
+  $cuerpo = Format-Trozo $T 'sin-datos' @{ FASE = 'prueba-local'; ETIQUETA = (Format-Trozo $T 'et-sin') }
+  if ($D.PruebaLocal) { $cuerpo = Get-DatosLocalHtml $D $T }
+  elseif ($r -ceq 'fallo') {
+    $e = $D.Estado.pruebaLocal
+    $cuerpo = Format-Trozo $T 'pl-sin-fallo' @{ CODIGO = "$($e.codigo)"; DETALLE = $e.detalle; REGISTRO = $e.registro }
+  }
+  elseif ($r -ceq 'saltada') { $cuerpo = Format-Trozo $T 'pl-saltada' @{ ETIQUETA = (Format-Trozo $T 'et-sin') } }
+  return (Format-Trozo $T 'pl-seccion' @{ CUERPO = $cuerpo })
+}
+
 function Get-CuerpoComparar($D, $T, [string]$Cuerpo) {
   $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'comparar'; ETIQUETA = (Format-Trozo $T 'et-sin') }
   if (-not $D.Mapa) { $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'mapa'; ETIQUETA = (Format-Trozo $T 'et-sin') } }
   elseif ($D.Comparacion.Count -gt 0) { $jobs = (@($D.Mapa.jobs | ForEach-Object { Get-GrupoComparar $D $T $_ }) -join "`n") }
-  return (Expand-Plantilla $Cuerpo @{ JOBS = $jobs })
+  return (Expand-Plantilla $Cuerpo @{
+      PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs
+    })
 }
 
 function ConvertTo-FechaInforme($V) {
@@ -515,16 +625,31 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
   return (Format-Trozo $T 'duracion-corta' @{ M = "$min" })
 }
 
+# Las fases de la pasada en el orden en que se hacen, que depende de la respuesta: con corregir, la comparacion y la prueba en local van
+# despues de la correccion; si no, la comparacion va antes. lectura-hecha y hecha no se pintan: marcan el sitio de esos dos estados.
+function Get-OrdenFases($D) {
+  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')
+  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar', 'prueba-local', 'hecha')) }
+  return @($lectura + @('comparar', 'lectura-hecha', 'correccion', 'prueba-local', 'hecha'))
+}
+
 # Una linea de una fase: su estado (segun la fase en que va la pasada) y lo que cuentan sus tareas.
-function Get-FaseHtml($D, $T, [string]$Fase, [string]$Tipo) {
+function Get-FaseHtml($D, $T, [string]$Fase) {
   $est = if ($D.Estado) { [string]$D.Estado.fase } else { '' }
-  $nombres = @($FasesInforme | ForEach-Object { $_[0] })
+  $orden = @(Get-OrdenFases $D)
+  $Tipo = [string]$TipoFase[$Fase]
   $e = 'espera'
   if ($Fase -eq 'correccion') {
     if ($D.Correccion -and $D.Correccion.completa -eq $true) { $e = 'hecha' }
     elseif ($est -eq 'correccion') { $e = 'curso' }
   }
-  elseif ($est -eq 'lectura-hecha' -or [array]::IndexOf($nombres, $Fase) -lt [array]::IndexOf($nombres, $est)) { $e = 'hecha' }
+  elseif ($Fase -eq 'prueba-local') {
+    $r = Get-ResultadoLocal $D
+    if ($est -eq 'prueba-local') { $e = 'curso' }
+    elseif ($r -ceq 'hecha' -or $r -ceq 'fallo') { $e = 'hecha' }
+    elseif ($r -ceq 'saltada') { $e = 'saltada' }
+  }
+  elseif ([array]::IndexOf($orden, $Fase) -lt [array]::IndexOf($orden, $est)) { $e = 'hecha' }
   elseif ($Fase -eq $est) { $e = 'curso' }
   $ts = @($D.Tareas | Where-Object { $_.tipo -eq $Tipo })
   $cuenta = Format-Trozo $T 'cuenta-ninguna'
@@ -533,6 +658,16 @@ function Get-FaseHtml($D, $T, [string]$Fase, [string]$Tipo) {
     if ($D.Diag) {
       $cuenta = Format-Trozo $T 'cuenta-diagnostico' @{ ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)" }
       if ($D.CobAntes) { $cuenta += Format-Trozo $T 'cuenta-cobertura' @{ VALOR = (Get-CobValor $T $D.CobAntes 'cob-sin-medir') } }
+    }
+  }
+  elseif ($Fase -eq 'prueba-local') {
+    $r = Get-ResultadoLocal $D
+    $cuenta = Format-Trozo $T 'sin-valor'
+    if ($r -ceq 'fallo') { $cuenta = Format-Trozo $T 'cuenta-local-fallo' }
+    elseif ($r -ceq 'saltada') { $cuenta = Format-Trozo $T 'cuenta-local-saltada' }
+    elseif ($D.PruebaLocal) {
+      $c = Get-CuentasLocal $D.PruebaLocal
+      $cuenta = Format-Trozo $T 'cuenta-local' @{ CASOS = "$($c.Casos)"; IGUALES = "$($c.Iguales)"; DISTINTOS = "$($c.Distintos)"; SIN = "$($c.Sin)" }
     }
   }
   elseif ($Fase -eq 'correccion') {
@@ -557,18 +692,33 @@ function Get-PrimeraLinea([string]$Motivo) {
   return $s
 }
 
-function Get-GrupoToca($T, [string]$Nombre, $Items, [string]$N) {
+function Get-GrupoToca($T, [string]$Nombre, $Items, [string]$N, [string]$Etiqueta = 'et-sin') {
   return (Format-Trozo $T 'toca-grupo' @{
-      TITULO = (Format-Trozo $T "toca-$Nombre-titulo" @{ N = $N }); TEXTO = (Format-Trozo $T "toca-$Nombre-texto"); ETIQUETA = (Format-Trozo $T 'et-sin')
+      TITULO = (Format-Trozo $T "toca-$Nombre-titulo" @{ N = $N }); TEXTO = (Format-Trozo $T "toca-$Nombre-texto"); ETIQUETA = (Format-Trozo $T $Etiqueta)
       ITEMS = (@($Items) -join "`n")
     })
 }
 
-# "Lo que te toca": tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba, datos
+# "Lo que te toca": primero lo mas fiable (los casos distintos al ejecutar los dos, o la prueba en local que no se hizo), luego las tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba, datos
 # que nombran clases (los que la pagina de negocio no pinta, y las clases que no cupieron en la redaccion de un job) y
 # los datos que el migrado hace distinto o no hace (uno por job y dato).
 function Get-TocaHtml($D, $T) {
   $grupos = @()
+  $distintos = @()
+  if ($D.PruebaLocal) { $distintos = @(Get-CasosDistintos $D.PruebaLocal) }
+  if ($distintos.Count -gt 0) {
+    $items = @($distintos | ForEach-Object {
+        $dif = @($_.diferencias | Where-Object { $null -ne $_ } | Select-Object -First 1)
+        $valores = @{ CABECERA = (Format-Trozo $T 'cab-caso' @{ JOB = $_.job; CASO = $_.caso }); TITULO = $_.titulo; FICHERO = ''; ORIGINAL = ''; MIGRADO = '' }
+        if ($dif.Count -gt 0) { $valores.FICHERO = $dif[0].fichero; $valores.ORIGINAL = (Get-PrimeraLinea ([string]$dif[0].original)); $valores.MIGRADO = (Get-PrimeraLinea ([string]$dif[0].migrado)) }
+        Format-Trozo $T 'toca-distinto' $valores
+      })
+    $grupos += (Get-GrupoToca $T 'distintos' $items "$($distintos.Count)" 'et-medido-ia')
+  }
+  elseif (-not $D.PruebaLocal -and (Get-ResultadoLocal $D) -ceq 'fallo') {
+    $e = $D.Estado.pruebaLocal
+    $grupos += (Get-GrupoToca $T 'localfallo' @(Format-Trozo $T 'toca-localfallo' @{ CODIGO = "$($e.codigo)"; DETALLE = $e.detalle }) '1')
+  }
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
   if ($atascadas.Count -gt 0) {
     $items = @($atascadas | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-tarea' @{ ID = $_.id; DONDE = $_.entradas.fichero }); TEXTO = (Get-PrimeraLinea $_.motivo) } })
@@ -845,6 +995,24 @@ function Get-ProblemasPortada($D, $T) {
 }
 
 # ============================ LA PAGINA DE CORRECCIONES ============================
+# Lo que paso en un area durante la correccion, segun los asuntos de sus commits ("rescate(<paso>): lote N, hallazgos X a Y"): con cuantos
+# hallazgos empezo y con cuantos acabo, y lo que aparecio o se fue con los arreglos de otros pasos (la diferencia con los del diagnostico).
+function Get-DuranteHtml($T, $A) {
+  $x = @(); $y = @()
+  foreach ($c in $A.Commits) {
+    $m = [regex]::Match([string]$c.asunto, '^rescate\([^)]*\): lote [0-9]+, hallazgos ([0-9]+) a ([0-9]+)')
+    if ($m.Success) { $x += [int]$m.Groups[1].Value; $y += [int]$m.Groups[2].Value }
+  }
+  if ($x.Count -eq 0) { return '' }
+  $antes = @($A.Antes.Errores).Count
+  $dif = ''
+  if ($x[0] -gt $antes) { $dif = Format-Trozo $T 'durante-aparecieron' @{ N = "$($x[0] - $antes)" } }
+  elseif ($x[0] -lt $antes) { $dif = Format-Trozo $T 'durante-se-fueron' @{ N = "$($antes - $x[0])" } }
+  $commits = Format-Trozo $T 'durante-commit-otros' @{ N = "$($A.Commits.Count)" }
+  if ($A.Commits.Count -eq 1) { $commits = Format-Trozo $T 'durante-commit-uno' }
+  return (Format-Trozo $T 'area-durante' @{ X = "$($x[0])"; Y = "$($y[$y.Count - 1])"; COMMITS = $commits; DIF = $dif })
+}
+
 # Un area de la pagina de correcciones: sus barras de antes y despues, los commits de arreglo, los atascados con su motivo y
 # lo que queda (las mismas filas de la pagina de problemas).
 function Get-GrupoCorreccionHtml($T, $A, [int]$Max) {
@@ -866,7 +1034,7 @@ function Get-GrupoCorreccionHtml($T, $A, [int]$Max) {
   }
   return (Format-Trozo $T 'area-corr' @{
       ID = $A.Id; NOMBRE = (Get-NombreArea $T $A.Id); CUENTA = $cuenta; ESTADO = (Get-EstadoAreaHtml $T $A)
-      BARRAS = $barras; COMMITS = $commits; ATASCADOS = $atascados; QUEDA = $queda
+      BARRAS = $barras; COMMITS = $commits; ATASCADOS = $atascados; QUEDA = $queda; DURANTE = (Get-DuranteHtml $T $A)
     })
 }
 
@@ -929,24 +1097,28 @@ function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
   $fase = ''
   $parada = ''
   $estado = ''
-  $e = [pscustomobject]@{ batch = ''; legacy = ''; migrado = ''; plantilla = ''; rama = ''; modelo = ''; creado = $null; actualizado = $null; parada = $null; fase = '' }
+  $e = [pscustomobject]@{ batch = ''; legacy = ''; migrado = ''; plantilla = ''; rama = ''; modelo = ''; creado = $null; actualizado = $null; fin = $null; parada = $null; fase = '' }
   if ($est) { $e = $est }
   $fase = [string]$e.fase
   if ($e.parada) {
     $estado = Format-Trozo $T 'estado-parada' @{ FASE = $fase; MOTIVO = $e.parada.motivo }
     $parada = Format-Trozo $T 'parada' @{ MOTIVO = $e.parada.motivo; DETALLE = $e.parada.detalle; REGISTRO = $e.parada.registro; AYUDA = $e.parada.ayuda }
   }
-  elseif ($D.Correccion -and $D.Correccion.completa -eq $true) { $estado = Format-Trozo $T 'estado-corregida' }
+  elseif ($fase -eq 'hecha' -and $D.Correccion -and $D.Correccion.completa -eq $true) { $estado = Format-Trozo $T 'estado-terminada' }
+  elseif ($fase -eq 'hecha') { $estado = Format-Trozo $T 'estado-terminada-sin' }
   elseif ($fase -eq 'lectura-hecha') { $estado = Format-Trozo $T 'estado-hecha' }
   else { $estado = Format-Trozo $T 'estado-curso' @{ FASE = $fase } }
   $modelo = [string]$e.modelo
   if (-not $modelo) { $modelo = Format-Trozo $T 'modelo-defecto' }
   $c = @{}
   foreach ($s in @('hecha', 'atascada', 'pendiente')) { $c[$s] = "$(@($D.Tareas | Where-Object { $_.estado -eq $s }).Count)" }
-  $fases = (@($FasesInforme | ForEach-Object { Get-FaseHtml $D $T $_[0] $_[1] }) -join "`n")
+  $rotulo = Format-Trozo $T 'rotulo-lleva'
+  $duracion = Get-TextoDuracion $T $e.creado $e.actualizado
+  if ($null -ne (ConvertTo-FechaInforme $e.fin)) { $rotulo = Format-Trozo $T 'rotulo-duro'; $duracion = Get-TextoDuracion $T $e.creado $e.fin }
+  $fases = (@(Get-OrdenFases $D | Where-Object { $_ -cne 'lectura-hecha' -and $_ -cne 'hecha' } | ForEach-Object { Get-FaseHtml $D $T $_ }) -join "`n")
   return (Expand-Plantilla $Cuerpo @{
       BATCH = (Get-BatchInforme $D); ESTADO = $estado; MIGRADO = (Get-Hoja $e.migrado); ORIGINAL = (Get-Hoja $e.legacy); PLANTILLA = (Get-Hoja $e.plantilla)
-      MODELO = $modelo; EMPEZO = (Get-TextoFecha $T $e.creado); LLEVA = (Get-TextoDuracion $T $e.creado $e.actualizado)
+      MODELO = $modelo; EMPEZO = (Get-TextoFecha $T $e.creado); DURACION_ROTULO = $rotulo; DURACION = $duracion
       ETIQUETA = (Format-Trozo $T 'et-medido'); ETIQUETA_FASES = (Format-Trozo $T 'et-medido')
       HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente']; PARADA = $parada
       TOCA = (Get-TocaHtml $D $T); PROBLEMAS = (Get-ProblemasPortada $D $T); FASES = $fases; FICHEROS = (Get-FicherosHtml $D $T)
