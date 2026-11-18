@@ -779,7 +779,7 @@ $Pruebas['prompt: un plan con titulos en negrita lleva solo su parte'] = {
 $Pruebas['prompt: Maven fuera del repo va con su ruta, y entre comillas si tiene espacios'] = {
   $e = Nuevo-Escenario 'maven-fuera'
   $mvn = Join-Path $falsos 'mvn.ps1'
-  Igual 'MvnExe fuera del repo: su ruta, sin ./' $mvn (Maven-Del-Prompt $e)
+  Igual 'MvnExe fuera del repo: su ruta, sin ./' (Join-Path $falsos 'm20a-mvn.ps1') (Maven-Del-Prompt $e)   # el de Pon-Config
   $e2 = Nuevo-Escenario 'maven-espacios'
   $conEspacios = Join-Path $Dir 'con espacios'
   [void](New-Item -ItemType Directory -Path $conEspacios -Force)
@@ -1071,7 +1071,7 @@ function Lineas-Latido([string]$Salida) { return @($Salida -split "`r?`n" | Wher
 # El config.json del repo del escenario: Maven y Copilot, los falsos, y sin reflexion (estas pruebas cuentan las llamadas
 # a Copilot; la reflexion tiene las suyas, en M6), mas estos ajustes (nombre -> valor).
 function Pon-Config($E, [hashtable]$Mas) {
-  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Reflexionar = $false }
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'm20a-mvn.ps1'); Reflexionar = $false }
   foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
   Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg)
 }
@@ -2296,7 +2296,7 @@ $Pruebas['m8 reflexion: si aun falta una seccion, el aviso dice que titulos trae
 
 $Pruebas['m8 reflexion: sin decir nada en la config, corre cuando el fallo se repite y el siguiente la lleva'] = {
   $e = Escenario-M6 'm8-reflexion-defecto'
-  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'm20a-mvn.ps1'); Orden = @('estructura', 'tests') }))
   $r = Fix-M6 $e 'estructura' 3 @() 'nada-hasta-reflexion'
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'hay una reflexion, tras el segundo intento (el primero no tenia otro con el que compararse)' 1 (Llamadas-M6 $e 'reflexion').Count
@@ -2373,7 +2373,7 @@ function Reflexiones-De($E) { return @(Llamadas-M6 $E 'reflexion' | ForEach-Obje
 
 $Pruebas['m9 reflexion: con fallos distintos en los intentos 1 y 2 no se reflexiona (repetido, el defecto)'] = {
   $e = Escenario-M6 'm9-refl-distintos'
-  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'm20a-mvn.ps1'); Orden = @('estructura', 'tests') }))
   $r = Fix-M6 $e 'estructura' 3 @('-Lote', '1', '-Saltar', '1') 'fallos-distintos'
   Igual 'sale con 0' 0 $r.Codigo
   $c1 = Lee $e.Wt '.rescate/intento-estructura-1-1.md'; $c2 = Lee $e.Wt '.rescate/intento-estructura-1-2.md'
@@ -2531,7 +2531,7 @@ $Pruebas['m9 comprobar: el prompt de cada lote y el de reparacion llevan la orde
     $m = [regex]::Match($q[1], $orden)
     Comprueba "el prompt $($q[0]) lleva la orden de comprobar" $m.Success $q[1]
     if ($m.Success) { Comprueba "la orden del prompt $($q[0]) apunta a un rescate.ps1 y al repo de verdad" ((Test-Path -LiteralPath $m.Groups[2].Value) -and ($m.Groups[3].Value -eq $e.Repo)) $m.Value }
-    Comprueba "el prompt $($q[0]) pide despues los tests de Maven" ($q[1] -match '(?m)^- Ejecuta: .* -q -B test  y corrige los tests que fallen\.$') $q[1]
+    Comprueba "el prompt $($q[0]) pide despues los tests de Maven" ($q[1] -match '(?m)^- Ejecuta: .* -q -B -DskipTests=false "-Dmaven\.test\.skip=false" "-Dmaven\.test\.failure\.ignore=false" test  y corrige los tests que fallen\.$') $q[1]
   }
   $e2 = Escenario-M6 'm9-comprobar-sin-marca'
   $foto = { (@(Get-ChildItem -LiteralPath $e2.Repo -Recurse -Force -File | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' } | ForEach-Object { $_.FullName + '|' + $_.Length + '|' + $_.LastWriteTimeUtc.Ticks }) | Sort-Object) -join "`n" }
@@ -2772,7 +2772,7 @@ $Pruebas['m92 motivo: un fallo de ArchUnit con su pila deja las 3 primeras linea
   if ($d.H.Count -ne 1) { return }
   $h = $d.H[0]
   Igual 'el fichero es el del test' $TestM92 $h.Fichero
-  Igual 'el detalle es el de siempre, sin el motivo' "1 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $h.Detalle
+  Igual 'el detalle es el del informe .txt: un hallazgo numerado por fallo, sin el motivo' "test 1 de 1 que fallan en $ClaseM92" $h.Detalle
   Igual 'el motivo son las 3 primeras lineas, unidas con " | " y sin la linea Class de mas' $MotivoArchM92 $h.Motivo
   Comprueba 'sin lineas at ni Time elapsed' ($h.Motivo -and $h.Motivo -notmatch '(^| \| )at ' -and $h.Motivo -notmatch 'Time elapsed' -and $h.Motivo -notmatch 'LeerFichero') $h.Motivo
   . ([scriptblock]::Create((Texto-De-Funciones @('Get-ClaveHallazgo'))))
@@ -2794,7 +2794,7 @@ $Pruebas['m92 motivo: sin motivo legible el hallazgo es el de siempre, sin propi
   Igual 'un hallazgo de tests' 1 $d.H.Count
   if ($d.H.Count -ne 1) { return }
   Igual 'el hallazgo solo tiene las 5 propiedades de siempre' 'Cat Detalle Fichero Linea Sev' ((@($d.H[0].PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)) -join ' ')
-  Igual 'el detalle es el de siempre' "1 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $d.H[0].Detalle
+  Igual 'el detalle es el del informe .txt: numerado, sin el motivo' "test 1 de 1 que fallan en $ClaseM92" $d.H[0].Detalle
   # un metodo que falla pero solo trae la pila
   $d2 = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 (@('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!') + (Pila-M92 @('com.acme.life.ArquitecturaTest.capasRespetadas(ArquitecturaTest.java:20)'))))
   Igual 'con solo la pila, un hallazgo de tests' 1 $d2.H.Count
@@ -2819,7 +2819,7 @@ $Pruebas['m92 motivo: la linea del prompt del lote y el detalle de la consola tr
   $lotes = @(Llamadas-M6 $e 'lote')
   Comprueba 'hay un lote de tests' ($lotes.Count -ge 1) (Cola $r.Salida)
   if ($lotes.Count -eq 0) { return }
-  $linea = '- ' + $TestM92 + " - 1 test(s) fallan en $ClaseM92 (ver target/surefire-reports) - motivo: " + $MotivoArchM92
+  $linea = '- ' + $TestM92 + " - test 1 de 1 que fallan en $ClaseM92 - motivo: " + $MotivoArchM92
   $p = Prompt-M6 $e $lotes[0]
   Comprueba 'la linea del hallazgo del prompt lleva el motivo' (@($p -split "`r?`n") -contains $linea) (([regex]::Match($p, '(?s)## Hallazgos de este lote.*?(?=## Reglas)')).Value)
   $c1 = Consola-Del-Intento $r.Salida 1
@@ -3131,12 +3131,14 @@ $Pruebas['m95 motivo: con dos metodos que fallan, el motivo lleva solo la linea 
     @('Tests run: 2, Failures: 2, Errors: 0, Skipped: 0')
   $d = Diagnostica-Con-Informe $e (Informe-M92 $resumen $metodos)
   Igual 'sale con 0' 0 $d.R.Codigo
-  Igual 'un hallazgo de tests' 1 $d.H.Count
-  if ($d.H.Count -ne 1) { return }
-  Igual 'el detalle cuenta los dos' "2 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $d.H[0].Detalle
+  Igual 'un hallazgo de tests por cada fallo' 2 $d.H.Count
+  if ($d.H.Count -ne 2) { return }
+  Igual 'el primero cuenta el 1 de 2' "test 1 de 2 que fallan en $ClaseM92" $d.H[0].Detalle
+  Igual 'el segundo, el 2 de 2' "test 2 de 2 que fallan en $ClaseM92" $d.H[1].Detalle
   Igual 'el motivo es la linea del primero' 'java.lang.AssertionError: motivo-del-primero' $d.H[0].Motivo
   Comprueba 'y no lleva la del segundo' (-not ([string]$d.H[0].Motivo).Contains('motivo-del-segundo')) $d.H[0].Motivo
   Comprueba 'ni una linea Tests run' (-not ([string]$d.H[0].Motivo).Contains('Tests run')) $d.H[0].Motivo
+  Comprueba 'el segundo no lleva motivo (no se repite el del primero)' ($null -eq $d.H[1].PSObject.Properties['Motivo']) ($d.H[1] | ConvertTo-Json -Compress)
 }
 
 # ============================ M10: PASO SONAR ============================
@@ -3310,7 +3312,7 @@ public class $Clase {
 # Ajustes de un repo de Sonar: Maven y Copilot de mentira, mas lo de $Mas (con profundidad para listas de tablas). Cada test carga sus recetas,
 # exclusiones y prohibiciones: por defecto las tres listas van vacias, para que el contenido por defecto del script no cambie ningun test.
 function Config-Sonar($E, [hashtable]$Mas) {
-  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Reflexionar = $false; SonarRecetas = @(); SonarNoAutomatizar = @(); SonarProhibido = @() }
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1'); MvnExe = (Join-Path $falsos 'm20a-mvn.ps1'); Reflexionar = $false; SonarRecetas = @(); SonarNoAutomatizar = @(); SonarProhibido = @() }
   foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
   Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg -Depth 6)
 }
@@ -4175,7 +4177,7 @@ $Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, sumando to
   Igual '(?-i:) distingue: nosonar no casa' $true (Pasa (Diff-De @{ 'a/A.java' = @('+    int x = 1; // nosonar') }) $dist)
 }
 
-$Pruebas['m10 sonar: SonarProhibido neto-: quitar un @Test invalida el intento aunque arregle la linea; sin la entrada pasa'] = {
+$Pruebas['m10 sonar: SonarProhibido neto-: quitar un @Test invalida el intento aunque arregle la linea; sin la entrada lo para la puerta de metodos de test'] = {
   $proh = @(, @{ Rx = '@Test'; Modo = 'neto-'; Motivo = 'MOTIVO-PRUEBA-NETO: no se quitan tests' })
   $e = Escenario-Sonar 'm10-neto' @('service/TotalService') @{ SonarProhibido = $proh }
   $total = $RutaSv + 'service/TotalService.java'
@@ -4193,7 +4195,8 @@ $Pruebas['m10 sonar: SonarProhibido neto-: quitar un @Test invalida el intento a
   $e2 = Escenario-Sonar 'm10-neto-control' @('service/TotalService')
   Informe-Sonar $e2.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
   $r2 = Sonar-Lanza $e2 @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e2.Xlsx, '-Auto', '-Si', '-MaxIntentos', '2', '-MaxLotes', '1') 'sonar-quita-test'
-  Comprueba 'sin la entrada el lote pasa' ($r2.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r2.Salida)
+  # sin la entrada, quitar el @Test ya no pasa: lo para la puerta general de metodos de test (M20a), no la entrada
+  Comprueba 'sin la entrada no sale su motivo: lo para la puerta de metodos de test' ($r2.Salida -match 'NO PASA: .*Has borrado 1 metodos de test \(1 -> 0\)' -and $r2.Salida -notmatch 'MOTIVO-PRUEBA-NETO') (Cola $r2.Salida)
 }
 
 $Pruebas['m10 sonar: crear .java nuevos se permite; tocar ficheros que no son .java, o borrar o renombrar algo de src/test, invalida el intento'] = {
@@ -4391,12 +4394,12 @@ $Pruebas['m10 sonar: borrar una clase cuyo nombre aparece en src/main/resources 
 $Pruebas['m10 sonar: una entrada de SonarProhibido con Si solo cuenta en el lote que tiene un mensaje que la cumple'] = {
   $proh = @(, @{ Rx = '@Test'; Modo = 'neto-'; Motivo = 'MOTIVO-PRUEBA-SI'; Si = 'SI-PRUEBA' })
   $total = $RutaSv + 'service/TotalService.java'
-  # lote sin el mensaje: la entrada no se aplica y el lote pasa aunque quite el @Test
+  # lote sin el mensaje: la entrada no se aplica (su motivo no sale); quitar el @Test lo para la puerta general de metodos de test (M20a)
   $e1 = Escenario-Sonar 'm10-si-sin' @('service/TotalService') @{ SonarProhibido = $proh }
   $ln = Linea-De (Lee $e1.Repo $total) 'int resultado'
   Informe-Sonar $e1.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
   $r1 = Sonar-Lanza $e1 @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e1.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'sonar-quita-test'
-  Comprueba 'sin el mensaje el lote pasa' ($r1.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r1.Salida)
+  Comprueba 'sin el mensaje la entrada no se aplica: no sale su motivo' ($r1.Salida -match 'NO PASA: .*Has borrado 1 metodos de test \(1 -> 0\)' -and $r1.Salida -notmatch 'MOTIVO-PRUEBA-SI') (Cola $r1.Salida)
   # lote con el mensaje: la entrada se aplica
   $e2 = Escenario-Sonar 'm10-si-con' @('service/TotalService') @{ SonarProhibido = $proh }
   Informe-Sonar $e2.Xlsx @(, (Inc 'CRITICAL' 'Fix this SI-PRUEBA null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
@@ -4510,7 +4513,7 @@ ConvertTo-Json -InputObject $o -Depth 6 -Compress
 
 # Ajustes de un repo de cobertura: Maven y Copilot de mentira, mas lo de $Mas.
 function Config-Cob($E, [hashtable]$Mas = @{}) {
-  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'cobertura-copilot.ps1'); MvnExe = (Join-Path $falsos 'cobertura-mvn.ps1'); Reflexionar = $false }
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'cobertura-copilot.ps1'); MvnExe = (Join-Path $falsos 'm20a-cobertura-mvn.ps1'); Reflexionar = $false }
   foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
   Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg -Depth 6)
 }
@@ -4886,6 +4889,211 @@ $Pruebas['m18 plantilla (j): fecha-antigua dice que usa la API antigua y que pas
   Igual 'hay un aviso de fecha-antigua' 1 $f.Count
   Igual 'con el texto nuevo' '[fecha-antigua] usa java.util.Date (API antigua de fechas). Pasarlo a java.time puede cambiar el formato o la zona: hazlo solo con un test delante' "$($f[0].Detalle)"
   Comprueba 'y ya no dice que usa java.time en vez de la antigua' (("$($f[0].Detalle)") -notmatch 'usa java\.time en vez de')
+}
+
+# ===== M20a: LA PUERTA DE LOS TESTS MIRA LOS TESTS DE VERDAD =====
+# Los falsos son m20a-mvn.ps1 y m20a-copilot.ps1. Los informes de surefire (XML y .txt) salen de los metodos '@Test ... void x() {...}' de
+# src/test/java: M20A_FALLA en la linea, el test falla; @DisabledOnOs, se salta. El pom manda, como en Maven: un <skipTests>true</skipTests> dentro
+# de <configuration> no ejecuta nada (gana al -DskipTests=false) y un <testFailureIgnore>true</testFailureIgnore> hace salir con 0 aunque falle.
+$TestM20a = 'src/test/java/com/acme/life/FacturaServiceTest.java'
+$ClaseM20a = 'com.acme.life.FacturaServiceTest'
+$FacturaM20a = @'
+package com.acme.life;
+
+class FacturaServiceTest {
+    @Test void calculaRecargo() { /* M20A_FALLA */ }
+    @Test void calculaBase() { }
+    @Test void calculaIva() { }
+    @Test void calculaTotal() { }
+    @Test void redondea() { }
+}
+'@
+$TresRotosM20a = @'
+package com.acme.life;
+
+class FacturaServiceTest {
+    @Test void uno() { /* M20A_FALLA */ }
+    @Test void dos() { /* M20A_FALLA */ }
+    @Test void dos(int n) { /* M20A_FALLA */ }
+    @Test void cuatro() { }
+}
+'@
+$AnotacionesM20a = @'
+package com.acme.life;
+
+class FacturaServiceTest {
+    @Test void a() { /* M20A_FALLA */ }
+    @ParameterizedTest void b() { }
+    @RepeatedTest void c() { }
+    @TestFactory void d() { }
+    @org.junit.jupiter.api.Test void e() { }
+}
+'@
+$MotivoM20a = 'org.opentest4j.AssertionFailedError: expected: <1> but was: <2>'
+
+# El pom del banco con esto dentro de la configuracion del plugin de surefire.
+function Pom-Surefire([string]$Config) {
+  return ($Pom -replace '</project>', ('<build><plugins><plugin><artifactId>maven-surefire-plugin</artifactId><configuration>' + $Config + '</configuration></plugin></plugins></build></project>'))
+}
+
+# Repo de juguete con FacturaServiceTest como unico test (1 metodo que falla y 4 que pasan, o el texto de $Test) ya en un commit, con el
+# Maven y el Copilot de m20a. $Mas: ajustes de mas (nombre -> valor).
+function Escenario-M20a([string]$Nombre, [string]$Test = $FacturaM20a, [hashtable]$Mas = @{}) {
+  $cfg = @{ CopilotExe = (Join-Path $falsos 'm20a-copilot.ps1'); MvnExe = (Join-Path $falsos 'm20a-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  $e = Escenario-M6 $Nombre $cfg
+  Remove-Item -LiteralPath (Get-Ruta $e.Repo 'src/test/java/com/acme/life/PolizaServiceTest.java') -Force
+  Escribe $e.Repo $TestM20a $Test
+  [void](GitEn $e.Repo @('add', '-A', '--', 'src/test'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'tests de m20a'))
+  return $e
+}
+
+# El diagnostico con Maven del repo (con M20A_FORMATO si se pide): lo que sale y los hallazgos de 'tests' que son errores.
+function Diagnostica-M20a($E, [string]$Formato = '') {
+  $env:M20A_FORMATO = $Formato
+  try { $r = Rescate @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla) }
+  finally { $env:M20A_FORMATO = '' }
+  return [pscustomobject]@{ R = $r; H = @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'tests' -and $_.Sev -eq 'error' }) }
+}
+
+# Un lote del paso 'estructura' (un solo fichero, un lote) con estos guiones de RESCATE_FALSO y este M20A_FORMATO.
+function Lote-M20a($E, [string]$Guion, [string]$Formato = '') {
+  $env:M20A_FORMATO = $Formato
+  try { return (Fix-M6 $E 'estructura' 1 @('-Lote', '1', '-MaxLotes', '1') $Guion) }
+  finally { $env:M20A_FORMATO = '' }
+}
+
+$Pruebas['m20a (a): Maven sale con 0 pero el informe XML trae 1 fallo: los tests no estan bien y sale un hallazgo con el nombre del metodo y su motivo'] = {
+  $e = Escenario-M20a 'm20a-a'
+  Escribe $e.Repo 'pom.xml' (Pom-Surefire '<testFailureIgnore>true</testFailureIgnore>')
+  [void](GitEn $e.Repo @('commit', '-q', '-am', 'testFailureIgnore'))
+  $d = Diagnostica-M20a $e
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Comprueba 'el estado dice que los tests fallan' ($d.R.Salida -match 'compila: SI \| tests: FALLAN') (Cola $d.R.Salida)
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el detalle nombra el metodo y la clase' "falla calculaRecargo en $ClaseM20a" $d.H[0].Detalle
+  Igual 'el fichero es el de la clase de test' $TestM20a $d.H[0].Fichero
+  Igual 'el motivo es el del metodo' $MotivoM20a $d.H[0].Motivo
+}
+
+$Pruebas['m20a (a2): con Maven saliendo con 1 los hallazgos son los mismos: uno por metodo que falla, no uno por clase'] = {
+  $e = Escenario-M20a 'm20a-a2' $TresRotosM20a
+  $d = Diagnostica-M20a $e
+  Comprueba 'el estado dice que los tests fallan' ($d.R.Salida -match 'compila: SI \| tests: FALLAN') (Cola $d.R.Salida)
+  Igual 'tres hallazgos de tests, uno por metodo, y el segundo "dos" (una sobrecarga) con su numero' ("falla dos (2) en $ClaseM20a|falla dos en $ClaseM20a|falla uno en $ClaseM20a") ((@($d.H | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
+  $s = Diagnostica-M20a $e 'xml-sin-casos'
+  Igual 'un fallo de la clase entera, sin <testcase> que lo lleve, tambien sale: numerado' ("test 1 de 3 que fallan en $ClaseM20a|test 2 de 3 que fallan en $ClaseM20a|test 3 de 3 que fallan en $ClaseM20a") ((@($s.H | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
+  # con Maven saliendo con 0 (testFailureIgnore en el pom) el fallo de la clase entera tambien hace fallar los tests
+  Escribe $e.Repo 'pom.xml' (Pom-Surefire '<testFailureIgnore>true</testFailureIgnore>')
+  [void](GitEn $e.Repo @('commit', '-q', '-am', 'testFailureIgnore'))
+  $z = Diagnostica-M20a $e 'xml-sin-casos'
+  Comprueba 'con Maven saliendo con 0, el fallo de la clase entera hace que los tests fallen' ($z.R.Codigo -eq 0 -and $z.R.Salida -match 'compila: SI \| tests: FALLAN') (Cola $z.R.Salida)
+}
+
+$Pruebas['m20a (b): Maven sale con 0, hay un test en src/test/java y no se ha ejecutado ninguno (skipTests en el pom): hallazgo de tests en pom.xml'] = {
+  $e = Escenario-M20a 'm20a-b'
+  Escribe $e.Repo 'pom.xml' (Pom-Surefire '<skipTests>true</skipTests>')
+  [void](GitEn $e.Repo @('commit', '-q', '-am', 'skipTests'))
+  $d = Diagnostica-M20a $e
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Comprueba 'el estado dice que los tests fallan' ($d.R.Salida -match 'compila: SI \| tests: FALLAN') (Cola $d.R.Salida)
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el fichero es el pom' 'pom.xml' $d.H[0].Fichero
+  Igual 'el detalle manda mirar el pom' 'Hay tests en src/test/java, pero Maven no ha ejecutado ninguno: mira skipTests, testFailureIgnore, excludes o el perfil del pom' $d.H[0].Detalle
+}
+
+$Pruebas['m20a (c): Maven sale con 0 y no hay src/test/java: los tests estan bien y no hay hallazgo de error'] = {
+  $e = Escenario-M20a 'm20a-c'
+  [void](GitEn $e.Repo @('rm', '-q', '-r', '--', 'src/test'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'sin tests'))
+  $d = Diagnostica-M20a $e
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Comprueba 'el estado dice que los tests estan bien' ($d.R.Salida -match 'compila: SI \| tests: OK') (Cola $d.R.Salida)
+  Igual 'ningun hallazgo de tests' 0 $d.H.Count
+}
+
+$Pruebas['m20a (d): una clase con 1 metodo que falla antes del lote y 5 despues: el lote no pasa y sale "Hay mas tests fallando que antes (1 -> 5)"'] = {
+  $e = Escenario-M20a 'm20a-d'
+  $r = Lote-M20a $e 'm20a-rompe-mas'
+  Comprueba 'NO PASA: Hay mas tests fallando que antes (1 -> 5)' ($r.Salida -match 'NO PASA: .*Hay mas tests fallando que antes \(1 -> 5\)') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (control): un lote que no toca los tests pasa: con 5 tests antes y despues, y el que falla seguiendo igual, ninguna puerta nueva salta'] = {
+  $e = Escenario-M20a 'm20a-control'
+  $r = Lote-M20a $e ''
+  Comprueba 'el lote sale bien' ($r.Salida -match "Lote 1 OK: 'estructura'") (Cola $r.Salida)
+  Comprueba 'ninguna puerta nueva' ($r.Salida -notmatch 'Se ejecutan menos tests|Has borrado \d+ metodos|Hay mas tests fallando') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (e): el lote borra el metodo de test que fallaba pero deja el fichero: no pasa, por los metodos borrados y por los tests que se ejecutan'] = {
+  $e = Escenario-M20a 'm20a-e'
+  $r = Lote-M20a $e 'm20a-borra-metodo'
+  Comprueba 'NO PASA: Has borrado 1 metodos de test (5 -> 4)' ($r.Salida -match 'NO PASA: .*Has borrado 1 metodos de test \(5 -> 4\)\. Restauralos\.') (Cola $r.Salida)
+  Comprueba 'y Se ejecutan menos tests que antes (5 -> 4)' ($r.Salida -match 'Se ejecutan menos tests que antes \(5 -> 4\)\. No borres, saltes ni excluyas tests\.') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (e2): comentar el metodo con // tampoco vale: un @Test comentado no cuenta como metodo'] = {
+  $e = Escenario-M20a 'm20a-e2'
+  $r = Lote-M20a $e 'm20a-comenta-metodo'
+  Comprueba 'NO PASA: Has borrado 1 metodos de test (5 -> 4)' ($r.Salida -match 'NO PASA: .*Has borrado 1 metodos de test \(5 -> 4\)\. Restauralos\.') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (e3): se cuentan @Test, @ParameterizedTest, @RepeatedTest, @TestFactory y @org.junit.jupiter.api.Test: vaciar la clase borra 5 metodos'] = {
+  $e = Escenario-M20a 'm20a-e3' $AnotacionesM20a
+  $r = Lote-M20a $e 'm20a-vacia-test'
+  Comprueba 'NO PASA: Has borrado 5 metodos de test (5 -> 0)' ($r.Salida -match 'NO PASA: .*Has borrado 5 metodos de test \(5 -> 0\)\. Restauralos\.') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (f): el lote pone skipTests en el pom y Maven ejecuta 0 tests: no pasa y sale "Se ejecutan menos tests que antes (5 -> 0)"'] = {
+  $e = Escenario-M20a 'm20a-f'
+  $r = Lote-M20a $e 'm20a-skip-pom'
+  Comprueba 'NO PASA: Se ejecutan menos tests que antes (5 -> 0)' ($r.Salida -match 'NO PASA: .*Se ejecutan menos tests que antes \(5 -> 0\)\. No borres, saltes ni excluyas tests\.') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (g): MvnTests lleva -DskipTests=false, -Dmaven.test.skip=false y -Dmaven.test.failure.ignore=false'] = {
+  $e = Escenario-M20a 'm20a-g'
+  $d = Diagnostica-M20a $e
+  Igual 'sale con 0' 0 $d.R.Codigo
+  $l = @([System.IO.File]::ReadAllLines((Get-Ruta $e.Repo '.rescate/mvn-llamadas.log')) | Where-Object { $_ -match ' test$' })
+  Comprueba 'hay una llamada de tests' ($l.Count -ge 1) ($l -join ' // ')
+  Comprueba 'la orden lleva los tres -D, antes de test' (@($l | Where-Object { $_ -match '\| -q -B -DskipTests=false -Dmaven\.test\.skip=false -Dmaven\.test\.failure\.ignore=false test$' }).Count -eq $l.Count) ($l -join ' // ')
+  # la orden que el prompt le da a la IA: PowerShell parte -Dmaven.test.skip=false en dos argumentos si no va entre comillas
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'tests', '-SinPlan', '-Lote', '1', '-Auto', '-Si', '-MaxIntentos', '1'))
+  $p = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt lleva la orden con los -D con punto entre comillas' ($p -match '(?m)^- Ejecuta: .* -q -B -DskipTests=false "-Dmaven\.test\.skip=false" "-Dmaven\.test\.failure\.ignore=false" test ') $p
+}
+
+$Pruebas['m20a (h): sin XML, con el .txt antiguo, se cuenta igual: un hallazgo numerado por fallo y los tests que se ejecutan'] = {
+  $e = Escenario-M20a 'm20a-h' $TresRotosM20a
+  $dx = Diagnostica-M20a $e
+  $dt = Diagnostica-M20a $e 'txt'
+  Igual 'con el .xml, 3 hallazgos' 3 $dx.H.Count
+  Igual 'con solo el .txt, 3 hallazgos' 3 $dt.H.Count
+  $esperado = (1..3 | ForEach-Object { "test $_ de 3 que fallan en $ClaseM20a" }) -join '|'
+  Igual 'cada uno con su numero, y no hay dos con el mismo texto' $esperado ((@($dt.H | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
+  Igual 'con el .xml roto cae al .txt: los mismos numerados' $esperado ((@((Diagnostica-M20a $e 'xml-roto').H | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
+  $e2 = Escenario-M20a 'm20a-h2'
+  $r = Lote-M20a $e2 'm20a-borra-metodo' 'txt'
+  Comprueba 'con solo el .txt, borrar el metodo baja los tests que se ejecutan (5 -> 4)' ($r.Salida -match 'Se ejecutan menos tests que antes \(5 -> 4\)') (Cola $r.Salida)
+  Comprueba 'y los metodos (5 -> 4)' ($r.Salida -match 'Has borrado 1 metodos de test \(5 -> 4\)') (Cola $r.Salida)
+}
+
+$Pruebas['m20a (i): un test saltado (@DisabledOnOs) no cuenta como ejecutado: el lote no pasa aunque el metodo siga y el fallo baje'] = {
+  $e = Escenario-M20a 'm20a-i'
+  $r = Lote-M20a $e 'm20a-salta-metodo'
+  Comprueba 'NO PASA: Se ejecutan menos tests que antes (5 -> 4)' ($r.Salida -match 'NO PASA: .*Se ejecutan menos tests que antes \(5 -> 4\)') (Cola $r.Salida)
+  Comprueba 'el metodo sigue en el fichero: no dice que se hayan borrado' ($r.Salida -notmatch 'Has borrado \d+ metodos') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  $e2 = Escenario-M20a 'm20a-i2'
+  $rs = Lote-M20a $e2 'm20a-salta-metodo' 'txt'
+  Comprueba 'con el .txt antiguo (Skipped: 1) tambien' ($rs.Salida -match 'Se ejecutan menos tests que antes \(5 -> 4\)') (Cola $rs.Salida)
 }
 
 # ================================ LANZADOR ================================
