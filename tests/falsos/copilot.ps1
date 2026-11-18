@@ -17,7 +17,10 @@
 #   sonar-borra-test   arregla y borra un fichero de src/test
 #   sonar-quita-test   arregla y quita la linea @Test de un test (el fichero se queda)
 #   sonar-fichero-nuevo  arregla y crea un fichero nuevo en src/main/java
+#   sonar-renombra-test  arregla y cambia el nombre de un fichero de src/test
 #   sonar-toca-pom     arregla y cambia el pom.xml
+#   sonar-borra-clase  borra el fichero de cada incidencia
+#   sonar-parte-clase  parte la clase de cada incidencia en dos: el metodo suma pasa a una clase nueva, en otro fichero
 #   sonar-extrae       la incidencia es de un metodo: extrae la suma a un metodo privado y deja la declaracion igual
 #   sonar-sin-tocar    no toca la linea marcada: cambia otra cosa del fichero
 #   sonar-atasca       no toca las incidencias cuyo detalle lleva ATASCA y corrige las demas
@@ -571,6 +574,18 @@ switch ($paso) {
       if ($guion -eq 'sonar-sin-tocar') { Escribir $f ((Leer $f) + "`n// otro cambio: la linea marcada no se toca`n"); continue }
       if ($guion -eq 'sonar-atasca' -and $l -match 'ATASCA') { continue }   # no toca nada de esa incidencia: el lote no baja
       if ($guion -eq 'sonar-deja' -and $l -match 'DEJAME') { $dejadas += "${f}:${n} | cambiaria la API publica"; continue }
+      if ($guion -eq 'sonar-borra-clase') { Remove-Item -LiteralPath (Get-Ruta $f) -Force; continue }   # borra el fichero de la incidencia
+      if ($guion -eq 'sonar-parte-clase') {   # parte la clase en dos: el metodo suma pasa a una clase nueva, en otro fichero
+        $texto = Leer $f
+        $m = [regex]::Match($texto, '(?s)\r?\n    /\*\*\r?\n     \* Suma dos numeros\..*?\r?\n    \}\r?\n')
+        if ($m.Success) {
+          $clase = [System.IO.Path]::GetFileNameWithoutExtension($f)
+          $paquete = [regex]::Match($texto, '(?m)^package [^;]*;').Value
+          Escribir $f $texto.Remove($m.Index, $m.Length - 1)
+          Escribir ($f -replace '\.java$', 'Suma.java') ($paquete + "`n`n/** Parte de ${clase}: la suma. */`npublic class ${clase}Suma {`n" + $m.Value.TrimEnd() + "`n}`n")
+        }
+        continue
+      }
       if ($guion -eq 'sonar-extrae') {   # la incidencia es de un metodo: saca la suma a un metodo privado y deja la declaracion como estaba
         $texto = (Leer $f).Replace('int resultado = a + b;', 'int resultado = sumaAuxiliar(a, b);')
         $i = $texto.LastIndexOf('}')
@@ -590,6 +605,10 @@ switch ($paso) {
     }
     if ($guion -eq 'sonar-fichero-nuevo') { Escribir 'src/main/java/com/acme/plantillabatch/service/Nuevo.java' "package com.acme.plantillabatch.service;`n`n/** Clase nueva. */`npublic class Nuevo {`n}`n" }
     if ($guion -eq 'sonar-toca-pom') { Escribir 'pom.xml' ((Leer 'pom.xml') + "`n<!-- cambio -->`n") }
+    if ($guion -eq 'sonar-renombra-test') {
+      $test = @(Get-ChildItem -LiteralPath (Get-Ruta 'src/test') -Recurse -File -Filter '*.java')[0]
+      Move-Item -LiteralPath $test.FullName -Destination (Join-Path $test.DirectoryName 'OtroNombreTest.java')
+    }
     if ($guion -in @('sonar-disabled', 'sonar-borra-test', 'sonar-quita-test')) {
       $test = @(Get-ChildItem -LiteralPath (Get-Ruta 'src/test') -Recurse -File -Filter '*.java')[0]
       $tt = [System.IO.File]::ReadAllText($test.FullName)

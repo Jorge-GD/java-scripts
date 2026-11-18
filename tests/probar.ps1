@@ -3315,7 +3315,7 @@ function Config-Sonar($E, [hashtable]$Mas) {
   Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg -Depth 6)
 }
 
-# Un repo Java con Maven que no es una migracion (sin plantilla): una clase por cada 'subpaquete/Clase' de $Clases, las de $SinDoc sin Javadoc y los ficheros de $Extra (ruta bajo el paquete sin .java -> texto).
+# Un repo Java con Maven que no es una migracion (sin plantilla): una clase por cada 'subpaquete/Clase' de $Clases, las de $SinDoc sin Javadoc y los ficheros de $Extra (ruta bajo el paquete sin .java -> texto; o una ruta del repo que empieza por /).
 function Escenario-Sonar([string]$Nombre, [string[]]$Clases = @('service/TotalService', 'service/ReciboService'), [hashtable]$Mas = @{}, [string[]]$SinDoc = @(), [hashtable]$Extra = @{}) {
   $raiz = Join-Path $Dir $Nombre
   if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
@@ -3325,7 +3325,10 @@ function Escenario-Sonar([string]$Nombre, [string[]]$Clases = @('service/TotalSe
   Escribe $repo 'src/test/java/com/acme/plantillabatch/service/TotalServiceTest.java' $TestSonar
   foreach ($c in $Clases) { $p = $c -split '/'; Escribe $repo ($RutaSv + $p[0] + '/' + $p[1] + '.java') (Servicio-Java $p[1] $p[0]) }
   foreach ($c in $SinDoc) { $p = $c -split '/'; Escribe $repo ($RutaSv + $p[0] + '/' + $p[1] + '.java') (Servicio-Java $p[1] $p[0] $true) }
-  foreach ($k in $Extra.Keys) { Escribe $repo ($RutaSv + $k + '.java') $Extra[$k] }
+  foreach ($k in $Extra.Keys) {
+    if ($k.StartsWith('/')) { Escribe $repo $k.TrimStart('/') $Extra[$k] }   # una ruta del repo tal cual (por ejemplo un yml de resources)
+    else { Escribe $repo ($RutaSv + $k + '.java') $Extra[$k] }
+  }
   Inicia-Repo $repo
   $e = [pscustomobject]@{ Raiz = $raiz; Repo = $repo; Wt = ($repo + '-rescate'); Plantilla = ''; Xlsx = (Join-Path $raiz 'informe.xlsx') }
   Config-Sonar $e $Mas
@@ -3673,7 +3676,7 @@ $Pruebas['m10 sonar: no se vale silenciar a Sonar ni quitar tests: el intento cu
     if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba "$caso : existe el worktree" $false (Cola $r.Salida); continue }
     $motivo = 'MOTIVO-PRUEBA-SILENCIO'
     if ($caso -eq 'sonar-disabled') { $motivo = 'MOTIVO-PRUEBA-DESACTIVADO' }
-    if ($caso -eq 'sonar-borra-test') { $motivo = 'solo se pueden modificar' }
+    if ($caso -eq 'sonar-borra-test') { $motivo = 'borrar ni renombrar' }
     Comprueba "$caso : el intento no pasa y dice el motivo de la entrada" ($r.Salida -match ('NO PASA: .*' + $motivo)) (Cola $r.Salida)
     Comprueba "$caso : el lote se deshace" ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
     Igual "$caso : no hay commits nuevos" 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
@@ -3940,7 +3943,7 @@ class B {
   Igual 'con el Javadoc cambiado: ya no' $false (Test-SonarSigueAhi $u.Unidad $u.SinDoc (Get-SonarNormal ($java.Replace('Doc.', 'Otro texto.'))))
 }
 
-$Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, contando por fichero, y la condicion Si'] = {
+$Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, sumando todo el diff, y la condicion Si'] = {
   . ([scriptblock]::Create((Texto-Sonar)))
   # un diff como el de git: por fichero, con sus lineas + y -
   function Diff-De($Ficheros) {
@@ -3965,7 +3968,8 @@ $Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, contando p
   Igual 'neto-: una menos que mas falla' $false (Pasa (Diff-De @{ 'a/A.java' = @('-    @Test') }) $menos)
   Igual 'neto-: mover la linea (sale y entra) no falla' $true (Pasa (Diff-De @{ 'a/A.java' = @('-    @Test', '+    @Test') }) $menos)
   Igual 'neto-: anadir no falla' $true (Pasa (Diff-De @{ 'a/A.java' = @('+    @Test') }) $menos)
-  Igual 'neto- cuenta por fichero: lo que sale de uno no lo compensa lo que entra en otro' $false (Pasa (Diff-De @{ 'a/A.java' = @('-    @Test'); 'a/B.java' = @('+    @Test') }) $menos)
+  Igual 'neto- suma todo el diff: lo que sale de un fichero lo compensa lo que entra en otro (mover a otra clase da 0)' $true (Pasa (Diff-De @{ 'a/A.java' = @('-    @Test'); 'a/B.java' = @('+    @Test') }) $menos)
+  Igual 'neto- suma todo el diff: si en total salen mas de las que entran, falla' $false (Pasa (Diff-De @{ 'a/A.java' = @('-    @Test', '-    @Test'); 'a/B.java' = @('+    @Test') }) $menos)
   $cero = @(, @{ Rx = 'foo'; Modo = 'neto0'; Motivo = 'm-cero' })
   Igual 'neto0: mas que menos falla' $false (Pasa (Diff-De @{ 'a/A.java' = @('+    foo(1);', '+    foo(2);', '-    foo(0);') }) $cero)
   Igual 'neto0: menos que mas falla' $false (Pasa (Diff-De @{ 'a/A.java' = @('-    foo(1);') }) $cero)
@@ -4005,18 +4009,82 @@ $Pruebas['m10 sonar: SonarProhibido neto-: quitar un @Test invalida el intento a
   Comprueba 'sin la entrada el lote pasa' ($r2.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r2.Salida)
 }
 
-$Pruebas['m10 sonar: solo se pueden modificar .java que ya existan bajo src/main/java o src/test/java: crear un fichero o tocar el pom invalida el intento'] = {
-  foreach ($caso in @('sonar-fichero-nuevo', 'sonar-toca-pom')) {
+$Pruebas['m10 sonar: crear .java nuevos se permite; tocar ficheros que no son .java, o borrar o renombrar algo de src/test, invalida el intento'] = {
+  $total = $RutaSv + 'service/TotalService.java'
+  $casos = @(
+    @{ G = 'sonar-fichero-nuevo'; Pasa = $true; Motivo = '' },
+    @{ G = 'sonar-toca-pom'; Pasa = $false; Motivo = 'que no son \.java' },
+    @{ G = 'sonar-borra-test'; Pasa = $false; Motivo = 'borrar ni renombrar.*src/test' },
+    @{ G = 'sonar-renombra-test'; Pasa = $false; Motivo = 'borrar ni renombrar.*src/test' })
+  foreach ($c in $casos) {
+    $caso = $c.G
     $e = Escenario-Sonar ('m10-estructura-' + $caso) @('service/TotalService')
-    $total = $RutaSv + 'service/TotalService.java'
     $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
     Informe-Sonar $e.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
     $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') $caso
     if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba "$caso : existe el worktree" $false (Cola $r.Salida); continue }
-    Comprueba "$caso : el intento no pasa" ($r.Salida -match 'NO PASA: .*solo se pueden modificar') (Cola $r.Salida)
-    Comprueba "$caso : el lote se deshace" ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
-    Igual "$caso : no hay commits nuevos" 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
-    Igual "$caso : el worktree queda limpio" '' (GitEn $e.Wt @('status', '--porcelain'))
+    if ($c.Pasa) {
+      Comprueba "$caso : el lote pasa" ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+      Comprueba "$caso : y el fichero nuevo entra en el commit" ((GitEn $e.Wt @('show', '--stat', '--format=', 'HEAD')) -match 'Nuevo\.java') (GitEn $e.Wt @('show', '--stat', '--format=', 'HEAD'))
+      Igual "$caso : el worktree queda limpio" '' (GitEn $e.Wt @('status', '--porcelain'))
+    }
+    else {
+      Comprueba "$caso : el intento no pasa y dice por que" ($r.Salida -match ('NO PASA: .*' + $c.Motivo)) (Cola $r.Salida)
+      Comprueba "$caso : el lote se deshace" ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+      Igual "$caso : no hay commits nuevos" 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+      Igual "$caso : el worktree queda limpio" '' (GitEn $e.Wt @('status', '--porcelain'))
+    }
+  }
+}
+
+$Pruebas['m10 sonar: partir una clase en dos, con una nueva en otro fichero, pasa y resuelve la incidencia; las lineas del fichero nuevo cuentan como anadidas'] = {
+  $total = $RutaSv + 'service/TotalService.java'
+  $recibo = $RutaSv + 'service/ReciboService.java'
+  $nuevo = $RutaSv + 'service/TotalServiceSuma.java'
+  function Escenario-Parte([string]$Nombre, [hashtable]$Mas) {
+    $e = Escenario-Sonar $Nombre @('service/TotalService', 'service/ReciboService') $Mas
+    $lnClase = Linea-De (Lee $e.Repo $total) 'public class TotalService'
+    $lnLinea = Linea-De (Lee $e.Repo $recibo) 'int resultado'
+    # una incidencia de la clase entera y otra de una linea que se va a la clase nueva
+    Informe-Sonar $e.Xlsx @(
+      (Inc 'MAJOR' 'Split this class, it has too many responsibilities.' 'CODE_SMELL' 'TotalService.java' $total "${lnClase}L"),
+      (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'ReciboService.java' $recibo "${lnLinea}L"))
+    return $e
+  }
+  $a = @('-Modo', 'fix', '-Paso', 'sonar', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1')
+  $e = Escenario-Parte 'm10-parte' @{}
+  $r = Sonar-Lanza $e ($a + @('-Sonar', $e.Xlsx)) 'sonar-parte-clase'
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'el lote pasa' ($r.Salida -match "Lote 1 OK: 'sonar' 2 -> 0") (Cola $r.Salida)
+  Comprueba 'la clase nueva esta en su fichero' ((Lee $e.Wt $nuevo).Contains('public class TotalServiceSuma')) (Cola $r.Salida)
+  Comprueba 'y el metodo ya no esta en la original' (-not (Lee $e.Wt $total).Contains('public int suma(')) (Cola $r.Salida)
+  Comprueba 'las dos incidencias cuentan como resueltas' ($r.Salida -match 'Sonar: 2 resueltas aqui\.') (Cola $r.Salida)
+  Comprueba 'el fichero nuevo entra en el commit' ((GitEn $e.Wt @('show', '--stat', '--format=', 'HEAD')) -match 'TotalServiceSuma\.java') (GitEn $e.Wt @('show', '--stat', '--format=', 'HEAD'))
+  # con una entrada anadida que casa con una linea de la clase nueva, el mismo intento no pasa: las lineas de un fichero nuevo cuentan como +
+  $proh = @(, @{ Rx = 'public class \w+Suma'; Modo = 'anadida'; Motivo = 'MOTIVO-PRUEBA-CLASE-NUEVA' })
+  $e2 = Escenario-Parte 'm10-parte-prohibida' @{ SonarProhibido = $proh }
+  $r2 = Sonar-Lanza $e2 ($a + @('-Sonar', $e2.Xlsx)) 'sonar-parte-clase'
+  Comprueba 'con la entrada el intento no pasa y dice el motivo' ($r2.Salida -match 'NO PASA: .*MOTIVO-PRUEBA-CLASE-NUEVA') (Cola $r2.Salida)
+}
+
+$Pruebas['m10 sonar: borrar una clase cuyo nombre aparece en src/main/resources invalida el intento; si no aparece, se permite'] = {
+  $yml = "servicios:`n  recibo: com.acme.plantillabatch.service.ReciboService`n"
+  foreach ($caso in @(@{ N = 'recibo'; Clase = 'ReciboService'; Pasa = $false }, @{ N = 'pago'; Clase = 'PagoService'; Pasa = $true })) {
+    $e = Escenario-Sonar ('m10-borra-' + $caso.N) @('service/ReciboService', 'service/PagoService') @{} @() @{ '/src/main/resources/application.yml' = $yml }
+    $ruta = $RutaSv + 'service/' + $caso.Clase + '.java'
+    $ln = Linea-De (Lee $e.Repo $ruta) 'int resultado'
+    Informe-Sonar $e.Xlsx @(, (Inc 'MAJOR' 'Remove this empty class.' 'CODE_SMELL' ($caso.Clase + '.java') $ruta "${ln}L"))
+    $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'sonar-borra-clase'
+    if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba "$($caso.N) : existe el worktree" $false (Cola $r.Salida); continue }
+    if ($caso.Pasa) {
+      Comprueba "$($caso.N) : sin el nombre en resources el lote pasa" ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+      Comprueba "$($caso.N) : y la clase ya no esta" (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt $ruta)))
+      Comprueba "$($caso.N) : la incidencia cuenta como resuelta (el fichero ya no existe)" ($r.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r.Salida)
+    }
+    else {
+      Comprueba "$($caso.N) : con el nombre en application.yml el intento no pasa y dice por que" ($r.Salida -match ('NO PASA: .*' + $caso.Clase + '.*application\.yml') -and $r.Salida -match 'se cablea por nombre') (Cola $r.Salida)
+      Comprueba "$($caso.N) : el lote se deshace y la clase sigue" ($r.Salida -match 'Lote 1 DESHECHO' -and (Test-Path -LiteralPath (Get-Ruta $e.Wt $ruta))) (Cola $r.Salida)
+    }
   }
 }
 
