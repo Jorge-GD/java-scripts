@@ -3837,7 +3837,7 @@ function Datos-Siguiente([int]$Distintos = 0, $Correccion = $null, [int]$Errores
 function Correccion-Siguiente([bool]$Completa = $true, [int]$Commits = 2) {
   return [ordered]@{
     completa = $Completa; codigo = 0; rama = 'rescate/feat-life-20261118-0900'; base = 'feat/life'
-    commits = @(1..$Commits | ForEach-Object { [ordered]@{ hash = ('abc123' + $_); paso = 'estructura'; asunto = 'rescate(estructura): lote 1' } }); atascados = @(); resueltos = @(); variablesNuevas = @()
+    commits = @(if ($Commits -gt 0) { 1..$Commits | ForEach-Object { [ordered]@{ hash = ('abc123' + $_); paso = 'estructura'; asunto = 'rescate(estructura): lote 1' } } }); atascados = @(); resueltos = @(); variablesNuevas = @()
   }
 }
 
@@ -3931,6 +3931,8 @@ $Pruebas['m16 siguiente: fila 7, correccion completa: las 3 lineas de git del pa
   Comprueba 'sin ramaOrigen, la base de correcciones.json' ($s.Comando -match 'log --oneline feat/life\.\.rescate') $s.Comando
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente) 0)
   Igual 'con casos distintos gana la fila 3' 'distinto-corregido' $s.Caso
+  $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 0 (Correccion-Siguiente $true 0))
+  Igual 'completa pero sin ningun commit: no hay nada que traer, cae a pre' 'pre' $s.Caso
 }
 
 $Pruebas['m16 siguiente: fila 8 y casos sin fila: nada de lo anterior es probarlo en pre; una pasada cortada con -Limite dice que se relance'] = {
