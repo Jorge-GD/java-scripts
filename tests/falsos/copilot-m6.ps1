@@ -16,6 +16,10 @@
 #   atasca-siempre     un lote que lleva Suelta.java no cambia nada nunca
 #   nada-sin-correccion  un lote sin CORRECCION no cambia nada
 #   crea-fichero       un lote crea ademas output/de-la-ia.csv
+#   quita-catch        un lote sin CORRECCION quita el segundo catch de CalidadMuestra (el error se propaga);
+#                      con CORRECCION lo deja como estaba
+#   mueve-catch        un lote quita ese catch y lo lleva, igual, a una clase nueva (TamanoSeguro)
+#   catch-en-comentario  como quita-catch, y deja 'catch (' en un comentario y en un texto
 $todos = $args
 $guiones = @("$env:RESCATE_FALSO" -split ';' | Where-Object { $_ })
 $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
@@ -115,4 +119,25 @@ if ($guiones -contains 'atasca' -and $conSuelta -and $prompt -notmatch '## Conse
 if ($guiones -contains 'nada-sin-correccion' -and $prompt -notmatch '## CORRECCION') { 'no hago nada'; exit 0 }
 if ($guiones -contains 'crea-fichero') { Escribir 'output/de-la-ia.csv' "id;nota`n1;de la IA`n" }
 & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
-exit $LASTEXITCODE
+$codigo = $LASTEXITCODE
+$deCatch = @($guiones | Where-Object { @('quita-catch', 'mueve-catch', 'catch-en-comentario') -contains $_ })
+if ($deCatch.Count -gt 0) {
+  $cm = 'src/main/java/com/acme/life/application/usecases/CalidadMuestra.java'
+  if ($prompt -match '## CORRECCION') { [void](& git checkout -q HEAD -- $cm) }
+  else {
+    $sin = "`n        datos.size();"
+    if ($deCatch -contains 'catch-en-comentario') { $sin = "`n        // antes: catch (RuntimeException e)`n        String nota = `"catch (RuntimeException e)`";" + $sin }
+    $ruta = Join-Path $raiz $cm
+    $t = [regex]::Replace([System.IO.File]::ReadAllText($ruta), '\n        try \{\s*datos\.size\(\);\s*\} catch \(RuntimeException e\) \{\s*// se ignora a proposito\s*\}', $sin)
+    [System.IO.File]::WriteAllText($ruta, $t)
+    if ($deCatch -contains 'mueve-catch') {
+      Escribir 'src/main/java/com/acme/life/application/usecases/TamanoSeguro.java' (@(
+          'package com.acme.life.application.usecases;', '', 'import java.util.List;', '',
+          '/** Mira el tamano de una lista y sigue aunque falle, como antes en CalidadMuestra. */',
+          'final class TamanoSeguro {', '', '    private TamanoSeguro() {', '    }', '',
+          '    static void mira(List<String> datos) {', '        try {', '            datos.size();',
+          '        } catch (RuntimeException e) {', '            // se ignora a proposito', '        }', '    }', '}', '') -join "`n")
+    }
+  }
+}
+exit $codigo

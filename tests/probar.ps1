@@ -1660,5 +1660,51 @@ $Pruebas['m6 reflexion: sin las cuatro secciones se sigue sin ella; con Reflexio
   Comprueba 'la cabecera dice que va sin reflexion' ($r3.Salida -match '\(sin reflexion\)') (Cola $r3.Salida)
 }
 
+# ============= M7: UN LOTE NO CAMBIA COMO SE TRATAN LOS ERRORES =============
+# CalidadMuestra tiene dos catch; el segundo sigue tras el error. El script cuenta los catch de src/main/java
+# (sin comentarios ni textos) antes y despues de cada lote: si bajan, el lote no pasa.
+$CalidadM7 = 'src/main/java/com/acme/life/application/usecases/CalidadMuestra.java'
+function Catch-En($E, [string]$Rel) { return ([regex]::Matches((Lee $E.Wt $Rel), '\bcatch\s*\(')).Count }
+
+$Pruebas['m7 catch: un lote que quita un catch no pasa y la correccion dice en que fichero'] = {
+  $e = Escenario-M6 'm7-quita-catch'
+  $r = Fix-M6 $e 'estructura' 2 @() 'quita-catch'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el primer intento no pasa por el catch quitado' ($r.Salida -match 'NO PASA: Has quitado 1 catch \(2 -> 1\)\. El original sigue tras esos errores: manten el mismo tratamiento\.') (Cola $r.Salida)
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Igual 'dos intentos' 2 $lotes.Count
+  $p = Prompt-M6 $e $lotes[1]
+  Comprueba 'la correccion dice en que fichero bajo' ($p -match 'CalidadMuestra\.java - catch: 2 -> 1') $p
+  Igual 'el catch sigue en el fichero' 2 (Catch-En $e $CalidadM7)
+}
+
+$Pruebas['m7 catch: llevar el catch a un fichero nuevo pasa (la cuenta es de todo el repo)'] = {
+  $e = Escenario-M6 'm7-mueve-catch'
+  $r = Fix-M6 $e 'estructura' 1 @() 'mueve-catch'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no dice que se ha quitado un catch' ($r.Salida -notmatch 'Has quitado') (Cola $r.Salida)
+  Igual 'un solo intento' 1 @(Llamadas-M6 $e 'lote').Count
+  Igual 'CalidadMuestra se queda con 1 catch' 1 (Catch-En $e $CalidadM7)
+  Igual 'y la clase nueva lleva el otro, en el commit' 1 (Catch-En $e 'src/main/java/com/acme/life/application/usecases/TamanoSeguro.java')
+  Comprueba 'la clase nueva entra en el commit' ((GitEn $e.Wt @('log', '-1', '--name-only', '--format=')) -match 'TamanoSeguro\.java') ''
+}
+
+$Pruebas['m7 catch: un catch en un comentario o en un texto no cuenta'] = {
+  $e = Escenario-M6 'm7-catch-comentario'
+  $r = Fix-M6 $e 'estructura' 1 @() 'catch-en-comentario'
+  Igual 'el lote se deshace: sale con 2' 2 $r.Codigo
+  Comprueba 'cuenta 2 -> 1: el comentario y el texto no son catch' ($r.Salida -match 'Has quitado 1 catch \(2 -> 1\)') (Cola $r.Salida)
+}
+
+$Pruebas['m7 catch: el prompt del lote ya no dice que se relance, y el del plan dice que tratar errores es comportamiento'] = {
+  $e = Escenario-M6 'm7-textos'
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-Auto', '-Si', '-MaxIntentos', '1') '')
+  $plan = Prompt-M6 $e @(Llamadas-M6 $e 'plan')[0]
+  Comprueba 'el plan dice que capturar o propagar es comportamiento y no lo cambia' ($plan -match 'capturar y seguir, o propagar\) es comportamiento: el plan no lo cambia') $plan
+  $lote = Prompt-M6 $e @(Llamadas-M6 $e 'lote')[0]
+  Comprueba 'el lote no dice que se relance' ($lote -notmatch 'se relanza') $lote
+  Comprueba 'el lote dice que no se relance ni se quite el catch' ($lote -match 'No la relances ni quites el catch: cambia el comportamiento\.') $lote
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
