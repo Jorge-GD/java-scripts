@@ -2172,5 +2172,66 @@ $Pruebas['m9 reparar: al rendirse la ref guarda el mejor intento y el escalon si
   Comprueba 'el test roto no llego a la rama' ((GitEn $e.Wt @('ls-tree', '-r', '--name-only', 'HEAD')) -notmatch 'RompeTest')
 }
 
+# ===== M9 (parte C): LA HERRAMIENTA DENTRO DE LA SESION (-Modo comprobar) =====
+# Los bloques de .rescate/comprobar-visto.log (guion comprueba): la cabecera 'rc=.. rescate-igual=..' y su salida.
+function Comprobar-Visto($E) {
+  $p = Get-Ruta $E.Wt '.rescate/comprobar-visto.log'
+  if (-not (Test-Path -LiteralPath $p)) { return @() }
+  $bloques = @()
+  foreach ($l in [System.IO.File]::ReadAllLines($p)) {
+    if ($l -match '^(rc=|sin-orden)') { $bloques += ,@($l) } elseif ($bloques.Count -gt 0) { $bloques[$bloques.Count - 1] += $l }
+  }
+  return $bloques
+}
+
+$Pruebas['m9 comprobar: lista lo que el arbol ha roto frente al commit de partida (fichero, linea y regla) y sale con 1'] = {
+  $e = Escenario-M6 'm9-comprobar-roto'
+  $r = Fix-M6 $e 'estructura' 1 @('-Lote', '1', '-Saltar', '1') 'mueve-a-util;comprueba'
+  $b = @(Comprobar-Visto $e)
+  Comprueba 'el Copilot ejecuto la orden del prompt' ($b.Count -ge 1) (Cola $r.Salida)
+  if ($b.Count -lt 1) { return }
+  $txt = $b[0] -join "`n"
+  Comprueba 'sale con 1' ($b[0][0] -match '^rc=1 ') $txt
+  Comprueba 'no escribe nada en .rescate' ($b[0][0] -match 'rescate-igual=True') $txt
+  $roto = ([regex]::Match($txt, '(?s)HAS ROTO.*?(?=Siguen sin resolver|$)')).Value
+  Comprueba 'lista lo nuevo con su fichero y su regla' ($roto -match '- src/main/java/com/acme/life/infrastructure/util/LeerFichero\.java - subpaquete .infrastructure/util. no existe en la plantilla') $txt
+  Comprueba 'y no lo que ya estaba (Suelta)' ($roto -notmatch 'Suelta') $txt
+}
+
+$Pruebas['m9 comprobar: sin regresion sale con 0 y no deja nada en .rescate'] = {
+  $e = Escenario-M6 'm9-comprobar-limpio'
+  $r = Fix-M6 $e 'estructura' 1 @('-Lote', '1') 'comprueba'
+  $b = @(Comprobar-Visto $e)
+  Comprueba 'el Copilot ejecuto la orden del prompt' ($b.Count -ge 1) (Cola $r.Salida)
+  if ($b.Count -lt 1) { return }
+  $txt = $b[0] -join "`n"
+  Comprueba 'sale con 0 y .rescate queda igual' ($b[0][0] -match '^rc=0 rescate-igual=True') $txt
+  Comprueba 'dice que no ha roto nada' ($txt -match 'No has roto nada nuevo') $txt
+  Comprueba 'el lote pasa' ($r.Salida -match "Lote 1 OK: 'estructura'") (Cola $r.Salida)
+}
+
+$Pruebas['m9 comprobar: el prompt de cada lote y el de reparacion llevan la orden exacta; sin intento en curso no hace nada'] = {
+  $e = Escenario-M6 'm9-comprobar-prompt'
+  $r = Fix-M6 $e 'estructura' 2 @('-Lote', '1') 'mejor-peor'
+  $ls = @(Lotes-Suelta $e)
+  Comprueba 'hay dos intentos' ($ls.Count -ge 2) (Cola $r.Salida)
+  if ($ls.Count -lt 2) { return }
+  $orden = '(?m)^- Ejecuta: (pwsh|powershell) -NoProfile -File "([^"\r\n]*rescate\.ps1)" -Modo comprobar -Repo "([^"\r\n]+)" -Plantilla "[^"\r\n]+"  y corrige lo que liste \(como mucho 3 veces\)\.$'
+  foreach ($q in @(@('normal', (Prompt-M6 $e $ls[0])), @('de reparacion', (Prompt-M6 $e $ls[1])))) {
+    $m = [regex]::Match($q[1], $orden)
+    Comprueba "el prompt $($q[0]) lleva la orden de comprobar" $m.Success $q[1]
+    if ($m.Success) { Comprueba "la orden del prompt $($q[0]) apunta a un rescate.ps1 y al repo de verdad" ((Test-Path -LiteralPath $m.Groups[2].Value) -and ($m.Groups[3].Value -eq $e.Repo)) $m.Value }
+    Comprueba "el prompt $($q[0]) pide despues los tests de Maven" ($q[1] -match '(?m)^- Ejecuta: .* -q -B test  y corrige los tests que fallen\.$') $q[1]
+  }
+  $e2 = Escenario-M6 'm9-comprobar-sin-marca'
+  $foto = { (@(Get-ChildItem -LiteralPath $e2.Repo -Recurse -Force -File | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' } | ForEach-Object { $_.FullName + '|' + $_.Length + '|' + $_.LastWriteTimeUtc.Ticks }) | Sort-Object) -join "`n" }
+  $antes = & $foto
+  $r2 = Rescate @('-Modo', 'comprobar', '-Repo', $e2.Repo, '-Plantilla', $e2.Plantilla)
+  $despues = & $foto
+  Igual 'sin intento en curso sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que no hay un intento en curso' ($r2.Salida -match 'No hay un intento en curso') (Cola $r2.Salida)
+  Comprueba 'no cambia ni un fichero del repo' ($antes -eq $despues) $despues
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

@@ -39,6 +39,9 @@
 #   parcial-roto       el primer lote (Suelta.java y algo mas) mueve Suelta a application/usecases y deja un test que falla:
 #                      los hallazgos bajan y compila, pero no pasa. Los demas lotes apuntan en .rescate/arbol-visto.log si
 #                      Suelta ya esta movida, quitan ese test si el prompt lleva CORRECCION y arreglan como siempre
+#   comprueba          tras arreglar, un lote ejecuta la orden del modo comprobar que lleva su prompt (la linea 'Ejecuta: ... y corrige lo
+#                      que liste') y apunta en .rescate/comprobar-visto.log 'rc=<codigo> rescate-igual=<si no ha cambiado nada en
+#                      .rescate>' y su salida, cada linea con '> '
 #   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
 #                      ('sin marca' si no estaba)
 $todos = $args
@@ -235,6 +238,20 @@ if ($deCatch.Count -gt 0) {
           '    static void mira(List<String> datos) {', '        try {', '            datos.size();',
           '        } catch (RuntimeException e) {', '            // se ignora a proposito', '        }', '    }', '}', '') -join "`n")
     }
+  }
+}
+if ($guiones -contains 'comprueba') {
+  $v = Join-Path $rescate 'comprobar-visto.log'
+  $o = [regex]::Match($prompt, '(?m)^- Ejecuta: (.+?)  y corrige lo que liste')
+  if (-not $o.Success) { [System.IO.File]::AppendAllText($v, "sin-orden`n") }
+  else {
+    function Listado-Rescate { return ((@(Get-ChildItem -LiteralPath $rescate -Recurse -File | Sort-Object FullName | ForEach-Object { $_.FullName + '|' + $_.Length + '|' + $_.LastWriteTimeUtc.Ticks })) -join "`n") }
+    $antesR = Listado-Rescate
+    $cmd = $o.Groups[1].Value -replace '^(pwsh|powershell)\b', ("& '" + (Get-Process -Id $PID).Path + "'")
+    $sal = @(Invoke-Expression $cmd 2>&1 | ForEach-Object { "$_" })
+    $rcC = $LASTEXITCODE
+    $igual = ((Listado-Rescate) -eq $antesR)
+    [System.IO.File]::AppendAllText($v, "rc=$rcC rescate-igual=$igual`n" + (($sal | ForEach-Object { "> $_" }) -join "`n") + "`n")
   }
 }
 exit $codigo

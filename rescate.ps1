@@ -54,6 +54,10 @@ USO
   .\rescate.ps1 -Modo fix -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado `
                 -Legacy C:\ruta\life-java8 -Modelo <id-del-modelo>
 
+  # Comprobar (sin Maven, sin escribir nada): lo que el arbol de trabajo ha roto frente al commit de partida del lote en curso.
+  # Los prompts de los lotes se la piden a la IA antes de terminar; sale con 1 si hay algo nuevo roto.
+  .\rescate.ps1 -Modo comprobar -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
+
   # Todo seguido, sin parar: se detiene solo si un lote no pasa las comprobaciones.
   # Sin .rescate\contrato.json (y con -Legacy) hace antes lo del modo pre.
   .\rescate.ps1 -Modo fix ... -Todo
@@ -113,7 +117,7 @@ LIMITES
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('diagnostico', 'pre', 'plan', 'fix', 'deshacer')][string]$Modo = 'diagnostico',
+  [ValidateSet('diagnostico', 'pre', 'plan', 'fix', 'deshacer', 'comprobar')][string]$Modo = 'diagnostico',
   [string]$Repo = '.',
   [string]$Plantilla = '',
   [string]$Legacy = '',
@@ -991,6 +995,21 @@ function Get-TextoReferencias {
   return ($l + '')
 }
 
+# En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
+function Get-ConTests([string]$PasoId) { return [bool]((-not $SinTests) -or ($PasoId -eq 'tests') -or ($PasoId -eq 'e2e')) }
+
+# La orden que la IA ejecuta dentro de su sesion para ver, sin Maven, lo que ha roto: este mismo script en -Modo comprobar, con el
+# mismo PowerShell (5.1 o 7) y los parametros que deciden donde se trabaja.
+function Get-OrdenComprobar {
+  $exe = [System.IO.Path]::GetFileNameWithoutExtension((Get-Process -Id $PID).Path)
+  if ($exe -notmatch '^(pwsh|powershell)$') { $exe = 'pwsh' }
+  $o = "$exe -NoProfile -File `"$PSCommandPath`" -Modo comprobar -Repo `"$OrigenRoot`""
+  if ($PlantillaRoot) { $o += " -Plantilla `"$PlantillaRoot`"" }
+  if ($SinWorktree) { $o += ' -SinWorktree' }
+  if ($Worktree) { $o += " -Worktree `"$Worktree`"" }
+  return $o
+}
+
 # La orden de Maven para un prompt: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
 function Get-OrdenMaven {
   $sep = [System.IO.Path]::DirectorySeparatorChar
@@ -1012,9 +1031,12 @@ $TextoReglas = @(
 )
 
 # Lo que el prompt de un lote pide hacer al terminar.
-function Get-TextoAlTerminar([string]$Mvn) {
-  return @("- Ejecuta: $Mvn " + ($Cfg.MvnCompilar -join ' ') + '  y corrige hasta que compile.',
-    '- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
+function Get-TextoAlTerminar([string]$Mvn, [string]$PasoId) {
+  $a = $Cfg.MvnCompilar; $fin = 'y corrige hasta que compile.'
+  if (Get-ConTests $PasoId) { $a = $Cfg.MvnTests; $fin = 'y corrige los tests que fallen.' }
+  $l1 = "- Ejecuta: $(Get-OrdenComprobar)  y corrige lo que liste (como mucho 3 veces)."
+  $l2 = "- Ejecuta: $Mvn $($a -join ' ')  $fin"
+  return @($l1, $l2, '- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
 }
 
 # Prompt de un lote. $Consejo: la decision del modelo de las dudas para un atascado (va tras los hallazgos).
@@ -1067,7 +1089,7 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $nu
   foreach ($x in $TextoCalidad) { $l.Add($x) }
   $l.Add('')
   $l.Add('## Al terminar')
-  foreach ($x in (Get-TextoAlTerminar $mvn)) { $l.Add($x) }
+  foreach ($x in (Get-TextoAlTerminar $mvn $PasoId)) { $l.Add($x) }
   foreach ($x in (Get-TextoReflexiones $Reflexiones $false)) { $l.Add($x) }
   return ($l -join "`n")
 }
@@ -1097,7 +1119,7 @@ function New-PromptReparacion([string]$PasoId, $LoteH, [string]$Correccion, $Con
   foreach ($f in $fichs) { $l.Add("- $f") }
   $l.Add('')
   $l.Add('## Al terminar')
-  foreach ($x in (Get-TextoAlTerminar (Get-OrdenMaven))) { $l.Add($x) }
+  foreach ($x in (Get-TextoAlTerminar (Get-OrdenMaven) $PasoId)) { $l.Add($x) }
   $l.Add('')
   $l.Add('## Reglas obligatorias')
   foreach ($x in $TextoReglas) { $l.Add($x) }
@@ -1739,8 +1761,10 @@ function Show-SinPasos([string]$Pie) {
 # ventana, la luz), esos cambios a medias no son de nadie: el arranque siguiente los deshace en vez de guardarlos en la foto.
 function Get-RutaIntento { return (Join-Path $Work 'intento-en-curso.json') }
 
-function Save-Intento([string]$PasoId, [int]$N, [string]$Commit) {
-  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit })))
+# La marca lleva tambien los ficheros del lote y las claves de los errores de antes (el modo comprobar los usa para saber que hay de nuevo).
+function Save-Intento([string]$PasoId, [int]$N, [string]$Commit, [string[]]$Ficheros = @(), $Base = $null) {
+  $claves = @(); if ($Base) { $claves = @($Base.Keys | Sort-Object) }
+  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit; ficheros = @($Ficheros); base = $claves })))
 }
 
 function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
@@ -1852,7 +1876,7 @@ function Invoke-Fix {
     if ($q -gt 0) { Aviso "Ojo: quedan $q errores en el paso anterior '$c'." }
   }
   # En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
-  $conTests = ((-not $SinTests) -or ($paso -eq 'tests') -or ($paso -eq 'e2e'))
+  $conTests = (Get-ConTests $paso)
   if ($conTests -and $script:Build.Compila -and -not $script:Build.TestsEjecutados) { $hall = @(Invoke-Diagnostico $true $true) }
   $loteEf = $Lote
   if ($Cfg.PasosDeUnoEnUno -contains $paso) { $loteEf = 1 }
@@ -1911,7 +1935,7 @@ function Invoke-Fix {
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
     $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
-    Save-Intento $paso $n $check   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
+    Save-Intento $paso $n $check $sel $hallAntes   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
     # el mejor intento del lote que no ha pasado: Sha del arbol, Peso (Problemas y Nuevos), Correccion, Intento, Lote, Base (el commit bueno), Sirve, Ref
     $mejor = $null
     if ($sel.Count -eq 1 -and $mejorDe.ContainsKey($sel[0])) {
@@ -2148,35 +2172,69 @@ function Invoke-Fix {
   else { Show-SinPasos 'Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
 }
 
+# ================================ COMPROBAR ================================
+# Modo comprobar: sin Maven y sin escribir nada, lo que el arbol de trabajo ha roto frente al commit de partida del lote en curso (la
+# marca de .rescate/intento-en-curso.json lleva los errores de antes) y lo que sigue sin resolver en sus ficheros. Devuelve 0 si no hay
+# nada nuevo roto y 1 si lo hay. Lo ejecuta la IA dentro de su sesion; las puertas del fix cuentan lo nuevo con la misma funcion.
+function Invoke-Comprobar {
+  $m = $null
+  if (Test-Path -LiteralPath (Get-RutaIntento)) { try { $m = [System.IO.File]::ReadAllText((Get-RutaIntento)) | ConvertFrom-Json } catch { $m = $null } }
+  if (-not $m -or -not ($m.PSObject.Properties.Name -contains 'base')) {
+    Info 'No hay un intento en curso (.rescate/intento-en-curso.json con los errores de partida): no se que has roto tu. Para ver todos los hallazgos: -Modo diagnostico.'
+    return 0
+  }
+  $antes = @{}
+  foreach ($k in @($m.base)) { $antes["$k"] = $true }
+  $hall = @(Invoke-Diagnostico $false $false)
+  $cats = @($hall | ForEach-Object { $_.Cat } | Select-Object -Unique)
+  $rotos = @(Get-HallazgosNuevos $hall $cats $antes)
+  $fich = @($m.ficheros)
+  $siguen = @($hall | Where-Object { $_.Sev -eq 'error' -and $_.Cat -eq $m.paso -and ($fich -contains $_.Fichero) })
+  Info "Comprobacion rapida, sin Maven (paso '$($m.paso)', lote $($m.lote))."
+  if ($rotos.Count -gt 0) {
+    Aviso "HAS ROTO ($($rotos.Count) hallazgos nuevos desde el commit de partida):"
+    foreach ($x in ($rotos | Select-Object -First 30)) { Info ('  ' + (Get-LineaHallazgo $x)) }
+    if ($rotos.Count -gt 30) { Info "  ($($rotos.Count - 30) mas)" }
+  }
+  else { Bien 'No has roto nada nuevo.' }
+  if ($siguen.Count -gt 0) {
+    Info "Siguen sin resolver en los ficheros del lote ($($siguen.Count)):"
+    foreach ($x in ($siguen | Select-Object -First 20)) { Info ('  ' + (Get-LineaHallazgo $x)) }
+  }
+  if ($rotos.Count -gt 0) { return 1 }
+  return 0
+}
+
 # ================================= MAIN =================================
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fallo "No encuentro 'git' en el PATH."; exit 1 }
 $RepoRoot = Resolve-Dir $Repo
 $PlantillaRoot = Resolve-Dir $Plantilla
 $LegacyRoot = Resolve-Dir $Legacy
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot '.git'))) { Fallo "No es la raiz de un repo git: $RepoRoot"; exit 1 }
+$soloLee = ($Modo -eq 'comprobar')   # no escribe nada ni necesita Copilot
 if ($PlantillaRoot -and ($PlantillaRoot -eq $RepoRoot)) { Aviso 'Repo y plantilla son la misma carpeta: todo saldra permitido.' }
 
 # Carpeta de trabajo. $OrigenRoot es la carpeta que has pasado en -Repo.
 # Si ya hay worktree de rescate, se trabaja en el; fix y plan lo crean si falta.
 $OrigenRoot = $RepoRoot
-Set-Excluidos $OrigenRoot
+if (-not $soloLee) { Set-Excluidos $OrigenRoot }
 [void](Read-CfgFile (Get-RutaAjustes) @() $false)   # ajustes.json: lleva claves de otros scripts, ninguna avisa; el del repo manda
 Read-Config $OrigenRoot    # antes del worktree: CommitArgs vale tambien para el commit 'foto'
-Test-Copilot               # antes del worktree: sin Copilot que lanzar no se toca el repo
+if (-not $soloLee) { Test-Copilot }   # antes del worktree: sin Copilot que lanzar no se toca el repo
 if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
   $dirWt = Get-DirRescate
   if (-not (Test-WorktreeRescate $dirWt) -and ($Modo -eq 'fix' -or $Modo -eq 'plan')) { New-WorktreeRescate $dirWt }
   if (Test-WorktreeRescate $dirWt) {
     $RepoRoot = $dirWt
-    Info "Carpeta de trabajo: $RepoRoot (worktree de rescate, rama '$(Get-Rama $RepoRoot)')"
+    if (-not $soloLee) { Info "Carpeta de trabajo: $RepoRoot (worktree de rescate, rama '$(Get-Rama $RepoRoot)')" }
     if ($Modo -eq 'diagnostico' -or $Modo -eq 'pre') { Info 'Para mirar tu carpeta original en vez del worktree: -SinWorktree' }
     Read-Config $RepoRoot
-    Test-Copilot
+    if (-not $soloLee) { Test-Copilot }
   }
 }
 
 $Work = Join-Path $RepoRoot '.rescate'
-if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
+if (-not $soloLee -and -not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
 
 $script:Atascados = @{}   # paso -> ficheros que la IA no ha sabido arreglar
 $script:AtascadosInfo = [ordered]@{}   # 'paso|fichero' -> lo que se guarda en atascados.json
@@ -2198,12 +2256,13 @@ $script:Build = $null
 $script:BasePkg = ''
 $script:Cal = $null
 if ($PlantillaRoot) {
-  Info 'Leyendo la plantilla...'
+  if (-not $soloLee) { Info 'Leyendo la plantilla...' }
   $script:Cal = Get-Calibracion $PlantillaRoot
-  Info ('Plantilla incumple: ' + (Get-TextoIncumple $script:Cal))
+  if (-not $soloLee) { Info ('Plantilla incumple: ' + (Get-TextoIncumple $script:Cal)) }
 }
 
 switch ($Modo) {
+  'comprobar' { exit @(Invoke-Comprobar)[-1] }
   'diagnostico' {
     if ($SinBuild) { Info 'Diagnostico sin Maven...' } else { Info 'Diagnostico (ejecutando Maven, puede tardar)...' }
     $hall = @(Invoke-Diagnostico (-not $SinBuild) (-not $SinTests))
