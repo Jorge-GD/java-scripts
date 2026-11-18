@@ -66,8 +66,11 @@ Comprueba con `mvn -q test-compile` que compila. Termina tu respuesta con una so
 
 ## CORRECCIÓN: tu intento anterior no pasó la comprobación
 
+{{SI_CORTADO}}Tu intento anterior se cortó por tiempo. Lo que escribiste sigue en la copia: continúa desde ahí, no empieces de cero.
+
 El script ha revisado lo que escribiste y ha encontrado esto:
 
 {{MOTIVO}}
 
-Lo que habías cambiado se ha deshecho. Vuelve a escribir el test completo en ESCRIBIR (y lo demás que te haga falta de lo permitido), corrigiendo eso.
+{{SI_DESHECHO}}Lo que habías cambiado se ha deshecho. Vuelve a escribir el test completo en ESCRIBIR (y lo demás que te haga falta de lo permitido), corrigiendo eso.
+{{SI_CORTADO}}Corrige eso en lo que ya está escrito y termina; no vuelvas a empezar.

@@ -926,5 +926,34 @@ $Pruebas['49 m18 arnes (g): el registro de una llamada matada por el tope guarda
   Comprueba 'y lleva su salida parcial' ($l.Contains('salida parcial: leyendo el job cargaRecibosJob')) $l
 }
 
+$Pruebas['50 m18 arnes (k): la llamada se pasa del tope y su test no vale: el test se queda en la copia, el reintento sigue desde ahi y su prompt lo dice'] = {
+  $e = Nuevo-Escenario 'm18-k' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-malo:arnes-original'
+  Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
+  Igual 'la tarea queda hecha en el segundo intento' 'hecha/2' "$((Tarea-Arnes $e 'original').estado)/$((Tarea-Arnes $e 'original').intentos)"
+  $test = Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'
+  Comprueba 'la 2.a llamada encontro el test de la 1.a (lo arreglo en vez de escribirlo de cero)' ((Test-Path -LiteralPath $test) -and (Lee $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java').Contains('ARREGLADO')) $test
+  $p2 = Registro-Arnes $e 'original' 2
+  Comprueba 'su prompt dice que el intento se corto por tiempo y que siga desde lo escrito' ($p2 -match 'Tu intento anterior se cort. por tiempo\. Lo que escribiste sigue en la copia: contin.a desde ah., no empieces de cero\.') $p2
+  Comprueba 'despues va el motivo concreto' ($p2 -match '(?s)no empieces de cero\..*Tiempo agotado: la llamada se paso del tope y se mato\. Ademas, lo que dejo escrito no vale:.*simbolo de mentira no encontrado') $p2
+  Comprueba 'y no dice que lo escrito se ha deshecho' ($p2 -notmatch 'se ha deshecho') $p2
+  Comprueba 'ni deja marcas de la plantilla en el prompt' ($p2 -notmatch '<!--no-->|\{\{') $p2
+}
+
+$Pruebas['51 m18 arnes (k2): si la llamada no se corto por tiempo (sale con codigo 3) y su test no vale, se deshace todo como hoy'] = {
+  $e = Nuevo-Escenario 'm18-k2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'sale-mal-malo:arnes-original'
+  Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
+  $test = Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'
+  Comprueba 'la 2.a llamada no encontro el test de la 1.a (lo escribio entero)' ((Test-Path -LiteralPath $test) -and -not (Lee $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java').Contains('ARREGLADO')) $test
+  $p2 = Registro-Arnes $e 'original' 2
+  Comprueba 'su prompt dice que lo escrito se ha deshecho' ($p2 -match 'se ha deshecho') $p2
+  Comprueba 'y no dice que el intento se corto por tiempo' ($p2 -notmatch 'se cort. por tiempo') $p2
+  Comprueba 'ni deja marcas de la plantilla en el prompt' ($p2 -notmatch '<!--no-->|\{\{') $p2
+  Comprueba 'el motivo lleva el codigo de salida y el error de Maven' ($p2 -match 'Copilot salio con codigo 3' -and $p2 -match 'simbolo de mentira no encontrado') $p2
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

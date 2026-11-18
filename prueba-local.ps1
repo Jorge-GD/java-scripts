@@ -76,6 +76,9 @@ $Cfg += @{
   FallosSeguidos = 6      # llamadas fallidas seguidas antes de parar
 }
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
+# Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
+# de un parrafo y cada tarea elige una. Ninguna otra linea de las plantillas empieza asi.
+$MarcaNo = '<!--no-->'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
@@ -203,7 +206,7 @@ function Invoke-Lote($Lote, [string]$Esfuerzo) {
     $esf = $Esfuerzo
     $motivo = ''
     if ($t.intentos -gt 0) { $esf = $Cfg.EsfuerzoReintento; $motivo = $t.motivo }
-    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = (Get-Prompt $t '' $motivo); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs) })
+    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = ((Get-Prompt $t '' $motivo) -replace ('(?m)^' + [regex]::Escape($MarcaNo) + '.*\n(\n)?'), ''); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs) })
   }
   $ll = @(Invoke-Llamadas $items)
   for ($i = 0; $i -lt $items.Count; $i++) {
@@ -283,7 +286,7 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   if ($PlantillaRoot -and @($ejemplos | Where-Object { $_.StartsWith($PlantillaRoot) }).Count -gt 0) { $dirs = @($PlantillaRoot) }
   $pom = 'no'
   if ($Repo -eq 'original') { $pom = 'si' }
-  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)" }
+  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = '' }
   $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
   $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
@@ -398,6 +401,24 @@ function Get-MotivoArnes($T, $C, [string[]]$Jobs) {
   return "$fallo Ademas, lo que dejo escrito no vale: $m"
 }
 
+# Deshace en la copia del arnes $T lo que la IA cambio fuera de lo permitido (Get-Permitidos) y deja lo permitido como lo dejo: el
+# reintento sigue desde ahi.
+function Undo-Fuera($T) {
+  $dir = $T.entradas.copia
+  $permitidos = @(Get-Permitidos $T)
+  $dejado = @{}
+  foreach ($rel in @(Get-Cambios $dir | Where-Object { $permitidos -contains $_ })) {
+    $f = Join-Ruta $dir $rel
+    if (Test-Path -LiteralPath $f -PathType Leaf) { $dejado[$rel] = [System.IO.File]::ReadAllBytes($f) }
+  }
+  Undo-Copia $dir
+  foreach ($rel in $dejado.Keys) {
+    $f = Join-Ruta $dir $rel
+    [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
+    [System.IO.File]::WriteAllBytes($f, $dejado[$rel])
+  }
+}
+
 # Las tareas de arnes pendientes, a la vez; cada una con su comprobacion y, si falla, su reintento con el motivo.
 function Invoke-Arneses($Tareas, [string[]]$Jobs) {
   while ($true) {
@@ -412,7 +433,14 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
       $t = $pend[$i]
       Restore-Base $t.entradas.copia
       $m = Get-MotivoArnes $t $ll[$i] $Jobs
-      if ($m) { Undo-Copia $t.entradas.copia } else { Save-Arnes $t }
+      # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
+      $sigue = [bool]($m -and $ll[$i].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
+      if (-not $m) { Save-Arnes $t }
+      elseif ($sigue) { Undo-Fuera $t }
+      else { Undo-Copia $t.entradas.copia }
+      $t.entradas.prompt.SI_CORTADO = $MarcaNo
+      $t.entradas.prompt.SI_DESHECHO = ''
+      if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
       Set-Intento $t $m
       if ($m) { Aviso "Arnes del $($t.entradas.repo) rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del $($t.entradas.repo): bien." }
     }
