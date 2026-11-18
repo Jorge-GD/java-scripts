@@ -4059,7 +4059,7 @@ $t = @(Get-TareasResumen $mapa $false)
   $txt = ''
   if (Test-Path -LiteralPath (Join-Path $d 'datos-resumen.txt')) { $txt = [System.IO.File]::ReadAllText((Join-Path $d 'datos-resumen.txt')) }
   Comprueba 'hay una tarea con los datos de los jobs' ($txt -match '(?m)^JOB: cargaRecibosJob\r?$' -and $txt -match '(?m)^JOB: informeCobrosJob\r?$') (Cola $r.Salida)
-  $b = [regex]::Match($txt, '(?s)^JOB: cargaRecibosJob.*?(?=\r?\nJOB: |\z)').Value
+  $b = [regex]::Match($txt, '(?ms)^JOB: cargaRecibosJob.*?(?=\r?\nJOB: |\z)').Value
   Comprueba 'lo que necesita, con sus tablas y ficheros' ($b -match '(?m)^NECESITA:\r?$' -and $b.Contains('Fichero de recibos del banco en la carpeta de entrada') -and $b.Contains('Tabla de clientes')) $b
   Comprueba 'lo que deja' ($b -match '(?m)^DEJA:\r?$' -and $b.Contains('Tabla de recibos pendientes de cobro') -and $b.Contains('Fichero de recibos rechazados')) $b
   Comprueba 'a quien lo envia' ($b -match '(?m)^SE ENVIA A:\r?$' -and $b.Contains('servidor del banco por SFTP')) $b
@@ -4068,9 +4068,9 @@ $t = @(Get-TareasResumen $mapa $false)
   Comprueba 'un dato tecnico (que nombra una clase) no va' (-not $b.Contains('GestorRecibos') -and -not $b.Contains('RUTA_ENTRADA')) $b
   Comprueba 'de lo que pasa si falla no se manda nada (no esta en lo que se pide)' (-not $b.Contains('avisa por correo')) $b
   Comprueba 'lleva tambien el titulo, el para que y los pasos de antes' ($b.Contains('Titulo cargaRecibosJob') -and $b.Contains('Sirve para cargaRecibosJob') -and $b.Contains('Leer el fichero')) $b
-  $c = [regex]::Match($txt, '(?s)^JOB: informeCobrosJob.*?(?=\r?\nJOB: |\z)').Value
+  $c = [regex]::Match($txt, '(?ms)^JOB: informeCobrosJob.*?(?=\r?\nJOB: |\z)').Value
   Comprueba 'lo que no hay se dice "no consta", no se deja en blanco' ($c -match '(?m)^NECESITA: no consta\r?$' -and $c -match '(?m)^DEJA: no consta\r?$' -and $c -match '(?m)^SE ENVIA A: no consta\r?$' -and $c -match '(?m)^REGLAS: no consta\r?$') $c
-  $e = [regex]::Match($txt, '(?s)^JOB: avisosJob.*?(?=\r?\nJOB: |\z)').Value
+  $e = [regex]::Match($txt, '(?ms)^JOB: avisosJob.*?(?=\r?\nJOB: |\z)').Value
   Comprueba 'un job sin redaccion lleva igual sus listas del script' ($e.Contains('Sin redaccion') -and $e.Contains('Avisa solo a los clientes con deuda')) $e
 }
 
