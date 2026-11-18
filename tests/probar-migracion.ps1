@@ -189,8 +189,8 @@ function Escribe-Original($E, $Clases) {
 
 # Dos jobs en un mismo fichero. Los pasos sacan sus clases por el prefijo (cargaStep: CargaReader y CargaValidator).
 # CargaReader -> Auxiliar1 -> Auxiliar2 -> Auxiliar3 (la cadena de referencias); Suelta no cuelga de nadie.
-function Escenario-Dos([string]$Nombre, [string[]]$UsaConfig = @()) {
-  $e = Nuevo-Escenario $Nombre @()
+function Escenario-Dos([string]$Nombre, [string[]]$UsaConfig = @(), [hashtable]$Ajustes = @{}) {
+  $e = Nuevo-Escenario $Nombre @() $Ajustes
   Escribe-Original $e @{
     JobsConfig = (Jobs-Config @('cargaJob:cargaStep', 'informeJob:informeStep') $UsaConfig)
     CargaReader = (Clase-Con 'CargaReader' @('Auxiliar1') 4)
@@ -2259,6 +2259,292 @@ $Pruebas['79 singular y plural: 1 error y 1 aviso, 2 errores y 0 avisos en las p
     Comprueba "$($par[0]) : dice 2 errores y 0 avisos" ($par[1].Contains('2 errores y 0 avisos'))
   }
   Comprueba 'pagina 2: el grupo dice 2 errores, 0 avisos' ((Grupo-De $y.P2 'build').Contains('2 errores, 0 avisos'))
+}
+
+# ============================ COBERTURA DE TESTS ============================
+# El texto de un jacoco.csv de mentira: una fila por clase ('nombre', faltan, cubiertas) con las columnas de $Cab, en ese orden. En las
+# columnas que no son de lineas va un 7: si algo leyera por posicion y no por nombre, saldria otra cifra.
+function Csv-Texto($Filas, [string[]]$Cab = @('GROUP', 'PACKAGE', 'CLASS', 'LINE_MISSED', 'LINE_COVERED')) {
+  $t = ($Cab -join ',') + "`n"
+  foreach ($f in $Filas) {
+    $v = @()
+    foreach ($c in $Cab) {
+      if ($c -eq 'GROUP') { $v += '' }
+      elseif ($c -eq 'PACKAGE') { $v += 'com.acme' }
+      elseif ($c -eq 'CLASS') { $v += $f[0] }
+      elseif ($c -eq 'LINE_MISSED') { $v += $f[1] }
+      elseif ($c -eq 'LINE_COVERED') { $v += $f[2] }
+      else { $v += '7' }
+    }
+    $t += ($v -join ',') + "`n"
+  }
+  return $t
+}
+
+function Csv-Cobertura([string]$Ruta, $Filas, [string[]]$Cab = @('GROUP', 'PACKAGE', 'CLASS', 'LINE_MISSED', 'LINE_COVERED')) {
+  [System.IO.File]::WriteAllText($Ruta, (Csv-Texto $Filas $Cab))
+  return $Ruta
+}
+
+# Pone variables de entorno mientras corre el bloque (el JaCoCo falso de tests/falsos/mvn.ps1 las lee) y las quita al acabar.
+function Con-Entorno([hashtable]$Vars, [scriptblock]$Bloque) {
+  foreach ($k in $Vars.Keys) { [Environment]::SetEnvironmentVariable($k, [string]$Vars[$k]) }
+  try { return (& $Bloque) }
+  finally { foreach ($k in $Vars.Keys) { [Environment]::SetEnvironmentVariable($k, $null) } }
+}
+
+# Un escenario cuyo Maven apunta cada llamada en mvn-llamadas.txt (una linea por llamada) y sigue con el Maven falso.
+function Nuevo-Escenario-Contado([string]$Nombre, [string[]]$Clases = @('Clase1'), [hashtable]$Ajustes = @{}) {
+  $aj = @{ MvnExe = (Join-Path (Join-Path $Dir $Nombre) 'mvn-contado.ps1') }
+  foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
+  $e = Nuevo-Escenario $Nombre $Clases $aj
+  $envoltorio = @'
+[System.IO.File]::AppendAllText('{{LOG}}', (($args -join ' ') + "`n"))
+& '{{MVN}}' @args
+exit $LASTEXITCODE
+'@
+  Escribe $e.Raiz 'mvn-contado.ps1' ($envoltorio.Replace('{{LOG}}', (Join-Path $e.Raiz 'mvn-llamadas.txt')).Replace('{{MVN}}', (Join-Path $falsos 'mvn.ps1')))
+  return $e
+}
+
+function Llamadas-Mvn($E) {
+  $f = Get-Ruta $E.Raiz 'mvn-llamadas.txt'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ })
+}
+
+function Con-JaCoCo($Llamadas) { return @($Llamadas | Where-Object { $_ -match 'jacoco-maven-plugin' }) }
+
+function Cobertura-De($E, [string]$Cuando) { return (Lee-Json (Get-Ruta $E.Out "datos/cobertura-$Cuando.json")) }
+
+# Repite el diagnostico de antes de un escenario ya corrido (relanzar lo salta mientras estan los hallazgos): quita hallazgos-antes.json y lanza otra vez.
+function Re-Diagnostica($E, [hashtable]$Entorno) {
+  Remove-Item -LiteralPath (Get-Ruta $E.Out 'datos/hallazgos-antes.json') -Force
+  return (Con-Entorno $Entorno { Migra $E (Basicos $E) })
+}
+
+# La linea de cobertura de la portada.
+function Linea-Cobertura([string]$Html) { return [regex]::Match($Html, '(?s)<p class="cob-linea">.*?</p>').Value }
+
+$Pruebas['80 cobertura: un CSV de dos clases da 62,5 %, 5 de 8 y minimo 80 en cobertura-antes.json, con un solo Maven, su registro y la pagina 2; relanzar no lo repite'] = {
+  $e = Nuevo-Escenario-Contado 'cob-dos'
+  $csv = Csv-Cobertura (Get-Ruta $e.Raiz 'jacoco.csv') @(@('A', 3, 1), @('B', 0, 4))
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra $e (Basicos $e) }
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Cobertura-De $e 'antes'
+  Comprueba 'existe datos/cobertura-antes.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'los campos, en su orden' 'medida porcentaje cubiertas total minima motivo' ($c.PSObject.Properties.Name -join ' ')
+  Igual 'medida' 'True' "$($c.medida)"
+  Igual 'porcentaje con un decimal' '62.5' "$($c.porcentaje)"
+  Igual 'cubiertas (1 + 4)' '5' "$($c.cubiertas)"
+  Igual 'total (4 + 4)' '8' "$($c.total)"
+  Igual 'minima' '80' "$($c.minima)"
+  Igual 'motivo vacio' '' "$($c.motivo)"
+  Comprueba 'no hay cobertura de despues' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/cobertura-despues.json')))
+  Comprueba 'el registro del Maven esta en registros/cobertura-antes.log' (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/cobertura-antes.log'))
+  $ll = @(Llamadas-Mvn $e)
+  $jc = @(Con-JaCoCo $ll)
+  Igual 'un solo Maven con JaCoCo' 1 $jc.Count
+  Comprueba 'es prepare-agent, test y report con la version de Cfg.JacocoPlugin' ($jc.Count -eq 1 -and $jc[0] -match '^-B org\.jacoco:jacoco-maven-plugin:0\.8\.16:prepare-agent test org\.jacoco:jacoco-maven-plugin:0\.8\.16:report$') ($jc -join ' | ')
+  Comprueba 'ningun proceso mas para la cobertura (ni --version ni -v)' (@($ll | Where-Object { $_ -match '(^|\s)(-v|--version)(\s|$)' }).Count -eq 0) ($ll -join ' | ')
+  $p = Pagina $e.Out '2-problemas.html'
+  $b = Panel-De $p 'cobertura'
+  Comprueba 'la pagina 2 tiene el panel Cobertura de tests' ($b -match '<h2[^>]*>Cobertura de tests</h2>') $b
+  Comprueba 'lo etiqueta como Medido' ($b -match 'Medido') $b
+  Comprueba 'dice 62,5 % y 5 de 8 lineas' ($b.Contains('62,5 %') -and $b -match '5 de 8 l.neas') $b
+  Comprueba 'dice el minimo (80 %) y que esta por debajo' ($b -match 'm.nimo de 80 %' -and $b.Contains('por debajo')) $b
+  Comprueba 'lleva el componente: la fila cob-fila con su meter, el relleno y el umbral' ($b.Contains('class="cob-fila') -and $b.Contains('class="meter"') -and $b.Contains('--v:62.5') -and $b.Contains('--u:80')) $b
+  Comprueba 'sin JavaScript' ($p -notmatch '(?i)<script')
+  $i = Pagina $e.Out 'index.html'
+  $l = Linea-Cobertura $i
+  Comprueba 'la portada tiene una linea con la cobertura y el minimo' ($l.Contains('62,5 %') -and $l -match 'm.nimo de 80 %' -and $l.Contains('por debajo')) $l
+  Comprueba 'y esa linea esta en Problemas del migrado' ((Panel-De $i 'problemas-migrado').Contains($l))
+  $fase = @([regex]::Matches([regex]::Match($i, '(?s)<ol class="fases">.*?</ol>').Value, '(?s)<li>.*?</li>'))[0].Value
+  Comprueba 'Que ha hecho el script: la linea del diagnostico anade la cobertura' ($fase -match 'Diagn.stico' -and $fase -match 'cobertura: 62,5 %') $fase
+  $f = [regex]::Match($i, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'Que es cada fichero: el JSON y el registro de antes' ($f.Contains('datos/cobertura-antes.json') -and $f.Contains('registros/cobertura-antes.log')) $f
+  Comprueba 'y ninguno de despues' (-not $f.Contains('cobertura-despues')) $f
+  # relanzar no repite la medida: va con el diagnostico, que ya esta
+  $jh = Hash-De (Get-Ruta $e.Out 'datos/cobertura-antes.json')
+  $lh = Hash-De (Get-Ruta $e.Out 'registros/cobertura-antes.log')
+  $r2 = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra $e (Basicos $e) }
+  Igual 'el segundo lanzamiento sale con 0' 0 $r2.Codigo
+  Igual 'cobertura-antes.json no cambia' $jh (Hash-De (Get-Ruta $e.Out 'datos/cobertura-antes.json'))
+  Igual 'el registro no cambia' $lh (Hash-De (Get-Ruta $e.Out 'registros/cobertura-antes.log'))
+  Igual 'y Maven no se lanza otra vez para medir' 1 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+}
+
+$Pruebas['81 cobertura: las columnas se leen por nombre: en otro orden y con columnas de mas (como el CSV real de JaCoCo) da lo mismo'] = {
+  $e = Nuevo-Escenario-Contado 'cob-cols'
+  $filas = @(@('A', 3, 1), @('B', 0, 4))
+  $real = @('GROUP', 'PACKAGE', 'CLASS', 'INSTRUCTION_MISSED', 'INSTRUCTION_COVERED', 'BRANCH_MISSED', 'BRANCH_COVERED', 'LINE_MISSED', 'LINE_COVERED', 'COMPLEXITY_MISSED', 'COMPLEXITY_COVERED', 'METHOD_MISSED', 'METHOD_COVERED')
+  $vuelto = @('METHOD_COVERED', 'LINE_COVERED', 'CLASS', 'LINE_MISSED', 'GROUP', 'INSTRUCTION_MISSED')
+  $csv = Csv-Cobertura (Get-Ruta $e.Raiz 'jacoco.csv') $filas $real
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra $e (Basicos $e) }
+  Igual 'con las 13 columnas de JaCoCo sale con 0' 0 $r.Codigo
+  $c = Cobertura-De $e 'antes'
+  Comprueba 'con las 13 columnas: 62,5 %, 5 de 8' ($null -ne $c -and "$($c.porcentaje) $($c.cubiertas) $($c.total)" -ceq '62.5 5 8') (Cola $r.Salida)
+  $csv = Csv-Cobertura (Get-Ruta $e.Raiz 'jacoco.csv') $filas $vuelto
+  $r = Re-Diagnostica $e @{ RESCATE_JACOCO_CSV = $csv }
+  Igual 'con las columnas en otro orden sale con 0' 0 $r.Codigo
+  $c = Cobertura-De $e 'antes'
+  Comprueba 'en otro orden y con columnas de mas: lo mismo' ($null -ne $c -and "$($c.medida) $($c.porcentaje) $($c.cubiertas) $($c.total)" -ceq 'True 62.5 5 8') (Cola $r.Salida)
+  Igual 'cada diagnostico lanza su Maven con JaCoCo' 2 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+}
+
+$Pruebas['82 cobertura sin medida: sin CSV, CSV sin esas columnas, CSV ilegible, total 0 y Maven con error dejan medida false, porcentaje nulo y su motivo; la pagina no pinta ningun 0 %'] = {
+  $e = Nuevo-Escenario-Contado 'cob-sin'
+  $r = Migra $e (Basicos $e)
+  Igual 'la primera corrida (el JaCoCo de siempre) sale con 0' 0 $r.Codigo
+  Igual 'y mide: 100 % con el CSV del falso' '100' "$((Cobertura-De $e 'antes').porcentaje)"
+  Comprueba 'deja su CSV en el worktree (es el viejo que hay que borrar antes de medir)' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'target/site/jacoco/jacoco.csv'))
+  $sinCols = Csv-Cobertura (Get-Ruta $e.Raiz 'sin-columnas.csv') @(,@('A', 3, 1)) @('GROUP', 'PACKAGE', 'CLASS', 'INSTRUCTION_MISSED', 'INSTRUCTION_COVERED')
+  $cero = Csv-Cobertura (Get-Ruta $e.Raiz 'cero.csv') @(@('A', 0, 0), @('B', 0, 0))
+  $malo = Csv-Cobertura (Get-Ruta $e.Raiz 'malo.csv') @(,@('A', 'x', 1))
+  $casos = @(
+    @{ N = 'sin CSV'; Env = @{ RESCATE_JACOCO_SIN_CSV = '1' }; Motivo = 'jacoco\.csv.*hay tests' },
+    @{ N = 'CSV sin las columnas de lineas'; Env = @{ RESCATE_JACOCO_CSV = $sinCols }; Motivo = 'LINE_MISSED.*LINE_COVERED' },
+    @{ N = 'total de lineas 0'; Env = @{ RESCATE_JACOCO_CSV = $cero }; Motivo = 'ninguna linea medible' },
+    @{ N = 'CSV con un valor que no es un numero'; Env = @{ RESCATE_JACOCO_CSV = $malo }; Motivo = 'no se puede leer' },
+    @{ N = 'Maven con error'; Env = @{ RESCATE_MVN_ERROR = 'fallo de mentira de Maven' }; Motivo = 'Maven.*fallo de mentira de Maven' }
+  )
+  foreach ($k in $casos) {
+    $r = Re-Diagnostica $e $k.Env
+    Igual "$($k.N) : sale con 0" 0 $r.Codigo
+    $c = Cobertura-De $e 'antes'
+    Comprueba "$($k.N) : hay cobertura-antes.json" ($null -ne $c) (Cola $r.Salida)
+    if ($null -eq $c) { continue }
+    Igual "$($k.N) : medida false" 'False' "$($c.medida)"
+    Comprueba "$($k.N) : porcentaje nulo (nunca un 0 % que no se ha medido)" ($null -eq $c.porcentaje) ($c | ConvertTo-Json -Compress)
+    Comprueba "$($k.N) : cubiertas y total nulos" (($null -eq $c.cubiertas) -and ($null -eq $c.total))
+    Comprueba "$($k.N) : motivo" ("$($c.motivo)" -match $k.Motivo) "$($c.motivo)"
+    $p = Pagina $e.Out '2-problemas.html'
+    $b = Panel-De $p 'cobertura'
+    Comprueba "$($k.N) : la pagina 2 dice no se ha podido medir y el motivo" ($b.Contains('no se ha podido medir: ' + (Html "$($c.motivo)"))) $b
+    Comprueba "$($k.N) : la pagina 2 no pinta ningun porcentaje ni 0 %" ($b -notmatch '\d\s*%' -and $b -notmatch 'meter') $b
+    Comprueba "$($k.N) : esta sin comprobar, no medido" ($b -match 'Sin comprobar' -and $b -notmatch 'Medido') $b
+    $l = Linea-Cobertura (Pagina $e.Out 'index.html')
+    Comprueba "$($k.N) : la portada dice lo mismo, sin porcentaje" ($l.Contains('no se ha podido medir: ' + (Html "$($c.motivo)")) -and $l -notmatch '\d\s*%') $l
+    $fase = @([regex]::Matches([regex]::Match((Pagina $e.Out 'index.html'), '(?s)<ol class="fases">.*?</ol>').Value, '(?s)<li>.*?</li>'))[0].Value
+    Comprueba "$($k.N) : Que ha hecho el script dice cobertura: sin medir" ($fase -match 'cobertura: sin medir' -and $fase -notmatch '\d\s*%') $fase
+  }
+}
+
+$Pruebas['83 cobertura: un migrado que no compila no lanza Maven para medir y dice que no compila'] = {
+  $e = Nuevo-Escenario-Contado 'cob-nocompila'
+  Escribe $e.Migrado 'src/main/java/com/acme/life/Rota.java' "package com.acme.life;`n`n/** NO_COMPILA. */`npublic class Rota {`n}`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'rota'))
+  $csv = Csv-Cobertura (Get-Ruta $e.Raiz 'jacoco.csv') @(,@('A', 3, 1))
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra $e (Basicos $e) }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el diagnostico dice compila: NO' ((Lee $e.Out 'datos/diagnostico-antes.md') -match '(?m)^- Estado: compila: NO\s*$') (Cola $r.Salida)
+  $ll = @(Llamadas-Mvn $e)
+  Comprueba 'el Maven del diagnostico si se lanzo (el registro de llamadas funciona)' ($ll.Count -ge 1) ($ll -join ' | ')
+  Igual 'pero Maven no se lanza para medir (ninguna llamada con JaCoCo)' 0 (@(Con-JaCoCo $ll)).Count
+  $c = Cobertura-De $e 'antes'
+  Comprueba 'hay cobertura-antes.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'medida false' 'False' "$($c.medida)"
+  Comprueba 'porcentaje nulo' ($null -eq $c.porcentaje)
+  Igual 'motivo: el migrado no compila' 'el migrado no compila' "$($c.motivo)"
+  Comprueba 'no hay registro de cobertura (no se lanzo Maven)' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/cobertura-antes.log')))
+  $b = Panel-De (Pagina $e.Out '2-problemas.html') 'cobertura'
+  Comprueba 'la pagina 2 dice no se ha podido medir: el migrado no compila' ($b.Contains('no se ha podido medir: el migrado no compila')) $b
+}
+
+$Pruebas['84 cobertura: CoberturaMinima de ajustes.json manda: con 50 y 62,5 % no sale por debajo'] = {
+  $e = Nuevo-Escenario-Contado 'cob-min' @('Clase1') @{ CoberturaMinima = 50 }
+  $csv = Csv-Cobertura (Get-Ruta $e.Raiz 'jacoco.csv') @(@('A', 3, 1), @('B', 0, 4))
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra $e (Basicos $e) }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola no avisa de claves desconocidas' ($r.Salida -notmatch 'clave desconocida') (Cola $r.Salida)
+  $c = Cobertura-De $e 'antes'
+  Comprueba 'cobertura-antes.json lleva minima 50 y 62,5 %' ($null -ne $c -and "$($c.minima) $($c.porcentaje)" -ceq '50 62.5') (Cola $r.Salida)
+  $b = Panel-De (Pagina $e.Out '2-problemas.html') 'cobertura'
+  Comprueba 'la pagina 2 no dice por debajo y cumple el minimo de 50 %' ($b -notmatch 'por debajo' -and $b -match 'm.nimo de 50 %') $b
+  Comprueba 'el umbral del medidor esta en 50' ($b.Contains('--u:50')) $b
+  $l = Linea-Cobertura (Pagina $e.Out 'index.html')
+  Comprueba 'la portada tampoco' ($l.Contains('62,5 %') -and $l -notmatch 'por debajo' -and $l -match 'm.nimo de 50 %') $l
+}
+
+$Pruebas['85 cobertura despues de corregir: cobertura-despues.json con su registro; la portada ensena la de despues y la pagina 4, antes -> despues'] = {
+  $e = Nuevo-Escenario-Contado 'cob-despues'
+  $csv = Csv-Cobertura (Get-Ruta $e.Raiz 'jacoco.csv') @(@('A', 3, 1), @('B', 0, 4))
+  # el motor falso "mejora los tests": al arreglar reescribe el CSV (esta junto al worktree) y el diagnostico de despues lo mide
+  $o = Orden-Base
+  $o['ficheros'] = [ordered]@{ '../jacoco.csv' = (Csv-Texto @(@('A', 1, 3), @('B', 0, 4))) }
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra-Motor $e $o (Corrige $e) }
+  Igual 'sale con 0' 0 $r.Codigo
+  $a = Cobertura-De $e 'antes'
+  $d = Cobertura-De $e 'despues'
+  Comprueba 'antes: 62,5 %, 5 de 8' ($null -ne $a -and "$($a.medida) $($a.porcentaje) $($a.cubiertas) $($a.total)" -ceq 'True 62.5 5 8') (Cola $r.Salida)
+  Comprueba 'despues: 87,5 %, 7 de 8' ($null -ne $d -and "$($d.medida) $($d.porcentaje) $($d.cubiertas) $($d.total)" -ceq 'True 87.5 7 8') (Cola $r.Salida)
+  Comprueba 'los dos registros' ((Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/cobertura-antes.log')) -and (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/cobertura-despues.log')))
+  Igual 'un Maven con JaCoCo por diagnostico' 2 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+  Comprueba 'el despues se midio sobre el worktree ya corregido, que el motor deja limpio' ((GitEn $e.Wt @('status', '--porcelain')) -eq '')
+  $p2 = Pagina $e.Out '2-problemas.html'
+  Comprueba 'la pagina 2 sigue con la de antes' ((Panel-De $p2 'cobertura').Contains('62,5 %') -and -not $p2.Contains('87,5 %'))
+  $i = Pagina $e.Out 'index.html'
+  $l = Linea-Cobertura $i
+  Comprueba 'la portada ensena la de despues (87,5 %, que cumple) y no la de antes' ($l.Contains('87,5 %') -and -not $l.Contains('62,5 %') -and $l -match 'despu.s de corregir' -and $l -notmatch 'por debajo' -and $l -match 'm.nimo de 80 %') $l
+  $p4 = Panel-De (Pagina $e.Out '4-correcciones.html') 'cobertura'
+  Comprueba 'la pagina 4 dice Cobertura: 62,5 % -> 87,5 %' ($p4.Contains('Cobertura: 62,5 % ' + $Flecha + ' 87,5 %')) $p4
+  Comprueba 'y que cumple el minimo' ($p4 -match 'Cumple el m.nimo de 80 %' -and $p4 -match 'Medido') $p4
+  $f = [regex]::Match($i, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'Que es cada fichero: los dos JSON y los dos registros' ($f.Contains('datos/cobertura-antes.json') -and $f.Contains('datos/cobertura-despues.json') -and $f.Contains('registros/cobertura-antes.log') -and $f.Contains('registros/cobertura-despues.log')) $f
+}
+
+# Las paginas con estos datos de cobertura (null = sin el fichero) sobre una copia de una corrida, con los datos de la prueba 77 para la pagina 4.
+function Cobertura-Con($E, [string]$Nombre, $Antes, $Despues) {
+  $d = Datos-Pagina4
+  $x = Correccion-Con $E $Nombre $d.Antes $d.Despues $d.Corr
+  foreach ($par in @(@('antes', $Antes), @('despues', $Despues))) {
+    $f = Join-Path $x.Dir ('datos/cobertura-' + $par[0] + '.json')
+    if ($par[1]) { Guarda-Json $f $par[1] } elseif (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force }
+  }
+  $g = Genera-Informes $x.Dir
+  Comprueba "$Nombre : Write-Informes sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  return [pscustomobject]@{ Dir = $x.Dir; P2 = (Pagina $x.Dir '2-problemas.html'); P4 = (Pagina $x.Dir '4-correcciones.html'); I = (Pagina $x.Dir 'index.html') }
+}
+
+function Cob([double]$Pct, [int]$Cub, [int]$Tot, [int]$Min = 80) {
+  return [ordered]@{ medida = $true; porcentaje = $Pct; cubiertas = $Cub; total = $Tot; minima = $Min; motivo = '' }
+}
+
+function Cob-Sin([string]$Motivo) {
+  return [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = 80; motivo = $Motivo }
+}
+
+$Pruebas['86 paginas de cobertura: casos de los datos (medida, sin medir, ausente, 0 % medido, 100 %), todo escapado'] = {
+  $c = Corrida-Dos $GuionBase
+  # antes medida y despues sin medir (con markup en el motivo)
+  $x = Cobertura-Con $c.E 'cob-a-sin' (Cob 62.5 5 8) (Cob-Sin $MalTexto)
+  $b4 = Panel-De $x.P4 'cobertura'
+  Comprueba 'pagina 4: 62,5 % -> sin medir (motivo escapado)' ($b4.Contains('Cobertura: 62,5 % ' + $Flecha + ' sin medir (' + (Html $MalTexto) + ')')) $b4
+  Comprueba 'pagina 4: sin la frase de por debajo ni de cumple (la de despues no se midio)' ($b4 -notmatch 'por debajo' -and $b4 -notmatch 'Cumple') $b4
+  $l = Linea-Cobertura $x.I
+  Comprueba 'portada: la de despues, sin medir, con el motivo escapado y sin porcentaje' ($l.Contains('no se ha podido medir: ' + (Html $MalTexto)) -and $l -notmatch '\d\s*%' -and $l -match 'despu.s de corregir') $l
+  Comprueba 'pagina 2: sigue con la de antes' ((Panel-De $x.P2 'cobertura').Contains('62,5 %'))
+  Comprueba 'el markup del motivo no sale sin escapar en ninguna pagina' (-not $x.P4.Contains('<script>alert(1)') -and -not $x.I.Contains('<script>alert(1)') -and -not $x.P2.Contains('<script>alert(1)'))
+  # solo la de antes (no hay de despues): la portada la ensena y la pagina 4 dice sin dato
+  $y = Cobertura-Con $c.E 'cob-solo-antes' (Cob 62.5 5 8) $null
+  Comprueba 'sin la de despues, la portada ensena la de antes' ((Linea-Cobertura $y.I).Contains('62,5 %') -and (Linea-Cobertura $y.I) -match 'antes de corregir') (Linea-Cobertura $y.I)
+  Comprueba 'y la pagina 4 dice sin dato en el despues' ((Panel-De $y.P4 'cobertura').Contains('62,5 % ' + $Flecha + ' sin dato')) (Panel-De $y.P4 'cobertura')
+  # sin ninguna: ni panel ni linea, y la linea del diagnostico es la de siempre
+  $z = Cobertura-Con $c.E 'cob-ninguna' $null $null
+  Comprueba 'sin ficheros de cobertura no hay panel en las paginas 2 y 4 ni linea en la portada' ((Panel-De $z.P2 'cobertura') -eq '' -and (Panel-De $z.P4 'cobertura') -eq '' -and (Linea-Cobertura $z.I) -eq '')
+  Comprueba 'y Que ha hecho el script no cuenta cobertura' ($z.I -notmatch 'cobertura: ')
+  # un 0 % medido si se pinta; un 100 %, sin coma
+  $w = Cobertura-Con $c.E 'cob-cero-cien' (Cob 0 0 8) (Cob 100 8 8)
+  $b2 = Panel-De $w.P2 'cobertura'
+  Comprueba 'un 0 % medido se pinta como 0 %, con 0 de 8 lineas y por debajo' ($b2.Contains('0 %') -and $b2 -match '0 de 8 l.neas' -and $b2.Contains('por debajo') -and $b2.Contains('--v:0')) $b2
+  Comprueba 'un 100 % sale 100 % y cumple' ((Linea-Cobertura $w.I).Contains('100 %') -and (Linea-Cobertura $w.I) -notmatch '100,' -and (Linea-Cobertura $w.I) -notmatch 'por debajo') (Linea-Cobertura $w.I)
+  Comprueba 'pagina 4: 0 % -> 100 %' ((Panel-De $w.P4 'cobertura').Contains('Cobertura: 0 % ' + $Flecha + ' 100 %'))
+  foreach ($par in @(@('2-problemas.html', $x.P2), @('4-correcciones.html', $x.P4), @('index.html', $x.I))) {
+    Comprueba "$($par[0]) : sin JavaScript ni nada externo" ($par[1] -notmatch '(?i)<script' -and $par[1] -notmatch 'https?://' -and $par[1] -notmatch '<link|<img|@import')
+  }
 }
 
 # ================================ LANZADOR ================================

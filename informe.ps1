@@ -50,12 +50,14 @@ $FicherosInforme = @(
   @('datos', 'f-datos', 'f-carpeta', $false), @('datos/estado.json', 'f-estado', 'f-fichero', $false),
   @('datos/hallazgos-antes.json', 'f-hallazgos', 'f-fichero', $false), @('datos/diagnostico-antes.md', 'f-diagnostico', 'f-fichero', $false),
   @('datos/hallazgos-despues.json', 'f-hallazgos-despues', 'f-fichero', $false), @('datos/diagnostico-despues.md', 'f-diagnostico-despues', 'f-fichero', $false),
+  @('datos/cobertura-antes.json', 'f-cobertura-antes', 'f-fichero', $false), @('datos/cobertura-despues.json', 'f-cobertura-despues', 'f-fichero', $false),
   @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
   @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
   @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false),
-  @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false)
+  @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false),
+  @('registros/cobertura-antes.log', 'f-cobertura-antes-log', 'f-fichero', $false), @('registros/cobertura-despues.log', 'f-cobertura-despues-log', 'f-fichero', $false)
 )
 
 # ================================ PLANTILLAS ================================
@@ -208,6 +210,9 @@ function Get-VistaJob($D, $J) {
   }
 }
 
+# La linea "- Estado:" de un diagnostico.md (uno de los cinco textos del build de $TextosBuild), o '' si no la tiene.
+function Get-EstadoBuild([string]$Md) { return [regex]::Match($Md, '(?m)^- Estado: (.*)$').Groups[1].Value.Trim() }
+
 # Los problemas del migrado que dejo un diagnostico ($Cuando: antes de corregir o despues): hallazgos-<Cuando>.json y
 # diagnostico-<Cuando>.md. El orden de las areas es el de la tabla del .md (las que solo salen en los hallazgos, al final).
 # $null si falta alguno de los dos o el .json no se lee.
@@ -224,7 +229,7 @@ function Read-Diagnostico([string]$Datos, [string]$Cuando = 'antes') {
     $de = @($hall | Where-Object { [string]$_.Cat -ceq $c })
     $areas += [pscustomobject]@{ Id = $c; Errores = @($de | Where-Object { $_.Sev -ceq 'error' }); Avisos = @($de | Where-Object { $_.Sev -cne 'error' }) }
   }
-  $estado = [regex]::Match($md, '(?m)^- Estado: (.*)$').Groups[1].Value.Trim()
+  $estado = Get-EstadoBuild $md
   $incumple = $null
   $m = [regex]::Match($md, '(?m)^- La plantilla incumple: capas ([0-9]+) \| ficheros ([0-9]+) \| calidad ([0-9]+) \| secretos ([0-9]+)[ \t]*$')
   if ($m.Success) { $incumple = [pscustomobject]@{ Capas = $m.Groups[1].Value; Ficheros = $m.Groups[2].Value; Calidad = $m.Groups[3].Value; Secretos = $m.Groups[4].Value } }
@@ -245,6 +250,7 @@ function Read-DatosInforme([string]$Salida) {
     Resumen = (Read-JsonSuave (Join-Path $datos 'resumen.json')); Variables = @(Read-JsonSuave (Join-Path $datos 'variables.json') | Where-Object { $null -ne $_ })
     Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos); Despues = (Read-Diagnostico $datos 'despues')
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json'))
+    CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
   }
   if ($D.Mapa) {
     $porNombre = @{}
@@ -440,7 +446,10 @@ function Get-FaseHtml($D, $T, [string]$Fase, [string]$Tipo) {
   $cuenta = Format-Trozo $T 'cuenta-ninguna'
   if ($Fase -eq 'diagnostico') {
     $cuenta = Format-Trozo $T 'sin-valor'
-    if ($D.Diag) { $cuenta = Format-Trozo $T 'cuenta-diagnostico' @{ ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)" } }
+    if ($D.Diag) {
+      $cuenta = Format-Trozo $T 'cuenta-diagnostico' @{ ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)" }
+      if ($D.CobAntes) { $cuenta += Format-Trozo $T 'cuenta-cobertura' @{ VALOR = (Get-CobValor $T $D.CobAntes 'cob-sin-medir') } }
+    }
   }
   elseif ($Fase -eq 'correccion') {
     $cuenta = Format-Trozo $T 'sin-valor'
@@ -530,6 +539,69 @@ function Get-FicherosHtml($D, $T) {
   return ($filas -join "`n")
 }
 
+# ============================== LA COBERTURA ==============================
+# Lo que se dice de una medida de cobertura ($C, de datos\cobertura-<antes|despues>.json): su porcentaje con coma decimal o, si no se
+# pudo medir, el trozo $SinMedir (con el motivo); sin fichero ($null), "sin dato".
+function Get-CobValor($T, $C, [string]$SinMedir) {
+  if ($null -eq $C) { return (Format-Trozo $T 'sin-valor') }
+  if ($C.medida -eq $true) { return (Format-Trozo $T 'cob-pct' @{ PCT = "$($C.porcentaje)".Replace('.', ',') }) }
+  return (Format-Trozo $T $SinMedir @{ MOTIVO = $C.motivo })
+}
+
+# La medida es baja si esta por debajo del minimo que tenia al medirse.
+function Test-CobBaja($C) { return ([double]$C.porcentaje -lt [double]$C.minima) }
+
+# "Cumple el minimo de N %." o "Esta por debajo del minimo de N %." de una medida hecha.
+function Get-CobVeredicto($T, $C) {
+  $n = 'cob-cumple'
+  if (Test-CobBaja $C) { $n = 'cob-baja' }
+  return (Format-Trozo $T $n @{ MIN = "$($C.minima)" })
+}
+
+# El panel de la pagina de problemas: el medidor y las lineas, o por que no se pudo medir. Vacio si no hay medida.
+function Get-PanelCobertura($T, $C) {
+  if ($null -eq $C) { return '' }
+  if ($C.medida -ne $true) {
+    return (Format-Trozo $T 'cob-panel' @{ ETIQUETA = (Format-Trozo $T 'et-sin'); CUERPO = (Format-Trozo $T 'cob-sin-cuerpo' @{ TEXTO = (Format-Trozo $T 'cob-no-medida' @{ MOTIVO = $C.motivo }) }) })
+  }
+  $clase = 'cumple'
+  if (Test-CobBaja $C) { $clase = 'baja' }
+  $pct = "$($C.porcentaje)".Replace('.', ',')
+  $cuerpo = Format-Trozo $T 'cob-medida' @{
+    CLASE = $clase; PCT = (Get-CobValor $T $C ''); ETIQUETA_PCT = $pct; V = "$($C.porcentaje)"; U = "$($C.minima)"
+    CUBIERTAS = "$($C.cubiertas)"; TOTAL = "$($C.total)"; VEREDICTO = (Get-CobVeredicto $T $C)
+  }
+  return (Format-Trozo $T 'cob-panel' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); CUERPO = $cuerpo })
+}
+
+# La linea de la portada: la cobertura de despues de corregir si la hay y, si no, la de antes. Vacia si no hay ninguna.
+function Get-LineaCobertura($D, $T) {
+  $c = $D.CobDespues
+  $cuando = 'despues'
+  if ($null -eq $c) { $c = $D.CobAntes; $cuando = 'antes' }
+  if ($null -eq $c) { return '' }
+  $etiqueta = Format-Trozo $T 'et-sin'
+  $texto = Format-Trozo $T 'cob-no-medida' @{ MOTIVO = $c.motivo }
+  if ($c.medida -eq $true) {
+    $etiqueta = Format-Trozo $T 'et-medido'
+    $texto = Format-Trozo $T 'cob-linea-medida' @{ PCT = (Get-CobValor $T $c ''); CUBIERTAS = "$($c.cubiertas)"; TOTAL = "$($c.total)"; VEREDICTO = (Get-CobVeredicto $T $c) }
+  }
+  return (Format-Trozo $T 'cob-linea' @{ ETIQUETA = $etiqueta; CUANDO = (Format-Trozo $T "cob-cuando-$cuando"); TEXTO = $texto })
+}
+
+# El panel de la pagina de correcciones: la cobertura de antes y la de despues y, si la de despues se midio, si cumple el minimo.
+function Get-PanelCoberturaCambio($D, $T) {
+  $a = $D.CobAntes
+  $d = $D.CobDespues
+  if ($null -eq $a -and $null -eq $d) { return '' }
+  $etiqueta = Format-Trozo $T 'et-sin'
+  if (($a -and $a.medida -eq $true) -or ($d -and $d.medida -eq $true)) { $etiqueta = Format-Trozo $T 'et-medido' }
+  $veredicto = ''
+  if ($d -and $d.medida -eq $true) { $veredicto = Format-Trozo $T 'cob-cambio-veredicto' @{ TEXTO = (Get-CobVeredicto $T $d) } }
+  $cambio = Format-Trozo $T 'cuenta-antes-despues' @{ ANTES = (Get-CobValor $T $a 'cob-sin-medir-motivo'); DESPUES = (Get-CobValor $T $d 'cob-sin-medir-motivo') }
+  return (Format-Trozo $T 'cob-cambio' @{ ETIQUETA = $etiqueta; CAMBIO = $cambio; VEREDICTO = $veredicto })
+}
+
 # ============================ LA PAGINA DE PROBLEMAS ============================
 # "1 error y 2 avisos" ($Forma 'total') o "1 error, 2 avisos" ('par'): la palabra va en singular solo cuando el numero es 1.
 function Get-CuentaHtml($T, [int]$Errores, [int]$Avisos, [string]$Forma) {
@@ -593,7 +665,7 @@ function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
     }
     $diag = Format-Trozo $T 'diagnostico' @{
       ETIQUETA_BUILD = $build.Etiqueta; FRASE = $build.Frase; REFERENCIA = $ref; ETIQUETA = (Format-Trozo $T 'et-medido'); TOTAL = (Get-CuentaHtml $T $D.Diag.Errores $D.Diag.Avisos 'total')
-      RESPUESTA = $respuesta; GRUPOS = ((@($conErrores) + @($soloAvisos) | ForEach-Object { Get-GrupoProblemasHtml $T $_ }) -join "`n"); SINPROB = $sinProblemas
+      COBERTURA = (Get-PanelCobertura $T $D.CobAntes); RESPUESTA = $respuesta; GRUPOS = ((@($conErrores) + @($soloAvisos) | ForEach-Object { Get-GrupoProblemasHtml $T $_ }) -join "`n"); SINPROB = $sinProblemas
     }
   }
   return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag })
@@ -671,7 +743,7 @@ function Get-ProblemasPortada($D, $T) {
       else { Format-Trozo $T 'area-limpia' @{ NOMBRE = (Get-NombreArea $T $_.Id) } }
     })
   return (Format-Trozo $T 'prob-datos' @{
-      ETIQUETA_BUILD = $build.Etiqueta; BUILD = $build.Frase; ETIQUETA = (Format-Trozo $T 'et-medido'); LEYENDA = $leyenda; TOTAL = $total
+      ETIQUETA_BUILD = $build.Etiqueta; BUILD = $build.Frase; COBERTURA = (Get-LineaCobertura $D $T); ETIQUETA = (Format-Trozo $T 'et-medido'); LEYENDA = $leyenda; TOTAL = $total
       MAX = "$(Get-MaxErrores $areas)"; AREAS = ($filas -join "`n")
     })
 }
@@ -740,7 +812,7 @@ function Get-ResultadoCorreccion($D, $T) {
     ANTES = (Get-CuentaHtml $T $D.Diag.Errores $D.Diag.Avisos 'total'); DESPUES = (Get-CuentaHtml $T $D.Despues.Errores $D.Despues.Avisos 'total')
   }
   return (Format-Trozo $T 'correccion-datos' @{
-      INCOMPLETA = $incompleta; ETIQUETA = $medido; BUILD_ANTES = $antes.Frase; ETIQUETA_ANTES = $antes.Etiqueta; BUILD_DESPUES = $despues.Frase; ETIQUETA_DESPUES = $despues.Etiqueta
+      INCOMPLETA = $incompleta; COBERTURA = (Get-PanelCoberturaCambio $D $T); ETIQUETA = $medido; BUILD_ANTES = $antes.Frase; ETIQUETA_ANTES = $antes.Etiqueta; BUILD_DESPUES = $despues.Frase; ETIQUETA_DESPUES = $despues.Etiqueta
       TOTAL = $total; COMMITS = "$(@($c.commits).Count)"; ATASCADOS = "$(@($c.atascados).Count)"; LEYENDA = (Format-Trozo $T 'leyenda-barras')
       GRUPOS = (($con | ForEach-Object { Get-GrupoCorreccionHtml $T $_ $max }) -join "`n"); SINPROB = $sinProblemas; SUELTOS = $sueltos; VARIABLES = $variables
       RAMA = $c.rama; BASE = $c.base; WORKTREE = $D.Estado.worktree; MIGRADO = $D.Estado.migrado

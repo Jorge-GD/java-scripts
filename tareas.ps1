@@ -10,7 +10,7 @@ Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto 
 DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
-PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, ListasJob, Papeles, TiposDato y JavaExe) y
+PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, ListasJob, Papeles, TiposDato, JavaExe, JacocoPlugin y CoberturaMinima) y
 las funciones. Get-Lanzador usa Get-Lanzable, de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
@@ -49,6 +49,8 @@ $Cfg += @{
   PasosFichaMax      = 12     # pasos de una ficha de job
   GlosarioMax        = 15
   CasosMax           = 40     # casos de la prueba en pre de un job
+  JacocoPlugin       = 'org.jacoco:jacoco-maven-plugin:0.8.16'   # el preflight prueba en el equipo estas mismas coordenadas
+  CoberturaMinima    = 80     # por ciento de lineas cubiertas por los tests por debajo del cual la cobertura se marca como baja
   # Que datos de las fichas de clase van a cada lista de la ficha de job (cada tipo de dato, a una)
   ListasJob          = [ordered]@{
     necesita   = @('entrada-fichero', 'tabla-lee', 'parametro', 'config')
@@ -1065,6 +1067,44 @@ function Save-Pruebas($Mapa, $Tareas) {
     }
     Write-Json (Join-Path (Join-Path $Datos 'pruebas') ((Get-NombreJob $j.job) + '.json')) $o
   }
+}
+
+# ============================== COBERTURA ==============================
+# La cobertura de lineas de los tests del migrado ($Dir, el worktree), con JaCoCo por coordenadas y sin tocar el pom: un solo Maven
+# (prepare-agent, test y report) con su salida en $Registro. Lee target\site\jacoco\jacoco.csv por el nombre de sus columnas y suma
+# todas las filas. Sin medida (medida false y porcentaje nulo) el motivo dice por que: nunca sale un 0 % que no se ha medido.
+# Con $Compila en $false (el diagnostico dice que no compila) no lanza Maven.
+function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
+  $o = [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = $Cfg.CoberturaMinima; motivo = '' }
+  if (-not $Compila) { $o.motivo = 'el migrado no compila'; return $o }
+  $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
+  if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
+  $j = $Cfg.JacocoPlugin
+  $latido = Start-Latido 'Maven (cobertura)' $Cfg.SegundosLatido
+  try { $r = Invoke-Nativo (Get-Mvn $Dir) @('-B', "${j}:prepare-agent", 'test', "${j}:report") $Dir }
+  finally { Stop-Latido $latido }
+  [System.IO.File]::WriteAllText($Registro, ((@($r.Salida) -join "`n") + "`n"), $Utf8)
+  if ($r.Codigo -ne 0) {
+    $e = @($r.Salida | Where-Object { "$_" -match '^\[ERROR\]\s*\S' } | Select-Object -First 1)
+    $o.motivo = "Maven ha salido con error (codigo $($r.Codigo))"
+    if ($e.Count -gt 0) { $o.motivo = 'Maven ha salido con error: ' + ("$($e[0])" -replace '^\[ERROR\]\s*', '').Trim() }
+    return $o
+  }
+  if (-not (Test-Path -LiteralPath $csv)) { $o.motivo = 'Maven no ha dejado target/site/jacoco/jacoco.csv: hay tests?'; return $o }
+  $lineas = @([System.IO.File]::ReadAllLines($csv, $Utf8) | Where-Object { $_.Trim() })
+  $cab = @()
+  if ($lineas.Count -gt 0) { $cab = @($lineas[0] -split ',' | ForEach-Object { $_.Trim().Trim('"') }) }
+  if (($cab -cnotcontains 'LINE_MISSED') -or ($cab -cnotcontains 'LINE_COVERED')) { $o.motivo = 'el CSV de JaCoCo no tiene las columnas LINE_MISSED y LINE_COVERED'; return $o }
+  $faltan = [long]0
+  $cubiertas = [long]0
+  try { foreach ($f in @($lineas | ConvertFrom-Csv)) { $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED } }
+  catch { $o.motivo = 'el CSV de JaCoCo no se puede leer: ' + $_.Exception.Message; return $o }
+  if ($faltan + $cubiertas -eq 0) { $o.motivo = 'ninguna linea medible'; return $o }
+  $o.medida = $true
+  $o.cubiertas = $cubiertas
+  $o.total = $faltan + $cubiertas
+  $o.porcentaje = [math]::Round(100.0 * $cubiertas / $o.total, 1, [System.MidpointRounding]::AwayFromZero)
+  return $o
 }
 
 # ================================ APTITUD ================================

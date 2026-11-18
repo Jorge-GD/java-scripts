@@ -198,6 +198,16 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .barra.antes .rel{background:repeating-linear-gradient(135deg,var(--branch) 0 4px,var(--edge) 4px 8px)}
 .barra b{min-width:24px;font-variant-numeric:tabular-nums}
 .area.limpia .a-b{display:none}
+.cob-linea{margin:16px 0 12px}
+.cob-fila{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;align-items:center;max-width:560px;margin-top:16px}
+.cob-fila+p{margin-top:12px}
+.c-n{font-weight:700}
+.c-v{font-size:28px;font-weight:800;font-variant-numeric:tabular-nums}
+.cob-fila .meter{grid-column:1 / -1}
+.meter{position:relative;height:16px;border:2px solid var(--ink);background:var(--surf)}
+.meter .fill{display:block;height:100%;width:calc(var(--v) * 1%);background:var(--ok)}
+.cob-fila.baja .fill{background:var(--mal)}
+.meter .umbral{position:absolute;left:calc(var(--u) * 1%);top:-6px;bottom:-6px;width:3px;background:var(--ink)}
 .area.limpia .a-n{color:var(--muted);font-weight:400}
 @container (min-width:720px){
   .area{grid-template-columns:232px minmax(0,1fr) 144px;grid-template-areas:"n b e"}

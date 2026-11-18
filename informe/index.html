@@ -96,13 +96,13 @@
 <!--TROZO estado-fase-curso-->Por aquí va<!--FIN-->
 <!--TROZO estado-fase-espera-->Sin empezar<!--FIN-->
 <!--TROZO cuenta-diagnostico-->errores: {{ERRORES}}, avisos: {{AVISOS}}<!--FIN-->
+<!--TROZO cuenta-cobertura-->, cobertura: {{{VALOR}}}<!--FIN-->
 <!--TROZO cuenta-correccion-->commits: {{COMMITS}}, atascados: {{ATASCADOS}}<!--FIN-->
 <!--TROZO cuenta-tareas-->hechas: {{HECHAS}}, atascadas: {{ATASCADAS}}, pendientes: {{PENDIENTES}}<!--FIN-->
 <!--TROZO cuenta-jobs-->jobs: {{JOBS}}, clases sin job: {{SINJOB}}<!--FIN-->
 <!--TROZO cuenta-ninguna-->sin tareas<!--FIN-->
 <!--TROZO duracion-->{{H}} h {{M}} min<!--FIN-->
 <!--TROZO duracion-corta-->{{M}} min<!--FIN-->
-<!--TROZO sin-valor-->sin dato<!--FIN-->
 <!--TROZO fichero-linea-->    <li><svg aria-hidden="true"><use href="#{{ICONO}}"/></svg><p>{{{NOMBRE}}}</p><p>{{{QUE}}}</p></li><!--FIN-->
 <!--TROZO nombre-enlace--><a href="{{RUTA}}"><code>{{TEXTO}}</code></a><!--FIN-->
 <!--TROZO nombre-codigo--><code>{{TEXTO}}</code><!--FIN-->
@@ -112,6 +112,10 @@
 <!--TROZO f-correcciones-->Qué se ha corregido, qué queda y por qué, área por área.<!--FIN-->
 <!--TROZO f-hallazgos-despues-->Los problemas que quedan tras corregir, con la misma forma que los de antes.<!--FIN-->
 <!--TROZO f-diagnostico-despues-->El informe del diagnóstico del migrado tras corregir: estado del build y cuenta por área.<!--FIN-->
+<!--TROZO f-cobertura-antes-->La cobertura de líneas de los tests del migrado antes de corregir: porcentaje, líneas y mínimo; si no se pudo medir, el motivo.<!--FIN-->
+<!--TROZO f-cobertura-despues-->La misma cobertura tras corregir.<!--FIN-->
+<!--TROZO f-cobertura-antes-log-->Lo que dijo Maven al medir la cobertura antes de corregir. Para mirar si algo falla.<!--FIN-->
+<!--TROZO f-cobertura-despues-log-->Lo que dijo Maven al medir la cobertura tras corregir.<!--FIN-->
 <!--TROZO f-correcciones-json-->Los commits de arreglo, lo que quedó atascado, los hallazgos resueltos y las variables nuevas.<!--FIN-->
 <!--TROZO f-correccion-log-->Lo que dijo el motor de arreglos durante la corrección. Para mirar si algo falla.<!--FIN-->
 <!--TROZO f-datos-->Los datos de los que salen estas páginas.<!--FIN-->
@@ -134,6 +138,7 @@
   <ul class="areas" style="--max:{{MAX}}">
 {{{AREAS}}}
   </ul>
+  {{{COBERTURA}}}
   <p><a href="2-problemas.html">Ver los problemas, área por área</a></p><!--FIN-->
 <!--TROZO area-barra-->    <li class="area">
       <p class="a-n">{{{NOMBRE}}}</p>
@@ -141,3 +146,7 @@
     </li><!--FIN-->
 <!--TROZO area-estado--><p class="a-e">{{{TEXTO}}}</p><!--FIN-->
 <!--TROZO area-limpia-->    <li class="area limpia"><p class="a-n">{{{NOMBRE}}}</p><div class="a-b"></div><p class="a-e">sin errores</p></li><!--FIN-->
+<!--TROZO cob-linea--><p class="cob-linea">{{{ETIQUETA}}} <b>Cobertura de tests</b> ({{{CUANDO}}}): {{{TEXTO}}}</p><!--FIN-->
+<!--TROZO cob-linea-medida-->{{{PCT}}} de las líneas ({{CUBIERTAS}} de {{TOTAL}}). {{{VEREDICTO}}}<!--FIN-->
+<!--TROZO cob-cuando-antes-->antes de corregir<!--FIN-->
+<!--TROZO cob-cuando-despues-->después de corregir<!--FIN-->

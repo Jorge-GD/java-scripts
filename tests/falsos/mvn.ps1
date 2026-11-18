@@ -38,6 +38,16 @@ if ($args -contains 'test') {
     exit 1
   }
 }
+# Para la cobertura de migracion.ps1: con RESCATE_JACOCO_CSV (ruta de un fichero) el paso de JaCoCo deja ese fichero como jacoco.csv en vez
+# del suyo; con RESCATE_JACOCO_SIN_CSV no deja ninguno.
+if ($conJacoco -and ($env:RESCATE_JACOCO_CSV -or $env:RESCATE_JACOCO_SIN_CSV)) {
+  if ($env:RESCATE_JACOCO_CSV) {
+    $dest = Join-Path $raiz 'target/site/jacoco'
+    [void](New-Item -ItemType Directory -Path $dest -Force)
+    Copy-Item -LiteralPath $env:RESCATE_JACOCO_CSV -Destination (Join-Path $dest 'jacoco.csv') -Force
+  }
+  exit 0
+}
 if ($conJacoco) {
   $csv = Join-Path $raiz 'target/site/jacoco'
   [void](New-Item -ItemType Directory -Path $csv -Force)

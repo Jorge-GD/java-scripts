@@ -150,7 +150,8 @@ function Select-Modelo {
 
 # ================================= FASES =================================
 # El diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y sus hallazgos se copian a datos\ como
-# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. Si el motor falla, parada 'motor'
+# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
+# tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile). Si el motor falla, parada 'motor'
 # y devuelve $false.
 function Invoke-Diagnostico([string]$Cuando) {
   $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
@@ -167,6 +168,12 @@ function Invoke-Diagnostico([string]$Cuando) {
     $script:Parada = $true
     return $false
   }
+  # la cobertura va antes que los hallazgos: si se corta aqui, relanzar repite el diagnostico entero
+  $compila = ((Get-EstadoBuild ([System.IO.File]::ReadAllText($mMotor, $Utf8))) -cne 'compila: NO')
+  $cob = Get-Cobertura $RepoRoot (Join-Path $Registros "cobertura-$Cuando.log") $compila
+  Write-Json (Join-Path $Datos "cobertura-$Cuando.json") $cob
+  if ($cob.medida) { Info "Cobertura ($Cuando): $("$($cob.porcentaje)".Replace('.', ',')) % de las lineas ($($cob.cubiertas) de $($cob.total))." }
+  else { Aviso "Cobertura ($Cuando): no se ha podido medir: $($cob.motivo)" }
   # el .json el ultimo: es el que dice que la fase esta hecha
   foreach ($par in @(@($mMotor, "diagnostico-$Cuando.md"), @($hMotor, "hallazgos-$Cuando.json"))) {
     $destino = Join-Path $Datos $par[1]

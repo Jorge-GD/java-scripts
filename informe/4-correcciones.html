@@ -14,6 +14,7 @@
   <p><b>Después:</b> {{{BUILD_DESPUES}}} {{{ETIQUETA_DESPUES}}}</p>
 </section>
 
+{{{COBERTURA}}}
 <section class="panel" id="resumen" aria-labelledby="t-resumen">
   <h2 id="t-resumen">Lo que se ha corregido</h2>
   <p>{{{ETIQUETA}}}</p>
@@ -74,3 +75,11 @@ borrar el worktree:   git worktree remove "{{WORKTREE}}"</pre>
   <ul class="filas">
 {{{FILAS}}}
   </ul><!--FIN-->
+<!--TROZO cob-cambio--><section class="panel" id="cobertura" aria-labelledby="t-cobertura">
+  <h2 id="t-cobertura">Cobertura de tests</h2>
+  <p>{{{ETIQUETA}}}</p>
+  <p class="total-l"><b>Cobertura: {{{CAMBIO}}}</b></p>
+  {{{VEREDICTO}}}
+</section><!--FIN-->
+<!--TROZO cob-cambio-veredicto--><p>{{{TEXTO}}}</p><!--FIN-->
+<!--TROZO cob-sin-medir-motivo-->sin medir ({{MOTIVO}})<!--FIN-->

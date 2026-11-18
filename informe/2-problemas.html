@@ -11,6 +11,7 @@
   <p>{{{FRASE}}}</p>
 </section>
 
+{{{COBERTURA}}}
 <section class="panel" id="referencia" aria-labelledby="t-referencia">
   <h2 id="t-referencia">Lo que incumple la propia referencia</h2>
   <p>Lo que la referencia hace se permite también en el migrado, salvo el Javadoc. Estas son las reglas del motor que ella misma no cumple.</p>
@@ -54,3 +55,15 @@
 <!--TROZO arregla-e2e-->Escribir una prueba de extremo a extremo por job que lo lance de principio a fin y compruebe su salida.<!--FIN-->
 <!--TROZO arregla-tests-->Hacer que los tests pasen: adaptarlos a la nueva estructura o corregir el fallo real de la migración.<!--FIN-->
 <!--TROZO arregla-calidad-->Resolver los avisos de calidad sin cambiar el comportamiento: Javadoc, inyección por constructor, logger en lugar de la consola y catch vacíos.<!--FIN-->
+<!--TROZO cob-panel--><section class="panel" id="cobertura" aria-labelledby="t-cobertura">
+  <h2 id="t-cobertura">Cobertura de tests</h2>
+  <p>{{{ETIQUETA}}}</p>
+  {{{CUERPO}}}
+</section><!--FIN-->
+<!--TROZO cob-medida--><div class="cob-fila {{CLASE}}">
+    <p class="c-n">Líneas cubiertas por los tests</p>
+    <p class="c-v">{{{PCT}}}</p>
+    <div class="meter" role="img" aria-label="{{ETIQUETA_PCT}} por ciento"><span class="fill" style="--v:{{V}}"></span><span class="umbral" style="--u:{{U}}"></span></div>
+  </div>
+  <p>{{CUBIERTAS}} de {{TOTAL}} líneas cubiertas. {{{VEREDICTO}}}</p><!--FIN-->
+<!--TROZO cob-sin-cuerpo--><p>Líneas cubiertas por los tests: {{{TEXTO}}}</p><!--FIN-->
