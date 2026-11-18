@@ -395,13 +395,25 @@ function Save-Arnes($T) {
   Save-Copia $dir
 }
 
-# Pone en su copia el arnes hecho en otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede
-# ser otro). Si ya no la pasa, se deshace y la tarea vuelve a empezar.
+# Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
+# otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
+# atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
+# hecha vuelve a empezar (y se avisa), una que ya estaba por hacer sigue como estaba.
 function Use-ArnesGuardado($T, [string[]]$Jobs) {
+  $estabaHecha = ($T.estado -eq 'hecha')
   Copy-Carpeta (Join-Ruta $Local "arnes/$($T.entradas.repo)") $T.entradas.copia
   $m = Test-Arnes $T $Jobs
-  if (-not $m) { Save-Copia $T.entradas.copia; return }
+  if (-not $m) {
+    Save-Copia $T.entradas.copia
+    if (-not $estabaHecha) {
+      $T.estado = 'hecha'; $T.intentos = 0; $T.motivo = ''; $T.ultimoEstado = 'ok'
+      Save-Tarea $T
+      Bien "Arnes del $($T.entradas.repo): bien (el test de otro lanzamiento sigue valiendo)."
+    }
+    return
+  }
   Undo-Copia $T.entradas.copia
+  if (-not $estabaHecha) { return }
   Aviso "El test PruebaLocalTest del $($T.entradas.repo) de otro lanzamiento ya no vale en este commit ($(($m -split "`n")[0])): se vuelve a escribir."
   $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
   Save-Tarea $T
@@ -1117,7 +1129,7 @@ try {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs
-    if ($t.estado -eq 'hecha') { Use-ArnesGuardado $t $todosJobs }
+    if (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     $arneses += , $t
   }
   $ArnesOrig = $arneses[0]
