@@ -54,6 +54,10 @@ USO
   .\rescate.ps1 -Modo fix -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado `
                 -Legacy C:\ruta\life-java8 -Modelo <id-del-modelo>
 
+  # Comprobar (sin Maven, sin escribir nada): lo que el arbol de trabajo ha roto frente al commit de partida del lote en curso.
+  # Los prompts de los lotes se la piden a la IA antes de terminar; sale con 1 si hay algo nuevo roto.
+  .\rescate.ps1 -Modo comprobar -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
+
   # Todo seguido, sin parar: se detiene solo si un lote no pasa las comprobaciones.
   # Sin .rescate\contrato.json (y con -Legacy) hace antes lo del modo pre.
   .\rescate.ps1 -Modo fix ... -Todo
@@ -113,7 +117,7 @@ LIMITES
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('diagnostico', 'pre', 'plan', 'fix', 'deshacer')][string]$Modo = 'diagnostico',
+  [ValidateSet('diagnostico', 'pre', 'plan', 'fix', 'deshacer', 'comprobar')][string]$Modo = 'diagnostico',
   [string]$Repo = '.',
   [string]$Plantilla = '',
   [string]$Legacy = '',
@@ -569,7 +573,7 @@ function Get-Calidad($Hechos) {
 # Lo que se aprende de la plantilla.
 function Get-Calibracion([string]$Raiz) {
   $h = Get-Hechos $Raiz
-  $capas = @(); $sub2 = @{}; $dirs3 = @{}
+  $capas = @(); $sub2 = @{}; $dirs3 = @{}; $paquetes = @{}
   $excImp = @{}; $excFic = @{}; $tokens = @{}
   foreach ($f in $h.Ficheros) {
     $seg = $f.Rel.Split('/')
@@ -580,6 +584,11 @@ function Get-Calibracion([string]$Raiz) {
     }
     $n = [Math]::Min($seg.Count - 1, 3)
     if ($n -ge 1) { $dirs3[($seg[0..($n - 1)] -join '/')] = $true }
+    if ($seg.Count -ge 2) {   # paquete (ruta relativa al paquete base) -> nombres de sus clases
+      $dir = $seg[0..($seg.Count - 2)] -join '/'
+      if (-not $paquetes.ContainsKey($dir)) { $paquetes[$dir] = @() }
+      $paquetes[$dir] += [System.IO.Path]::GetFileNameWithoutExtension($seg[-1])
+    }
   }
   foreach ($v in @(Get-ViolImports $h)) { $excImp[$v.Clave] = $true }
   foreach ($u in @(Get-UsoFicheros $h)) { if (-not (Test-FicheroPermitido $u.Dir)) { $excFic[$u.Clave] = $true } }
@@ -595,13 +604,29 @@ function Get-Calibracion([string]$Raiz) {
   $calReglas = @{}
   foreach ($q in @(Get-Calidad $h)) { $calReglas[$q.Regla] = $true }
   return [pscustomobject]@{
-    Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object)
+    Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object); Paquetes = $paquetes
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
     Calidad = $calReglas; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
     YmlSftp = ($h.Yml -match 'sftp'); Pom = (Get-Pom $Raiz); Extra = $extra
   }
+}
+
+# El mapa de paquetes de la plantilla para el prompt de un plan o de un lote: una linea por paquete con hasta 4 clases (60 lineas como
+# mucho, con la ultima diciendo cuantos faltan). Sin paquetes, nada.
+function Get-TextoMapaPaquetes($Cal) {
+  $dirs = @($Cal.Paquetes.Keys | Sort-Object)
+  if ($dirs.Count -eq 0) { return @() }
+  $l = @('## Mapa de paquetes', 'Paquetes de la PLANTILLA. Cada clase nueva va en el paquete de su equivalente de esta lista. No crees paquetes que no esten aqui.')
+  $mostrar = $dirs
+  if ($dirs.Count -gt 60) { $mostrar = @($dirs | Select-Object -First 59) }
+  foreach ($d in $mostrar) {
+    $clases = @($Cal.Paquetes[$d] | Sort-Object)
+    $l += "- ${d}: " + (($clases | Select-Object -First 4) -join ', ') + $(if ($clases.Count -gt 4) { ', ...' } else { '' })
+  }
+  if ($dirs.Count -gt 60) { $l += "(y $($dirs.Count - 59) paquetes mas en la PLANTILLA)" }
+  return ($l + '')
 }
 
 # Cuanto incumple la propia plantilla (lo que se permite en el repo porque ella lo hace), en una linea.
@@ -921,10 +946,14 @@ function Show-Resumen($Hall) {
 }
 
 # ================================= FIX =================================
+# La regla de dependencias entre capas y la de adaptadores: las llevan los prompts de todos los pasos (lote y plan) y el texto del paso hexagonal.
+$TextoCapas = 'El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports).'
+$TextoAdaptadores = 'El adaptador de entrada depende del puerto, nunca de un adaptador de salida. Si la pieza comun necesita otra operacion, anadela al puerto y a todos sus adaptadores.'
+
 $TextoPaso = @{
   build      = 'Haz que el proyecto compile con Java 21 usando las mismas propiedades y plugins que el pom.xml de la PLANTILLA, sin cambiar el parent: si hace falta otro, apuntalo como duda. No copies dependencias de negocio que este repo no necesite. Corrige los errores de compilacion listados. No reestructures paquetes en este paso.'
   estructura = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover y actualizar package e imports: no cambies logica. Mueve tambien sus tests al paquete equivalente.'
-  hexagonal  = 'Elimina las dependencias prohibidas listadas. El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports). Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
+  hexagonal  = 'Elimina las dependencias prohibidas listadas. ' + $TextoCapas + ' Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
   ficheros   = 'Sustituye el acceso directo a ficheros locales por puertos de ficheros, igual que la PLANTILLA: puerto para listar y leer, puerto para el ciclo de vida del fichero, un adaptador SFTP y otro local, y seleccion por propiedad de configuracion. Usa la misma libreria SFTP que la PLANTILLA; si la PLANTILLA no tiene SFTP, crea igualmente el adaptador SFTP en infrastructure/adapters/output/sftp (con la libreria SFTP que ya use este repo) y su bloque sftp en application.yml. No dejes rutas fijas en el codigo.'
   config     = 'Elimina las referencias a la configuracion antigua (inventory). Toda la configuracion debe entrar por una clase @ConfigurationProperties validada al arranque y por application.yml leyendo variables de entorno, igual que la PLANTILLA. Ningun secreto (contrasena, token, clave) puede quedar escrito en application.yml o application.properties, ni como valor por defecto: se leen de una variable de entorno (`${NOMBRE}`). No escribas el valor en ningun otro fichero del repo; si un test lo necesita, usa un valor inventado en src/test/resources.'
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
@@ -990,14 +1019,56 @@ function Get-TextoReferencias {
   return ($l + '')
 }
 
-# Prompt de un lote. $Consejo: la decision del modelo de las dudas para un atascado (va tras los hallazgos).
-# $Reflexiones: las de los intentos anteriores de estos ficheros (dentro de la CORRECCION, si la hay).
-function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
-  # La orden de Maven: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
+# En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
+function Get-ConTests([string]$PasoId) { return [bool]((-not $SinTests) -or ($PasoId -eq 'tests') -or ($PasoId -eq 'e2e')) }
+
+# La orden que la IA ejecuta dentro de su sesion para ver, sin Maven, lo que ha roto: este mismo script en -Modo comprobar, con el
+# mismo PowerShell (5.1 o 7) y los parametros que deciden donde se trabaja.
+function Get-OrdenComprobar {
+  $exe = [System.IO.Path]::GetFileNameWithoutExtension((Get-Process -Id $PID).Path)
+  if ($exe -notmatch '^(pwsh|powershell)$') { $exe = 'pwsh' }
+  $o = "$exe -NoProfile -File `"$PSCommandPath`" -Modo comprobar -Repo `"$OrigenRoot`""
+  if ($PlantillaRoot) { $o += " -Plantilla `"$PlantillaRoot`"" }
+  if ($SinWorktree) { $o += ' -SinWorktree' }
+  if ($Worktree) { $o += " -Worktree `"$Worktree`"" }
+  return $o
+}
+
+# La orden de Maven para un prompt: relativa (./mvnw) si esta dentro del repo; si no, la ruta tal cual, entre comillas si tiene espacios.
+function Get-OrdenMaven {
   $sep = [System.IO.Path]::DirectorySeparatorChar
   $mvn = Get-Mvn $RepoRoot
   if ($mvn.StartsWith($RepoRoot + $sep, [System.StringComparison]::OrdinalIgnoreCase)) { $mvn = '.' + $sep + $mvn.Substring($RepoRoot.Length + 1) }
   if ($mvn -match '\s') { $mvn = '"' + $mvn + '"' }
+  return $mvn
+}
+
+# Las reglas que llevan todos los prompts de un lote.
+$TextoReglas = @(
+  '1. No cambies la logica de negocio: mismo comportamiento que el original.',
+  '2. No toques nada fuera de este repositorio. No hagas commit ni push ni cambies de rama: de git se encarga el script.',
+  '3. No borres tests, no los desactives (@Disabled, @Ignore), no relajes aserciones ni bajes umbrales de cobertura. Si mueves una clase, mueve su test.',
+  "4. No cambies el pom.xml salvo que el paso sea 'build' o sea imprescindible. Nunca anadas dependencias que la plantilla no use.",
+  '5. No escribas contrasenas, tokens ni hosts reales en ningun fichero.',
+  '6. No hagas mejoras ni refactors que este lote no pide.',
+  '7. Si un hallazgo no se puede resolver sin romper estas reglas, dejalo como esta y explicalo al final.'
+)
+
+# Lo que el prompt de un lote pide hacer al terminar.
+function Get-TextoAlTerminar([string]$Mvn, [string]$PasoId) {
+  $a = $Cfg.MvnCompilar; $fin = 'y corrige hasta que compile.'
+  if (Get-ConTests $PasoId) { $a = $Cfg.MvnTests; $fin = 'y corrige los tests que fallen.' }
+  $l1 = "- Ejecuta: $(Get-OrdenComprobar)  y corrige lo que liste (como mucho 3 veces)."
+  $l2 = "- Ejecuta: $Mvn $($a -join ' ')  $fin"
+  return @($l1, $l2, '- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
+}
+
+# Prompt de un lote. $Consejo: la decision del modelo de las dudas para un atascado (va tras los hallazgos).
+# $Reflexiones: las de los intentos anteriores de estos ficheros (dentro de la CORRECCION, si la hay).
+# Con CORRECCION es el prompt corto de reparacion: el intento anterior sigue en el arbol y no hay que explorar de nuevo.
+function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
+  if ($Correccion) { return (New-PromptReparacion $PasoId $LoteH $Correccion $Consejo $Reflexiones) }
+  $mvn = Get-OrdenMaven
   $l = New-Object System.Collections.Generic.List[string]
   $l.Add("# Tarea de rescate de migracion: paso '$PasoId'")
   $l.Add('')
@@ -1013,10 +1084,12 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $nu
     $l.Add('  Referencia de comportamiento: el resultado debe hacer exactamente lo mismo.')
   }
   $l.Add('')
+  if ($script:Cal) { foreach ($x in (Get-TextoMapaPaquetes $script:Cal)) { $l.Add($x) } }
   $l.Add('## Antes de tocar nada')
   $l.Add('1. Lee enteros los ficheros del lote y busca quien los usa: imports, inyeccion, configuracion y tests.')
   $l.Add('2. Lee en la PLANTILLA las clases equivalentes y copia su paquete, sus nombres y su estilo.')
   $l.Add('3. Si en este repo ya existe un puerto, un adaptador o una clase de configuracion que sirve, reutilizalo. No crees otro parecido.')
+  $l.Add('4. Respeta las dependencias entre capas. ' + $TextoCapas + ' ' + $TextoAdaptadores)
   $l.Add('')
   $rutaPlan = Get-RutaPlan $PasoId
   if (-not $SinPlan -and (Test-Path -LiteralPath $rutaPlan)) {
@@ -1034,35 +1107,51 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $nu
   $l.Add('## Hallazgos de este lote (resuelve estos y nada mas)')
   foreach ($x in $LoteH) { $l.Add((Get-LineaHallazgo $x)) }
   $l.Add('')
-  if ($Consejo) {
-    $l.Add('## Consejo para este fichero (lo ha decidido un revisor: siguelo)')
-    $l.Add("Duda: $($Consejo.duda)")
-    $l.Add('Decision: ' + (Get-Elegida $Consejo))
-    $l.Add("Por que: $($Consejo.porque)")
-    $l.Add('')
-  }
+  if ($Consejo) { foreach ($x in (Get-TextoConsejoLote $Consejo)) { $l.Add($x) } }
   $l.Add('## Reglas obligatorias')
-  $l.Add('1. No cambies la logica de negocio: mismo comportamiento que el original.')
-  $l.Add('2. No toques nada fuera de este repositorio. No hagas commit ni push ni cambies de rama: de git se encarga el script.')
-  $l.Add('3. No borres tests, no los desactives (@Disabled, @Ignore), no relajes aserciones ni bajes umbrales de cobertura. Si mueves una clase, mueve su test.')
-  $l.Add("4. No cambies el pom.xml salvo que el paso sea 'build' o sea imprescindible. Nunca anadas dependencias que la plantilla no use.")
-  $l.Add('5. No escribas contrasenas, tokens ni hosts reales en ningun fichero.')
-  $l.Add('6. No hagas mejoras ni refactors que este lote no pide.')
-  $l.Add('7. Si un hallazgo no se puede resolver sin romper estas reglas, dejalo como esta y explicalo al final.')
+  foreach ($x in $TextoReglas) { $l.Add($x) }
   $l.Add('')
   $l.Add('## Calidad del codigo que escribas (Java 21)')
   foreach ($x in $TextoCalidad) { $l.Add($x) }
   $l.Add('')
   $l.Add('## Al terminar')
-  $l.Add("- Ejecuta: $mvn " + ($Cfg.MvnCompilar -join ' ') + '  y corrige hasta que compile.')
-  $l.Add('- Responde solo con: ficheros cambiados (lista corta) y hallazgos sin resolver con el motivo.')
-  if ($Correccion) {
-    $l.Add('')
-    $l.Add('## CORRECCION: tu intento anterior no paso las comprobaciones')
-    $l.Add('Tus cambios siguen en el arbol de trabajo. Corrige esto sin deshacer lo que estaba bien:')
-    $l.Add($Correccion)
-  }
-  foreach ($x in (Get-TextoReflexiones $Reflexiones ([bool]$Correccion))) { $l.Add($x) }
+  foreach ($x in (Get-TextoAlTerminar $mvn $PasoId)) { $l.Add($x) }
+  foreach ($x in (Get-TextoReflexiones $Reflexiones $false)) { $l.Add($x) }
+  return ($l -join "`n")
+}
+
+# El consejo de un revisor para un fichero atascado, para un prompt.
+function Get-TextoConsejoLote($Consejo) {
+  return @('## Consejo para este fichero (lo ha decidido un revisor: siguelo)', "Duda: $($Consejo.duda)", ('Decision: ' + (Get-Elegida $Consejo)), "Por que: $($Consejo.porque)", '')
+}
+
+# Prompt de un intento 2, 3... (o de un escalon que parte del arbol del mejor intento): el arbol ya tiene el intento anterior, asi que
+# arriba va lo que hay que arreglar, con su detalle, y debajo, en corto, los ficheros del lote, la orden de Maven y las reglas.
+function New-PromptReparacion([string]$PasoId, $LoteH, [string]$Correccion, $Consejo, $Reflexiones) {
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea de rescate de migracion: paso '$PasoId'")
+  $l.Add('')
+  $l.Add('Tu intento anterior sigue en el arbol de trabajo. No vuelvas a explorar el repo: arregla solo esto.')
+  $l.Add('')
+  $l.Add('## CORRECCION: tu intento anterior no paso las comprobaciones')
+  $l.Add('Corrige esto sin deshacer lo que estaba bien:')
+  $l.Add($Correccion)
+  foreach ($x in (Get-TextoReflexiones $Reflexiones $true)) { $l.Add($x) }
+  $l.Add('')
+  if ($Consejo) { foreach ($x in (Get-TextoConsejoLote $Consejo)) { $l.Add($x) } }
+  $l.Add('## Ficheros del lote')
+  $fichs = @($LoteH | ForEach-Object { $_.Fichero } | Where-Object { $_ } | Select-Object -Unique)
+  if ($fichs.Count -eq 0) { $fichs = @('(repo)') }
+  foreach ($f in $fichs) { $l.Add("- $f") }
+  $l.Add('')
+  $l.Add('## Al terminar')
+  foreach ($x in (Get-TextoAlTerminar (Get-OrdenMaven) $PasoId)) { $l.Add($x) }
+  $l.Add('')
+  $l.Add('## Reglas obligatorias')
+  foreach ($x in $TextoReglas) { $l.Add($x) }
+  $l.Add('')
+  $l.Add('## Calidad del codigo que escribas (Java 21)')
+  foreach ($x in $TextoCalidad) { $l.Add($x) }
   return ($l -join "`n")
 }
 
@@ -1277,6 +1366,49 @@ function Get-PlanDelLote([string]$Plan, [string[]]$Fichs) {
   return $sal
 }
 
+# El paquete (ruta relativa al paquete base, con '/') de un nombre que la IA escribe en un plan: un nombre de clase completo, un
+# paquete o una ruta, con '.' o con '/'. $null si no se puede leer o no cuelga de una capa de la plantilla (no se comprueba).
+function Get-PaqueteDePlan([string]$Nombre, $Cal) {
+  $n = ($Nombre.Trim() -replace '[`"''*]', '')
+  if ($n -match '\.(ya?ml|xml|properties|json|md|txt|csv|sql)$') { return $null }
+  $seg = @(($n -replace '\.java$', '') -split '[./]' | Where-Object { $_ })
+  if ($seg.Count -ge 2 -and $seg[-1] -cmatch '^[A-Z]') { $seg = @($seg[0..($seg.Count - 2)]) }
+  for ($k = 0; $k -lt $seg.Count; $k++) {
+    if ($Cal.Capas -contains $seg[$k]) { return ($seg[$k..($seg.Count - 1)] -join '/') }
+  }
+  return $null
+}
+
+# Esta en la plantilla un paquete? Si tiene clases o es la carpeta de un paquete que las tiene.
+function Test-PaqueteEnPlantilla([string]$Rel, $Cal) {
+  foreach ($k in $Cal.Paquetes.Keys) { if ($k -eq $Rel -or $k.StartsWith($Rel + '/')) { return $true } }
+  return $false
+}
+
+# Los paquetes que un plan nombra y la plantilla no tiene, como 'paquete (en <nombre tal como esta escrito>)': los de '## Piezas
+# comunes' (nombres completos de clase, con '.' o con '/') y los de las lineas 'destino:' de '## Ficheros'. Lee con tolerancia: lo que
+# no se entiende, no se comprueba. Sin plantilla, nada.
+function Get-PaquetesFueraDePlantilla([string]$Plan, $Cal) {
+  if (-not $Cal -or $Cal.Paquetes.Count -eq 0) { return @() }
+  $nombres = New-Object System.Collections.Generic.List[string]
+  foreach ($x in (Get-SeccionPlan $Plan 'Piezas comunes')) {
+    foreach ($m in [regex]::Matches($x, '(?<![\w.])(?:[a-z][a-z0-9_]*\.)+[A-Z]\w*')) { $nombres.Add($m.Value) }
+    foreach ($m in [regex]::Matches($x, '(?<![\w/.])(?:[a-z][a-z0-9_]*/)+[A-Z]\w*')) { $nombres.Add($m.Value) }
+  }
+  foreach ($x in (Get-SeccionPlan $Plan 'Ficheros')) {
+    $m = [regex]::Match($x, 'destino:\s*([^|]*)')
+    if (-not $m.Success) { continue }
+    $d = @(($m.Groups[1].Value -replace '[`"''*]', '').Trim() -split '\s+')[0]
+    if ($d -and $d -ne '-') { $nombres.Add($d) }
+  }
+  $fuera = [ordered]@{}
+  foreach ($n in $nombres) {
+    $rel = Get-PaqueteDePlan $n $Cal
+    if ($rel -and -not $fuera.Contains($rel) -and -not (Test-PaqueteEnPlantilla $rel $Cal)) { $fuera[$rel] = $n }
+  }
+  return @($fuera.Keys | ForEach-Object { "$_ (en $($fuera[$_]))" })
+}
+
 # Una llamada a Copilot que solo debe leer (revision previa, consejo, reflexion) y escribir su fichero en .rescate. Si
 # toca la PLANTILLA o el ORIGINAL, para (exit 4). Si toca codigo de este repo: si estaba limpio, lo deshace; si no, avisa.
 function Invoke-SoloLectura([string]$Log, [string]$Mod, [string]$Esf, [string]$Que) {
@@ -1300,6 +1432,48 @@ function Invoke-SoloLectura([string]$Log, [string]$Mod, [string]$Esf, [string]$Q
   return $r
 }
 
+# El prompt de la revision previa de un paso, en .rescate/prompt.md. $Correccion: el motivo, si es la repeticion de un plan que no valia.
+function Save-PromptPlan([string]$PasoId, $Pend, [string]$Correccion) {
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea: revision previa del paso '$PasoId' (SOLO LECTURA)")
+  $l.Add('')
+  $l.Add('Vas a preparar el plan de un paso de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.')
+  $l.Add("No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/plan-$PasoId.md en el repositorio actual.")
+  $l.Add('')
+  foreach ($x in (Get-TextoReferencias)) { $l.Add($x) }
+  if ($script:Cal) { foreach ($x in (Get-TextoMapaPaquetes $script:Cal)) { $l.Add($x) } }
+  $l.Add('## Lo que se hara despues en este paso (ahora NO lo hagas)')
+  $l.Add($TextoPaso[$PasoId])
+  $l.Add('')
+  $l.Add('## Hallazgos del paso (todos)')
+  foreach ($x in $Pend) { $l.Add((Get-LineaHallazgo $x)) }
+  $l.Add('')
+  $l.Add('## Que tienes que revisar')
+  $l.Add('1. Lee entero cada fichero de la lista. Busca quien lo usa: imports, inyeccion, configuracion y tests.')
+  $l.Add('2. Lee en la PLANTILLA las clases equivalentes: en que paquete estan, como se llaman y que puertos y adaptadores usan.')
+  $l.Add('3. Decide que se hara con cada fichero. Las decisiones tienen que ser coherentes entre si: si varios ficheros necesitan lo mismo (un puerto, un adaptador, una clase de configuracion), se crea UNA sola pieza comun y todos la usan.')
+  $l.Add('4. Si algo no se puede resolver sin cambiar el comportamiento, no lo fuerces: apuntalo en Dudas.')
+  $l.Add('5. Como se tratan los errores (capturar y seguir, o propagar) es comportamiento: el plan no lo cambia.')
+  $l.Add('6. Respeta las dependencias entre capas. ' + $TextoCapas + ' ' + $TextoAdaptadores)
+  $l.Add('')
+  $l.Add("## Formato de .rescate/plan-$PasoId.md")
+  $l.Add("Empieza con la linea: # Plan del paso '$PasoId'")
+  $l.Add('Despues, estas cuatro secciones, con estos titulos:')
+  $l.Add('- "## Piezas comunes": una linea por cada pieza nueva que van a compartir varios ficheros, con su nombre completo (paquete incluido, uno de la lista de paquetes de la PLANTILLA), que es (puerto, adaptador, configuracion...) y para que sirve. Si no hace falta ninguna, escribe "ninguna".')
+  $l.Add('- "## Ficheros": una linea por cada fichero de la lista de hallazgos, asi:')
+  $l.Add('  - `ruta/del/Fichero.java` -> que se hace | destino: paquete o clase de destino, o "-" | riesgo: bajo, medio o alto, y por que')
+  $l.Add('- "## Orden": en que orden conviene hacerlos y por que (primero lo que otros necesitan).')
+  $l.Add('- "## Dudas": lo que deberia decidir una persona. Si no hay, escribe "ninguna".')
+  $l.Add('')
+  $l.Add('No escribas contrasenas, hosts ni datos reales. No inventes: si no has podido leer un fichero, dilo en Dudas.')
+  if ($Correccion) {
+    $l.Add('')
+    $l.Add('## CORRECCION: tu plan anterior no paso la comprobacion')
+    $l.Add($Correccion)
+  }
+  [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+}
+
 # Revision previa de un paso: la IA lee todos los ficheros con hallazgos y la
 # plantilla, y escribe el plan. No debe tocar codigo; si lo toca, se deshace.
 # Devuelve 'nuevo', 'existente' o '' (no hay plan).
@@ -1318,37 +1492,7 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
     $viejo = [System.IO.File]::ReadAllText($ruta)
     Remove-Item -LiteralPath $ruta -Force
   }
-  $l = New-Object System.Collections.Generic.List[string]
-  $l.Add("# Tarea: revision previa del paso '$PasoId' (SOLO LECTURA)")
-  $l.Add('')
-  $l.Add('Vas a preparar el plan de un paso de una migracion a medias de un batch Java 8 a Java 21 con arquitectura hexagonal.')
-  $l.Add("No modifiques NINGUN fichero de codigo, ni aqui ni en las referencias. Tu unica salida es crear el fichero .rescate/plan-$PasoId.md en el repositorio actual.")
-  $l.Add('')
-  foreach ($x in (Get-TextoReferencias)) { $l.Add($x) }
-  $l.Add('## Lo que se hara despues en este paso (ahora NO lo hagas)')
-  $l.Add($TextoPaso[$PasoId])
-  $l.Add('')
-  $l.Add('## Hallazgos del paso (todos)')
-  foreach ($x in $pend) { $l.Add((Get-LineaHallazgo $x)) }
-  $l.Add('')
-  $l.Add('## Que tienes que revisar')
-  $l.Add('1. Lee entero cada fichero de la lista. Busca quien lo usa: imports, inyeccion, configuracion y tests.')
-  $l.Add('2. Lee en la PLANTILLA las clases equivalentes: en que paquete estan, como se llaman y que puertos y adaptadores usan.')
-  $l.Add('3. Decide que se hara con cada fichero. Las decisiones tienen que ser coherentes entre si: si varios ficheros necesitan lo mismo (un puerto, un adaptador, una clase de configuracion), se crea UNA sola pieza comun y todos la usan.')
-  $l.Add('4. Si algo no se puede resolver sin cambiar el comportamiento, no lo fuerces: apuntalo en Dudas.')
-  $l.Add('5. Como se tratan los errores (capturar y seguir, o propagar) es comportamiento: el plan no lo cambia.')
-  $l.Add('')
-  $l.Add("## Formato de .rescate/plan-$PasoId.md")
-  $l.Add("Empieza con la linea: # Plan del paso '$PasoId'")
-  $l.Add('Despues, estas cuatro secciones, con estos titulos:')
-  $l.Add('- "## Piezas comunes": una linea por cada pieza nueva que van a compartir varios ficheros, con su nombre completo (paquete incluido), que es (puerto, adaptador, configuracion...) y para que sirve. Si no hace falta ninguna, escribe "ninguna".')
-  $l.Add('- "## Ficheros": una linea por cada fichero de la lista de hallazgos, asi:')
-  $l.Add('  - `ruta/del/Fichero.java` -> que se hace | destino: paquete o clase de destino, o "-" | riesgo: bajo, medio o alto, y por que')
-  $l.Add('- "## Orden": en que orden conviene hacerlos y por que (primero lo que otros necesitan).')
-  $l.Add('- "## Dudas": lo que deberia decidir una persona. Si no hay, escribe "ninguna".')
-  $l.Add('')
-  $l.Add('No escribas contrasenas, hosts ni datos reales. No inventes: si no has podido leer un fichero, dilo en Dudas.')
-  [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), ($l -join "`n"))
+  Save-PromptPlan $PasoId $pend ''
 
   Info "Revision previa del paso '$PasoId': Copilot lee $($fichs.Count) fichero(s) y la plantilla..."
   [void](Invoke-SoloLectura (Join-Path $Work "plan-$PasoId.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId)")
@@ -1360,6 +1504,21 @@ function Invoke-Plan([string]$PasoId, $Hall, [bool]$Forzar) {
     }
     Aviso "Copilot no ha escrito el plan (ver .rescate/plan-$PasoId.log). Sigo sin plan."
     return ''
+  }
+  $fuera = @(Get-PaquetesFueraDePlantilla ([System.IO.File]::ReadAllText($ruta)) $script:Cal)
+  if ($fuera.Count -gt 0) {
+    $lista = $fuera -join '; '
+    Info "El plan nombra paquetes que la plantilla no tiene ($lista): lo repito una vez con el motivo."
+    $malo = [System.IO.File]::ReadAllText($ruta)
+    Remove-Item -LiteralPath $ruta -Force
+    Save-PromptPlan $PasoId $pend ("Tu plan anterior nombra paquetes que la PLANTILLA no tiene: $lista. Cada pieza comun y cada destino tiene que estar en un paquete del 'Mapa de paquetes' de arriba: si no hay equivalente, elige el paquete mas parecido o apuntalo en Dudas. Escribe el plan entero otra vez.")
+    [void](Invoke-SoloLectura (Join-Path $Work "plan-$PasoId-repeticion.log") '' $EsfuerzoPlan "Copilot (revision previa, paso $PasoId, repeticion)")
+    if (-not (Test-Path -LiteralPath $ruta)) {
+      [System.IO.File]::WriteAllText($ruta, $malo)
+      Aviso "Copilot no ha escrito el plan repetido (ver .rescate/plan-$PasoId-repeticion.log). Me quedo con el primero."
+    }
+    $fuera = @(Get-PaquetesFueraDePlantilla ([System.IO.File]::ReadAllText($ruta)) $script:Cal)
+    if ($fuera.Count -gt 0) { Aviso ('El plan sigue nombrando paquetes que la plantilla no tiene: ' + ($fuera -join '; ') + '. Sigo con el.') }
   }
   $falta = @(Get-SinPlan $ruta $fichs)
   if ($falta.Count -gt 0) { Aviso ('El plan no nombra: ' + (($falta | Select-Object -First 8) -join ', ')) }
@@ -1698,11 +1857,41 @@ function Show-SinPasos([string]$Pie) {
 # ventana, la luz), esos cambios a medias no son de nadie: el arranque siguiente los deshace en vez de guardarlos en la foto.
 function Get-RutaIntento { return (Join-Path $Work 'intento-en-curso.json') }
 
-function Save-Intento([string]$PasoId, [int]$N, [string]$Commit) {
-  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit })))
+# La marca lleva tambien los ficheros del lote y las claves de los errores de antes (el modo comprobar los usa para saber que hay de nuevo).
+function Save-Intento([string]$PasoId, [int]$N, [string]$Commit, [string[]]$Ficheros = @(), $Base = $null) {
+  $claves = @(); if ($Base) { $claves = @($Base.Keys | Sort-Object) }
+  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit; ficheros = @($Ficheros); base = $claves })))
 }
 
 function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
+
+# El arbol de trabajo de un intento (con los ficheros nuevos, sin lo ignorado) como un commit suelto sobre HEAD, que no esta en ninguna
+# rama ni toca el indice ni el arbol. Devuelve su sha, o '' si no se pudo.
+function Save-ArbolIntento {
+  $idx = Join-Path $Work 'arbol.index'
+  $env:GIT_INDEX_FILE = $idx
+  try {
+    [void](Invoke-Git $RepoRoot @('read-tree', 'HEAD'))
+    [void](Invoke-Git $RepoRoot @('add', '-A'))
+    $t = Invoke-Git $RepoRoot @('write-tree')
+    $c = $null
+    if ($t.Codigo -eq 0) { $c = Invoke-Git $RepoRoot @('commit-tree', (($t.Salida -join '').Trim()), '-p', 'HEAD', '-m', 'rescate: arbol de un intento') }
+    if (-not $c -or $c.Codigo -ne 0) { Aviso '  No he podido guardar el arbol de este intento: sigo sin el.'; return '' }
+    return (($c.Salida -join '').Trim())
+  }
+  finally {
+    Remove-Item Env:GIT_INDEX_FILE -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $idx -Force -ErrorAction SilentlyContinue
+  }
+}
+
+# Deja el arbol de trabajo como el de un intento guardado: vuelve al commit bueno y pone encima lo del intento (HEAD no cambia).
+function Restore-ArbolIntento([string]$Rama, [string]$Check, [string]$Sha) {
+  Undo-Lote $Rama $Check
+  $r = Invoke-Git $RepoRoot @('read-tree', '--reset', '-u', $Sha)
+  if ($r.Codigo -ne 0) { Aviso ('  No he podido volver a ese arbol: ' + ($r.Salida -join ' ')); Undo-Lote $Rama $Check; return }
+  [void](Invoke-Git $RepoRoot @('reset', '-q', '--mixed', $Check))
+}
 
 # Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y
 # lo creado van antes a un git stash (el usuario pudo cortar la pasada y tocar algo a mano). Si la rama ya no esta en ese
@@ -1783,7 +1972,7 @@ function Invoke-Fix {
     if ($q -gt 0) { Aviso "Ojo: quedan $q errores en el paso anterior '$c'." }
   }
   # En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
-  $conTests = ((-not $SinTests) -or ($paso -eq 'tests') -or ($paso -eq 'e2e'))
+  $conTests = (Get-ConTests $paso)
   if ($conTests -and $script:Build.Compila -and -not $script:Build.TestsEjecutados) { $hall = @(Invoke-Diagnostico $true $true) }
   $loteEf = $Lote
   if ($Cfg.PasosDeUnoEnUno -contains $paso) { $loteEf = 1 }
@@ -1801,6 +1990,7 @@ function Invoke-Fix {
   }
 
   $unoAUno = @{}       # ficheros de un lote deshecho que se reintentan de uno en uno: los demas vuelven al tamano del paso
+  $mejorDe = @{}       # fichero -> el mejor intento de su ultimo lote deshecho, si compilaba y bajaba los hallazgos del paso (el escalon siguiente parte de su arbol)
   $planB = @{}
   $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
   $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
@@ -1841,19 +2031,32 @@ function Invoke-Fix {
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
     $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
-    Save-Intento $paso $n $check   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
+    Save-Intento $paso $n $check $sel $hallAntes   # hasta que el lote se da por bueno o se deshace: si el script se corta, el arranque lo deshace
+    # el mejor intento del lote que no ha pasado: Sha del arbol, Peso (Problemas y Nuevos), Correccion, Intento, Lote, Base (el commit bueno), Sirve, Ref
+    $mejor = $null
+    if ($sel.Count -eq 1 -and $mejorDe.ContainsKey($sel[0])) {
+      $ini = $mejorDe[$sel[0]]
+      if ($ini.Base -eq $check) {   # si la rama ha avanzado desde que se guardo, ese arbol ya no vale
+        $mejor = $ini
+        Info "  Parto del mejor intento de antes ($($ini.Ref)): su arbol ya esta puesto."
+        Restore-ArbolIntento $rama $check $ini.Sha
+        $correccion = $ini.Correccion
+      }
+      else { $mejorDe.Remove($sel[0]) }
+    }
     for ($i = 1; $i -le $intentos; $i++) {
       $detalle = @(); $rutaCorr = ''
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
       Info "  Copilot trabajando (intento $i de $intentos)..."
+      $estadoAntes = ((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida -join "`n")
       $esf = ''
       if ($i -ge 2 -or $escalon) { $esf = Get-EsfuerzoReintento }
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i)"
       if ($rc.Codigo -ne 0) {
         Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc
         # un fallo de Copilot sin tocar nada no es un intento del modelo: se repite la llamada una vez
-        $nada = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check -and @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ }).Count -eq 0
+        $nada = (((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check) -and (((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida -join "`n") -eq $estadoAntes)
         if ($nada) {
           Aviso '  No ha cambiado nada: repito la llamada una vez (no cuenta como intento).'
           # si iba con el esfuerzo de los reintentos, puede que el modelo no lo admita: se prueba el siguiente (la regla de siempre) y se queda
@@ -1945,10 +2148,31 @@ function Invoke-Fix {
       $falloAhora = Get-ClaveFallo $problemas $nuevos
       if ($reflexionar -and ($Cfg.Reflexionar -eq 'siempre' -or ($falloAntes -and (Test-FalloRepetido $falloAntes $falloAhora)))) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
       $falloAntes = $falloAhora
+      # el mejor intento, con una cuenta: los NO PASA y, con los mismos, los hallazgos nuevos. Uno peor se descarta antes del siguiente.
+      $peso = $problemas.Count * 100 + $nuevos.Count
+      if (-not $mejor -or $peso -le $mejor.Peso) {
+        $sha = Save-ArbolIntento
+        if ($sha) {
+          $mejor = @{ Sha = $sha; Peso = $peso; Problemas = $problemas.Count; Nuevos = $nuevos.Count; Correccion = $correccion; Intento = $i; Lote = $n; Base = $check; Ref = ''
+            Sirve = ($script:Build.Compila -and $d -lt $antes[$paso]) }
+        }
+      }
+      elseif ($i -lt $intentos) {
+        $cual = "el intento $($mejor.Intento)"
+        if ($mejor.Lote -ne $n) { $cual += " del lote $($mejor.Lote)" }
+        Aviso "  El intento $i es peor que $cual ($($problemas.Count) NO PASA y $($nuevos.Count) hallazgos nuevos, frente a $($mejor.Problemas) y $($mejor.Nuevos)): vuelvo a su arbol."
+        Restore-ArbolIntento $rama $check $mejor.Sha
+        $correccion = $mejor.Correccion
+      }
     }
 
     if (-not $ok) {
-      # Nada se queda a medias: se deshace y se prueba algo mas facil.
+      # Nada se queda a medias: el arbol del mejor intento se guarda en una ref (ni rama ni commit de la rama) y se deshace.
+      $refMejor = ''
+      if ($mejor) {
+        $refMejor = "refs/rescate/$paso-$n"
+        [void](Invoke-Git $RepoRoot @('update-ref', $refMejor, $mejor.Sha))
+      }
       Undo-Lote $rama $check
       Remove-Intento   # la marca se va cuando el lote ya esta deshecho, no antes
       $script:Build = $buildAntes
@@ -1956,6 +2180,12 @@ function Invoke-Fix {
       $problemas | ForEach-Object { Aviso "  - $_" }
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
       if ($rutaCorr) { Aviso "  Correccion completa del ultimo intento: $rutaCorr" }
+      if ($refMejor) { Aviso "  El mejor intento esta guardado en git: $refMejor (para verlo: git diff $refMejor^ $refMejor)." }
+      # el escalon siguiente parte de ese arbol si compilaba y bajaba los hallazgos del paso; si no, del commit bueno
+      foreach ($x in $sel) {
+        if ($mejor -and $mejor.Sirve) { $mejorDe[$x] = @{ Sha = $mejor.Sha; Peso = $mejor.Peso; Problemas = $mejor.Problemas; Nuevos = $mejor.Nuevos; Correccion = $mejor.Correccion; Intento = $mejor.Intento; Lote = $mejor.Lote; Base = $check; Ref = $refMejor; Sirve = $true } }
+        else { $mejorDe.Remove($x) }
+      }
       $conMod = ''
       if ($mod) { $conMod = ", con $mod" }
       foreach ($f in $sel) {
@@ -1993,7 +2223,7 @@ function Invoke-Fix {
       Add-Atascado $paso $f ($problemas -join ' ') $d0
       Save-Atascados
       [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota + "`n")
-      foreach ($x in $sel) { $unoAUno.Remove($x) }
+      foreach ($x in $sel) { $unoAUno.Remove($x); $mejorDe.Remove($x) }
       # la cascada de un fichero (de uno en uno, reserva, consejo) cuenta una vez, al quedar atascado, no una por escalon
       $script:Fallos++
       if ($script:Fallos -ge $Cfg.MaxFallosSeguidos) {
@@ -2016,7 +2246,7 @@ function Invoke-Fix {
     }
     $hall = $hall2
     $script:Fallos = 0
-    foreach ($f in $sel) { $unoAUno.Remove($f) }
+    foreach ($f in $sel) { $unoAUno.Remove($f); $mejorDe.Remove($f) }
     Write-Informe $hall
     Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho."
     (Invoke-Git $RepoRoot @('show', '--stat', '--oneline', '--format=%h %s', 'HEAD')).Salida | Select-Object -First 25 | ForEach-Object { Info "  $_" }
@@ -2038,35 +2268,69 @@ function Invoke-Fix {
   else { Show-SinPasos 'Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
 }
 
+# ================================ COMPROBAR ================================
+# Modo comprobar: sin Maven y sin escribir nada, lo que el arbol de trabajo ha roto frente al commit de partida del lote en curso (la
+# marca de .rescate/intento-en-curso.json lleva los errores de antes) y lo que sigue sin resolver en sus ficheros. Devuelve 0 si no hay
+# nada nuevo roto y 1 si lo hay. Lo ejecuta la IA dentro de su sesion; las puertas del fix cuentan lo nuevo con la misma funcion.
+function Invoke-Comprobar {
+  $m = $null
+  if (Test-Path -LiteralPath (Get-RutaIntento)) { try { $m = [System.IO.File]::ReadAllText((Get-RutaIntento)) | ConvertFrom-Json } catch { $m = $null } }
+  if (-not $m -or -not ($m.PSObject.Properties.Name -contains 'base')) {
+    Info 'No hay un intento en curso (.rescate/intento-en-curso.json con los errores de partida): no se que has roto tu. Para ver todos los hallazgos: -Modo diagnostico.'
+    return 0
+  }
+  $antes = @{}
+  foreach ($k in @($m.base)) { $antes["$k"] = $true }
+  $hall = @(Invoke-Diagnostico $false $false)
+  $cats = @($hall | ForEach-Object { $_.Cat } | Select-Object -Unique)
+  $rotos = @(Get-HallazgosNuevos $hall $cats $antes)
+  $fich = @($m.ficheros)
+  $siguen = @($hall | Where-Object { $_.Sev -eq 'error' -and $_.Cat -eq $m.paso -and ($fich -contains $_.Fichero) })
+  Info "Comprobacion rapida, sin Maven (paso '$($m.paso)', lote $($m.lote))."
+  if ($rotos.Count -gt 0) {
+    Aviso "HAS ROTO ($($rotos.Count) hallazgos nuevos desde el commit de partida):"
+    foreach ($x in ($rotos | Select-Object -First 30)) { Info ('  ' + (Get-LineaHallazgo $x)) }
+    if ($rotos.Count -gt 30) { Info "  ($($rotos.Count - 30) mas)" }
+  }
+  else { Bien 'No has roto nada nuevo.' }
+  if ($siguen.Count -gt 0) {
+    Info "Siguen sin resolver en los ficheros del lote ($($siguen.Count)):"
+    foreach ($x in ($siguen | Select-Object -First 20)) { Info ('  ' + (Get-LineaHallazgo $x)) }
+  }
+  if ($rotos.Count -gt 0) { return 1 }
+  return 0
+}
+
 # ================================= MAIN =================================
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fallo "No encuentro 'git' en el PATH."; exit 1 }
 $RepoRoot = Resolve-Dir $Repo
 $PlantillaRoot = Resolve-Dir $Plantilla
 $LegacyRoot = Resolve-Dir $Legacy
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot '.git'))) { Fallo "No es la raiz de un repo git: $RepoRoot"; exit 1 }
+$soloLee = ($Modo -eq 'comprobar')   # no escribe nada ni necesita Copilot
 if ($PlantillaRoot -and ($PlantillaRoot -eq $RepoRoot)) { Aviso 'Repo y plantilla son la misma carpeta: todo saldra permitido.' }
 
 # Carpeta de trabajo. $OrigenRoot es la carpeta que has pasado en -Repo.
 # Si ya hay worktree de rescate, se trabaja en el; fix y plan lo crean si falta.
 $OrigenRoot = $RepoRoot
-Set-Excluidos $OrigenRoot
+if (-not $soloLee) { Set-Excluidos $OrigenRoot }
 [void](Read-CfgFile (Get-RutaAjustes) @() $false)   # ajustes.json: lleva claves de otros scripts, ninguna avisa; el del repo manda
 Read-Config $OrigenRoot    # antes del worktree: CommitArgs vale tambien para el commit 'foto'
-Test-Copilot               # antes del worktree: sin Copilot que lanzar no se toca el repo
+if (-not $soloLee) { Test-Copilot }   # antes del worktree: sin Copilot que lanzar no se toca el repo
 if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
   $dirWt = Get-DirRescate
   if (-not (Test-WorktreeRescate $dirWt) -and ($Modo -eq 'fix' -or $Modo -eq 'plan')) { New-WorktreeRescate $dirWt }
   if (Test-WorktreeRescate $dirWt) {
     $RepoRoot = $dirWt
-    Info "Carpeta de trabajo: $RepoRoot (worktree de rescate, rama '$(Get-Rama $RepoRoot)')"
+    if (-not $soloLee) { Info "Carpeta de trabajo: $RepoRoot (worktree de rescate, rama '$(Get-Rama $RepoRoot)')" }
     if ($Modo -eq 'diagnostico' -or $Modo -eq 'pre') { Info 'Para mirar tu carpeta original en vez del worktree: -SinWorktree' }
     Read-Config $RepoRoot
-    Test-Copilot
+    if (-not $soloLee) { Test-Copilot }
   }
 }
 
 $Work = Join-Path $RepoRoot '.rescate'
-if (-not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
+if (-not $soloLee -and -not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
 
 $script:Atascados = @{}   # paso -> ficheros que la IA no ha sabido arreglar
 $script:AtascadosInfo = [ordered]@{}   # 'paso|fichero' -> lo que se guarda en atascados.json
@@ -2088,12 +2352,13 @@ $script:Build = $null
 $script:BasePkg = ''
 $script:Cal = $null
 if ($PlantillaRoot) {
-  Info 'Leyendo la plantilla...'
+  if (-not $soloLee) { Info 'Leyendo la plantilla...' }
   $script:Cal = Get-Calibracion $PlantillaRoot
-  Info ('Plantilla incumple: ' + (Get-TextoIncumple $script:Cal))
+  if (-not $soloLee) { Info ('Plantilla incumple: ' + (Get-TextoIncumple $script:Cal)) }
 }
 
 switch ($Modo) {
+  'comprobar' { exit @(Invoke-Comprobar)[-1] }
   'diagnostico' {
     if ($SinBuild) { Info 'Diagnostico sin Maven...' } else { Info 'Diagnostico (ejecutando Maven, puede tardar)...' }
     $hall = @(Invoke-Diagnostico (-not $SinBuild) (-not $SinTests))

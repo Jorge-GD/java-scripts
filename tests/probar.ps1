@@ -1790,7 +1790,8 @@ $Pruebas['m7 catch: llevar el catch a un fichero nuevo pasa (la cuenta es de tod
 $Pruebas['m7 catch: un catch en un comentario o en un texto no cuenta'] = {
   $e = Escenario-M6 'm7-catch-comentario'
   $r = Fix-M6 $e 'estructura' 1 @() 'catch-en-comentario'
-  Igual 'el lote se deshace: sale con 2' 2 $r.Codigo
+  # el primer lote se deshace; el escalon siguiente parte de su arbol (compilaba y bajaba los hallazgos) con la correccion, y ahi pasa
+  Comprueba 'el primer lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
   Comprueba 'cuenta 2 -> 1: el comentario y el texto no son catch' ($r.Salida -match 'Has quitado 1 catch \(2 -> 1\)') (Cola $r.Salida)
 }
 
@@ -2226,6 +2227,229 @@ $Pruebas['m9 esfuerzo: si Copilot no admite el esfuerzo del reintento, se baja c
   Igual 'dos lotes: el intento 2 pide max, se rechaza y se repite con xhigh; en el lote siguiente el 2 ya pide xhigh' 'medium,xhigh,medium,xhigh' ((Esfuerzos-De-Lotes $e) -join ',')
   Igual 'un solo rechazo' 1 @(Llamadas-M6 $e 'rechazo').Count
   Comprueba 'lo dice' ($r.Salida -match "esfuerzo 'max'.*'xhigh'") (Cola $r.Salida)
+}
+
+# ===== M9 (parte B): REPARAR, NO REPETIR =====
+$FraseReparacion = 'Tu intento anterior sigue en el arbol de trabajo. No vuelvas a explorar el repo: arregla solo esto.'
+
+$Pruebas['m9 reparar: los intentos 2 y 3 llevan el prompt corto de reparacion; un intento peor se descarta y el siguiente parte del mejor'] = {
+  $e = Escenario-M6 'm9-reparar'
+  $r = Fix-M6 $e 'estructura' 3 @('-Lote', '1') 'mejor-peor'
+  $ls = @(Lotes-Suelta $e)
+  Comprueba 'Suelta tiene tres llamadas' ($ls.Count -eq 3) ($ls -join ' / ')
+  if ($ls.Count -lt 3) { return }
+  $p1 = Prompt-M6 $e $ls[0]; $p2 = Prompt-M6 $e $ls[1]; $p3 = Prompt-M6 $e $ls[2]
+  Comprueba 'el primero es el prompt de siempre' ($p1 -match 'resuelve estos y nada mas' -and $p1 -notmatch [regex]::Escape($FraseReparacion)) $p1
+  foreach ($q in @(@(2, $p2), @(3, $p3))) {
+    $p = $q[1]
+    Comprueba "el intento $($q[0]) empieza por la frase de reparacion" ($p -match ('(?s)^# [^\n]*\n\n' + [regex]::Escape($FraseReparacion) + '\n')) $p
+    Comprueba "el intento $($q[0]) no dice 'nada mas'" ($p -notmatch 'nada mas') $p
+    Comprueba "el intento $($q[0]) lleva la correccion completa, con el detalle" ($p -match '## CORRECCION' -and $p -match "Los hallazgos de 'estructura' no han bajado" -and $p -match 'Detalle:') $p
+    Comprueba "el intento $($q[0]) lleva los ficheros del lote, la orden de Maven y las reglas" ($p -match '(?m)^## Ficheros del lote\n- src/main/java/com/acme/life/Suelta\.java\n' -and $p -match '(?m)^- Ejecuta: .* -q -B' -and $p -match '## Reglas obligatorias') $p
+    Comprueba "el intento $($q[0]) es corto: sin las referencias ni el 'Antes de tocar nada', y con las reglas de calidad" ($p -notmatch 'Antes de tocar nada' -and $p -notmatch '## Referencias' -and $p -match '## Calidad del codigo que escribas') $p
+  }
+  Comprueba 'dice que el intento 2 es peor que el 1 y vuelve a su arbol' ($r.Salida -match 'El intento 2 es peor que el intento 1.*vuelvo a su arbol') (Cola $r.Salida)
+  Comprueba 'el 3 lleva la correccion del mejor (el 1), no la del peor' ($p3 -notmatch 'mas tests fallando') $p3
+  $v = @([System.IO.File]::ReadAllLines((Get-Ruta $e.Wt '.rescate/arbol-visto.log')))
+  Igual 'el 3 ve el arbol del 1 sin lo del 2' 'mejor=True peor=False rompe=False' ($v -join '|')
+  Comprueba 'y el lote pasa en el intento 3' ($r.Salida -match "Lote 1 OK: 'estructura'") (Cola $r.Salida)
+}
+
+$Pruebas['m9 reparar: al rendirse la ref guarda el mejor intento y el escalon siguiente parte de su arbol (pero solo si la rama no ha avanzado)'] = {
+  $e = Escenario-M6 'm9-ref'
+  $r = Fix-M6 $e 'estructura' 1 @() 'parcial-roto'
+  $ref = 'refs/rescate/estructura-1'
+  Comprueba 'dice que el lote se deshace y donde queda el mejor intento' ($r.Salida -match 'Lote 1 DESHECHO' -and $r.Salida -match [regex]::Escape($ref)) (Cola $r.Salida)
+  $refs = GitEn $e.Wt @('for-each-ref', '--format=%(refname)', 'refs/rescate/')
+  Comprueba 'existe la ref' ($refs -match [regex]::Escape($ref)) $refs
+  $arbol = GitEn $e.Wt @('ls-tree', '-r', '--name-only', $ref)
+  Comprueba 'la ref guarda el arbol del intento: Suelta movida y el test roto' ($arbol -match 'application/usecases/Suelta\.java' -and $arbol -match 'RompeTest\.java') $arbol
+  Igual 'no es un commit de la rama' '' (GitEn $e.Wt @('branch', '--contains', $ref))
+  $v = @([System.IO.File]::ReadAllLines((Get-Ruta $e.Wt '.rescate/arbol-visto.log')))
+  Comprueba 'el escalon siguiente (Suelta de uno en uno) empieza con el arbol del mejor' ($v.Count -ge 1 -and $v[0] -eq 'suelta-movida=True') ($v -join '|')
+  $ll = @(Llamadas-M6 $e 'lote')
+  Comprueba 'y lleva el prompt de reparacion' ($ll.Count -ge 2 -and (Prompt-M6 $e $ll[1]).Contains($FraseReparacion)) (Cola $r.Salida)
+  Comprueba 'el lote de Suelta pasa' ($r.Salida -match "Lote 2 OK: 'estructura'") (Cola $r.Salida)
+  Comprueba 'el del otro fichero va de cero, con el prompt de siempre: la rama habia avanzado' ($ll.Count -ge 3 -and -not (Prompt-M6 $e $ll[2]).Contains($FraseReparacion) -and (Prompt-M6 $e $ll[2]) -match 'Hallazgos de este lote') (Cola $r.Salida)
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el test roto no llego a la rama' ((GitEn $e.Wt @('ls-tree', '-r', '--name-only', 'HEAD')) -notmatch 'RompeTest')
+}
+
+# ===== M9 (parte C): LA HERRAMIENTA DENTRO DE LA SESION (-Modo comprobar) =====
+# Los bloques de .rescate/comprobar-visto.log (guion comprueba): la cabecera 'rc=.. rescate-igual=..' y su salida.
+function Comprobar-Visto($E) {
+  $p = Get-Ruta $E.Wt '.rescate/comprobar-visto.log'
+  if (-not (Test-Path -LiteralPath $p)) { return @() }
+  $bloques = @()
+  foreach ($l in [System.IO.File]::ReadAllLines($p)) {
+    if ($l -match '^(rc=|sin-orden)') { $bloques += ,@($l) } elseif ($bloques.Count -gt 0) { $bloques[$bloques.Count - 1] += $l }
+  }
+  return $bloques
+}
+
+$Pruebas['m9 comprobar: lista lo que el arbol ha roto frente al commit de partida (fichero, linea y regla) y sale con 1'] = {
+  $e = Escenario-M6 'm9-comprobar-roto'
+  $r = Fix-M6 $e 'estructura' 1 @('-Lote', '1', '-Saltar', '1') 'mueve-a-util;comprueba'
+  $b = @(Comprobar-Visto $e)
+  Comprueba 'el Copilot ejecuto la orden del prompt' ($b.Count -ge 1) (Cola $r.Salida)
+  if ($b.Count -lt 1) { return }
+  $txt = $b[0] -join "`n"
+  Comprueba 'sale con 1' ($b[0][0] -match '^rc=1 ') $txt
+  Comprueba 'no escribe nada en .rescate' ($b[0][0] -match 'rescate-igual=True') $txt
+  $roto = ([regex]::Match($txt, '(?s)HAS ROTO.*?(?=Siguen sin resolver|$)')).Value
+  Comprueba 'lista lo nuevo con su fichero y su regla' ($roto -match '- src/main/java/com/acme/life/infrastructure/util/LeerFichero\.java - subpaquete .infrastructure/util. no existe en la plantilla') $txt
+  Comprueba 'y no lo que ya estaba (Suelta)' ($roto -notmatch 'Suelta') $txt
+}
+
+$Pruebas['m9 comprobar: sin regresion sale con 0 y no deja nada en .rescate'] = {
+  $e = Escenario-M6 'm9-comprobar-limpio'
+  $r = Fix-M6 $e 'estructura' 1 @('-Lote', '1') 'comprueba'
+  $b = @(Comprobar-Visto $e)
+  Comprueba 'el Copilot ejecuto la orden del prompt' ($b.Count -ge 1) (Cola $r.Salida)
+  if ($b.Count -lt 1) { return }
+  $txt = $b[0] -join "`n"
+  Comprueba 'sale con 0 y .rescate queda igual' ($b[0][0] -match '^rc=0 rescate-igual=True') $txt
+  Comprueba 'dice que no ha roto nada' ($txt -match 'No has roto nada nuevo') $txt
+  Comprueba 'el lote pasa' ($r.Salida -match "Lote 1 OK: 'estructura'") (Cola $r.Salida)
+}
+
+$Pruebas['m9 comprobar: el prompt de cada lote y el de reparacion llevan la orden exacta; sin intento en curso no hace nada'] = {
+  $e = Escenario-M6 'm9-comprobar-prompt'
+  $r = Fix-M6 $e 'estructura' 2 @('-Lote', '1') 'mejor-peor'
+  $ls = @(Lotes-Suelta $e)
+  Comprueba 'hay dos intentos' ($ls.Count -ge 2) (Cola $r.Salida)
+  if ($ls.Count -lt 2) { return }
+  $orden = '(?m)^- Ejecuta: (pwsh|powershell) -NoProfile -File "([^"\r\n]*rescate\.ps1)" -Modo comprobar -Repo "([^"\r\n]+)" -Plantilla "[^"\r\n]+"  y corrige lo que liste \(como mucho 3 veces\)\.$'
+  foreach ($q in @(@('normal', (Prompt-M6 $e $ls[0])), @('de reparacion', (Prompt-M6 $e $ls[1])))) {
+    $m = [regex]::Match($q[1], $orden)
+    Comprueba "el prompt $($q[0]) lleva la orden de comprobar" $m.Success $q[1]
+    if ($m.Success) { Comprueba "la orden del prompt $($q[0]) apunta a un rescate.ps1 y al repo de verdad" ((Test-Path -LiteralPath $m.Groups[2].Value) -and ($m.Groups[3].Value -eq $e.Repo)) $m.Value }
+    Comprueba "el prompt $($q[0]) pide despues los tests de Maven" ($q[1] -match '(?m)^- Ejecuta: .* -q -B test  y corrige los tests que fallen\.$') $q[1]
+  }
+  $e2 = Escenario-M6 'm9-comprobar-sin-marca'
+  $foto = { (@(Get-ChildItem -LiteralPath $e2.Repo -Recurse -Force -File | Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' } | ForEach-Object { $_.FullName + '|' + $_.Length + '|' + $_.LastWriteTimeUtc.Ticks }) | Sort-Object) -join "`n" }
+  $antes = & $foto
+  $r2 = Rescate @('-Modo', 'comprobar', '-Repo', $e2.Repo, '-Plantilla', $e2.Plantilla)
+  $despues = & $foto
+  Igual 'sin intento en curso sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que no hay un intento en curso' ($r2.Salida -match 'No hay un intento en curso') (Cola $r2.Salida)
+  Comprueba 'no cambia ni un fichero del repo' ($antes -eq $despues) $despues
+}
+
+# ===== M9 (parte D): EL PLAN Y LOS LOTES CON LOS PAQUETES DE LA PLANTILLA, Y EL PLAN COMPROBADO =====
+$CabeceraMapa = 'Paquetes de la PLANTILLA. Cada clase nueva va en el paquete de su equivalente de esta lista. No crees paquetes que no esten aqui.'
+$ReglaCapas = 'El dominio no depende de nada externo. La aplicacion solo depende del dominio y de sus puertos (interfaces en application/ports).'
+
+# Las lineas del mapa de paquetes de un prompt: desde su titulo hasta la seccion siguiente (la primera es la cabecera).
+function Mapa-Del-Prompt([string]$Prompt) {
+  return @([regex]::Match($Prompt, '(?s)## Mapa de paquetes\r?\n(.*?)(?:\r?\n## |$)').Groups[1].Value -split "`r?`n" | Where-Object { $_ })
+}
+
+# La seccion 'Antes de tocar nada' de un prompt.
+function Antes-De-Tocar([string]$Prompt) { return ([regex]::Match($Prompt, '(?s)## Antes de tocar nada.*?(?:\r?\n## |$)')).Value }
+
+$Pruebas['m9 mapa: el prompt de un lote de ficheros lleva los paquetes de la plantilla con sus clases y la regla de capas'] = {
+  $e = Escenario-M6 'm9-mapa' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 1 @() ''
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -eq 0) { Comprueba 'hay un lote' $false (Cola $r.Salida); return }
+  $p = Prompt-M6 $e $l[0]
+  $m = @(Mapa-Del-Prompt $p)
+  Comprueba 'la cabecera dice que cada clase nueva va en el paquete de su equivalente y que no se creen paquetes' ($m.Count -gt 0 -and $m[0] -ceq $CabeceraMapa) $p
+  Comprueba 'lleva el paquete de los puertos de salida con su clase' ($m -contains '- application/ports/output: FicheroPort') ($m -join ' / ')
+  Comprueba 'y el del adaptador local' ($m -contains '- infrastructure/adapters/output/file: FicheroLocalAdapter') ($m -join ' / ')
+  Igual 'una linea por paquete de la plantilla (la clase del paquete base no cuenta)' 6 ($m.Count - 1)
+  Comprueba 'un paquete que solo existe en el migrado no sale' (@($m | Where-Object { $_ -match 'service|PolizaService|Suelta' }).Count -eq 0) ($m -join ' / ')
+  Comprueba 'va despues de las referencias y antes de lo que hay que hacer antes de tocar' (($p.IndexOf('## Referencias') -lt $p.IndexOf('## Mapa de paquetes')) -and ($p.IndexOf('## Mapa de paquetes') -lt $p.IndexOf('## Antes de tocar nada'))) $p
+  Comprueba 'la regla de capas sale en un paso que no es hexagonal' ((Antes-De-Tocar $p).Contains($ReglaCapas)) $p
+}
+
+$Pruebas['m9 mapa: con muchos paquetes se corta en 60 lineas y lo dice; de cada paquete salen 4 clases como mucho'] = {
+  $e = Escenario-M6 'm9-mapa-tope' @{ Orden = @('estructura', 'ficheros') }
+  $b = 'src/main/java/com/acme/plantilla/application/'
+  foreach ($n in 1..65) { Escribe $e.Plantilla ($b + ('extra/p{0:d2}/C{0:d2}.java' -f $n)) ('package com.acme.plantilla.application.extra.p{0:d2};{1}{1}/** Clase de relleno. */{1}public class C{0:d2} {{{1}}}{1}' -f $n, "`n") }
+  foreach ($n in 1..6) { Escribe $e.Plantilla ($b + "a1/K$n.java") "package com.acme.plantilla.application.a1;`n`n/** Clase de relleno. */`npublic class K$n {`n}`n" }
+  $r = Fix-M6 $e 'ficheros' 1 @() ''
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -eq 0) { Comprueba 'hay un lote' $false (Cola $r.Salida); return }
+  $m = @(Mapa-Del-Prompt (Prompt-M6 $e $l[0]))
+  Comprueba 'no pasa de 60 lineas' (($m.Count - 1) -le 60 -and ($m.Count - 1) -ge 50) ('lineas: ' + ($m.Count - 1))
+  Comprueba 'la ultima dice cuantos paquetes faltan' ($m[-1] -match '^\(y \d+ paquetes mas') $m[-1]
+  Comprueba 'de un paquete con 6 clases salen 4 y los puntos suspensivos' ($m -contains '- application/a1: K1, K2, K3, K4, ...') (($m | Select-Object -First 4) -join ' / ')
+}
+
+$Pruebas['m9 mapa: sin plantilla el prompt no lleva mapa, y la regla de capas sale igual'] = {
+  $e = Escenario-M6 'm9-mapa-sin-plantilla'
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1') ''
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -eq 0) { Comprueba 'hay un lote' $false (Cola $r.Salida); return }
+  $p = Prompt-M6 $e $l[0]
+  Comprueba 'no hay mapa' ($p -notmatch 'Mapa de paquetes' -and $p -notmatch 'Paquetes de la PLANTILLA') $p
+  Comprueba 'la regla de capas sale' ((Antes-De-Tocar $p).Contains($ReglaCapas)) $p
+}
+
+$LineaAdaptadores = 'El adaptador de entrada depende del puerto, nunca de un adaptador de salida. Si la pieza comun necesita otra operacion, anadela al puerto y a todos sus adaptadores.'
+
+$Pruebas['m9 mapa: el prompt de un lote lleva tambien la linea de adaptadores, junto a la regla de capas'] = {
+  $e = Escenario-M6 'm9-mapa-adaptadores' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 1 @() ''
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -eq 0) { Comprueba 'hay un lote' $false (Cola $r.Salida); return }
+  $a = Antes-De-Tocar (Prompt-M6 $e $l[0])
+  Comprueba 'la regla de capas y la de adaptadores, en la misma linea' ($a.Contains($ReglaCapas + ' ' + $LineaAdaptadores)) $a
+}
+
+# El plan: lo que escribe la IA se comprueba contra los paquetes de la plantilla.
+function Plan-M9([string]$Nombre, [string]$Guion) {
+  $e = Escenario-M6 $Nombre
+  $r = Rescate @('-Modo', 'plan', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinBuild', '-Si') $Guion
+  return [pscustomobject]@{ E = $e; R = $r; Llamadas = @(Llamadas-M6 $e 'plan') }
+}
+
+$Pruebas['m9 plan: el prompt del plan lleva el mapa de paquetes de la plantilla, la regla de capas y la linea de adaptadores'] = {
+  $x = Plan-M9 'm9-plan-prompt' ''
+  if ($x.Llamadas.Count -eq 0) { Comprueba 'hay una llamada de plan' $false (Cola $x.R.Salida); return }
+  $p = Prompt-M6 $x.E $x.Llamadas[0]
+  $m = @(Mapa-Del-Prompt $p)
+  Comprueba 'la cabecera del mapa' ($m.Count -gt 0 -and $m[0] -ceq $CabeceraMapa) $p
+  Comprueba 'lleva el paquete de los puertos de salida con su clase' ($m -contains '- application/ports/output: FicheroPort') ($m -join ' / ')
+  Comprueba 'va despues de las referencias' ($p.IndexOf('## Referencias') -lt $p.IndexOf('## Mapa de paquetes')) $p
+  Comprueba 'lleva la regla de capas y la linea de adaptadores' ($p.Contains($ReglaCapas) -and $p.Contains($LineaAdaptadores)) $p
+}
+
+$Pruebas['m9 plan: un paquete que la plantilla no tiene, en las piezas comunes o en un destino, repite el plan una vez con el motivo'] = {
+  foreach ($g in @('plan-paquete-nuevo', 'plan-destino-nuevo')) {
+    $x = Plan-M9 "m9-plan-malo-$g" $g
+    Igual "$g`: dos llamadas de plan" 2 $x.Llamadas.Count
+    if ($x.Llamadas.Count -lt 2) { Comprueba "$g`: salida" $false (Cola $x.R.Salida); continue }
+    $p2 = Prompt-M6 $x.E $x.Llamadas[1]
+    Comprueba "$g`: la segunda lleva el motivo con el paquete y la clase o fichero" ($p2 -match '## CORRECCION' -and $p2 -match 'infrastructure/util') $p2
+    Comprueba "$g`: la segunda sigue siendo la revision previa del mismo paso" ($p2 -match "revision previa del paso 'estructura'") $p2
+    Comprueba "$g`: la primera no lleva correccion" ((Prompt-M6 $x.E $x.Llamadas[0]) -notmatch '## CORRECCION')
+    Comprueba "$g`: la consola dice que lo repite" ($x.R.Salida -match 'lo repito una vez con el motivo') (Cola $x.R.Salida)
+    $plan = Lee $x.E.Wt '.rescate/plan-estructura.md'
+    Comprueba "$g`: el plan que queda es el bueno" ($plan -notmatch 'infrastructure[/.]util' -and $plan -match 'ports[/.]output|application/ports/output') $plan
+    Comprueba "$g`: no avisa de paquetes de mas" ($x.R.Salida -notmatch 'sigue nombrando') (Cola $x.R.Salida)
+    Igual "$g`: sale con 0" 0 $x.R.Codigo
+  }
+}
+
+$Pruebas['m9 plan: un plan bueno no se repite, ni uno sin nada que comprobar'] = {
+  foreach ($g in @('plan-paquete-bueno', '', 'plan-ilegible')) {
+    $x = Plan-M9 "m9-plan-ok-$g" $g
+    Igual "'$g'`: una sola llamada de plan" 1 $x.Llamadas.Count
+    Comprueba "'$g'`: no habla de repetir" ($x.R.Salida -notmatch 'lo repito una vez') (Cola $x.R.Salida)
+    Igual "'$g'`: sale con 0" 0 $x.R.Codigo
+  }
+}
+
+$Pruebas['m9 plan: si la repeticion vuelve a nombrar un paquete que no esta, sigue con el plan y lo avisa'] = {
+  $x = Plan-M9 'm9-plan-siempre' 'plan-paquete-nuevo-siempre'
+  Igual 'dos llamadas de plan, no tres' 2 $x.Llamadas.Count
+  Comprueba 'avisa de que sigue nombrando el paquete' ($x.R.Salida -match 'El plan sigue nombrando paquetes que la plantilla no tiene: .*infrastructure/util') (Cola $x.R.Salida)
+  Comprueba 'el plan queda escrito' (Test-Path -LiteralPath (Get-Ruta $x.E.Wt '.rescate/plan-estructura.md')) (Cola $x.R.Salida)
+  Comprueba 'dice el plan escrito y no para' ($x.R.Salida -match 'Plan escrito') (Cola $x.R.Salida)
+  Igual 'sale con 0' 0 $x.R.Codigo
 }
 
 # ================================ LANZADOR ================================

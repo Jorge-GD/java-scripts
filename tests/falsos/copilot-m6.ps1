@@ -33,6 +33,22 @@
 #   nada-hasta-reflexion  un lote no cambia nada mientras su prompt no lleve una reflexion (REFLEXION-MARCA)
 #   fallos-distintos   un lote sin CORRECCION no cambia nada; con la CORRECCION 'No has cambiado ningun fichero' mueve LeerFichero a
 #                      infrastructure/util (el paso 'estructura' no baja); con cualquier otra la deja donde estaba y arregla como siempre
+#   mejor-peor         un lote con Suelta.java: el 1.o deja src/main/resources/mejor.txt (los hallazgos no bajan); el 2.o deja
+#                      peor.txt y un test que falla (peor que el 1.o); el 3.o apunta en .rescate/arbol-visto.log si ve mejor.txt,
+#                      peor.txt y el test, y arregla como siempre
+#   parcial-roto       el primer lote (Suelta.java y algo mas) mueve Suelta a application/usecases y deja un test que falla:
+#                      los hallazgos bajan y compila, pero no pasa. Los demas lotes apuntan en .rescate/arbol-visto.log si
+#                      Suelta ya esta movida, quitan ese test si el prompt lleva CORRECCION y arreglan como siempre
+#   comprueba          tras arreglar, un lote ejecuta la orden del modo comprobar que lleva su prompt (la linea 'Ejecuta: ... y corrige lo
+#                      que liste') y apunta en .rescate/comprobar-visto.log 'rc=<codigo> rescate-igual=<si no ha cambiado nada en
+#                      .rescate>' y su salida, cada linea con '> '
+#   plan-paquete-nuevo  la revision previa nombra en 'Piezas comunes' la clase com.acme.life.infrastructure.util.LeerFichero (un
+#                      paquete que la plantilla no tiene); con CORRECCION en su prompt, com.acme.life.application.ports.output.LeerFichero
+#   plan-paquete-nuevo-siempre  como plan-paquete-nuevo, con o sin CORRECCION
+#   plan-paquete-bueno  la revision previa nombra en 'Piezas comunes' un paquete que la plantilla tiene y, con ruta, la carpeta de otro
+#                      (application/ports: no tiene clases, pero cuelgan de ella paquetes de la plantilla)
+#   plan-destino-nuevo  como plan-paquete-nuevo, pero en el 'destino:' de las lineas de 'Ficheros' (infrastructure/util)
+#   plan-ilegible       'Piezas comunes' y 'destino:' sin ningun nombre de paquete que se pueda leer
 #   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
 #                      ('sin marca' si no estaba)
 $todos = $args
@@ -108,6 +124,23 @@ if ($titulo -match 'revision previa') {
   Apunta 'plan' ''
   & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
   $codigo = $LASTEXITCODE
+  $guionesPlan = @('plan-paquete-nuevo', 'plan-paquete-nuevo-siempre', 'plan-paquete-bueno', 'plan-destino-nuevo', 'plan-ilegible')
+  if (@($guiones | Where-Object { $guionesPlan -contains $_ }).Count -gt 0) {
+    $ruta = @(Get-ChildItem -LiteralPath $rescate -Filter 'plan-*.md')[0].FullName
+    $plan = [System.IO.File]::ReadAllText($ruta)
+    $corrige = ($prompt -match '## CORRECCION')
+    $malo = ($guiones -contains 'plan-paquete-nuevo-siempre') -or (($guiones -contains 'plan-paquete-nuevo' -or $guiones -contains 'plan-destino-nuevo') -and -not $corrige)
+    $fqcn = 'com.acme.life.application.ports.output.LeerFichero'; $dest = 'application/ports/output'
+    if ($malo) { $fqcn = 'com.acme.life.infrastructure.util.LeerFichero'; $dest = 'infrastructure/util' }
+    if ($guiones -contains 'plan-ilegible') { $plan = $plan -replace 'destino: -', 'destino: por decidir con el equipo' -replace '(?s)## Piezas comunes\r?\nninguna', "## Piezas comunes`n- Una clase nueva que lee los ficheros de entrada" }
+    elseif ($guiones -contains 'plan-destino-nuevo') { $plan = $plan -replace 'destino: -', "destino: $dest" }
+    else {
+      $mas = ''
+      if ($guiones -contains 'plan-paquete-bueno') { $mas = "`n- ``application/ports/Marcador`` (ruta con la carpeta de un paquete de la plantilla): marca" }
+      $plan = $plan -replace '(?s)## Piezas comunes\r?\nninguna', "## Piezas comunes`n- ``$fqcn`` (puerto): lee los ficheros de entrada$mas"
+    }
+    [System.IO.File]::WriteAllText($ruta, $plan)
+  }
   if ($guiones -contains 'duda-plan') {
     $ruta = @(Get-ChildItem -LiteralPath $rescate -Filter 'plan-*.md')[0].FullName
     $plan = [System.IO.File]::ReadAllText($ruta) -replace '(?s)## Dudas.*$', "## Dudas`n- DUDA-PLAN-MARCA: Suelta va en application o en domain?`n- Hay que cambiar el parent del pom?`n"
@@ -128,9 +161,9 @@ if ($titulo -notmatch "rescate de migracion: paso '(\w+)'") {
 $fichs = @()
 $dentro = $false
 foreach ($l in ($prompt -split "`r?`n")) {
-  if ($l -match '^## Hallazgos') { $dentro = $true; continue }
+  if ($l -match '^## (Hallazgos|Ficheros del lote)') { $dentro = $true; continue }
   if ($dentro -and $l -match '^## ') { break }
-  if ($dentro -and $l -match '^- (\S+?)(:\d+)? - ') { $fichs += $Matches[1] }
+  if ($dentro -and $l -match '^- (\S+?)(:\d+)?( - |$)') { $fichs += $Matches[1] }
 }
 $fichs = @($fichs | Select-Object -Unique)
 Apunta 'lote' ($fichs -join ',')
@@ -160,6 +193,30 @@ if ($guiones -contains 'muchos-ficheros' -and @($fichs | Where-Object { $_ -matc
   exit 0
 }
 $conSuelta = (@($fichs | Where-Object { $_ -match 'Suelta\.java$' }).Count -gt 0)
+$rompe = 'src/test/java/com/acme/life/RompeTest.java'
+$movida = 'src/main/java/com/acme/life/application/usecases/Suelta.java'
+function Ve-Arbol([string]$Que) { [System.IO.File]::AppendAllText((Join-Path $rescate 'arbol-visto.log'), "$Que`n") }
+if ($guiones -contains 'mejor-peor' -and $conSuelta) {
+  $k = @([System.IO.File]::ReadAllLines($log) | Where-Object { $_ -match '^\d+ \| lote \|.*Suelta\.java' }).Count
+  if ($k -eq 1) { Escribir 'src/main/resources/mejor.txt' "mejor`n"; exit 0 }
+  if ($k -eq 2) { Escribir 'src/main/resources/peor.txt' "peor`n"; Escribir $rompe "class RompeTest { /* TEST_FALLA */ }`n"; exit 0 }
+  $dc = $raiz
+  Ve-Arbol ('mejor=' + (Test-Path -LiteralPath (Join-Path $dc 'src/main/resources/mejor.txt')) + ' peor=' + (Test-Path -LiteralPath (Join-Path $dc 'src/main/resources/peor.txt')) + ' rompe=' + (Test-Path -LiteralPath (Join-Path $dc $rompe)))
+}
+if ($guiones -contains 'parcial-roto') {
+  if ($primero -and $conSuelta) {
+    $orig = Join-Path $raiz 'src/main/java/com/acme/life/Suelta.java'
+    $t = [System.IO.File]::ReadAllText($orig) -replace '(?m)^package [^;]*;', 'package com.acme.life.application.usecases;'
+    Remove-Item -LiteralPath $orig -Force
+    Escribir 'src/main/java/com/acme/life/application/usecases/Suelta.java' $t
+    Escribir $rompe "class RompeTest { /* TEST_FALLA */ }`n"
+    exit 0
+  }
+  if (-not $primero) {
+    Ve-Arbol ('suelta-movida=' + (Test-Path -LiteralPath (Join-Path $raiz $movida)))
+    if ($prompt -match '## CORRECCION' -and (Test-Path -LiteralPath (Join-Path $raiz $rompe))) { Remove-Item -LiteralPath (Join-Path $raiz $rompe) -Force }
+  }
+}
 if ($guiones -contains 'atasca-siempre' -and $conSuelta) { 'no hago nada'; exit 0 }
 if ($guiones -contains 'atasca' -and $conSuelta -and $prompt -notmatch '## Consejo') { 'no hago nada'; exit 0 }
 if ($guiones -contains 'nada-sin-correccion' -and $prompt -notmatch '## CORRECCION') { 'no hago nada'; exit 0 }
@@ -205,6 +262,20 @@ if ($deCatch.Count -gt 0) {
           '    static void mira(List<String> datos) {', '        try {', '            datos.size();',
           '        } catch (RuntimeException e) {', '            // se ignora a proposito', '        }', '    }', '}', '') -join "`n")
     }
+  }
+}
+if ($guiones -contains 'comprueba') {
+  $v = Join-Path $rescate 'comprobar-visto.log'
+  $o = [regex]::Match($prompt, '(?m)^- Ejecuta: (.+?)  y corrige lo que liste')
+  if (-not $o.Success) { [System.IO.File]::AppendAllText($v, "sin-orden`n") }
+  else {
+    function Listado-Rescate { return ((@(Get-ChildItem -LiteralPath $rescate -Recurse -File | Sort-Object FullName | ForEach-Object { $_.FullName + '|' + $_.Length + '|' + $_.LastWriteTimeUtc.Ticks })) -join "`n") }
+    $antesR = Listado-Rescate
+    $cmd = $o.Groups[1].Value -replace '^(pwsh|powershell)\b', ("& '" + (Get-Process -Id $PID).Path + "'")
+    $sal = @(Invoke-Expression $cmd 2>&1 | ForEach-Object { "$_" })
+    $rcC = $LASTEXITCODE
+    $igual = ((Listado-Rescate) -eq $antesR)
+    [System.IO.File]::AppendAllText($v, "rc=$rcC rescate-igual=$igual`n" + (($sal | ForEach-Object { "> $_" }) -join "`n") + "`n")
   }
 }
 exit $codigo
