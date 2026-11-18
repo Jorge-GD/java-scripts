@@ -37,7 +37,7 @@ Si Windows no deja lanzar el script:
 ## rescate.ps1
 
 Primeros auxilios para un batch Java migrado a medias (Java 8 → Java 21, arquitectura hexagonal, SFTP y configuración externa).
-Es un script de PowerShell (Windows PowerShell 5.1 o PowerShell 7). Necesita `git`, Maven y, para arreglar, GitHub Copilot CLI. Si lo copias a otra máquina, lleva también `comun.ps1`: `rescate.ps1` lo carga desde su misma carpeta.
+Es un script de PowerShell (Windows PowerShell 5.1 o PowerShell 7). Necesita `git`, Maven y, para arreglar, GitHub Copilot CLI. Si lo copias a otra máquina, lleva también `comun.ps1` (y `sonar-reglas.ps1`, si vas a usar `-Sonar`): `rescate.ps1` los carga desde su misma carpeta.
 
 Compara tu repo con una **plantilla** (un repo ya migrado y aprobado) y trabaja en cuatro fases:
 
@@ -156,6 +156,7 @@ Opcional y para cualquier proyecto Maven de Java: no necesita `-Plantilla` ni `-
 
 - Arregla solo Java y solo lo que dicen `SonarTipos` (por defecto `BUG` y `VULNERABILITY`, salvo `MINOR` e `INFO`) y `SonarSeveridades` (`BLOCKER`, `CRITICAL`, `MAJOR`). Las columnas se buscan por nombre y alias (`SonarColumnas`). Del xlsx solo se lee la hoja de incidencias.
 - Lo sagrado es no cambiar la lógica de negocio. En un lote se pueden cambiar `.java` y crear `.java` nuevos en `src/main/java` y `src/test/java`, pero una clase nueva va en el mismo paquete que una clase que el lote arregla. No valen tocar otros ficheros, borrar o renombrar nada de `src/test`, ni borrar o renombrar una clase de `src/main/java` cuyo nombre aparece en `src/main/resources`. `SonarProhibido` (en `.rescate/config.json`) añade reglas sobre el diff entero del lote, con las líneas de las clases nuevas como añadidas: silenciar a Sonar, desactivar tests, quitar `@Test`, `catch` genéricos. Cada entrada puede llevar `Si` (solo se aplica si algún mensaje del lote casa) y `Salvo` (no se aplica si algún mensaje del lote casa).
+- Las reglas (el prompt general, `SonarRecetas`, `SonarNoAutomatizar` y `SonarProhibido`) están en `sonar-reglas.ps1`, junto a `rescate.ps1`; `.rescate/config.json` puede sustituir cada una. Las `Rx` de `SonarProhibido` se aplican a la línea sin su `+` o `-` y sin distinguir mayúsculas (`(?-i:...)` las distingue).
 - `SonarRecetas`: texto por regla que se añade al prompt del lote cuando algún mensaje la cumple (`Avisar` lista al final lo que cambia el resultado a propósito). `SonarNoAutomatizar`: mensajes que no se mandan al modelo.
 - El modelo puede dejar una incidencia con su motivo en `.rescate/sonar-sin-arreglar.txt`: no se reintenta ni cuenta como atasco. Un fichero atascado tampoco para la pasada.
 - Al acabar, «Faltan N de Sonar» con la lista agrupada por motivo, también en `.rescate/sonar-faltan.md`, y los mensajes sin receta ni exclusión con su cuenta.
