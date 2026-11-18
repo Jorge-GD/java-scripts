@@ -62,6 +62,7 @@ Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primer
 - Lee el original, mide el migrado, compara los dos leyendo el código y los ejecuta con las mismas entradas (la prueba en local).
 - No cambia código.
 - Si el original no compila con el JDK de Maven, añade `-JavaLegacy C:\ruta\jdk-del-original`. Sin eso, la prueba en local se queda sin hacer.
+- Si el original se lanza con scripts `.sh` que no están en su carpeta, añade `-Lanzadores C:\ruta\scripts`. Sin ningún `.sh`, la página 1 y la 3 lo dicen.
 - Abre `C:\ruta\migrado\migracion-<batch>\index.html`. `<batch>` es el `artifactId` del `pom.xml` del migrado. La portada dice cómo ha ido y qué te toca. Arriba del todo, el recuadro «Siguiente paso» dice qué hacer ahora, con el comando listo para copiar. Desde ahí llegas a las otras cuatro páginas.
 
 | Página | Qué cuenta | Para quién |
