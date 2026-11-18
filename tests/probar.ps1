@@ -1204,12 +1204,12 @@ $Pruebas['sftp fijo: application.yml sin sftp es un error con una referencia sin
 # manda. El programa de Copilot se busca una vez, con la misma regla que el preflight (Get-Lanzable), antes de tocar el repo.
 
 # Escribe el ajustes.json de este escenario en su propia carpeta y lanza rescate.ps1 con RESCATE_HOME apuntando alli.
-function Rescate-Con-Ajustes([string]$Nombre, [hashtable]$Ajustes, [string[]]$A) {
+function Rescate-Con-Ajustes([string]$Nombre, [hashtable]$Ajustes, [string[]]$A, [string]$Guion = '') {
   $casa = Join-Path $Dir ($Nombre + '-casa')
   Escribe $casa 'ajustes.json' (ConvertTo-Json -InputObject $Ajustes)
   $antes = $env:RESCATE_HOME
   $env:RESCATE_HOME = $casa
-  try { return (Rescate $A) }
+  try { return (Rescate $A $Guion) }
   finally { $env:RESCATE_HOME = $antes }
 }
 
@@ -1704,6 +1704,23 @@ $Pruebas['m7 catch: el prompt del lote ya no dice que se relance, y el del plan 
   $lote = Prompt-M6 $e @(Llamadas-M6 $e 'lote')[0]
   Comprueba 'el lote no dice que se relance' ($lote -notmatch 'se relanza') $lote
   Comprueba 'el lote dice que no se relance ni se quite el catch' ($lote -match 'No la relances ni quites el catch: cambia el comportamiento\.') $lote
+}
+
+# migracion.ps1 lanza el fix sin -ModeloB: el modelo de reserva tambien sale de ajustes.json (o de config.json), y el
+# parametro manda.
+$Pruebas['m7 ModeloB: sin el parametro, el reintento con el modelo de reserva usa el de ajustes.json; con el, el parametro'] = {
+  $mas = @('-Modelo', 'modelo-x')
+  $e = Escenario-M6 'm7-modelob-ajustes'
+  $a = @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
+  $r = Rescate-Con-Ajustes 'm7-modelob-ajustes' @{ ModeloB = 'modelo-b-ajustes' } ($a + $mas) 'atasca;consejo-nada'
+  $s = Lotes-Suelta $e
+  Comprueba 'Suelta se reintenta con el modelo de reserva de ajustes.json' (@($s | Where-Object { $_ -match '--model=modelo-b-ajustes' }).Count -eq 1) (($s -join ' / ') + ' | ' + (Cola $r.Salida))
+  Comprueba 'la cabecera lo dice' ($r.Salida -match 'modelo de reserva: modelo-b-ajustes') (Cola $r.Salida)
+  $e2 = Escenario-M6 'm7-modelob-param'
+  $a2 = @('-Modo', 'fix', '-Repo', $e2.Repo, '-Plantilla', $e2.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
+  [void](Rescate-Con-Ajustes 'm7-modelob-param' @{ ModeloB = 'modelo-b-ajustes' } ($a2 + $mas + @('-ModeloB', 'modelo-b-param')) 'atasca;consejo-nada')
+  $s2 = Lotes-Suelta $e2
+  Comprueba 'con -ModeloB manda el parametro' ((@($s2 | Where-Object { $_ -match '--model=modelo-b-param' }).Count -eq 1) -and (@($s2 | Where-Object { $_ -match 'modelo-b-ajustes' }).Count -eq 0)) ($s2 -join ' / ')
 }
 
 # ================================ LANZADOR ================================

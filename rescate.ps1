@@ -118,7 +118,7 @@ param(
   [string]$Legacy = '',
   [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad')][string]$Paso = '',
   [string]$Modelo = '',
-  [string]$ModeloB = '',     # modelo de reserva: se prueba cuando el principal se atasca con un fichero
+  [string]$ModeloB = '',     # modelo de reserva cuando el principal se atasca con un fichero (vacio = ModeloB de la config)
   # Esfuerzo de razonamiento de Copilot (--effort). Vacio = el que tenga Copilot.
   [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$Esfuerzo = '',      # en los lotes de arreglo
   [ValidateSet('', 'low', 'medium', 'high', 'xhigh', 'max')][string]$EsfuerzoPlan = '',  # en la revision previa y en el modo pre (vacio = el de -Esfuerzo)
@@ -205,6 +205,8 @@ $Cfg += @{
   # a xhigh y luego a high.
   ModeloDudas           = ''
   EsfuerzoDudas         = 'max'
+  # El modelo de reserva si no se pasa -ModeloB (migracion.ps1 lanza el fix sin el). Vacio = sin reserva.
+  ModeloB               = ''
   # Tras cada intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
   # Apagado: en la medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no bajo ni los atascados
   # ni los lotes deshechos (0 y 0 con y sin ella, dos pasadas de cada), y la pasada tardo de 3 a 4 veces mas y costo
@@ -1866,6 +1868,7 @@ $script:Hall = $null      # los hallazgos del ultimo estado bueno del fix
 $script:Decidir = @()     # dudas de persona de los consejos del plan (las de los atascados van en AtascadosInfo)
 # El modelo de las dudas: -ModeloDudas, si no el de la config, si no el de -Modelo. Su esfuerzo: -EsfuerzoDudas o el de
 # la config (Invoke-Fuerte lo baja si Copilot no lo admite).
+if (-not $ModeloB) { $ModeloB = "$($Cfg.ModeloB)" }   # -ModeloB manda; si no, el de la config
 $script:ModDudas = $ModeloDudas
 if (-not $script:ModDudas) { $script:ModDudas = "$($Cfg.ModeloDudas)" }
 if (-not $script:ModDudas) { $script:ModDudas = $Modelo }

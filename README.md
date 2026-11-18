@@ -102,7 +102,7 @@ Cada llamada a la IA es `copilot -p` con `--model` y `--effort`
 | `-Modelo <id>` | Modelo de todas las llamadas. El id es el que enseña `/model` dentro de Copilot. | El que tenga Copilot. |
 | `-EsfuerzoPlan <nivel>` | Esfuerzo de la revisión previa (pensar). | El de `-Esfuerzo`. |
 | `-Esfuerzo <nivel>` | Esfuerzo de los lotes de arreglo (escribir). | El que tenga Copilot. |
-| `-ModeloB <id>` | Modelo de reserva cuando el principal se atasca con un fichero. | No hay reserva. |
+| `-ModeloB <id>` | Modelo de reserva cuando el principal se atasca con un fichero. También `ModeloB` en `ajustes.json` o `.rescate/config.json`; así lo usa también `migracion.ps1`, que lanza el fix sin `-ModeloB`. El parámetro manda. | No hay reserva. |
 | `-ModeloDudas <id>` | Modelo fuerte de las dudas: el consejo y la reflexión (abajo). También `ModeloDudas` en `ajustes.json` o `.rescate/config.json`. | El de `-Modelo`. |
 | `-EsfuerzoDudas <nivel>` | Esfuerzo del modelo de las dudas. También `EsfuerzoDudas` en los ajustes. | `max`; si Copilot no lo acepta, `xhigh` y luego `high`. |
 
