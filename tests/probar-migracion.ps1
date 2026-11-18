@@ -957,6 +957,35 @@ $Pruebas['36 variables.json: yml, yaml y properties del worktree, con y sin valo
   Comprueba 'sin ficheros de configuracion: variables.json es una lista vacia' ((Test-Path -LiteralPath $ruta) -and ([System.IO.File]::ReadAllText($ruta).Trim() -eq '[]')) (Cola $r.Salida)
 }
 
+$Pruebas['36b variables.json: tambien las de src/main/resources/config, con su ruta real y despues de las de la raiz'] = {
+  # (a) un yml solo en config/, con una variable con punto, otra con valor y una linea de comentario
+  $e = Nuevo-Escenario 'variables-config' @('Clase1')
+  Escribe $e.Migrado 'src/main/resources/config/application.yml' "app:`n  uno: `${env.uno}`n  dos: `${DOS:x}`n# no cuenta `${EN_COMENTARIO}`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'config'))
+  $r = Migra $e ((Basicos $e) + @('-Limite', '1'))
+  Igual 'sale con 0' 0 $r.Codigo
+  $v = @(Lee-Json (Get-Ruta $e.Out 'datos/variables.json'))
+  Igual 'solo config/: salen las dos variables, en el orden del fichero' 'env.uno DOS' (($v | ForEach-Object { $_.variable }) -join ' ')
+  Igual 'env.uno: fichero de config/ y linea' 'src/main/resources/config/application.yml 2' "$($v[0].fichero) $($v[0].linea)"
+  Comprueba 'env.uno: sin valor por defecto (null)' ($v.Count -gt 0 -and $null -eq $v[0].porDefecto)
+  Igual 'DOS: fichero de config/, linea y valor por defecto' 'src/main/resources/config/application.yml 3 x' "$($v[1].fichero) $($v[1].linea) $($v[1].porDefecto)"
+  # (c) la linea de comentario de config/ no cuenta
+  Comprueba 'una linea de comentario de config/ no cuenta' (@($v | Where-Object { $_.variable -eq 'EN_COMENTARIO' }).Count -eq 0)
+  # (b) uno en la raiz y dos en config/ (escritos al reves que su orden por nombre): primero la raiz, luego config/ por nombre
+  $e2 = Nuevo-Escenario 'variables-raiz-config' @('Clase1')
+  Escribe $e2.Migrado 'src/main/resources/application.yml' "raiz: `${RAIZ_VAR:r}`n"
+  Escribe $e2.Migrado 'src/main/resources/config/application-b.yml' "b: `${B_VAR}`n"
+  Escribe $e2.Migrado 'src/main/resources/config/application-a.properties' "a=`${A_VAR:1}`n"
+  [void](GitEn $e2.Migrado @('add', '-A'))
+  [void](GitEn $e2.Migrado @('commit', '-q', '-m', 'raiz y config'))
+  $r = Migra $e2 ((Basicos $e2) + @('-Limite', '1'))
+  Igual 'raiz y config/: sale con 0' 0 $r.Codigo
+  $v = @(Lee-Json (Get-Ruta $e2.Out 'datos/variables.json'))
+  Igual 'salen las tres, primero la de la raiz y luego las de config/ por nombre' 'RAIZ_VAR A_VAR B_VAR' (($v | ForEach-Object { $_.variable }) -join ' ')
+  Igual 'ficheros: cada una con su ruta real' 'src/main/resources/application.yml src/main/resources/config/application-a.properties src/main/resources/config/application-b.yml' (($v | ForEach-Object { $_.fichero }) -join ' ')
+}
+
 $Pruebas['37 reanudar: cortar tras el mapa no repite llamadas; cinco jobs, nunca mas de 4 a la vez'] = {
   $e = Escenario-Dos 'reanuda'
   $r = Migra $e ((Basicos $e) + @('-Limite', '9'))

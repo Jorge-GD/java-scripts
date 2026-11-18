@@ -929,20 +929,23 @@ function Get-TareasResumen($Mapa, [bool]$ConservarAtascadas) {
 }
 
 # ============================== VARIABLES ==============================
-# Cada ${NOMBRE} y ${NOMBRE:valor} de los application*.yml, .yaml y .properties de src/main/resources del
-# worktree (sin las lineas de comentario): variable, porDefecto (null si no lleva), fichero y linea.
+# Cada ${NOMBRE} y ${NOMBRE:valor} de los application*.yml, .yaml y .properties de src/main/resources y de
+# src/main/resources/config del worktree, en ese orden y cada carpeta por nombre (sin las lineas de comentario):
+# variable, porDefecto (null si no lleva), fichero (la ruta real) y linea.
 function Get-Variables {
   $res = @()
-  $dir = Join-Ruta $RepoRoot 'src/main/resources'
-  if (-not (Test-Path -LiteralPath $dir)) { return $res }
-  foreach ($f in @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Name -match '^application.*\.(yml|yaml|properties)$' } | Sort-Object Name)) {
-    $lineas = [System.IO.File]::ReadAllLines($f.FullName)
-    for ($i = 0; $i -lt $lineas.Count; $i++) {
-      if ($lineas[$i].TrimStart().StartsWith('#')) { continue }
-      foreach ($m in [regex]::Matches($lineas[$i], '\$\{([\w\.\-]+)(?::([^}]*))?\}')) {
-        $defecto = $null
-        if ($m.Groups[2].Success) { $defecto = $m.Groups[2].Value }
-        $res += [ordered]@{ variable = $m.Groups[1].Value; porDefecto = $defecto; fichero = ('src/main/resources/' + $f.Name); linea = ($i + 1) }
+  foreach ($rel in @('src/main/resources', 'src/main/resources/config')) {
+    $dir = Join-Ruta $RepoRoot $rel
+    if (-not (Test-Path -LiteralPath $dir)) { continue }
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File | Where-Object { $_.Name -match '^application.*\.(yml|yaml|properties)$' } | Sort-Object Name)) {
+      $lineas = [System.IO.File]::ReadAllLines($f.FullName)
+      for ($i = 0; $i -lt $lineas.Count; $i++) {
+        if ($lineas[$i].TrimStart().StartsWith('#')) { continue }
+        foreach ($m in [regex]::Matches($lineas[$i], '\$\{([\w\.\-]+)(?::([^}]*))?\}')) {
+          $defecto = $null
+          if ($m.Groups[2].Success) { $defecto = $m.Groups[2].Value }
+          $res += [ordered]@{ variable = $m.Groups[1].Value; porDefecto = $defecto; fichero = ($rel + '/' + $f.Name); linea = ($i + 1) }
+        }
       }
     }
   }
