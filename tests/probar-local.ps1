@@ -1073,6 +1073,8 @@ $Pruebas['57 m20b (d): todos los casos de un job como el vacio y ninguno distint
   $e = Nuevo-Escenario 'm20b-vacios' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
   Ajustes-M20b $e
   $detalle = 'En cargaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job'
+  New-Item -ItemType Directory -Force -Path (Split-Path $e.Json) | Out-Null
+  Set-Content -LiteralPath $e.Json -Value '{"jobs":[]}'   # el de un lanzamiento anterior: el informe lo pintaria como bueno
   $r = Prueba $e @() 'm20b-sin-entradas'
   Igual 'sale con 1 (fallo)' 1 $r.Codigo
   Comprueba 'el detalle esta en las tres ultimas lineas con texto (lo que guarda migracion.ps1)' ((@($r.Salida -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' / ').Contains($detalle)) (Cola $r.Salida)
