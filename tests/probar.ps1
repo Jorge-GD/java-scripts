@@ -4401,5 +4401,147 @@ ConvertTo-Json -InputObject $o -Depth 6 -Compress
   Igual 'y sus numeros salen igual' '3/0' ("$($c[2].Faltan)/$($c[2].Cubiertas)")
 }
 
+# Ajustes de un repo de cobertura: Maven y Copilot de mentira, mas lo de $Mas.
+function Config-Cob($E, [hashtable]$Mas = @{}) {
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'cobertura-copilot.ps1'); MvnExe = (Join-Path $falsos 'cobertura-mvn.ps1'); Reflexionar = $false }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg -Depth 6)
+}
+
+# Una clase de servicio con su marcador '// LINEAS: n' (las lineas medibles que lee el Maven falso) y Javadoc.
+function Servicio-Cob([string]$Sub, [string]$Clase, [int]$Lineas) {
+  return @"
+package com.acme.plantillabatch.$Sub;
+
+/** Servicio $Clase. */
+public class $Clase {
+    // LINEAS: $Lineas
+
+    /**
+     * Suma dos numeros.
+     *
+     * @param a primero
+     * @param b segundo
+     * @return la suma
+     */
+    public int suma(int a, int b) {
+        return a + b;
+    }
+}
+"@
+}
+
+# Su test de partida: cubre $Cubre de sus lineas (el marcador '// CUBRE: n' que lee el Maven falso).
+function Test-Cob([string]$Sub, [string]$Clase, [int]$Cubre) {
+  return @"
+package com.acme.plantillabatch.$Sub;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import org.junit.jupiter.api.Test;
+
+class ${Clase}Test {
+
+    @Test
+    void sumaBase() {
+        assertEquals(3, new $Clase().suma(1, 2));
+        // CUBRE: $Cubre
+    }
+}
+"@
+}
+
+# Un repo Java con Maven y los dos falsos de cobertura. $Clases: 'subpaquete/Clase', lineas y cubiertas al empezar (sin test si 0). Con
+# $ConApp lleva la clase @SpringBootApplication (2 lineas sin cubrir). $Extra: ruta del repo (con /) -> texto.
+function Escenario-Cob([string]$Nombre, $Clases, [hashtable]$Mas = @{}, [hashtable]$Extra = @{}, [bool]$ConApp = $true) {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $repo = Join-Path $raiz 'batch'
+  Escribe $repo 'pom.xml' $Pom
+  if ($ConApp) { Escribe $repo ($RutaSv + 'PlantillaBatchApplication.java') ($AppSonar.Replace('public class PlantillaBatchApplication {', "public class PlantillaBatchApplication {`n    // LINEAS: 2")) }
+  foreach ($c in $Clases) {
+    $p = ([string]$c[0]) -split '/'
+    Escribe $repo ($RutaSv + $p[0] + '/' + $p[1] + '.java') (Servicio-Cob $p[0] $p[1] ([int]$c[1]))
+    if ([int]$c[2] -gt 0) { Escribe $repo ('src/test/java/com/acme/plantillabatch/' + $p[0] + '/' + $p[1] + 'Test.java') (Test-Cob $p[0] $p[1] ([int]$c[2])) }
+  }
+  foreach ($k in $Extra.Keys) { Escribe $repo $k.TrimStart('/') $Extra[$k] }
+  Inicia-Repo $repo
+  $e = [pscustomobject]@{ Raiz = $raiz; Repo = $repo; Wt = ($repo + '-rescate') }
+  Config-Cob $e $Mas
+  return $e
+}
+
+function Hallazgos-Cob([string]$Raiz, [string]$Sev = '') {
+  return @(Hallazgos $Raiz | Where-Object { $_.Cat -eq 'cobertura' -and ((-not $Sev) -or $_.Sev -eq $Sev) })
+}
+
+# Un repo de clases con distinta cobertura y las que el paso no propone: un record sin metodos, y config, dto y model. 68 lineas, 26 cubiertas (38,2 %).
+function Escenario-Cob-Varias([string]$Nombre, [hashtable]$Mas = @{}) {
+  $record = @{
+    '/src/main/java/com/acme/plantillabatch/service/Importe.java' = "package com.acme.plantillabatch.service;`n`n/** Un importe. */`npublic record Importe(int valor) {`n    // LINEAS: 6`n`n    /**`n     * Dobla el valor.`n     *`n     * @return el doble`n     */`n    public int doble() {`n        return valor * 2;`n    }`n}`n"
+    '/src/main/java/com/acme/plantillabatch/service/Cantidad.java' = "package com.acme.plantillabatch.service;`n`n/** Una cantidad. */`npublic record Cantidad(int unidades) {`n    // LINEAS: 4`n}`n"
+  }
+  $cl = @(, @('service/AltaService', 10, 2)) + @(, @('service/BajaService', 10, 9)) + @(, @('service/CobroService', 10, 5)) + @(, @('service/PagoService', 10, 10)) +
+    @(, @('config/AjusteConfig', 10, 0)) + @(, @('dto/ClienteDto', 3, 0)) + @(, @('model/Cliente', 3, 0))
+  return (Escenario-Cob $Nombre $cl $Mas $record)
+}
+
+$Pruebas['m14 cobertura: el diagnostico sin -Cobertura no cambia: ni fila, ni hallazgos, ni Maven de JaCoCo; -Paso cobertura sin -Cobertura se rechaza'] = {
+  $e = Escenario-Cob-Varias 'm14-sin'
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico')
+  Igual 'el diagnostico sale con 0' 0 $r.Codigo
+  Igual 'ningun hallazgo de cobertura' 0 (Hallazgos-Cob $e.Repo).Count
+  Comprueba 'la tabla no tiene la fila cobertura' ($r.Salida -notmatch '(?m)^cobertura\s') (Cola $r.Salida)
+  Comprueba 'el diagnostico.md tampoco' ((Lee $e.Repo '.rescate/diagnostico.md') -notmatch '\| cobertura \|')
+  $ll = ''
+  if (Test-Path -LiteralPath (Get-Ruta $e.Repo '.rescate/cobertura-mvn.log')) { $ll = Lee $e.Repo '.rescate/cobertura-mvn.log' }
+  Comprueba 'Maven se lanza sin JaCoCo' ($ll -notmatch 'jacoco') $ll
+  $r2 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'fix', '-Paso', 'cobertura', '-Auto', '-Si')
+  Igual 'con -Paso cobertura sin -Cobertura sale con 1' 1 $r2.Codigo
+  Comprueba 'y dice que el paso necesita -Cobertura' ($r2.Salida -match "El paso 'cobertura' necesita -Cobertura") (Cola $r2.Salida)
+}
+
+$Pruebas['m14 cobertura: diagnostico - por encima del objetivo ningun hallazgo; por debajo, uno por clase con lineas sin cubrir, de mas a menos, sin las excluidas'] = {
+  $e = Escenario-Cob-Varias 'm14-diag' @{ CoberturaObjetivo = 80 }
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura')
+  Igual 'sale con 0' 0 $r.Codigo
+  $h = @(Hallazgos-Cob $e.Repo)
+  Igual 'hay 4 hallazgos: AltaService, Importe, CobroService y BajaService' 4 $h.Count
+  Igual 'todos son errores' 4 (Hallazgos-Cob $e.Repo 'error').Count
+  Igual 'ordenados por lo que falta' 'AltaService Importe CobroService BajaService' ((@($h | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Fichero) })) -join ' ')
+  Igual 'el fichero es la ruta del .java' ($RutaSv + 'service/AltaService.java') $h[0].Fichero
+  Igual 'AltaService: 2/10 lineas (20 %)' '2/10 lineas (20 %)' $h[0].Detalle
+  Igual 'Importe: 0/6 lineas (0 %)' '0/6 lineas (0 %)' $h[1].Detalle
+  Igual 'CobroService: 5/10 lineas (50 %)' '5/10 lineas (50 %)' $h[2].Detalle
+  Igual 'BajaService: 9/10 lineas (90 %)' '9/10 lineas (90 %)' $h[3].Detalle
+  Comprueba 'la tabla lleva la fila cobertura con 4 errores' ($r.Salida -match '(?m)^cobertura\s+4\s') (Cola $r.Salida)
+  Comprueba 'Maven midio con JaCoCo una sola vez' ((@([System.IO.File]::ReadAllLines((Get-Ruta $e.Repo '.rescate/cobertura-mvn.log')) | Where-Object { $_ -match 'jacoco' })).Count -eq 1)
+  # por encima del objetivo: 38,2 % con un objetivo de 38
+  Config-Cob $e @{ CoberturaObjetivo = 38 }
+  $r2 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura')
+  Igual 'con el objetivo alcanzado sale con 0' 0 $r2.Codigo
+  Igual 'ningun hallazgo, ni aviso' 0 (Hallazgos-Cob $e.Repo).Count
+  # una clase interna cuenta en el fichero de la externa: un solo hallazgo, con las lineas de las dos
+  Config-Cob $e @{ CoberturaObjetivo = 80 }
+  $csv = Join-Path $e.Raiz 'interna.csv'
+  [System.IO.File]::WriteAllText($csv, (@($CabJacoco, (Fila-Jacoco 'com.acme.plantillabatch.service' 'AltaService' 6 2), (Fila-Jacoco 'com.acme.plantillabatch.service' 'AltaService$Linea' 2 0)) -join "`n") + "`n")
+  $env:RESCATE_JACOCO_CSV = $csv
+  try { $r3 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura') }
+  finally { $env:RESCATE_JACOCO_CSV = '' }
+  $h3 = @(Hallazgos-Cob $e.Repo)
+  Igual 'la clase interna no hace otro hallazgo' 1 $h3.Count
+  Igual 'y suma sus lineas a las de la externa' '2/10 lineas (20 %)' $h3[0].Detalle
+}
+
+$Pruebas['m14 cobertura: sin poder medir (Maven falla) no hay hallazgos de error: un aviso con el motivo'] = {
+  $e = Escenario-Cob-Varias 'm14-sinmedida'
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura') 'cob-mvn-error:no hay jacoco en este equipo'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ningun error de cobertura' 0 (Hallazgos-Cob $e.Repo 'error').Count
+  $a = @(Hallazgos-Cob $e.Repo 'aviso')
+  Igual 'un aviso' 1 $a.Count
+  Comprueba 'que dice que no se ha podido medir y por que' ($a.Count -eq 1 -and $a[0].Detalle -match 'no se ha podido medir la cobertura' -and $a[0].Detalle -match 'no hay jacoco en este equipo') ($a | ForEach-Object { $_.Detalle })
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

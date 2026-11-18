@@ -22,6 +22,19 @@ $Cfg = @{
   MinutosCopilot = 20     # tope de cada llamada a Copilot de rescate.ps1, en minutos (admite decimales); pasado, se para Copilot con sus procesos hijos
   JacocoPlugin   = 'org.jacoco:jacoco-maven-plugin:0.8.16'   # el preflight prueba en el equipo estas mismas coordenadas
   CoberturaMinima = 80    # por ciento de lineas cubiertas por los tests por debajo del cual la cobertura se marca como baja
+  # El paso 'cobertura' de rescate.ps1 (-Cobertura). CoberturaObjetivo es el umbral de Sonar way para el codigo nuevo; CoberturaMinima, el del informe.
+  CoberturaObjetivo     = 80    # por ciento de lineas cubiertas con el que el paso da la cobertura por buena y para
+  CoberturaRepeticiones = 3     # veces seguidas que han de pasar los tests de la clase de un lote (si una falla, son inestables)
+  CoberturaClasesMax    = 40    # clases como mucho por pasada (tope de gasto)
+  # Lo que el paso no propone: una regex sobre la ruta del .java (con /); 'texto:<regex>' mira dentro del fichero; 'records-sin-metodos' es el
+  # record sin ningun metodo. Por defecto: la clase @SpringBootApplication, config, dto, model y los records sin metodos.
+  CoberturaExcluir      = @('(^|/)config/', '(^|/)dto/', '(^|/)model/', 'texto:@SpringBootApplication\b', 'records-sin-metodos')
+  # Lo que se le pide al modelo en cada lote de cobertura (el lote es una clase; la clase, su test y sus lineas sin cubrir van aparte).
+  CoberturaPrompt       = ('Escribe tests para la clase de este lote hasta cubrir sus lineas sin cubrir. Solo creas o cambias ficheros bajo src/test/: nada en src/main/, ni el pom.xml; la logica de negocio no se toca.' + "`n" +
+    '- Escribe o amplia src/test/java/<mismo paquete>/<Clase>Test.java. Usa solo lo que ya esta en el pom (JUnit 5, Mockito o AssertJ si estan). No anadas dependencias.' + "`n" +
+    '- Prueba el comportamiento visible: cada metodo publico, sus ramas y sus errores, con valores concretos en las aserciones. No pruebes getters, setters ni constructores triviales.' + "`n" +
+    '- Cada @Test lleva al menos una asercion de verdad. Nada de assertTrue(true), @Disabled, catch vacios ni Thread.sleep. Los tests no dependen del orden, del reloj ni de la red: pasan siempre.' + "`n" +
+    '- Si un comportamiento parece un error del codigo, no lo arregles ni lo escondas: dejalo fijado tal como es y anade el comentario: // OJO: parece un error: <motivo>')
 }
 
 # ============================== UTILIDADES ==============================
