@@ -1212,6 +1212,48 @@ function Get-SonarRecetasDe([string]$Mensaje) {
   }
 }
 
+# Un campo de un .tsv: los tabuladores y los saltos de linea pasan a un espacio y, con $Max > 0, se corta a $Max caracteres.
+function Get-CampoTsv([string]$Texto, [int]$Max = 0) {
+  $t = ($Texto -replace '[\t\r\n]+', ' ').Trim()
+  if ($Max -gt 0 -and $t.Length -gt $Max) { $t = $t.Substring(0, $Max) }
+  return $t
+}
+
+# La familia de un mensaje de Sonar (el xlsx no trae la clave de la regla): con receta, su Nombre o, si no lo lleva, 'receta-N' con N su lugar en
+# SonarRecetas (el '# N.' de sonar-reglas.ps1); sin receta, el mensaje con lo que va entre comillas y las cifras cambiados por #, cortado a 80.
+# Devuelve Familia y Receta (si la tiene). Es la clave de la tabla por familia y de la columna reglas de intentos.tsv.
+function Get-SonarFamilia([string]$Mensaje) {
+  $rs = @(Get-SonarRecetasDe $Mensaje)
+  if ($rs.Count -gt 0) {
+    $nombre = "$($rs[0].Nombre)"
+    if (-not $nombre) { $nombre = 'receta-' + ([array]::IndexOf(@($Cfg.SonarRecetas), $rs[0]) + 1) }
+    return [pscustomobject]@{ Familia = $nombre; Receta = $true }
+  }
+  $t = ([regex]::Replace($Mensaje, '"[^"]*"|''[^'']*''|\d+', '#') -replace '\s+', ' ').Trim()
+  if ($t.Length -gt 80) { $t = $t.Substring(0, 80) }
+  return [pscustomobject]@{ Familia = $t; Receta = $false }
+}
+
+# Al empezar el paso sonar: las incidencias pendientes ($Pend, hallazgos con su Fila) por familia, de mas a menos, en .rescate/sonar-por-familia.tsv
+# (familia, incidencias, ficheros, receta); en la consola, las 10 primeras y una linea con el total y la ruta. Si no puede escribir, avisa y sigue.
+function Write-SonarPorFamilia($Pend) {
+  $filas = @($Pend | ForEach-Object {
+      $f = Get-SonarFamilia "$($script:SonarPorFila[$_.Fila].Mensaje)"
+      [pscustomobject]@{ Familia = $f.Familia; Receta = $f.Receta; Fichero = $_.Fichero }
+    })
+  $grupos = @($filas | Group-Object -Property Familia | ForEach-Object {
+      [pscustomobject]@{ Familia = $_.Name; Incidencias = $_.Count; Ficheros = @($_.Group | ForEach-Object { $_.Fichero } | Select-Object -Unique).Count; Receta = $(if ($_.Group[0].Receta) { 'si' } else { 'no' }) }
+    } | Sort-Object @{ Expression = 'Incidencias'; Descending = $true }, 'Familia')
+  $txt = @("familia`tincidencias`tficheros`treceta") + @($grupos | ForEach-Object { (Get-CampoTsv $_.Familia) + "`t$($_.Incidencias)`t$($_.Ficheros)`t$($_.Receta)" })
+  try { [System.IO.File]::WriteAllText((Join-Path $Work 'sonar-por-familia.tsv'), (($txt -join "`n") + "`n"), $Utf8) }
+  catch { Aviso "No he podido escribir .rescate/sonar-por-familia.tsv ($($_.Exception.Message)): sigo sin la tabla." }
+  $fmt = '  {0,6} {1,5} {2,-6} {3}'
+  Info 'Incidencias pendientes de sonar por familia (las 10 primeras):'
+  Info ($fmt -f 'inc.', 'fich.', 'receta', 'familia')
+  foreach ($g in @($grupos | Select-Object -First 10)) { Info ($fmt -f $g.Incidencias, $g.Ficheros, $g.Receta, $g.Familia) }
+  Info "Total: $(@($Pend).Count) incidencias en $($grupos.Count) familias (detalle: .rescate/sonar-por-familia.tsv)"
+}
+
 # Tras el commit de un lote: apunta en la base cada incidencia que el codigo de ahora da por resuelta y que aun no constaba, con la regla (el Rx de la
 # receta que le tocaba, o vacio si no tenia) y el commit del lote. Es lo que conserva sonar-base-anterior.json.
 function Set-SonarResueltas([string]$Commit) {
@@ -1551,7 +1593,7 @@ function Get-RangosLineas([int[]]$Lineas) {
 # Mide la cobertura del arbol de trabajo (los tests tienen que pasar): Get-Cobertura con las filas por clase y, si midio, las lineas sin cubrir.
 function Measure-Cobertura {
   $previos = @(Get-Cambios $RepoRoot)
-  $c = Get-Cobertura $RepoRoot (Join-Path $Work 'cobertura.log') $true $true
+  $c = Invoke-ContandoMaven { Get-Cobertura $RepoRoot (Join-Path $Work 'cobertura.log') $true $true }
   [void](Remove-Ruido $RepoRoot $previos)   # lo que deja Maven fuera de target no entra en los commits
   $c['sinCubrir'] = @{}
   if ($c.medida) { $c['sinCubrir'] = Get-CoberturaSinCubrir $RepoRoot }
@@ -1719,7 +1761,7 @@ function Test-CoberturaRepeticiones([string]$Clase) {
     for ($k = 1; $k -le $n; $k++) {
       $reg = Join-Path $Work "cobertura-rep-$k.log"
       Info "  Repeticion $k de $n de ${Clase}Test (Maven)..."
-      $r = Invoke-MavenTope $RepoRoot (@($Cfg.MvnTests) + @("-Dtest=${Clase}Test")) "Maven (repeticion $k de $n de ${Clase}Test)" $reg
+      $r = Invoke-ContandoMaven { Invoke-MavenTope $RepoRoot (@($Cfg.MvnTests) + @("-Dtest=${Clase}Test")) "Maven (repeticion $k de $n de ${Clase}Test)" $reg }
       if ($r.Codigo -ne 0 -or $r.Tope) {
         $det = @($r.Salida | Where-Object { $_ -match '\[ERROR\]|FAIL' } | Select-Object -First 6 | ForEach-Object { '  - ' + $_.Trim() })
         $motivo = "Los tests de $Clase son inestables: fallan en la repeticion $k de $n de 'mvn test -Dtest=${Clase}Test' (registro: .rescate/cobertura-rep-$k.log). Quita lo que dependa del orden, del reloj, de la red o del azar."
@@ -1941,6 +1983,14 @@ function Read-InformesTests([string]$Rep) {
   return [pscustomobject]@{ Ejecutados = $ejecutados; Fallan = $fallan }
 }
 
+# Corre $Bloque (una llamada de Maven del script) y suma lo que tarda a $script:SegMaven: los segundos de Maven de cada intento en
+# .rescate/intentos.tsv. Cada intento pone SegMaven a 0 al empezar.
+function Invoke-ContandoMaven([scriptblock]$Bloque) {
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  try { return (& $Bloque) }
+  finally { $script:SegMaven += $reloj.Elapsed.TotalSeconds }
+}
+
 function Invoke-Build([bool]$ConTests) {
   $b = [pscustomobject]@{ Ejecutado = $true; Compila = $true; TestsEjecutados = $false; TestsOk = $false; TestsN = 0 }
   $rep = Join-Ruta $RepoRoot 'target/surefire-reports'
@@ -1948,7 +1998,7 @@ function Invoke-Build([bool]$ConTests) {
   if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
   if ($ConTests) { $que = 'Maven (tests)' } else { $que = 'Maven (compilar)' }
   $previos = @(Get-Cambios $RepoRoot)
-  $r = Invoke-MavenTope $RepoRoot $a $que (Join-Path $Work 'build.log')
+  $r = Invoke-ContandoMaven { Invoke-MavenTope $RepoRoot $a $que (Join-Path $Work 'build.log') }
   # lo que deja Maven fuera de target se quita (Remove-Ruido, la regla de prueba-local.ps1): no entra en los commits
   $ruido = @(Remove-Ruido $RepoRoot $previos)
   if ($ruido.Count -gt 0 -and -not $script:RuidoDicho) {
@@ -2543,7 +2593,7 @@ function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [str
   $salida = @()
   if ($p.Texto) { $salida = @(($p.Texto -replace '\r?\n$', '') -split '\r?\n') }
   [System.IO.File]::WriteAllLines($Log, [string[]]$salida)
-  $r = [pscustomobject]@{ Codigo = $p.Codigo; Salida = $salida; Tope = '' }
+  $r = [pscustomobject]@{ Codigo = $p.Codigo; Salida = $salida; Tope = ''; Segundos = $p.Segundos }
   if ($p.Agotado) {
     $r.Tope = "Copilot se ha pasado del tope de $($Cfg.MinutosCopilot) min y se ha parado ($Que)."
     Aviso $r.Tope
@@ -3270,6 +3320,31 @@ function Undo-IntentoCortado([string]$Rama) {
   Undo-Lote $Rama $c
 }
 
+$ColumnasIntentos = @('fecha', 'paso', 'lote', 'intento', 'ficheros', 'hallazgos', 'reglas', 'seg_copilot', 'seg_maven', 'resultado', 'puerta')
+
+# Al decidir si un intento pasa: una linea en .rescate/intentos.tsv (con su cabecera si el fichero es nuevo), que tambien suma a los tiempos del paso.
+# $SegCopilot: los segundos de las llamadas de Copilot del intento (repeticion incluida); los de Maven son los de $script:SegMaven. $Problemas: lo que
+# lo para si no pasa (el primero va en la columna puerta). Nunca para el script: si no puede escribir, avisa una vez por ejecucion.
+function Add-Intento([string]$PasoId, [int]$N, [int]$I, $LoteH, $Sel, [double]$SegCopilot, [bool]$Pasa, $Problemas) {
+  $t = $script:TiemposPaso
+  $t.Intentos++; $t.SegCopilot += $SegCopilot; $t.SegMaven += $script:SegMaven
+  $reglas = '-'
+  if ($PasoId -eq 'sonar') { $reglas = (@($LoteH | ForEach-Object { (Get-SonarFamilia "$($script:SonarPorFila[$_.Fila].Mensaje)").Familia } | Sort-Object -Unique) -join ';') }
+  $resultado = 'no pasa'; $puerta = ''
+  if ($Pasa) { $resultado = 'pasa' } else { $puerta = "$(@($Problemas)[0])" }
+  $fecha = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
+  $campos = @($fecha, $PasoId, $N, $I, @($Sel).Count, @($LoteH).Count, $reglas, [int][Math]::Round($SegCopilot), [int][Math]::Round($script:SegMaven), $resultado)
+  $fila = (@($campos | ForEach-Object { Get-CampoTsv "$_" }) + (Get-CampoTsv $puerta 200)) -join "`t"
+  $ruta = Join-Path $Work 'intentos.tsv'
+  try {
+    if (-not (Test-Path -LiteralPath $ruta)) { $fila = ($ColumnasIntentos -join "`t") + "`n" + $fila }
+    [System.IO.File]::AppendAllText($ruta, $fila + "`n", $Utf8)
+  }
+  catch {
+    if (-not $script:IntentosAvisado) { $script:IntentosAvisado = $true; Aviso "No he podido apuntar el intento en .rescate/intentos.tsv ($($_.Exception.Message)): sigo sin apuntar los intentos." }
+  }
+}
+
 function Invoke-Fix {
   if (-not $PlantillaRoot -and -not (($Sonar -and $Paso -eq 'sonar') -or $Paso -eq 'cobertura')) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
@@ -3352,6 +3427,7 @@ function Invoke-Fix {
   if ($Cfg.PasosDeUnoEnUno -contains $paso) { $loteEf = 1 }
   Info ''
   Info "=== Paso '$paso' en lotes de $loteEf ==="
+  if ($esSonar) { Write-SonarPorFamilia @($hall | Where-Object { $_.Cat -eq 'sonar' -and $_.Sev -eq 'error' }) }
 
   # --- revision previa: un plan para todo el paso, antes del primer lote ---
   if (-not $SinPlan -and ($Cfg.PasosConPlan -contains $paso)) {
@@ -3369,6 +3445,7 @@ function Invoke-Fix {
   $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
   $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
   $reflexiones = @()   # las reflexiones del paso (Titulo, Texto, Ficheros)
+  $script:TiemposPaso = @{ Intentos = 0; SegCopilot = 0.0; SegMaven = 0.0 }   # lo que suman los intentos de esta pasada (Add-Intento)
   for ($n = 1; $n -le $MaxLotes; $n++) {
     $pend = @($hall | Where-Object { $_.Cat -eq $paso -and $_.Sev -eq 'error' })
     if ($pend.Count -eq 0) { break }
@@ -3429,6 +3506,7 @@ function Invoke-Fix {
     }
     for ($i = 1; $i -le $intentos; $i++) {
       $detalle = @(); $rutaCorr = ''
+      $script:SegMaven = 0.0   # los segundos de Maven de este intento (Invoke-ContandoMaven); Add-Intento los apunta
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
       Info "  Copilot trabajando (intento $i de $intentos)..."
@@ -3436,6 +3514,7 @@ function Invoke-Fix {
       $esf = ''
       if ($i -ge 2 -or $escalon) { $esf = Get-EsfuerzoReintento }
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i)"
+      $segCop = $rc.Segundos
       # pasado el tope (Copilot se ha parado y la consola ya lo ha dicho) el intento se evalua tal cual: ni se repite ni cuenta como un fallo de Copilot
       if ($rc.Codigo -ne 0 -and -not $rc.Tope) {
         Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc
@@ -3450,6 +3529,7 @@ function Invoke-Fix {
             $esf = $menor[0]; $script:EsfReintento = $esf
           }
           $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i-repeticion.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i, repeticion)"
+          $segCop += $rc.Segundos
           if ($rc.Codigo -ne 0 -and -not $rc.Tope) { Aviso "  Copilot termino otra vez con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i-repeticion.log)"; Write-FinCopilot $rc }
         }
       }
@@ -3464,7 +3544,7 @@ function Invoke-Fix {
         exit 4
       }
       $ramaAhora = ((Invoke-Git $RepoRoot @('rev-parse', '--abbrev-ref', 'HEAD')).Salida -join '').Trim()
-      if ($ramaAhora -ne $rama) { $problemas = @('Copilot cambio de rama.'); break }
+      if ($ramaAhora -ne $rama) { $problemas = @('Copilot cambio de rama.'); Add-Intento $paso $n $i $loteH $sel $segCop $false $problemas; break }
       $head = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
       if ($head -ne $check) { [void](Invoke-Git $RepoRoot @('reset', '-q', '--mixed', $check)) }   # si hizo commit, lo deshago y conservo los cambios
       if ($esSonar) { Read-SonarSinArreglar $loteH }   # lo que el modelo deja con motivo no cuenta para bajar ni se reintenta
@@ -3477,10 +3557,12 @@ function Invoke-Fix {
         $hall2 = @(Invoke-Diagnostico $false $false)
         $script:Build = $buildAntes
         $ok = $true
+        Add-Intento $paso $n $i $loteH $sel $segCop $true @()
         break
       }
       if ($cambios.Count -eq 0) {
         $problemas = @('No has cambiado ningun fichero.')
+        Add-Intento $paso $n $i $loteH $sel $segCop $false $problemas
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
         $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
         $falloAhora = Get-ClaveFallo $problemas @()
@@ -3576,6 +3658,7 @@ function Invoke-Fix {
       if ($esCob) { $mejoraPaso = $cobSube }
       $nuevos = @(Get-HallazgosNuevos $hall2 $empeorados $hallAntes | Select-Object -First 20)
 
+      Add-Intento $paso $n $i $loteH $sel $segCop ($problemas.Count -eq 0) $problemas
       if ($problemas.Count -eq 0) { $ok = $true; break }
       $problemas | ForEach-Object { Aviso "  NO PASA: $_" }
       # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva),
@@ -3720,6 +3803,8 @@ function Invoke-Fix {
     }
   }
 
+  $t = $script:TiemposPaso
+  Info "Tiempos del paso ${paso}: $($t.Intentos) intentos, Copilot $(Format-Pct ($t.SegCopilot / 60)) min, Maven $(Format-Pct ($t.SegMaven / 60)) min (detalle: .rescate/intentos.tsv)"
   $script:Hall = $hall
   $script:HallCache = @{ Commit = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim(); Hall = $hall; Build = $script:Build }
   if ($esCob) { $script:CobHecha = $true }
@@ -3845,6 +3930,8 @@ if (-not $script:ModDudas) { $script:ModDudas = $Modelo }
 $script:EsfDudas = $EsfuerzoDudas
 if (-not $script:EsfDudas) { $script:EsfDudas = "$($Cfg.EsfuerzoDudas)" }
 $script:Fallos = 0        # ficheros atascados seguidos
+$script:SegMaven = 0.0    # los segundos de Maven del intento en curso (Invoke-ContandoMaven)
+$script:IntentosAvisado = $false   # Add-Intento ya ha avisado de que no puede escribir intentos.tsv
 Initialize-ConfigReintentos
 $script:H = $null
 $script:Build = $null
