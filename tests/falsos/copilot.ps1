@@ -17,6 +17,7 @@
 #   sonar-borra-test   arregla y borra un fichero de src/test
 #   sonar-quita-test   arregla y quita la linea @Test de un test (el fichero se queda)
 #   sonar-fichero-nuevo  arregla y crea un fichero nuevo en src/main/java
+#   sonar-fichero-nuevo-otro  arregla y crea un fichero nuevo en otro paquete (otro/) que el de la clase que arregla
 #   sonar-renombra-test  arregla y cambia el nombre de un fichero de src/test
 #   sonar-toca-pom     arregla y cambia el pom.xml
 #   sonar-borra-clase  borra el fichero de cada incidencia
@@ -604,6 +605,7 @@ switch ($paso) {
       Escribir '.rescate/sonar-sin-arreglar.txt' ((($dejadas + @('src/main/java/com/acme/plantillabatch/NoExiste.java:99 | esta no es de ningun lote')) -join "`n") + "`n")
     }
     if ($guion -eq 'sonar-fichero-nuevo') { Escribir 'src/main/java/com/acme/plantillabatch/service/Nuevo.java' "package com.acme.plantillabatch.service;`n`n/** Clase nueva. */`npublic class Nuevo {`n}`n" }
+    if ($guion -eq 'sonar-fichero-nuevo-otro') { Escribir 'src/main/java/com/acme/plantillabatch/otro/Nuevo.java' "package com.acme.plantillabatch.otro;`n`n/** Clase nueva. */`npublic class Nuevo {`n}`n" }
     if ($guion -eq 'sonar-toca-pom') { Escribir 'pom.xml' ((Leer 'pom.xml') + "`n<!-- cambio -->`n") }
     if ($guion -eq 'sonar-renombra-test') {
       $test = @(Get-ChildItem -LiteralPath (Get-Ruta 'src/test') -Recurse -File -Filter '*.java')[0]

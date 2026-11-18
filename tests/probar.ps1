@@ -3568,6 +3568,65 @@ $Pruebas['m10 sonar: la base guarda la unidad marcada y el hash; sin cambios la 
   Igual 'la incidencia vuelve a contar como pendiente' 1 (Hallazgos-Sonar $e.Repo 'error').Count
 }
 
+$Pruebas['m10 sonar: un xlsx con otro hash guarda la base anterior en sonar-base-anterior.json, con las resueltas, su regla y el commit del lote'] = {
+  $rec = @(, @{ Rx = 'null dereference'; Texto = 'RECETA-PRUEBA-H2: nada raro.' })
+  $e = Escenario-Sonar 'm10-base-anterior' @('service/TotalService', 'service/ReciboService') @{ SonarRecetas = $rec }
+  $total = $RutaSv + 'service/TotalService.java'
+  $recibo = $RutaSv + 'service/ReciboService.java'
+  $incs = @(
+    (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total ((Linea-De (Lee $e.Repo $total) 'int resultado').ToString() + 'L')),
+    (Inc 'CRITICAL' 'Mensaje-sin-receta-h2.' 'BUG' 'ReciboService.java' $recibo ((Linea-De (Lee $e.Repo $recibo) 'int resultado').ToString() + 'L')))
+  Informe-Sonar $e.Xlsx $incs
+  $a = @('-Modo', 'fix', '-Paso', 'sonar', '-Auto', '-Si', '-MaxIntentos', '1', '-Sonar', $e.Xlsx)
+  $r1 = Sonar-Lanza $e $a
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r1.Salida); return }
+  $hash1 = (Get-FileHash -LiteralPath $e.Xlsx -Algorithm SHA256).Hash
+  Comprueba 'la primera pasada resuelve las dos' ($r1.Salida -match 'Sonar: 2 resueltas aqui\.') (Cola $r1.Salida)
+  $dir = Join-Path $e.Wt '.rescate'
+  Comprueba 'con el primer xlsx no hay base anterior' (-not (Test-Path -LiteralPath (Join-Path $dir 'sonar-base-anterior.json')))
+  $b1 = (Lee $e.Wt '.rescate/sonar-base.json') | ConvertFrom-Json
+  Igual 'la base de la primera pasada lleva su hash' $hash1 "$($b1.hash)"
+  $x1 = @($b1.incidencias | Where-Object { $_.fichero -eq $total })
+  $x2 = @($b1.incidencias | Where-Object { $_.fichero -eq $recibo })
+  Igual 'la base lleva las dos incidencias' 2 (@($b1.incidencias).Count)
+  if ($x1.Count -eq 1 -and $x2.Count -eq 1) {
+    Igual 'la primera consta como resuelta en esta pasada' 'True' "$($x1[0].resuelta)"
+    Igual 'por la regla de la receta que le toco' 'null dereference' "$($x1[0].regla)"
+    Igual 'la segunda, sin receta, con la regla vacia' '' "$($x2[0].regla)"
+    $commit = "$($x1[0].commit)"
+    Comprueba 'lleva el commit del lote, que existe en el repo' ($commit -and ((GitEn $e.Wt @('cat-file', '-t', $commit)) -eq 'commit')) $commit
+    Comprueba 'y es el commit de un lote de sonar' ((GitEn $e.Wt @('log', '-1', '--format=%s', $commit)) -match '^rescate\(sonar\): lote ') (GitEn $e.Wt @('log', '--format=%h %s'))
+  }
+  else { Comprueba 'estan las dos incidencias en la base' $false (($b1.incidencias | ForEach-Object { $_.fichero }) -join ' ') }
+  # el xlsx nuevo (otro hash): la base de antes se guarda y la nueva se hace de cero
+  Informe-Sonar $e.Xlsx $incs 'otra pasada de Sonar'
+  $hash2 = (Get-FileHash -LiteralPath $e.Xlsx -Algorithm SHA256).Hash
+  Comprueba 'el xlsx nuevo tiene otro hash' ($hash2 -ne $hash1)
+  $r2 = Sonar-Lanza $e $a
+  Comprueba 'la segunda pasada sale bien' ($r2.Codigo -eq 0) (Cola $r2.Salida)
+  Comprueba 'estan los dos ficheros' ((Test-Path -LiteralPath (Join-Path $dir 'sonar-base.json')) -and (Test-Path -LiteralPath (Join-Path $dir 'sonar-base-anterior.json'))) (Cola $r2.Salida)
+  if (Test-Path -LiteralPath (Join-Path $dir 'sonar-base-anterior.json')) {
+    $ant = (Lee $e.Wt '.rescate/sonar-base-anterior.json') | ConvertFrom-Json
+    $nueva = (Lee $e.Wt '.rescate/sonar-base.json') | ConvertFrom-Json
+    Igual 'la anterior es la de la primera pasada (su hash)' $hash1 "$($ant.hash)"
+    Igual 'la nueva lleva el hash nuevo' $hash2 "$($nueva.hash)"
+    $a1 = @($ant.incidencias | Where-Object { $_.fichero -eq $total })
+    Comprueba 'la anterior conserva la resuelta con su regla y su commit' ($a1.Count -eq 1 -and "$($a1[0].resuelta)" -eq 'True' -and "$($a1[0].regla)" -eq 'null dereference' -and "$($a1[0].commit)" -eq $commit) (($ant.incidencias | ConvertTo-Json -Compress))
+  }
+  # una tercera con otro hash vuelve a machacar la anterior: queda la de la segunda pasada
+  Informe-Sonar $e.Xlsx $incs 'y otra mas'
+  $hash3 = (Get-FileHash -LiteralPath $e.Xlsx -Algorithm SHA256).Hash
+  $r3 = Sonar-Lanza $e $a
+  if (Test-Path -LiteralPath (Join-Path $dir 'sonar-base-anterior.json')) {
+    $ant3 = (Lee $e.Wt '.rescate/sonar-base-anterior.json') | ConvertFrom-Json
+    Igual 'la tercera machaca la anterior con la de la segunda pasada' $hash2 "$($ant3.hash)"
+  }
+  # el mismo xlsx otra vez no rehace nada ni guarda otra anterior
+  $r4 = Sonar-Lanza $e $a
+  $ant4 = (Lee $e.Wt '.rescate/sonar-base-anterior.json') | ConvertFrom-Json
+  Igual 'con el mismo xlsx la anterior no cambia' $hash2 "$($ant4.hash)"
+}
+
 $Pruebas['m10 sonar: el texto de calidad sobre inyeccion pide un unico constructor, campos final y sin estado mutable'] = {
   $e = Escenario-Sonar 'm10-calidad' @('service/TotalService') @{} @('service/SinDoc1', 'service/SinDoc2')
   $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'calidad', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'nada'
@@ -3915,9 +3974,9 @@ class A {
   $u = Get-SonarUnidad $java 4
   Igual 'un metodo con Javadoc y anotacion: todo el bloque, sin espacios, con cadenas y Javadoc, sin comentarios normales' '/**Doc.*/@OverridepublicStringf(Strings){Stringt="}{y//noescomentario";if(s==null){returnt;}returns;}' $u.Unidad
   Igual 'y no se dice sin Javadoc' $false $u.SinDoc
-  Igual 'una linea que no abre bloque: solo ella' 'intx=1;' (Get-SonarUnidad $java 12).Unidad
-  Igual 'sin su comentario final' 'inty=2;' (Get-SonarUnidad $java 13).Unidad
-  Igual 'una linea sola no lleva marca de sin Javadoc' $false (Get-SonarUnidad $java 12).SinDoc
+  Igual 'una linea que no abre bloque: solo ella' 'intx=1;' (Get-SonarUnidad $java 13).Unidad
+  Igual 'sin su comentario final' 'inty=2;' (Get-SonarUnidad $java 14).Unidad
+  Igual 'una linea sola no lleva marca de sin Javadoc' $false (Get-SonarUnidad $java 13).SinDoc
   $b = @'
 class B {
     @Override
@@ -3943,7 +4002,7 @@ class B {
   Igual 'con el Javadoc cambiado: ya no' $false (Test-SonarSigueAhi $u.Unidad $u.SinDoc (Get-SonarNormal ($java.Replace('Doc.', 'Otro texto.'))))
 }
 
-$Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, sumando todo el diff, y la condicion Si'] = {
+$Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, sumando todo el diff, y las condiciones Si y Salvo'] = {
   . ([scriptblock]::Create((Texto-Sonar)))
   # un diff como el de git: por fichero, con sus lineas + y -
   function Diff-De($Ficheros) {
@@ -3986,6 +4045,17 @@ $Pruebas['m10 sonar: puertas del diff - anadida, neto+, neto-, neto0, sumando to
   Igual 'Si: sin mensajes no cuenta' $true (Pasa $dif $si @())
   Igual 'Si: con un mensaje que la cumple cuenta (sin mirar mayusculas)' $false (Pasa $dif $si @('otro mensaje', 'Mensaje CONDICION-PRUEBA con texto'))
   Igual 'sin Si se aplica con cualquier mensaje' $false (Pasa $dif $menos @('lo que sea'))
+  # la condicion Salvo, lo contrario de Si: la entrada no se aplica si algun mensaje del lote casa
+  $salvo = @(, @{ Rx = '@Test'; Modo = 'neto-'; Motivo = 'm-salvo'; Salvo = 'excepcion-prueba' })
+  Igual 'Salvo: con mensajes que no la cumplen la entrada se aplica' $false (Pasa $dif $salvo @('otro mensaje', 'y otro'))
+  Igual 'Salvo: sin mensajes la entrada se aplica' $false (Pasa $dif $salvo @())
+  Igual 'Salvo: con un mensaje que la cumple (sin mirar mayusculas) no se aplica' $true (Pasa $dif $salvo @('otro mensaje', 'Mensaje EXCEPCION-PRUEBA con texto'))
+  $ambas = @(, @{ Rx = '@Test'; Modo = 'neto-'; Motivo = 'm-ambas'; Si = 'condicion-prueba'; Salvo = 'excepcion-prueba' })
+  Igual 'Si y Salvo juntas: casa Si y no Salvo, se aplica' $false (Pasa $dif $ambas @('condicion-prueba aqui'))
+  Igual 'Si y Salvo juntas: casan las dos, no se aplica' $true (Pasa $dif $ambas @('condicion-prueba aqui', 'excepcion-prueba aqui'))
+  Igual 'Si y Salvo juntas: solo casa Salvo, no se aplica' $true (Pasa $dif $ambas @('excepcion-prueba aqui'))
+  Igual 'Si y Salvo juntas: no casa ninguna, no se aplica' $true (Pasa $dif $ambas @('otro mensaje'))
+  Igual 'Si y Salvo en mensajes distintos del lote: Salvo manda' $true (Pasa $dif $ambas @('condicion-prueba aqui', 'otro', 'excepcion-prueba'))
 }
 
 $Pruebas['m10 sonar: SonarProhibido neto-: quitar un @Test invalida el intento aunque arregle la linea; sin la entrada pasa'] = {
@@ -4035,6 +4105,48 @@ $Pruebas['m10 sonar: crear .java nuevos se permite; tocar ficheros que no son .j
       Igual "$caso : el worktree queda limpio" '' (GitEn $e.Wt @('status', '--porcelain'))
     }
   }
+}
+
+$Pruebas['m10 sonar: un .java nuevo solo vale en la carpeta de una clase que el lote ya modifica; sus lineas cuentan en los neto; el indice queda como estaba; .rescate se ignora'] = {
+  $total = $RutaSv + 'service/TotalService.java'
+  $nuevo = $RutaSv + 'service/Nuevo.java'
+  function Escenario-Nuevo([string]$Nombre, [hashtable]$Mas) {
+    $e = Escenario-Sonar $Nombre @('service/TotalService') $Mas
+    $ln = Linea-De (Lee $e.Repo $total) 'int resultado'
+    Informe-Sonar $e.Xlsx @(, (Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${ln}L"))
+    return $e
+  }
+  $a = @('-Modo', 'fix', '-Paso', 'sonar', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1')
+  # en el mismo paquete que la clase que arregla: pasa (y el modelo deja ademas su fichero en .rescate sin que moleste)
+  $e1 = Escenario-Nuevo 'm10-nuevo-mismo' @{}
+  $r1 = Sonar-Lanza $e1 ($a + @('-Sonar', $e1.Xlsx)) 'sonar-fichero-nuevo'
+  if (-not (Test-Path -LiteralPath (Join-Path $e1.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r1.Salida); return }
+  Comprueba 'mismo paquete: el lote pasa' ($r1.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r1.Salida)
+  Comprueba 'mismo paquete: el fichero nuevo entra en el commit' ((GitEn $e1.Wt @('show', '--stat', '--format=', 'HEAD')) -match 'Nuevo\.java')
+  # sus lineas cuentan en los neto: con un neto+ que casa con una linea de la clase nueva, el mismo intento no pasa
+  $proh = @(, @{ Rx = 'public class Nuevo'; Modo = 'neto+'; Motivo = 'MOTIVO-PRUEBA-NETO-NUEVO' })
+  $e2 = Escenario-Nuevo 'm10-nuevo-neto' @{ SonarProhibido = $proh }
+  $r2 = Sonar-Lanza $e2 ($a + @('-Sonar', $e2.Xlsx)) 'sonar-fichero-nuevo'
+  Comprueba 'mismo paquete con neto+: el intento no pasa y dice el motivo' ($r2.Salida -match 'NO PASA: .*MOTIVO-PRUEBA-NETO-NUEVO') (Cola $r2.Salida)
+  # el indice de git queda como estaba tras comprobar el diff, pase o no el intento
+  Igual 'el indice queda limpio (nada preparado) tras el intento que no pasa' '' (GitEn $e2.Wt @('diff', '--cached', '--name-only'))
+  # en otro paquete: no pasa y dice donde crearla
+  $e3 = Escenario-Nuevo 'm10-nuevo-otro' @{}
+  $r3 = Sonar-Lanza $e3 ($a + @('-Sonar', $e3.Xlsx)) 'sonar-fichero-nuevo-otro'
+  Comprueba 'otro paquete: el intento no pasa y dice que la cree en el mismo paquete que la clase que arregla' ($r3.Salida -match 'NO PASA: .*crea la clase nueva en el mismo paquete que la clase que arreglas') (Cola $r3.Salida)
+  Comprueba 'otro paquete: el lote se deshace' ($r3.Salida -match 'Lote 1 DESHECHO') (Cola $r3.Salida)
+  Igual 'otro paquete: no hay commits nuevos' 'inicial' (GitEn $e3.Wt @('log', '--format=%s'))
+  Igual 'otro paquete: el worktree queda limpio' '' (GitEn $e3.Wt @('status', '--porcelain'))
+  Igual 'otro paquete: el indice queda limpio' '' (GitEn $e3.Wt @('diff', '--cached', '--name-only'))
+  # lo que el modelo escribe en .rescate (sonar-sin-arreglar.txt) no cuenta como fichero tocado que no es .java
+  $e4 = Escenario-Sonar 'm10-nuevo-rescate' @('service/TotalService', 'service/ReciboService')
+  $lnT = Linea-De (Lee $e4.Repo $total) 'int resultado'
+  $recibo = $RutaSv + 'service/ReciboService.java'
+  $lnR = Linea-De (Lee $e4.Repo $recibo) 'int resultado'
+  Informe-Sonar $e4.Xlsx @((Inc 'CRITICAL' 'Fix this null dereference.' 'BUG' 'TotalService.java' $total "${lnT}L"), (Inc 'CRITICAL' 'DEJAME: no se toca.' 'BUG' 'ReciboService.java' $recibo "${lnR}L"))
+  $r4 = Sonar-Lanza $e4 ($a + @('-Sonar', $e4.Xlsx)) 'sonar-deja'
+  Comprueba 'con lo apuntado en .rescate el lote pasa' ($r4.Salida -match "Lote 1 OK: 'sonar' 2 -> 0") (Cola $r4.Salida)
+  Comprueba 'y no dice que haya tocado ficheros que no son .java' ($r4.Salida -notmatch 'que no son \.java') (Cola $r4.Salida)
 }
 
 $Pruebas['m10 sonar: partir una clase en dos, con una nueva en otro fichero, pasa y resuelve la incidencia; las lineas del fichero nuevo cuentan como anadidas'] = {
