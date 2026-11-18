@@ -973,6 +973,19 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion) {
   return ($l -join "`n")
 }
 
+# El programa de Copilot, buscado con la regla de comun.ps1 (Get-Lanzable: la misma del preflight y de migracion.ps1).
+# Se busca al empezar un modo que lo usa, antes de tocar el repo; Test-Copilot lo repite solo si CopilotExe ha cambiado.
+# En pre (que sin Copilot sigue con la busqueda por texto) no es un error; en plan y fix, si.
+$script:Copilot = $null
+$script:CopilotDe = $null
+function Test-Copilot {
+  if (($Modo -ne 'plan') -and ($Modo -ne 'fix') -and (($Modo -ne 'pre') -or $SinIA)) { return }
+  if ($script:CopilotDe -ceq $Cfg.CopilotExe) { return }
+  $script:Copilot = Get-Lanzable $Cfg.CopilotExe
+  $script:CopilotDe = $Cfg.CopilotExe
+  if (-not $script:Copilot.Ruta -and $Modo -ne 'pre') { Fallo $script:Copilot.Mensaje; exit 1 }
+}
+
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
@@ -982,7 +995,7 @@ function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [str
   if (-not $Esf) { $Esf = $Esfuerzo }
   $a = Get-ArgsCopilot 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.' $Mod $Esf @($PlantillaRoot, $LegacyRoot) ([bool]$SinInstrucciones)
   $latido = Start-Latido $Que $Cfg.SegundosLatido
-  try { $r = Invoke-Nativo $Cfg.CopilotExe $a $RepoRoot }
+  try { $r = Invoke-Nativo $script:Copilot.Ruta $a $RepoRoot }
   finally { Stop-Latido $latido }
   [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
   return $r
@@ -1154,7 +1167,7 @@ function Invoke-Pre {
   $det = Get-JobsPorRegex $LegacyRoot
   $ia = @()
   if (-not $SinIA) {
-    if (-not (Get-Command $Cfg.CopilotExe -ErrorAction SilentlyContinue)) { Aviso 'No encuentro copilot: sigo solo con la busqueda por texto.' }
+    if (-not $script:Copilot.Ruta) { Aviso ($script:Copilot.Mensaje + ' Sigo solo con la busqueda por texto.') }
     else {
       $antes = (Invoke-Git $RepoRoot @('status', '--porcelain')).Salida -join "`n"
       $h0 = Get-Huella $LegacyRoot; $hp = Get-Huella $PlantillaRoot
@@ -1224,9 +1237,6 @@ function Invoke-Pre {
 }
 
 function Invoke-Fix {
-  foreach ($exe in @('git', $Cfg.CopilotExe)) {
-    if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { Fallo "No encuentro '$exe' en el PATH."; exit 1 }
-  }
   if (-not $PlantillaRoot) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
   # --- rama de rescate y foto del estado actual: nada se pierde ---
@@ -1437,7 +1447,9 @@ if ($PlantillaRoot -and ($PlantillaRoot -eq $RepoRoot)) { Aviso 'Repo y plantill
 # Si ya hay worktree de rescate, se trabaja en el; fix y plan lo crean si falta.
 $OrigenRoot = $RepoRoot
 Set-Excluidos $OrigenRoot
+[void](Read-CfgFile (Get-RutaAjustes) @() $false)   # ajustes.json: lleva claves de otros scripts, ninguna avisa; el del repo manda
 Read-Config $OrigenRoot    # antes del worktree: CommitArgs vale tambien para el commit 'foto'
+Test-Copilot               # antes del worktree: sin Copilot que lanzar no se toca el repo
 if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
   $dirWt = Get-DirRescate
   if (-not (Test-WorktreeRescate $dirWt) -and ($Modo -eq 'fix' -or $Modo -eq 'plan')) { New-WorktreeRescate $dirWt }
@@ -1446,6 +1458,7 @@ if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
     Info "Carpeta de trabajo: $RepoRoot (worktree de rescate, rama '$(Get-Rama $RepoRoot)')"
     if ($Modo -eq 'diagnostico' -or $Modo -eq 'pre') { Info 'Para mirar tu carpeta original en vez del worktree: -SinWorktree' }
     Read-Config $RepoRoot
+    Test-Copilot
   }
 }
 
@@ -1475,7 +1488,6 @@ switch ($Modo) {
   }
   'pre' { Invoke-Pre }
   'plan' {
-    if (-not (Get-Command $Cfg.CopilotExe -ErrorAction SilentlyContinue)) { Fallo "No encuentro '$($Cfg.CopilotExe)' en el PATH."; exit 1 }
     Info (Get-TextoModelo)
     if ($SinBuild) { Info 'Diagnostico sin Maven...' } else { Info 'Diagnostico (compilando)...' }
     $hall = @(Invoke-Diagnostico (-not $SinBuild) $false)

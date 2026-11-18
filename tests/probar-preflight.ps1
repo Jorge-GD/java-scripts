@@ -1346,8 +1346,13 @@ function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
   return (@($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
 }
 
+# Las funciones con las que se elige y se lanza un programa: la eleccion es de comun.ps1 y el lanzador de tareas.ps1.
+function Texto-Del-Lanzador {
+  return ((Texto-De-Funciones (Join-Path $origen 'comun.ps1') @('Select-Lanzable', 'Get-Lanzable')) + "`n" + (Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin')))
+}
+
 $Pruebas['35 lanzar Copilot, eleccion (funcion pura): solo ficheros, y en Windows solo con una extension que se lanza'] = {
-  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Select-Lanzable'))))
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'comun.ps1') @('Select-Lanzable'))))
   function Cand([string]$Tipo, [string]$Ruta) { return [pscustomobject]@{ CommandType = $Tipo; Source = $Ruta } }
   # lo que da Get-Command -All en un Windows con npm: la funcion (o el alias), el fichero sin extension, el .cmd y el .ps1
   $npm = @((Cand 'Function' ''), (Cand 'Application' '/n/copilot'), (Cand 'Application' '/n/copilot.cmd'), (Cand 'ExternalScript' '/n/copilot.ps1'))
@@ -1370,7 +1375,7 @@ $Pruebas['35 lanzar Copilot, eleccion (funcion pura): solo ficheros, y en Window
 }
 
 $Pruebas['36 lanzar Copilot, de verdad: una funcion con el nombre de un .ps1 del PATH no tapa al .ps1'] = {
-  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Select-Lanzable', 'Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin'))))
+  . ([scriptblock]::Create((Texto-Del-Lanzador)))
   $bin = Join-Path $Dir 'bin-funcion'
   Escribe $bin 'copilotfalsoxq.ps1' "Write-Host 'hola'`n"
   $pathAntes = $env:PATH
@@ -1385,7 +1390,7 @@ $Pruebas['36 lanzar Copilot, de verdad: una funcion con el nombre de un .ps1 del
 }
 
 $Pruebas['37 lanzar Copilot, nada que lanzar: el mensaje dice que es lo que hay, sin rutas, y el preflight lo lleva en "sin modelo"'] = {
-  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Select-Lanzable', 'Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin'))))
+  . ([scriptblock]::Create((Texto-Del-Lanzador)))
   function Mensaje-De([string]$Exe) {
     try { [void](Get-Lanzador $Exe @()); return 'no falla' } catch { return $_.Exception.Message }
   }

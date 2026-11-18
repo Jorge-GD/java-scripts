@@ -61,6 +61,8 @@ Si no las pasa, el script reintenta con el error y, si sigue mal, deshace el lot
 
 Si el batch maneja ficheros, el paso `ficheros` exige siempre un adaptador SFTP y su bloque `sftp` en `application.yml`, tenga o no SFTP la plantilla. Para exigir solo lo que la plantilla tiene, pon `"ExigirSftp": false` en `.rescate/config.json`.
 
+`rescate.ps1` lee también `ajustes.json` (`%USERPROFILE%\.rescate\ajustes.json`, el mismo del preflight y de `migracion.ps1`) antes que `.rescate/config.json`, que manda; las claves que no son suyas las ignora. Copilot se busca una vez al empezar, con la misma regla del preflight (un `.exe`, `.cmd`, `.bat` o `.ps1`, no una función ni el `copilot` sin extensión de npm): si no hay nada que lanzar, lo dice, pide la ruta entera en `CopilotExe` y sale con 1 antes de tocar el repo.
+
 Mientras espera a Copilot o a Maven escribe una línea cada minuto (`... sigue: Copilot (paso estructura, lote 1, intento 1) (lleva 2 min 0 s)`; `SegundosLatido` en `.rescate/config.json`, 0 la apaga): si deja de salir, se ha colgado.
 
 ### Uso

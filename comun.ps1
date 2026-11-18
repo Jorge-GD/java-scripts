@@ -42,6 +42,43 @@ function Invoke-Nativo {
   return [pscustomobject]@{ Codigo = $code; Salida = @($out) }
 }
 
+# De lo que PowerShell encuentra con un nombre (Get-Command -All, en su orden: CommandType y Source), el fichero que se
+# lanza, o $null. Solo cuentan los ficheros (Application, ExternalScript): una funcion o un alias no tienen ruta. En
+# Windows el fichero tiene que acabar en una extension que se pueda lanzar (el 'copilot' sin extension que deja npm no);
+# fuera de Windows vale el primer fichero, porque ahi un ejecutable no lleva extension.
+function Select-Lanzable($Candidatos, [bool]$EsWindows) {
+  foreach ($c in $Candidatos) {
+    if (@('Application', 'ExternalScript') -notcontains "$($c.CommandType)") { continue }
+    $ruta = "$($c.Source)"
+    if (-not $ruta) { continue }
+    if (-not $EsWindows) { return $ruta }
+    if (@('.exe', '.com', '.cmd', '.bat', '.ps1') -contains [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()) { return $ruta }
+  }
+  return $null
+}
+
+# El fichero que se lanza con un nombre o una ruta (Select-Lanzable sobre lo que da Get-Command): su Ruta, o $null y un
+# Mensaje que dice que es lo que hay. Lo usan Get-Lanzador (tareas.ps1), el preflight y rescate.ps1: una sola regla.
+function Get-Lanzable([string]$Exe) {
+  $encontrados = @()
+  if ($Exe) { $encontrados = @(Get-Command $Exe -All -ErrorAction SilentlyContinue) }
+  $ruta = Select-Lanzable $encontrados ($env:OS -eq 'Windows_NT')
+  $mensaje = ''
+  if (-not $ruta) {
+    $hay = 'nada'
+    if ($encontrados.Count -gt 0) {
+      $tipo = "$($encontrados[0].CommandType)"
+      if ($tipo -eq 'Function') { $hay = 'funcion' }
+      elseif ($tipo -eq 'Alias') { $hay = 'alias' }
+      elseif ($tipo -eq 'Cmdlet') { $hay = 'cmdlet' }
+      elseif ([System.IO.Path]::GetExtension("$($encontrados[0].Source)")) { $hay = 'fichero con otra extension' }
+      else { $hay = 'fichero sin extension' }
+    }
+    $mensaje = "No puedo lanzar '" + (($Exe -replace '\\', '/') -split '/')[-1] + "': aqui es $hay. Pon la ruta entera del .cmd o del .exe en CopilotExe de ajustes.json."
+  }
+  return [pscustomobject]@{ Ruta = $ruta; Mensaje = $mensaje }
+}
+
 # Latido: mientras un programa largo corre, una linea cada $Cada segundos para que se vea que el script sigue vivo
 # ("  ... sigue: <que> (lleva N min M s)"). Corre en un runspace aparte, asi no cambia como se lanzan los programas.
 # Devuelve $null si no se puede crear (y Stop-Latido $null no hace nada): el latido nunca rompe nada. Usar con try/finally.
@@ -160,15 +197,22 @@ function Set-Excluidos([string]$Dir) {
   if ($ya -notmatch '(?m)^migracion-\*/') { [System.IO.File]::AppendAllText($exc, "`nmigracion-*/`n") }
 }
 
+# Donde esta ajustes.json: RESCATE_HOME o la carpeta .rescate del usuario.
+function Get-RutaAjustes {
+  if ($env:RESCATE_HOME) { return (Join-Path $env:RESCATE_HOME 'ajustes.json') }
+  return (Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.rescate') 'ajustes.json')
+}
+
 # Lee un .json de ajustes y pisa las claves de $Cfg. Las claves de $Aparte las
-# trata quien llama (aqui no se avisa de ellas). Devuelve el objeto leido o $null.
-function Read-CfgFile([string]$Ruta, [string[]]$Aparte = @()) {
+# trata quien llama (aqui no se avisa de ellas) y con $Avisar en $false no se avisa
+# de ninguna desconocida (ajustes.json lleva claves de otros scripts). Devuelve el objeto leido o $null.
+function Read-CfgFile([string]$Ruta, [string[]]$Aparte = @(), [bool]$Avisar = $true) {
   if (-not (Test-Path -LiteralPath $Ruta)) { return $null }
   try {
     $o = [System.IO.File]::ReadAllText($Ruta) | ConvertFrom-Json
     foreach ($pr in $o.PSObject.Properties) {
       if ($Cfg.ContainsKey($pr.Name)) { $Cfg[$pr.Name] = $pr.Value }
-      elseif ($Aparte -notcontains $pr.Name) { Aviso ((Split-Path $Ruta -Leaf) + ": clave desconocida '$($pr.Name)'") }
+      elseif ($Avisar -and ($Aparte -notcontains $pr.Name)) { Aviso ((Split-Path $Ruta -Leaf) + ": clave desconocida '$($pr.Name)'") }
     }
     return $o
   }
