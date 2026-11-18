@@ -1289,11 +1289,15 @@ $Pruebas['ajustes: un nombre a secas que en el PATH solo es un .ps1 se lanza por
 # ======================= EL REINTENTO Y EL FINAL =======================
 $Pruebas['reintento: el detalle de la correccion lleva los hallazgos de la ruta nueva, con los paquetes que valen'] = {
   $e = Nuevo-Escenario 'reintento-ruta-nueva'
-  # el Copilot de mentira mueve la clase a infrastructure/util: un subpaquete que la plantilla no tiene (alli: adapters)
-  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '2') 'mueve-a-infrastructure')
-  $ll = Lee $e.Wt '.rescate/llamadas.log'
-  Igual 'dos llamadas a Copilot, la segunda con la correccion' 2 @($ll -split "`n" | Where-Object { $_ -match 'correccion=' }).Count
-  $p = Lee $e.Wt '.rescate/prompt.md'
+  # el Copilot de mentira mueve la clase a infrastructure/util: un subpaquete que la plantilla no tiene (alli: adapters).
+  # Con el del M6 (que le pasa los lotes al de siempre) queda el prompt de cada llamada: despues de los dos intentos
+  # vienen el consejo del atascado y el intento con el.
+  Pon-Config $e @{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1') }
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '2') 'mueve-a-infrastructure'
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'dos intentos del lote' ($lotes.Count -ge 2) ("$($lotes.Count) lotes`n" + (Cola $r.Salida))
+  $p = ''
+  if ($lotes.Count -ge 2) { $p = Prompt-M6 $e $lotes[1] }
   Comprueba 'el prompt del segundo intento lleva la correccion' ($p -match '## CORRECCION') $p
   Comprueba 'y el hallazgo de la ruta nueva, con los paquetes que valen' ($p -match "- src/main/java/com/acme/life/infrastructure/util/\w+\.java - subpaquete 'infrastructure/util' no existe en la plantilla \(alli: [^)]*adapters[^)]*\)") $p
 }
