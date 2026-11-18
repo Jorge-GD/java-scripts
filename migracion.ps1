@@ -19,7 +19,7 @@ QUE HACE (esta version: la lectura del original, los datos para explicarlo a neg
   cada ronda el worktree tiene que estar limpio y el original y la referencia sin
   cambios. Una salida invalida se repite una vez, con el motivo y esfuerzo alto;
   si falla otra vez la tarea queda atascada y se sigue.
-  Despues de las clases, cinco fases mas (datos\estado.json lleva la fase en que va; cada
+  Despues de las clases, seis fases mas (datos\estado.json lleva la fase en que va; cada
   tarea hecha se salta al relanzar, y una fase se hace aunque la anterior tenga atascadas):
     mapa        jobs del original (contrato de rescate.ps1 -Modo pre -SinIA, o el que ya haya en
                 .rescate\contrato.json), sus pasos (una tarea de definicion por fichero que
@@ -30,13 +30,18 @@ QUE HACE (esta version: la lectura del original, los datos para explicarlo a neg
     resumen     una tarea con todos los jobs: datos\resumen.json
     pruebas-pre una tarea por job con reglas o errores (sin leer codigo): el guion de prueba en pre,
                 datos\pruebas\<job>.json; los jobs sin reglas ni errores lo llevan montado por el script
+    comparar    una tarea por clase del original con datos: la IA lee los ficheros del migrado que elige el script (los del
+                mismo nombre o los que comparten palabras con la clase) y dice, dato a dato, si estan igual, distintos o
+                faltan; las citas las comprueba el script: datos\comparacion\<ficha>.json. Sin ficheros del migrado no hay
+                llamada y sus datos salen 'sin-pieza'. Es una lectura sin cambiar nada, del migrado tal como llego.
     lectura-hecha
     correccion  si contestaste "corregir": rescate.ps1 -Modo fix -Todo arregla el worktree (registros\correccion.log), se vuelve a
                 diagnosticar (datos\hallazgos-despues.json) y datos\correcciones.json cuenta que se ha corregido y que no.
                 Con "parar" (o -SoloInforme) no se corrige nada. Se salta si la correccion ya esta completa.
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
   que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
-  migrado) y 4-correcciones.html (que se ha corregido y que queda), con informe.ps1 y las plantillas de informe\.
+  migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato) y 4-correcciones.html (que se ha
+  corregido y que queda), con informe.ps1 y las plantillas de informe\.
   Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
@@ -119,7 +124,7 @@ function Save-Estado {
   Write-Json (Join-Path $Datos 'estado.json') $Estado
 }
 
-# Las cuatro paginas del informe (index.html, 1-batch-original.html, 2-problemas.html y 4-correcciones.html) con lo que haya hasta ahora. Si no se pueden montar,
+# Las cinco paginas del informe (index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html) con lo que haya hasta ahora. Si no se pueden montar,
 # se avisa y la pasada sigue: son una vista de los datos, no parte del trabajo.
 function Save-Informes {
   try { Write-Informes -Salida $Salida }
@@ -282,6 +287,7 @@ function Get-TareasFase([string]$Fase, [bool]$Conservar) {
     'fichas-job' { return @(Get-TareasJob (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'resumen' { return @(Get-TareasResumen (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'pruebas-pre' { return @(Get-TareasPrueba (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
+    'comparar' { return @(Get-TareasComparar $Conservar) }
   }
 }
 
@@ -294,6 +300,7 @@ function Save-Fase([string]$Fase, $Tareas) {
     'fichas-job' { Save-Jobs (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
     'resumen' { if (@($Tareas | Where-Object { $_.estado -eq 'hecha' }).Count -gt 0) { Write-Json (Join-Path $Datos 'resumen.json') $Tareas[0].resultado } }
     'pruebas-pre' { Save-Pruebas (Read-Json (Join-Path $Datos 'mapa.json')) $Tareas }
+    'comparar' { Save-Comparaciones $Tareas }
   }
 }
 
@@ -325,6 +332,15 @@ function Get-LineaFase([string]$Fase, $Tareas) {
       $l = "Pruebas en pre: $($n.hecha) hechas, $($n.atascada) atascadas"
       if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
       return $l
+    }
+    'comparar' {
+      if (@($Tareas).Count -eq 0) { return 'Comparacion con el original: ninguna clase con datos que comparar' }
+      $l = "Comparacion con el original: $($n.hecha) clases comparadas"
+      if ($n.atascada -gt 0) { $l += ", $($n.atascada) atascadas" }
+      if ($n.pendiente -gt 0) { $l += ", $($n.pendiente) pendientes" }
+      $c = [ordered]@{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-pieza' = 0 }
+      foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) { foreach ($d in @($t.resultado.comparacion)) { $c[[string]$d.estado]++ } }
+      return "$l. Datos: $($c['igual']) igual, $($c['distinto']) distinto, $($c['falta']) falta, $($c['no-lo-se']) no lo se, $($c['sin-pieza']) sin pieza."
     }
   }
 }
@@ -548,7 +564,7 @@ try {
   $todas = @()
   $quedan = 0
   Invoke-FaseDiagnostico
-  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')) {
+  foreach ($fase in @('fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'comparar')) {
     if ($script:Parada) { break }
     $Estado['fase'] = $fase
     Save-Estado
