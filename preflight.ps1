@@ -14,7 +14,7 @@ Una ruta de -Legacy, -Migrado o -Plantilla que no es una carpeta se dice al inst
 
 BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   1 entorno       modo de lenguaje, versiones, politica de ejecucion, suspension, disco
-  2 bancos        tests\probar.ps1 y tests\probar-migracion.ps1 como procesos hijo
+  2 bancos        tests\probar.ps1 como proceso hijo (probar-migracion es un banco de desarrollo y no entra)
   3 copilot       que banderas conoce (sin llamar a ningun modelo)
   4 aptitud       la ficha de un fichero de juguete, 3 veces + esfuerzo alto + herramientas limitadas
   5 paralelo      4 fichas de juguete a la vez
@@ -475,6 +475,14 @@ function Add-DatosRepo([string]$Nombre, [string]$Raiz) {
   Add-Linea "$Nombre ficheros locales: $($c.locales)"
 }
 
+# De un fichero, su extension si es de las que se lanzan (.exe, .cmd, .bat, .ps1, .com), 'sin extension' o 'otra'.
+function Get-TipoFichero([string]$Ruta) {
+  $ext = [System.IO.Path]::GetExtension($Ruta).ToLowerInvariant()
+  if (-not $ext) { return 'sin extension' }
+  if (@('.exe', '.cmd', '.bat', '.ps1', '.com') -contains $ext) { return $ext }
+  return 'otra'
+}
+
 # Los bloques: cada uno en su try; el fichero se reescribe al acabar cada uno.
 function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cuerpo, [bool]$SinMensaje = $false) {
   if ($SoloN.Count -gt 0 -and $SoloN -notcontains $N) { return }
@@ -913,19 +921,23 @@ try {
       Add-Linea ('maven: ' + (Get-Version $mvnElegido.Exe @('--version') 'Apache Maven (\d+(?:\.\d+)+)' $carpetaMvn))
     }
     Add-Linea ('copilot: ' + (Get-Version $Cfg.CopilotExe @('--version') '(\d+\.\d+(?:\.\d+)*)'))
-    # la extension del Copilot (.exe, .cmd, .bat, .ps1 o .com; otra cualquiera sale como 'otra')
-    $tipo = 'no encontrado'
+    # lo primero que encuentra PowerShell con el nombre del Copilot (funcion, alias o fichero y su extension) y lo que se
+    # lanza de verdad: la misma eleccion que hace Get-Lanzador
+    $tipo = 'no encontrado'; $seLanza = 'nada'
     try {
-      $c = @(Get-Command $Cfg.CopilotExe -ErrorAction SilentlyContinue)
+      $c = @(Get-Command $Cfg.CopilotExe -All -ErrorAction SilentlyContinue)
       if ($c.Count -gt 0) {
-        $ext = [System.IO.Path]::GetExtension("$($c[0].Source)").ToLowerInvariant()
-        if (-not $ext) { $tipo = 'sin extension' }
-        elseif (@('.exe', '.cmd', '.bat', '.ps1', '.com') -contains $ext) { $tipo = $ext }
-        else { $tipo = 'otra' }
+        $k = "$($c[0].CommandType)"
+        if ($k -eq 'Function') { $tipo = 'funcion' }
+        elseif ($k -eq 'Alias') { $tipo = 'alias' }
+        elseif ($k -eq 'Cmdlet') { $tipo = 'cmdlet' }
+        else { $tipo = Get-TipoFichero "$($c[0].Source)" }
       }
+      $lanzable = Select-Lanzable $c ($env:OS -eq 'Windows_NT')
+      if ($lanzable) { $seLanza = Get-TipoFichero $lanzable }
     }
     catch { }
-    Add-Linea "tipo de copilot: $tipo"
+    Add-Linea "tipo de copilot: $tipo | se lanza: $seLanza"
     $suelta = Set-Despierto $false
     [void](Set-Despierto $true)
     Add-Linea ('impide la suspension: ' + (Get-SiNo $despierto) + ' | al soltar ' + (Get-SiNo $suelta))
@@ -948,7 +960,7 @@ try {
   # ----------------------------------- 2 -----------------------------------
   Invoke-Bloque 2 'bancos' 30 {
     $fallan = @()
-    foreach ($b in @('probar', 'probar-migracion')) {
+    foreach ($b in @('probar')) {
       $ruta = Join-Path (Join-Path $PSScriptRoot 'tests') ($b + '.ps1')
       if (-not (Test-Path -LiteralPath $ruta)) { Add-Linea "${b}: no esta el fichero"; continue }
       $r = Invoke-Proceso (Get-PowerShellExe) (Get-ArgsPowerShell @($ruta, '-Dir', (Join-Path $Tmp $b))) $PSScriptRoot 1800

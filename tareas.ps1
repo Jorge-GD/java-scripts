@@ -107,9 +107,38 @@ function Get-PowerShellExe {
   return $e
 }
 
+# De lo que PowerShell encuentra con un nombre (Get-Command -All, en su orden: CommandType y Source), el fichero que se
+# lanza, o $null. Solo cuentan los ficheros (Application, ExternalScript): una funcion o un alias no tienen ruta. En
+# Windows el fichero tiene que acabar en una extension que se pueda lanzar (el 'copilot' sin extension que deja npm no);
+# fuera de Windows vale el primer fichero, porque ahi un ejecutable no lleva extension.
+function Select-Lanzable($Candidatos, [bool]$EsWindows) {
+  foreach ($c in $Candidatos) {
+    if (@('Application', 'ExternalScript') -notcontains "$($c.CommandType)") { continue }
+    $ruta = "$($c.Source)"
+    if (-not $ruta) { continue }
+    if (-not $EsWindows) { return $ruta }
+    if (@('.exe', '.com', '.cmd', '.bat', '.ps1') -contains [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()) { return $ruta }
+  }
+  return $null
+}
+
 # Que programa y que argumentos lanzar: un .ps1 va por PowerShell, un .cmd por cmd.
 function Get-Lanzador([string]$Exe, [string[]]$A) {
-  $ruta = @(Get-Command $Exe)[0].Source
+  $encontrados = @()
+  if ($Exe) { $encontrados = @(Get-Command $Exe -All -ErrorAction SilentlyContinue) }
+  $ruta = Select-Lanzable $encontrados ($env:OS -eq 'Windows_NT')
+  if (-not $ruta) {
+    $hay = 'nada'
+    if ($encontrados.Count -gt 0) {
+      $tipo = "$($encontrados[0].CommandType)"
+      if ($tipo -eq 'Function') { $hay = 'funcion' }
+      elseif ($tipo -eq 'Alias') { $hay = 'alias' }
+      elseif ($tipo -eq 'Cmdlet') { $hay = 'cmdlet' }
+      elseif ([System.IO.Path]::GetExtension("$($encontrados[0].Source)")) { $hay = 'fichero con otra extension' }
+      else { $hay = 'fichero sin extension' }
+    }
+    throw ("No puedo lanzar '" + (($Exe -replace '\\', '/') -split '/')[-1] + "': aqui es $hay. Pon la ruta entera del .cmd o del .exe en CopilotExe de ajustes.json.")
+  }
   $ext = [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()
   if ($ext -eq '.ps1') {
     return [pscustomobject]@{ Exe = (Get-PowerShellExe); Args = (((@('-NoProfile', '-File', $ruta) + $A) | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }

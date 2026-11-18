@@ -10,7 +10,7 @@ Vale para Windows PowerShell 5.1 y para PowerShell 7. Solo ASCII a proposito.
   .\tests\probar-preflight.ps1 -Dir D:\tmp\x -Conservar
   .\tests\probar-preflight.ps1 -Script C:\otra\preflight.ps1
 
-La prueba 1 lanza de verdad los otros dos bancos (unos 2 minutos); las demas usan -Solo.
+La prueba 1 lanza de verdad el banco probar (el bloque 2 del preflight); las demas usan -Solo.
 Cada lanzamiento corre sobre una copia de los scripts en la carpeta temporal, para que
 preflight-resultado.txt no se mezcle con el del repo.
 Sale con 0 si todo pasa y con 1 si algo falla.
@@ -273,14 +273,14 @@ $Pruebas['1 completo: nueve bloques con los tres repos y los falsos, sin fallos'
   Comprueba '1: politica de ejecucion efectiva y por ambito' ((Valor-De $r 'politica de ejecucion') -match 'efectiva \w+ \| .*Process=') (Valor-De $r 'politica de ejecucion')
   Comprueba '1: version de Windows en numeros' ((Valor-De $r 'windows') -match '^\d+\.\d+\.\d+') (Valor-De $r 'windows')
   Comprueba '1: versiones de git, java, maven y copilot (solo el numero)' (((Valor-De $r 'git') -match '^\d+\.\d+') -and ((Valor-De $r 'java') -eq '21.0.0') -and ((Valor-De $r 'maven') -eq '3.9.8') -and ((Valor-De $r 'copilot') -eq '1.0.112')) (((Bloque-De $r '1') | Select-Object -First 12) -join ' / ')
-  Igual '1: tipo de copilot' '.ps1' (Valor-De $r 'tipo de copilot')
+  Igual '1: tipo de copilot y lo que se lanza' '.ps1 | se lanza: .ps1' (Valor-De $r 'tipo de copilot')
   Igual '1: impide la suspension' 'si' ((Valor-De $r 'impide la suspension') -replace ' .*$', '')
   Comprueba '1: pagina de codigos' ((Valor-De $r 'pagina de codigos') -match '^\d+') (Valor-De $r 'pagina de codigos')
   Comprueba '1: GB libres' ((Valor-De $r 'GB libres') -match '^\d+(\.\d+)?$') (Valor-De $r 'GB libres')
 
-  # 2 bancos y 10 los otros dos bancos siguen igual
+  # 2 bancos: solo probar (probar-migracion es un banco de desarrollo y no entra en el preflight)
   Comprueba '2: probar.ps1 pasa todas sus comprobaciones (N de N en S s, 75 o mas)' ((Valor-De $r 'probar') -match '^(\d+) de \1 en \d+ s$' -and [int]$Matches[1] -ge 75) (Valor-De $r 'probar')
-  Comprueba '2: probar-migracion.ps1 pasa todas sus comprobaciones (232 o mas)' ((Valor-De $r 'probar-migracion') -match '^(\d+) de \1 en \d+ s$' -and [int]$Matches[1] -ge 232) (Valor-De $r 'probar-migracion')
+  Igual '2: no lanza probar-migracion' 0 (Cuenta-Lineas $r 'probar-migracion')
   Igual '2: fallan' 'ninguna' (Valor-De $r 'fallan')
 
   # 3 copilot
@@ -580,14 +580,14 @@ $Pruebas['12 ruta mal escrita: se dice al instante, sale con 1, no ejecuta ningu
   Sin-Fugas $r2 'dos mal'
 }
 
-$Pruebas['13 bloque 1: tipo de copilot (extension, sin extension, no encontrado) y GB libres con una ruta relativa'] = {
+$Pruebas['13 bloque 1, lanzar Copilot: tipo y lo que se lanza (extension, sin extension, no encontrado) y GB libres con una ruta relativa'] = {
   $e = Nuevo-Escenario 'tipo'
   Pon-Ajustes $e @{ CopilotExe = (Join-Path $Dir 'no-existe-zorba/copilot.exe') }
   $r = Pf $e (Todos $e @('-Solo', '1'))
-  Igual 'un Copilot que no esta: no encontrado' 'no encontrado' (Valor-De $r 'tipo de copilot')
+  Igual 'un Copilot que no esta: no encontrado, y no se lanza nada' 'no encontrado | se lanza: nada' (Valor-De $r 'tipo de copilot')
   Sin-Fugas $r 'tipo'
   if ($env:OS -ne 'Windows_NT') {
-    foreach ($c in @(@('copilot-sin-ext', 'sin extension'), @('copilot.cmd', '.cmd'), @('copilot.zorba', 'otra'))) {
+    foreach ($c in @(@('copilot-sin-ext', 'sin extension | se lanza: sin extension'), @('copilot.cmd', '.cmd | se lanza: .cmd'), @('copilot.zorba', 'otra | se lanza: otra'))) {
       $exe = Join-Path (Join-Path $e.Raiz 'bin') $c[0]
       Nuevo-Lanzador $exe (Join-Path $falsos 'copilot.ps1')
       Pon-Ajustes $e @{ CopilotExe = $exe }
@@ -1337,6 +1337,93 @@ $Pruebas['34 latido: un bloque que tarda mas que el intervalo escribe "... sigue
   Igual 'el fichero de resultado no trae ninguna' 0 (Cuenta-Lineas $r '\.\.\. sigue')
   Comprueba 'el fichero de resultado sigue entero (tiene el bloque 9 y acaba con == fin)' ((Cuenta-Lineas $r '^== 9 ') -eq 1 -and (Lineas-De $r) -contains '== fin')
   Sin-Fugas $r 'latido'
+}
+
+# El texto de esas funciones de un script, para cargarlas sin ejecutarlo: . ([scriptblock]::Create(...)).
+function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Ruta, [ref]$null, [ref]$null)
+  $fs = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $Nombres -contains $_.Name })
+  return (@($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+$Pruebas['35 lanzar Copilot, eleccion (funcion pura): solo ficheros, y en Windows solo con una extension que se lanza'] = {
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Select-Lanzable'))))
+  function Cand([string]$Tipo, [string]$Ruta) { return [pscustomobject]@{ CommandType = $Tipo; Source = $Ruta } }
+  # lo que da Get-Command -All en un Windows con npm: la funcion (o el alias), el fichero sin extension, el .cmd y el .ps1
+  $npm = @((Cand 'Function' ''), (Cand 'Application' '/n/copilot'), (Cand 'Application' '/n/copilot.cmd'), (Cand 'ExternalScript' '/n/copilot.ps1'))
+  Igual 'Windows: funcion, fichero sin extension, .cmd y .ps1: el .cmd' '/n/copilot.cmd' (Select-Lanzable $npm $true)
+  Igual 'fuera de Windows: el primer fichero, sea como sea' '/n/copilot' (Select-Lanzable $npm $false)
+  $sinExt = @((Cand 'Application' '/n/copilot'))
+  Igual 'Windows: solo un fichero sin extension: nada' '' "$(Select-Lanzable $sinExt $true)"
+  Igual 'fuera de Windows: ese fichero' '/n/copilot' (Select-Lanzable $sinExt $false)
+  foreach ($w in @($true, $false)) {
+    Igual "un alias no es un fichero (Windows $w)" '' "$(Select-Lanzable @((Cand 'Alias' '')) $w)"
+    Igual "un cmdlet tampoco (Windows $w)" '' "$(Select-Lanzable @((Cand 'Cmdlet' 'Mod')) $w)"
+    Igual "ni una lista vacia (Windows $w)" '' "$(Select-Lanzable @() $w)"
+    Igual "ni nada (Windows $w)" '' "$(Select-Lanzable $null $w)"
+  }
+  Igual 'Windows: un .ps1 solo' '/n/copilot.ps1' (Select-Lanzable @((Cand 'ExternalScript' '/n/copilot.ps1')) $true)
+  Igual 'Windows: la extension en mayusculas vale' '/n/COPILOT.EXE' (Select-Lanzable @((Cand 'Application' '/n/COPILOT.EXE')) $true)
+  Igual 'Windows: .bat y .com valen' '/n/a.bat' (Select-Lanzable @((Cand 'Application' '/n/a.vbs'), (Cand 'Application' '/n/a.bat'), (Cand 'Application' '/n/a.com')) $true)
+  Igual 'Windows: de dos que valen, el primero' '/n/uno.exe' (Select-Lanzable @((Cand 'Application' '/n/uno.exe'), (Cand 'Application' '/n/dos.cmd')) $true)
+  Igual 'Windows: una extension que no se lanza (.vbs): nada' '' "$(Select-Lanzable @((Cand 'Application' '/n/a.vbs')) $true)"
+}
+
+$Pruebas['36 lanzar Copilot, de verdad: una funcion con el nombre de un .ps1 del PATH no tapa al .ps1'] = {
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Select-Lanzable', 'Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin'))))
+  $bin = Join-Path $Dir 'bin-funcion'
+  Escribe $bin 'copilotfalsoxq.ps1' "Write-Host 'hola'`n"
+  $pathAntes = $env:PATH
+  $env:PATH = $bin + [System.IO.Path]::PathSeparator + $env:PATH
+  try {
+    function copilotfalsoxq { 'una funcion' }
+    $l = Get-Lanzador 'copilotfalsoxq' @('-p', 'hola')
+  }
+  finally { $env:PATH = $pathAntes }
+  Comprueba 'el programa a lanzar no esta vacio y es PowerShell' (-not [string]::IsNullOrEmpty($l.Exe) -and $l.Exe -eq (Get-PowerShellExe)) "Exe='$($l.Exe)'"
+  Comprueba 'lanza el .ps1 con -File y sus argumentos' ($l.Args -match '-File' -and $l.Args.Contains((Join-Path $bin 'copilotfalsoxq.ps1')) -and $l.Args.Contains('hola')) $l.Args
+}
+
+$Pruebas['37 lanzar Copilot, nada que lanzar: el mensaje dice que es lo que hay, sin rutas, y el preflight lo lleva en "sin modelo"'] = {
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path $origen 'tareas.ps1') @('Select-Lanzable', 'Get-Lanzador', 'Get-PowerShellExe', 'ConvertTo-ArgWin'))))
+  function Mensaje-De([string]$Exe) {
+    try { [void](Get-Lanzador $Exe @()); return 'no falla' } catch { return $_.Exception.Message }
+  }
+  $fin = ". Pon la ruta entera del .cmd o del .exe en CopilotExe de ajustes.json."
+  Igual 'nada de nada' ("No puedo lanzar 'copilotnadaxq': aqui es nada" + $fin) (Mensaje-De 'copilotnadaxq')
+  Igual 'con una ruta entera, el mensaje lleva solo el nombre' ("No puedo lanzar 'copilotnadaxq': aqui es nada" + $fin) (Mensaje-De (Join-Path (Join-Path $Dir 'no-hay') 'copilotnadaxq'))
+  function copilotfuncionxq { 'una funcion' }
+  Igual 'una funcion' ("No puedo lanzar 'copilotfuncionxq': aqui es funcion" + $fin) (Mensaje-De 'copilotfuncionxq')
+  Set-Alias -Name copilotaliasxq -Value Get-Date
+  Igual 'un alias' ("No puedo lanzar 'copilotaliasxq': aqui es alias" + $fin) (Mensaje-De 'copilotaliasxq')
+  # un fichero sin extension en un Windows simulado (como el que deja npm); los lanzadores de prueba son de sh
+  if ($env:OS -ne 'Windows_NT') {
+    $bin = Join-Path $Dir 'bin-sin-ext'
+    Nuevo-Lanzador (Join-Path $bin 'copilotsinextxq') (Join-Path $falsos 'copilot.ps1')
+    $pathAntes = $env:PATH; $so = $env:OS
+    $env:PATH = $bin + [System.IO.Path]::PathSeparator + $env:PATH
+    $env:OS = 'Windows_NT'
+    try { $m = Mensaje-De 'copilotsinextxq' }
+    finally { $env:PATH = $pathAntes; $env:OS = $so }
+    Igual 'un fichero sin extension (en Windows)' ("No puedo lanzar 'copilotsinextxq': aqui es fichero sin extension" + $fin) $m
+  }
+  # el preflight: la linea 'sin modelo' del bloque 4 lleva el mismo mensaje, sin rutas
+  $e = Nuevo-Escenario 'sin-lanzador'
+  Pon-Ajustes $e @{ CopilotExe = 'copilotfalsoinexistente' }
+  $r = Pf $e (Todos $e @('-Solo', '4'))
+  Igual 'el preflight sale con 0' 0 $r.Codigo
+  $sm = Valor-De $r 'sin modelo'
+  Comprueba 'sin modelo dice que no pudo lanzar Copilot y por que' ($sm -ceq ("No pude lanzar Copilot: No puedo lanzar 'copilotfalsoinexistente': aqui es nada" + $fin)) $sm
+  Sin-Fugas $r 'sin lanzador'
+}
+
+$Pruebas['38 lanzar Copilot, bloque 2: solo el banco probar'] = {
+  $e = Nuevo-Escenario 'bancos'
+  $r = Pf $e (Todos $e @('-Solo', '2'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'probar pasa todas sus comprobaciones' ((Valor-De $r 'probar') -match '^(\d+) de \1 en \d+ s$') ((Bloque-De $r '2') -join ' / ')
+  Igual 'ni el fichero de resultado ni la consola nombran probar-migracion' 0 ((Cuenta-Lineas $r 'probar-migracion') + @($r.Salida -split "`n" | Where-Object { $_ -match 'probar-migracion' }).Count)
+  Igual 'fallan: ninguna' 'ninguna' (Valor-De $r 'fallan')
 }
 
 # ================================ LANZADOR ================================
