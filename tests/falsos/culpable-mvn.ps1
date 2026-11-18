@@ -5,6 +5,7 @@
 #   commit               hace un commit vacio ('cambio ajeno')
 #   fichero              escribe un fichero nuevo sin commit (ajeno.txt)
 #   fichero-tras-revert  igual, pero solo cuando el ultimo commit de <carpeta> es un revert (es decir, ya despues de deshacer)
+#   reset                quita el ultimo commit de <carpeta> (git reset --hard HEAD~1)
 if ($env:RESCATE_TOCA -and ($args -contains 'test')) {
   $carpeta, $modo = "$env:RESCATE_TOCA" -split '\|', 2
   $marca = Join-Path $env:RESCATE_LLAMADAS 'toco.txt'
@@ -14,6 +15,7 @@ if ($env:RESCATE_TOCA -and ($args -contains 'test')) {
     [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
     [System.IO.File]::WriteAllText($marca, "$modo`n")
     if ($modo -eq 'commit') { $null = & git -C $carpeta commit -q --allow-empty -m 'cambio ajeno' 2>&1 }
+    elseif ($modo -eq 'reset') { $null = & git -C $carpeta reset -q --hard HEAD~1 2>&1 }
     else { [System.IO.File]::WriteAllText((Join-Path $carpeta 'ajeno.txt'), "ajeno`n") }
   }
 }

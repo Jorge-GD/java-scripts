@@ -771,10 +771,10 @@ function Invoke-Revert([string]$Commit) {
 
 # Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar sus casos en el nuevo HEAD.
 # Apunta en cada culpable si se ha deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por
-# buenos en la carpeta). Devuelve $Res con el resultado de ahora de esos casos.
+# buenos en la carpeta). Pone en su sitio, en $Res, el resultado de ahora de esos casos.
 function Undo-Culpables($Culpables, $Res) {
   $commits = @($Culpables | Sort-Object -Property indice -Descending | ForEach-Object { $_.commit } | Select-Object -Unique)
-  if ($commits.Count -eq 0) { return $Res }
+  if ($commits.Count -eq 0) { return }
   Info ''
   Info "Deshaciendo con git revert en ${DirRama}: $($commits.Count) commit(s), del mas nuevo al mas viejo..."
   foreach ($commit in $commits) {
@@ -788,7 +788,7 @@ function Undo-Culpables($Culpables, $Res) {
     Bien "Deshecho $($commit.Substring(0, 7)) ($($suyos[0].asunto)) con el commit $($nuevo.Substring(0, 7))."
   }
   $hechos = @($Culpables | Where-Object { $_.deshecho })
-  if ($hechos.Count -eq 0) { return $Res }
+  if ($hechos.Count -eq 0) { return }
   $script:headMig = Get-Head $DirRama
   foreach ($x in $hechos) {
     $e = Get-EstadoEn $script:headMig (Get-TareaCaso $x.job $x.caso)
@@ -799,7 +799,6 @@ function Undo-Culpables($Culpables, $Res) {
     }
     else { Bien "El caso $($x.job)/$($x.caso): ahora igual tras deshacer $($x.commit.Substring(0, 7))." }
   }
-  return $Res
 }
 
 # Es la huella de $Dir de ahora la de antes? Solo se admite una diferencia: en la carpeta donde -Deshacer ha hecho sus commits
@@ -992,7 +991,7 @@ try {
   # 6. Con -Desde: el commit que rompe cada caso distinto y, con -Deshacer, su git revert; el resultado y la salida son los de despues
   if ($Desde) {
     $culpables = @(Find-Culpables $res)
-    if ($Deshacer) { $res = @(Undo-Culpables $culpables $res) }
+    if ($Deshacer) { Undo-Culpables $culpables $res }
     $o = Save-Resultado $res $culpables
     if ($Deshacer -and @($culpables | Where-Object { $_.deshecho }).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
   }

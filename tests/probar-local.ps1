@@ -690,6 +690,19 @@ $Pruebas['31 culpable (m): dos casos rotos por commits distintos: se deshacen de
   Igual 'los dos casos quedan iguales' 'igual,igual' ((Resultados $e) -join ',')
 }
 
+$Pruebas['32 culpable (n): si el culpable es el ultimo commit no se ejecuta otra vez (ya se comparo), y -Desde igual al HEAD dice que ya era distinto sin ejecutar nada'] = {
+  $e = Nuevo-Escenario 'culpable-n' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 5
+  $r = Prueba $e @('-Desde', $h.Desde)
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el culpable es el ultimo' ($r.Salida.Contains("se rompe en $(Corto $h.Commits[4]) (cambia el limite del paso 5).")) (Cola $r.Salida)
+  Igual 'la normal, -Desde y dos mas de la biseccion (el ultimo no se repite)' 4 (Ejecuciones-Mig $e 'caso-01')
+  $r = Prueba $e @('-Desde', $h.Commits[4])
+  Igual 'con -Desde igual al HEAD sale con 2' 2 $r.Codigo
+  Comprueba 'dice que ya era distinto' ($r.Salida.Contains("El caso cargaJob/caso-01 ya era distinto en $(Corto $h.Commits[4])")) (Cola $r.Salida)
+  Igual 'y solo se ejecuta la comparacion normal (una mas)' 5 (Ejecuciones-Mig $e 'caso-01')
+}
+
 # Prueba con el Maven falso de culpable-mvn.ps1, que toca la carpeta de rescate ($Modo: ver ese fichero) en medio de la prueba.
 function Prueba-Con-Toque($E, [string]$Modo, [string[]]$A) {
   $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'culpable-mvn.ps1'); SegundosPorLlamada = 60 }
@@ -699,7 +712,7 @@ function Prueba-Con-Toque($E, [string]$Modo, [string[]]$A) {
   finally { $env:RESCATE_TOCA = '' }
 }
 
-$Pruebas['30 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, o un fichero ajeno despues del revert): la huella los ve'] = {
+$Pruebas['30 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, un fichero ajeno despues del revert o un reset ajeno): la huella los ve'] = {
   $e = Nuevo-Escenario 'culpable-k1' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $h = Historia $e 3
   $r = Prueba-Con-Toque $e 'commit' @('-Desde', $h.Desde, '-Deshacer')
@@ -712,6 +725,11 @@ $Pruebas['30 culpable (k): -Deshacer no tapa otros cambios en la carpeta de resc
   Igual 'con un fichero ajeno aparecido despues del revert sale con 1' 1 $r.Codigo
   Comprueba 'y dice que ha cambiado una carpeta' ($r.Salida -match 'Ha cambiado durante la prueba') (Cola $r.Salida)
   Comprueba 'el fichero ajeno esta (lo dejo el falso, no el script)' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'ajeno.txt'))
+  $e = Nuevo-Escenario 'culpable-k3' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $r = Prueba-Con-Toque $e 'reset' @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'con un reset ajeno (un commit menos, y el revert encima de otro) sale con 1' 1 $r.Codigo
+  Comprueba 'y dice que ha cambiado una carpeta' ($r.Salida -match 'Ha cambiado durante la prueba') (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
