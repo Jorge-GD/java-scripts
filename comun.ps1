@@ -21,7 +21,19 @@ $Cfg = @{
   MinutosMaven   = 30     # tope de cada llamada a Maven, en minutos (admite decimales); pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida
   MinutosCopilot = 20     # tope de cada llamada a Copilot de rescate.ps1, en minutos (admite decimales); pasado, se para Copilot con sus procesos hijos
   JacocoPlugin   = 'org.jacoco:jacoco-maven-plugin:0.8.16'   # el preflight prueba en el equipo estas mismas coordenadas
-  CoberturaMinima = 80    # por ciento de lineas cubiertas por los tests por debajo del cual la cobertura se marca como baja
+  CoberturaMinima = 80    # por ciento de lineas cubiertas (Sonar way: 80): por debajo, el informe la marca como baja y el paso 'cobertura' sube hasta aqui
+  # El paso 'cobertura' de rescate.ps1 (-Cobertura) escribe tests hasta llegar a CoberturaMinima.
+  CoberturaRepeticiones = 3     # veces seguidas que han de pasar los tests de la clase de un lote (si una falla, son inestables)
+  CoberturaClasesMax    = 40    # clases como mucho por pasada (tope de gasto)
+  # Lo que el paso no propone: una regex sobre la ruta del .java (con /); 'texto:<regex>' mira dentro del fichero; 'records-sin-metodos' es el
+  # record sin ningun metodo. Por defecto: la clase @SpringBootApplication, config, dto, model y los records sin metodos.
+  CoberturaExcluir      = @('(^|/)config/', '(^|/)dto/', '(^|/)model/', 'texto:@SpringBootApplication\b', 'records-sin-metodos')
+  # Lo que se le pide al modelo en cada lote de cobertura (el lote es una clase; la clase, su test y sus lineas sin cubrir van aparte).
+  CoberturaPrompt       = ('Escribe tests para la clase de este lote hasta cubrir sus lineas sin cubrir. Solo creas o cambias ficheros bajo src/test/: nada en src/main/, ni el pom.xml; la logica de negocio no se toca.' + "`n" +
+    '- Escribe o amplia src/test/java/<mismo paquete>/<Clase>Test.java. Usa solo lo que ya esta en el pom (JUnit 5, Mockito o AssertJ si estan). No anadas dependencias.' + "`n" +
+    '- Prueba el comportamiento visible: cada metodo publico, sus ramas y sus errores, con valores concretos en las aserciones. No pruebes getters, setters ni constructores triviales.' + "`n" +
+    '- Cada @Test lleva al menos una asercion de verdad. Nada de assertTrue(true), @Disabled, catch vacios ni Thread.sleep. Los tests no dependen del orden, del reloj ni de la red: pasan siempre.' + "`n" +
+    '- Si un comportamiento parece un error del codigo, no lo arregles ni lo escondas: dejalo fijado tal como es y anade el comentario: // OJO: parece un error: <motivo>')
 }
 
 # ============================== UTILIDADES ==============================
@@ -326,8 +338,12 @@ function Get-Head([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', 'HEAD'
 # (prepare-agent, test y report) con su salida en $Registro. Lee target\site\jacoco\jacoco.csv por el nombre de sus columnas y suma
 # todas las filas. Sin medida (medida false y porcentaje nulo) el motivo dice por que: nunca sale un 0 % que no se ha medido.
 # Con $Compila en $false (el diagnostico dice que no compila) no lanza Maven.
-function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
+# Con $ConClases en $true devuelve ademas clases (por defecto no: migracion.ps1 guarda el objeto tal cual en sus datos): una fila por fila del CSV,
+# con Clase (paquete.clase), Fichero (la ruta relativa src/main/java/... del .java, o '' si no esta), Faltan y Cubiertas (lineas); vacia si no se
+# ha medido. Una clase interna (Externa$Interna) lleva el fichero de la externa.
+function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila, [bool]$ConClases = $false) {
   $o = [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = $Cfg.CoberturaMinima; motivo = '' }
+  if ($ConClases) { $o.clases = @() }
   if (-not $Compila) { $o.motivo = 'el migrado no compila'; return $o }
   $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
   if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
@@ -347,9 +363,22 @@ function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
   if (($cab -cnotcontains 'LINE_MISSED') -or ($cab -cnotcontains 'LINE_COVERED')) { $o.motivo = 'el CSV de JaCoCo no tiene las columnas LINE_MISSED y LINE_COVERED'; return $o }
   $faltan = [long]0
   $cubiertas = [long]0
-  try { foreach ($f in @($lineas | ConvertFrom-Csv)) { $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED } }
+  $clases = New-Object System.Collections.Generic.List[object]
+  try {
+    foreach ($f in @($lineas | ConvertFrom-Csv)) {
+      $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED
+      $paq = "$($f.PACKAGE)".Trim()
+      $cls = "$($f.CLASS)".Trim()
+      $rel = 'src/main/java/' + ($paq.Replace('.', '/') + '/').TrimStart('/') + $cls.Split('$')[0] + '.java'
+      if (-not (Test-Path -LiteralPath (Join-Ruta $Dir $rel) -PathType Leaf)) { $rel = '' }
+      $nombre = $cls
+      if ($paq) { $nombre = "$paq.$cls" }
+      $clases.Add([pscustomobject]@{ Clase = $nombre; Fichero = $rel; Faltan = [long]$f.LINE_MISSED; Cubiertas = [long]$f.LINE_COVERED })
+    }
+  }
   catch { $o.motivo = 'el CSV de JaCoCo no se puede leer: ' + $_.Exception.Message; return $o }
   if ($faltan + $cubiertas -eq 0) { $o.motivo = 'ninguna linea medible'; return $o }
+  if ($ConClases) { $o.clases = $clases.ToArray() }
   $o.medida = $true
   $o.cubiertas = $cubiertas
   $o.total = $faltan + $cubiertas

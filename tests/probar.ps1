@@ -3844,6 +3844,113 @@ $Pruebas['m10 sonar: el modelo deja una incidencia con motivo: el lote vale sin 
   Comprueba 'el resumen cuenta 1 resuelta (la dejada no)' ($r.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r.Salida)
 }
 
+# Una clase con dos lineas distintas que se pueden marcar en un mismo fichero.
+$DosLineas = @'
+package com.acme.plantillabatch.service;
+
+/** Dos calculos en una clase. */
+public class DosLineasService {
+
+    /**
+     * Primer calculo.
+     *
+     * @param a primero
+     * @param b segundo
+     * @return la suma
+     */
+    public int primero(int a, int b) {
+        int primero = a + b;
+        return primero;
+    }
+
+    /**
+     * Segundo calculo.
+     *
+     * @param a primero
+     * @param b segundo
+     * @return la resta
+     */
+    public int segundo(int a, int b) {
+        int segundo = a - b;
+        return segundo;
+    }
+}
+'@
+
+$Pruebas['m10 sonar: dos incidencias de un mismo fichero, el modelo deja una con motivo y no toca la otra: solo la apuntada es dejada, la otra sigue pendiente y se atasca'] = {
+  $e = Escenario-Sonar 'm10-deja-linea' @('service/TotalService') @{ CopilotExe = (Join-Path $falsos 'sonar-copilot.ps1') } @() @{ 'service/DosLineasService' = $DosLineas }
+  $total = $RutaSv + 'service/TotalService.java'
+  $f = $RutaSv + 'service/DosLineasService.java'
+  $lnT = Linea-De (Lee $e.Repo $total) 'int resultado'
+  $l1 = Linea-De (Lee $e.Repo $f) 'int primero = a + b;'
+  $l2 = Linea-De (Lee $e.Repo $f) 'int segundo = a - b;'
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'Fix this bug in TotalService.' 'BUG' 'TotalService.java' $total "${lnT}L"),
+    (Inc 'CRITICAL' 'DEJAME: change the public API of primero.' 'BUG' 'DosLineasService.java' $f "${l1}L"),
+    (Inc 'CRITICAL' 'ATASCA: this one cannot be fixed.' 'BUG' 'DosLineasService.java' $f "${l2}L"))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1') 'sonar-deja-y-atasca'
+  Igual 'sale con 2: la otra incidencia del fichero se atasca' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba "Lote 1 OK: 'sonar' 3 -> 1 (solo la linea apuntada es dejada, la otra sigue pendiente)" ($r.Salida -match "Lote 1 OK: 'sonar' 3 -> 1") (Cola $r.Salida)
+  Comprueba 'la otra se intenta en un lote 2 de 1 hallazgo y se deshace' ($r.Salida -match 'Lote 2 : 1 hallazgo\(s\) en 1 fichero\(s\)' -and $r.Salida -match 'Lote 2 DESHECHO') (Cola $r.Salida)
+  Comprueba 'faltan 2 de Sonar: la dejada y la atascada' ($r.Salida -match 'Faltan 2 de Sonar') (Cola $r.Salida)
+  Comprueba 'la apuntada sale dejada por el modelo, y es la unica de ese grupo' ($r.Salida -match "dejada por el modelo: cambiaria la API publica \(1\):\s*\n\s*- $([regex]::Escape($f)):${l1} - DEJAME") (Cola $r.Salida)
+  Comprueba 'la otra sale atascada tras los intentos, no dejada' ($r.Salida -match "atascada tras los intentos \(1\):\s*\n\s*- $([regex]::Escape($f)):${l2} - ATASCA") (Cola $r.Salida)
+}
+
+# Una clase con la misma linea de codigo dos veces ('return null;').
+$DosNulos = @'
+package com.acme.plantillabatch.service;
+
+/** Dos salidas nulas. */
+public class NuloService {
+
+    /**
+     * Busca uno.
+     *
+     * @param a clave
+     * @return nada
+     */
+    public String uno(String a) {
+        return null;
+    }
+
+    /**
+     * Busca otro.
+     *
+     * @param a clave
+     * @return nada
+     */
+    public String otro(String a) {
+        return null;
+    }
+}
+'@
+
+$Pruebas['m10 sonar: la misma linea dos veces en el fichero: si el arreglo deja una sola, la incidencia de orden 1 se da por arreglada y la de orden 0 no'] = {
+  $e = Escenario-Sonar 'm10-unidad-repetida' @('service/TotalService') @{} @() @{ 'service/NuloService' = $DosNulos }
+  $f = $RutaSv + 'service/NuloService.java'
+  $lineas = @((Lee $e.Repo $f) -split "`r?`n")
+  $nulos = @(1..$lineas.Count | Where-Object { $lineas[$_ - 1].Trim() -eq 'return null;' })
+  Igual 'el fichero tiene dos veces return null;' 2 $nulos.Count
+  Informe-Sonar $e.Xlsx @(
+    (Inc 'CRITICAL' 'ATASCA: return null en uno.' 'BUG' 'NuloService.java' $f "$($nulos[0])L"),
+    (Inc 'CRITICAL' 'Return an empty value en otro.' 'BUG' 'NuloService.java' $f "$($nulos[1])L"))
+  # el Copilot falso no toca la primera (ATASCA) y cambia la segunda: queda una sola linea 'return null;'
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1') 'sonar-atasca'
+  Igual 'sale con 2: la primera sigue pendiente y se atasca' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba "Lote 1 OK: 'sonar' 2 -> 1 (la segunda cuenta como arreglada)" ($r.Salida -match "Lote 1 OK: 'sonar' 2 -> 1") (Cola $r.Salida)
+  Igual 'queda una sola linea return null;' 1 @((Lee $e.Wt $f) -split "`r?`n" | Where-Object { $_.Trim() -eq 'return null;' }).Count
+  $base = (Lee $e.Wt '.rescate/sonar-base.json') | ConvertFrom-Json
+  $i0 = @($base.incidencias | Where-Object { $_.linea -eq $nulos[0] })[0]
+  $i1 = @($base.incidencias | Where-Object { $_.linea -eq $nulos[1] })[0]
+  Igual 'la primera lleva el orden 0 y sigue sin resolver' '0 False' "$($i0.indice) $($i0.resuelta)"
+  Igual 'la segunda lleva el orden 1 y consta como resuelta' '1 True' "$($i1.indice) $($i1.resuelta)"
+  Comprueba 'el resumen cuenta 1 resuelta' ($r.Salida -match 'Sonar: 1 resueltas aqui\.') (Cola $r.Salida)
+  Comprueba 'faltan 1 de Sonar: la primera, atascada' ($r.Salida -match 'Faltan 1 de Sonar' -and $r.Salida -match 'atascada tras los intentos') (Cola $r.Salida)
+}
+
 $Pruebas['m10 sonar: una incidencia que casa con SonarNoAutomatizar no llega al modelo y sale en Faltan con su motivo'] = {
   $no = @(, @{ Rx = 'enum-prueba'; Motivo = 'prueba: esta regla no se automatiza' })
   $e = Escenario-Sonar 'm10-noauto' @('service/TotalService', 'service/ReciboService') @{ SonarNoAutomatizar = $no }
@@ -4347,6 +4454,392 @@ $Pruebas['m10 sonar: todo en ASCII (el script, el banco y los falsos)'] = {
     $malos = @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
     Igual ('sin bytes fuera de ASCII en ' + (Split-Path $f -Leaf)) 0 $malos
   }
+}
+
+# ================================ M14: PASO COBERTURA ================================
+# El paso 'cobertura' (-Cobertura) escribe tests hasta que la cobertura de lineas llega al objetivo. Los falsos son cobertura-mvn.ps1 y
+# cobertura-copilot.ps1: la cobertura de una clase sale de marcadores (un '// LINEAS: n' en su fuente y los '// CUBRE: n' de su test).
+$CabJacoco = 'GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED'
+
+# Una fila de jacoco.csv como la de JaCoCo: paquete, clase, lineas sin cubrir y cubiertas (lo demas, de relleno).
+function Fila-Jacoco([string]$Paquete, [string]$Clase, [int]$Faltan, [int]$Cubiertas) {
+  return "batch,$Paquete,$Clase,$($Faltan * 3),$($Cubiertas * 3),2,1,$Faltan,$Cubiertas,3,1,1,1"
+}
+
+$Pruebas['m14 cobertura: Get-Cobertura con un jacoco.csv de 3 clases devuelve clases con sus lineas y la ruta del fichero; el total no cambia'] = {
+  $raiz = Join-Path $Dir 'm14-clases'
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  Escribe $raiz 'src/main/java/com/acme/batch/service/TotalService.java' "package com.acme.batch.service;`npublic class TotalService {}`n"
+  Escribe $raiz 'src/main/java/com/acme/batch/service/ReciboService.java' "package com.acme.batch.service;`npublic class ReciboService {}`n"
+  $csv = Join-Path $Dir 'm14-clases.csv'
+  [System.IO.File]::WriteAllText($csv, (@($CabJacoco, (Fila-Jacoco 'com.acme.batch.service' 'TotalService' 8 2), (Fila-Jacoco 'com.acme.batch.service' 'ReciboService' 0 10), (Fila-Jacoco 'com.acme.batch.config' 'AppConfig' 3 0)) -join "`n") + "`n")
+  $f = Join-Path $Dir 'm14-clases.ps1'
+  [System.IO.File]::WriteAllText($f, @'
+param([string]$Sis, [string]$Mvn, [string]$Carpeta, [string]$Registro)
+. (Join-Path $Sis 'comun.ps1')
+$Cfg.MvnExe = $Mvn
+$Cfg.SegundosLatido = 0
+$o = Get-Cobertura $Carpeta $Registro $true $true
+$sin = Get-Cobertura $Carpeta $Registro $true
+'CAMPOS ' + (@($sin.Keys) -join ' ')
+ConvertTo-Json -InputObject $o -Depth 6 -Compress
+'@)
+  $env:RESCATE_JACOCO_CSV = $csv
+  try { $r = Lanzar $f @((Split-Path -Parent $Script), (Join-Path $falsos 'mvn.ps1'), $raiz, (Join-Path $Dir 'm14-clases.log')) }
+  finally { $env:RESCATE_JACOCO_CSV = '' }
+  $o = $null
+  $lineas = @($r.Salida -split "`r?`n")
+  try { $o = $lineas[-1] | ConvertFrom-Json } catch { }
+  if (-not $o) { Comprueba 'la salida es un JSON' $false (Cola $r.Salida); return }
+  Igual 'sin pedir las clases, los campos son los de siempre' 'CAMPOS medida porcentaje cubiertas total minima motivo' (@($lineas | Where-Object { $_ -match '^CAMPOS ' })[0])
+  Comprueba 'medida' ($o.medida -eq $true) (Cola $r.Salida)
+  Igual 'el total sigue igual: 12 cubiertas' 12 $o.cubiertas
+  Igual 'el total sigue igual: 23 lineas' 23 $o.total
+  Igual 'el total sigue igual: 52,2 %' 52.2 $o.porcentaje
+  Igual 'la minima sigue en 80' 80 $o.minima
+  $c = @($o.clases)
+  Igual 'hay 3 clases, una por fila del csv' 3 $c.Count
+  Igual 'la primera clase lleva paquete y nombre' 'com.acme.batch.service.TotalService' $c[0].Clase
+  Igual 'su fichero es la ruta relativa del .java' 'src/main/java/com/acme/batch/service/TotalService.java' $c[0].Fichero
+  Igual 'faltan 8' 8 $c[0].Faltan
+  Igual 'y 2 cubiertas' 2 $c[0].Cubiertas
+  Igual 'la segunda esta entera cubierta' '0/10' ("$($c[1].Faltan)/$($c[1].Cubiertas)")
+  Igual 'la tercera no tiene .java en el repo: su fichero va vacio' '' "$($c[2].Fichero)"
+  Igual 'y sus numeros salen igual' '3/0' ("$($c[2].Faltan)/$($c[2].Cubiertas)")
+}
+
+# Ajustes de un repo de cobertura: Maven y Copilot de mentira, mas lo de $Mas.
+function Config-Cob($E, [hashtable]$Mas = @{}) {
+  $cfg = [ordered]@{ CopilotExe = (Join-Path $falsos 'cobertura-copilot.ps1'); MvnExe = (Join-Path $falsos 'cobertura-mvn.ps1'); Reflexionar = $false }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  Escribe $E.Repo '.rescate/config.json' (ConvertTo-Json -InputObject $cfg -Depth 6)
+}
+
+# Una clase de servicio con su marcador '// LINEAS: n' (las lineas medibles que lee el Maven falso) y Javadoc.
+function Servicio-Cob([string]$Sub, [string]$Clase, [int]$Lineas) {
+  return @"
+package com.acme.plantillabatch.$Sub;
+
+/** Servicio $Clase. */
+public class $Clase {
+    // LINEAS: $Lineas
+
+    /**
+     * Suma dos numeros.
+     *
+     * @param a primero
+     * @param b segundo
+     * @return la suma
+     */
+    public int suma(int a, int b) {
+        return a + b;
+    }
+}
+"@
+}
+
+# Su test de partida: cubre $Cubre de sus lineas (el marcador '// CUBRE: n' que lee el Maven falso).
+function Test-Cob([string]$Sub, [string]$Clase, [int]$Cubre) {
+  return @"
+package com.acme.plantillabatch.$Sub;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import org.junit.jupiter.api.Test;
+
+class ${Clase}Test {
+
+    @Test
+    void sumaBase() {
+        assertEquals(3, new $Clase().suma(1, 2));
+        // CUBRE: $Cubre
+    }
+}
+"@
+}
+
+# Un repo Java con Maven y los dos falsos de cobertura. $Clases: 'subpaquete/Clase', lineas y cubiertas al empezar (sin test si 0). Con
+# $ConApp lleva la clase @SpringBootApplication (2 lineas sin cubrir). $Extra: ruta del repo (con /) -> texto.
+function Escenario-Cob([string]$Nombre, $Clases, [hashtable]$Mas = @{}, [hashtable]$Extra = @{}, [bool]$ConApp = $true) {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $repo = Join-Path $raiz 'batch'
+  Escribe $repo 'pom.xml' $Pom
+  if ($ConApp) { Escribe $repo ($RutaSv + 'PlantillaBatchApplication.java') ($AppSonar.Replace('public class PlantillaBatchApplication {', "public class PlantillaBatchApplication {`n    // LINEAS: 2")) }
+  foreach ($c in $Clases) {
+    $p = ([string]$c[0]) -split '/'
+    Escribe $repo ($RutaSv + $p[0] + '/' + $p[1] + '.java') (Servicio-Cob $p[0] $p[1] ([int]$c[1]))
+    if ([int]$c[2] -gt 0) { Escribe $repo ('src/test/java/com/acme/plantillabatch/' + $p[0] + '/' + $p[1] + 'Test.java') (Test-Cob $p[0] $p[1] ([int]$c[2])) }
+  }
+  foreach ($k in $Extra.Keys) { Escribe $repo $k.TrimStart('/') $Extra[$k] }
+  Inicia-Repo $repo
+  $e = [pscustomobject]@{ Raiz = $raiz; Repo = $repo; Wt = ($repo + '-rescate') }
+  Config-Cob $e $Mas
+  return $e
+}
+
+function Hallazgos-Cob([string]$Raiz, [string]$Sev = '') {
+  return @(Hallazgos $Raiz | Where-Object { $_.Cat -eq 'cobertura' -and ((-not $Sev) -or $_.Sev -eq $Sev) })
+}
+
+# Un repo de clases con distinta cobertura y las que el paso no propone: un record sin metodos, y config, dto y model. 68 lineas, 26 cubiertas (38,2 %).
+function Escenario-Cob-Varias([string]$Nombre, [hashtable]$Mas = @{}) {
+  $record = @{
+    '/src/main/java/com/acme/plantillabatch/service/Importe.java' = "package com.acme.plantillabatch.service;`n`n/** Un importe. */`npublic record Importe(int valor) {`n    // LINEAS: 6`n`n    /**`n     * Dobla el valor.`n     *`n     * @return el doble`n     */`n    public int doble() {`n        return valor * 2;`n    }`n}`n"
+    '/src/main/java/com/acme/plantillabatch/service/Cantidad.java' = "package com.acme.plantillabatch.service;`n`n/** Una cantidad. */`npublic record Cantidad(int unidades) {`n    // LINEAS: 4`n}`n"
+  }
+  $cl = @(, @('service/AltaService', 10, 2)) + @(, @('service/BajaService', 10, 9)) + @(, @('service/CobroService', 10, 5)) + @(, @('service/PagoService', 10, 10)) +
+    @(, @('config/AjusteConfig', 10, 0)) + @(, @('dto/ClienteDto', 3, 0)) + @(, @('model/Cliente', 3, 0))
+  return (Escenario-Cob $Nombre $cl $Mas $record)
+}
+
+$Pruebas['m14 cobertura: el diagnostico sin -Cobertura no cambia: ni fila, ni hallazgos, ni Maven de JaCoCo; -Paso cobertura sin -Cobertura se rechaza'] = {
+  $e = Escenario-Cob-Varias 'm14-sin'
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico')
+  Igual 'el diagnostico sale con 0' 0 $r.Codigo
+  Igual 'ningun hallazgo de cobertura' 0 (Hallazgos-Cob $e.Repo).Count
+  Comprueba 'la tabla no tiene la fila cobertura' ($r.Salida -notmatch '(?m)^cobertura\s') (Cola $r.Salida)
+  Comprueba 'el diagnostico.md tampoco' ((Lee $e.Repo '.rescate/diagnostico.md') -notmatch '\| cobertura \|')
+  $ll = ''
+  if (Test-Path -LiteralPath (Get-Ruta $e.Repo '.rescate/cobertura-mvn.log')) { $ll = Lee $e.Repo '.rescate/cobertura-mvn.log' }
+  Comprueba 'Maven se lanza sin JaCoCo' ($ll -notmatch 'jacoco') $ll
+  $r2 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'fix', '-Paso', 'cobertura', '-Auto', '-Si')
+  Igual 'con -Paso cobertura sin -Cobertura sale con 1' 1 $r2.Codigo
+  Comprueba 'y dice que el paso necesita -Cobertura' ($r2.Salida -match "El paso 'cobertura' necesita -Cobertura") (Cola $r2.Salida)
+}
+
+$Pruebas['m14 cobertura: diagnostico - por encima del objetivo ningun hallazgo; por debajo, uno por clase con lineas sin cubrir, de mas a menos, sin las excluidas'] = {
+  $e = Escenario-Cob-Varias 'm14-diag' @{ CoberturaMinima = 80 }
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura')
+  Igual 'sale con 0' 0 $r.Codigo
+  $h = @(Hallazgos-Cob $e.Repo)
+  Igual 'hay 4 hallazgos: AltaService, Importe, CobroService y BajaService' 4 $h.Count
+  Igual 'todos son errores' 4 (Hallazgos-Cob $e.Repo 'error').Count
+  Igual 'ordenados por lo que falta' 'AltaService Importe CobroService BajaService' ((@($h | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Fichero) })) -join ' ')
+  Igual 'el fichero es la ruta del .java' ($RutaSv + 'service/AltaService.java') $h[0].Fichero
+  Igual 'AltaService: 2/10 lineas (20 %)' '2/10 lineas (20 %)' $h[0].Detalle
+  Igual 'Importe: 0/6 lineas (0 %)' '0/6 lineas (0 %)' $h[1].Detalle
+  Igual 'CobroService: 5/10 lineas (50 %)' '5/10 lineas (50 %)' $h[2].Detalle
+  Igual 'BajaService: 9/10 lineas (90 %)' '9/10 lineas (90 %)' $h[3].Detalle
+  Comprueba 'la tabla lleva la fila cobertura con 4 errores' ($r.Salida -match '(?m)^cobertura\s+4\s') (Cola $r.Salida)
+  Comprueba 'Maven midio con JaCoCo una sola vez' ((@([System.IO.File]::ReadAllLines((Get-Ruta $e.Repo '.rescate/cobertura-mvn.log')) | Where-Object { $_ -match 'jacoco' })).Count -eq 1)
+  # por encima del objetivo: 38,2 % con un objetivo de 38
+  Config-Cob $e @{ CoberturaMinima = 38 }
+  $r2 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura')
+  Igual 'con el objetivo alcanzado sale con 0' 0 $r2.Codigo
+  Igual 'ningun hallazgo, ni aviso' 0 (Hallazgos-Cob $e.Repo).Count
+  # una clase interna cuenta en el fichero de la externa: un solo hallazgo, con las lineas de las dos
+  Config-Cob $e @{ CoberturaMinima = 80 }
+  $csv = Join-Path $e.Raiz 'interna.csv'
+  [System.IO.File]::WriteAllText($csv, (@($CabJacoco, (Fila-Jacoco 'com.acme.plantillabatch.service' 'AltaService' 6 2), (Fila-Jacoco 'com.acme.plantillabatch.service' 'AltaService$Linea' 2 0)) -join "`n") + "`n")
+  $env:RESCATE_JACOCO_CSV = $csv
+  try { $r3 = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura') }
+  finally { $env:RESCATE_JACOCO_CSV = '' }
+  $h3 = @(Hallazgos-Cob $e.Repo)
+  Igual 'la clase interna no hace otro hallazgo' 1 $h3.Count
+  Igual 'y suma sus lineas a las de la externa' '2/10 lineas (20 %)' $h3[0].Detalle
+}
+
+$Pruebas['m14 cobertura: sin poder medir (Maven falla) no hay hallazgos de error: un aviso con el motivo'] = {
+  $e = Escenario-Cob-Varias 'm14-sinmedida'
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Modo', 'diagnostico', '-Cobertura') 'cob-mvn-error:no hay jacoco en este equipo'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ningun error de cobertura' 0 (Hallazgos-Cob $e.Repo 'error').Count
+  $a = @(Hallazgos-Cob $e.Repo 'aviso')
+  Igual 'un aviso' 1 $a.Count
+  Comprueba 'que dice que no se ha podido medir y por que' ($a.Count -eq 1 -and $a[0].Detalle -match 'no se ha podido medir la cobertura' -and $a[0].Detalle -match 'no hay jacoco en este equipo') ($a | ForEach-Object { $_.Detalle })
+}
+
+# Tres clases de 10 lineas con 0, 2 y 5 cubiertas (7 de 30, 23,3 %); sin la clase de arranque. Con el objetivo en 80 bastan dos lotes: Alta y Baja.
+function Escenario-Cob-Tres([string]$Nombre, [hashtable]$Mas = @{}, [hashtable]$Extra = @{}) {
+  $cl = @(, @('service/AltaService', 10, 0)) + @(, @('service/BajaService', 10, 2)) + @(, @('service/CobroService', 10, 5))
+  return (Escenario-Cob $Nombre $cl $Mas $Extra $false)
+}
+
+# Una sola clase de 10 lineas sin cubrir.
+function Escenario-Cob-Una([string]$Nombre, [hashtable]$Mas = @{}) {
+  return (Escenario-Cob $Nombre @(, @('service/AltaService', 10, 0)) $Mas @{} $false)
+}
+
+# El fix del paso cobertura, con un intento por lote, en el repo del escenario.
+function Cob-Fix($E, [string]$Guion = '', [string[]]$Mas = @()) {
+  return (Lanzar $Script (@('-Repo', $E.Repo, '-Modo', 'fix', '-Paso', 'cobertura', '-Cobertura', '-Auto', '-Si', '-MaxIntentos', '1') + $Mas) $Guion)
+}
+
+$Pruebas['m14 cobertura: solo -Repo y -Cobertura arregla sin preguntar, en el worktree, con un commit por lote y pasando 3 veces los tests de cada clase'] = {
+  $e = Escenario-Cob-Tres 'm14-corto'
+  $r = Lanzar $Script @('-Repo', $e.Repo, '-Cobertura') '' @('s')
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'va directo al paso cobertura, una clase por lote' ($r.Salida -match "=== Paso 'cobertura' en lotes de 1 ===") (Cola $r.Salida)
+  Comprueba 'primer lote: AltaService, la que mas falta' ($r.Salida -match 'Lote 1 OK' -and $r.Salida -match 'service/AltaService\.java') (Cola $r.Salida)
+  Comprueba 'segundo lote OK' ($r.Salida -match 'Lote 2 OK') (Cola $r.Salida)
+  Comprueba 'no pregunta entre lotes' ($r.Salida -notmatch 'siguiente lote') (Cola $r.Salida)
+  Comprueba 'sin plantilla no hay aviso de que el arreglo va a ciegas' ($r.Salida -notmatch 'a ciegas') (Cola $r.Salida)
+  $log = GitEn $e.Wt @('log', '--format=%s')
+  Comprueba 'hay un commit por lote' ($log -match 'rescate\(cobertura\): lote 1' -and $log -match 'rescate\(cobertura\): lote 2') $log
+  Comprueba 'los tests nuevos estan en el worktree' ((Test-Path -LiteralPath (Get-Ruta $e.Wt ($RutaSv.Replace('main', 'test') + 'service/AltaServiceTest.java'))) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt ($RutaSv.Replace('main', 'test') + 'service/BajaServiceTest.java'))))
+  Igual 'el repo del usuario sigue como estaba' '' (GitEn $e.Repo @('status', '--porcelain'))
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  $rep = @([System.IO.File]::ReadAllLines((Get-Ruta $e.Wt '.rescate/cobertura-rep.log')))
+  Igual 'los tests de cada clase se repiten 3 veces (6 en dos lotes)' 6 $rep.Count
+  Comprueba 'con -Dtest=<Clase>Test' (@($rep | Where-Object { $_ -eq '-Dtest=AltaServiceTest' }).Count -eq 3 -and @($rep | Where-Object { $_ -eq '-Dtest=BajaServiceTest' }).Count -eq 3) ($rep -join ' ')
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt es el de cobertura' ($prompt.StartsWith("# Tarea de cobertura: paso 'cobertura'")) $prompt
+}
+
+$Pruebas['m14 cobertura: el prompt lleva la clase entera, su test, lo que falta segun JaCoCo y la regla de solo src/test, sin dependencias nuevas'] = {
+  $e = Escenario-Cob-Tres 'm14-prompt'
+  $r = Cob-Fix $e '' @('-Lote', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  # el prompt del primer lote se machaca con el del segundo: se mira el del ultimo (BajaService, que ya tenia test)
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  $baja = $RutaSv + 'service/BajaService.java'
+  Comprueba 'nombra la clase con sus lineas' ($prompt.Contains("- $baja - 2/10 lineas (20 %)")) $prompt
+  Comprueba 'lleva la clase entera' ($prompt.Contains('public class BajaService {') -and $prompt.Contains('// LINEAS: 10')) $prompt
+  Comprueba 'y su test, que ya existia' ($prompt.Contains('class BajaServiceTest {')) $prompt
+  Comprueba 'y las lineas que JaCoCo da como no cubiertas (3-10)' ($prompt -match 'Lineas que JaCoCo da como no cubiertas: 3-10') $prompt
+  Comprueba 'pide escribir src/test/java/<mismo paquete>/<Clase>Test.java' ($prompt.Contains('src/test/java/<mismo paquete>/<Clase>Test.java')) $prompt
+  Comprueba 'solo ficheros bajo src/test' ($prompt -match 'Solo creas o cambias ficheros bajo src/test/') $prompt
+  Comprueba 'sin dependencias nuevas' ($prompt -match 'No anadas dependencias') $prompt
+  Comprueba 'y el comentario OJO para lo que parezca un error' ($prompt.Contains('// OJO: parece un error: <motivo>')) $prompt
+  Comprueba 'el texto es ASCII' (@([System.Text.Encoding]::UTF8.GetBytes($prompt) | Where-Object { $_ -gt 127 }).Count -eq 0)
+}
+
+$Pruebas['m14 cobertura: P1 - un intento que toca src/main o el pom no vale, y el motivo lo dice; sin Maven'] = {
+  foreach ($caso in @(@{ N = 'main'; G = 'cob-toca-main'; Frag = 'src/main/java/com/acme/plantillabatch/service/AltaService.java' }, @{ N = 'pom'; G = 'cob-toca-pom'; Frag = 'pom.xml' })) {
+    $e = Escenario-Cob-Una ('m14-p1-' + $caso.N)
+    $r = Cob-Fix $e $caso.G
+    Igual "$($caso.N): sale con 2" 2 $r.Codigo
+    if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+    Comprueba "$($caso.N): NO PASA con el fichero tocado y la regla de src/test" ($r.Salida -match 'NO PASA: Has tocado ficheros que no son de src/test/' -and $r.Salida.Contains($caso.Frag)) (Cola $r.Salida)
+    Comprueba "$($caso.N): sin Maven" ($r.Salida -match 'Sin Maven: el intento ya incumple las reglas del paso') (Cola $r.Salida)
+    Comprueba "$($caso.N): el lote se deshace y la clase queda atascada" ($r.Salida -match 'Lote 1 DESHECHO' -and $r.Salida -match "ATASCADO en 'cobertura'") (Cola $r.Salida)
+    Igual "$($caso.N): no hay commits nuevos" 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+    Igual "$($caso.N): el worktree queda limpio" '' (GitEn $e.Wt @('status', '--porcelain'))
+    Comprueba "$($caso.N): el final dice que faltan esas clases" ($r.Salida -match 'Faltan estas clases' -and $r.Salida -match 'atascada') (Cola $r.Salida)
+  }
+}
+
+$Pruebas['m14 cobertura: P2 - un test que falla 1 vez de cada 3 hace inestable el lote: no vale y el motivo lo dice'] = {
+  $e = Escenario-Cob-Una 'm14-p2'
+  $r = Cob-Fix $e 'cob-inestable'
+  Igual 'sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'NO PASA: inestables, en la repeticion 2 de 3' ($r.Salida -match 'NO PASA: Los tests de AltaService son inestables' -and $r.Salida -match 'repeticion 2 de 3') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+  Igual 'se repitio hasta el primer fallo: 2 veces' 2 @([System.IO.File]::ReadAllLines((Get-Ruta $e.Wt '.rescate/cobertura-rep.log'))).Count
+}
+
+$Pruebas['m14 cobertura: P3 - un test que no sube la cobertura de la clase no vale; ni el que baja el total'] = {
+  $e = Escenario-Cob-Una 'm14-p3'
+  $r = Cob-Fix $e 'cob-no-sube'
+  Igual 'sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'NO PASA: la cobertura de AltaService no sube (0/10 -> 0/10)' ($r.Salida -match 'NO PASA: La cobertura de AltaService no sube \(0/10 -> 0/10 lineas\)') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+  # sube la clase (0 -> 2 lineas) pero un test de otra pierde 5 cubiertas: el total baja
+  $e2 = Escenario-Cob 'm14-p3-total' @(@('service/AltaService', 10, 0), @('service/BajaService', 10, 5)) @{} @{} $false
+  $r2 = Cob-Fix $e2 'cob-rompe-otra:AltaService'
+  Igual 'con el total a la baja sale con 2' 2 $r2.Codigo
+  Comprueba 'NO PASA: el total baja de 5 a 2 lineas cubiertas' ($r2.Salida -match 'NO PASA: La cobertura total baja \(5 -> 2 lineas cubiertas\)') (Cola $r2.Salida)
+  Comprueba 'y la clase si subia: no hay NO PASA de AltaService' ($r2.Salida -notmatch 'AltaService no sube') (Cola $r2.Salida)
+}
+
+$Pruebas['m14 cobertura: P4 - sin aserciones, assertTrue(true), @Disabled, Thread.sleep o un catch vacio: el lote no vale y el motivo lo dice'] = {
+  $casos = @(
+    @{ G = 'cob-sin-asercion'; Rx = 'cubre1 .* no tiene ninguna asercion \(assert\*, verify'; NoRx = 'asercion de verdad' },
+    @{ G = 'cob-assert-true'; Rx = 'cubre1 .* no tiene ninguna asercion de verdad: assertTrue\(true\)'; NoRx = 'ninguna asercion \(assert' },
+    @{ G = 'cob-disabled'; Rx = 'has anadido un test desactivado' },
+    @{ G = 'cob-sleep'; Rx = 'has anadido Thread\.sleep' },
+    @{ G = 'cob-catch-vacio'; Rx = 'has anadido un catch vacio' })
+  foreach ($c in $casos) {
+    $e = Escenario-Cob-Una ('m14-p4-' + $c.G)
+    $r = Cob-Fix $e $c.G
+    Igual "$($c.G): sale con 2" 2 $r.Codigo
+    if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+    Comprueba "$($c.G): NO PASA y el motivo" ($r.Salida -match ('NO PASA: .*' + $c.Rx)) (Cola $r.Salida)
+    if ($c.NoRx) { Comprueba "$($c.G): y no sale con el motivo del otro caso" ($r.Salida -notmatch $c.NoRx) (Cola $r.Salida) }
+    Comprueba "$($c.G): el lote se deshace" ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+    Igual "$($c.G): no hay commits nuevos" 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+  }
+}
+
+$Pruebas['m14 cobertura: un test que falla (TEST_FALLA) no vale: no hay mas tests fallando que antes y la cobertura no se mide'] = {
+  $e = Escenario-Cob-Una 'm14-p5'
+  $r = Cob-Fix $e 'cob-test-falla'
+  Igual 'sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'NO PASA: mas tests fallando que antes (0 -> 1)' ($r.Salida -match 'NO PASA: Hay mas tests fallando que antes \(0 -> 1\)') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Comprueba 'las repeticiones no se lanzan' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/cobertura-rep.log')))
+}
+
+$Pruebas['m14 cobertura: al llegar al objetivo para: con 5 clases y el objetivo alcanzado tras la 2.a no hay 3.er lote'] = {
+  $cl = @(@('service/AaService', 10, 0), @('service/BbService', 10, 0), @('service/CcService', 10, 0), @('service/DdService', 10, 0), @('service/EeService', 10, 0))
+  $e = Escenario-Cob 'm14-para' $cl @{ CoberturaMinima = 40 } @{} $false
+  $r = Cob-Fix $e
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'hay lote 1 y lote 2' ($r.Salida -match 'Lote 1 OK' -and $r.Salida -match 'Lote 2 OK') (Cola $r.Salida)
+  Comprueba 'no hay lote 3' ($r.Salida -notmatch 'Lote 3') (Cola $r.Salida)
+  Igual 'dos commits de cobertura' 2 @((GitEn $e.Wt @('log', '--format=%s')) -split "`n" | Where-Object { $_ -match '^rescate\(cobertura\)' }).Count
+  Comprueba 'el resumen dice 0 % -> 40 % (objetivo 40 %)' ($r.Salida -match 'Cobertura: 0 % -> 40 % \(objetivo 40 %\)') (Cola $r.Salida)
+  Comprueba 'y no dice que falten clases' ($r.Salida -notmatch 'Faltan estas clases') (Cola $r.Salida)
+}
+
+$Pruebas['m14 cobertura: CoberturaClasesMax limita las clases de la pasada y el resto sale como sin intentar'] = {
+  $e = Escenario-Cob-Tres 'm14-tope' @{ CoberturaClasesMax = 1 }
+  $r = Cob-Fix $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'un solo lote' ($r.Salida -match 'Lote 1 OK' -and $r.Salida -notmatch 'Lote 2') (Cola $r.Salida)
+  Comprueba 'dice el tope' ($r.Salida -match 'Tope de gasto: 1 clase') (Cola $r.Salida)
+  Comprueba 'y las que quedan salen sin intentar por el tope' ($r.Salida -match 'sin intentar: tope de 1 clase') (Cola $r.Salida)
+}
+
+$Pruebas['m14 cobertura: el final dice X % -> Y %, las clases que faltan con su motivo, las excluidas y los OJO; todo tambien en cobertura-faltan.md'] = {
+  $cl = @(@('service/AltaService', 10, 0), @('service/BajaService', 10, 2), @('service/CobroService', 10, 5), @('config/AjusteConfig', 10, 0))
+  $e = Escenario-Cob 'm14-final' $cl @{ CoberturaMinima = 95 } @{} $false
+  $r = Cob-Fix $e 'cob-parcial:Alta;cob-ojo:Baja;cob-no-sube:Cobro'
+  Igual 'sale con 2: una clase atascada' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $md = Lee $e.Wt '.rescate/cobertura-faltan.md'
+  foreach ($donde in @(@('la consola', $r.Salida), @('cobertura-faltan.md', $md))) {
+    $n = $donde[0]; $txt = $donde[1]
+    Comprueba "$n : Cobertura: 17,5 % -> 42,5 % (objetivo 95 %)" ($txt -match 'Cobertura: 17,5 % -> 42,5 % \(objetivo 95 %\)') (Cola $txt)
+    Comprueba "$n : Faltan estas clases" ($txt -match 'Faltan estas clases') (Cola $txt)
+    Comprueba "$n : AltaService subida pero sin llegar, con sus lineas" ($txt -match 'AltaService\.java - 2/10 lineas \(20 %\): .*aun le faltan lineas') (Cola $txt)
+    Comprueba "$n : CobroService atascada, con el motivo" ($txt -match 'CobroService\.java - 5/10 lineas \(50 %\): atascada tras los intentos: .*no sube') (Cola $txt)
+    Comprueba "$n : BajaService, que llego al 100 %, no esta entre las que faltan" ($txt -notmatch 'BajaService\.java - ') (Cola $txt)
+    Comprueba "$n : las excluidas se dicen" ($txt -match 'No se proponen \(CoberturaExcluir\): 1 clases?' -and $txt.Contains('config/AjusteConfig.java')) (Cola $txt)
+    Comprueba "$n : el OJO con su fichero:linea y su texto" ($txt -match 'BajaServiceTest\.java:\d+ - // OJO: parece un error: suma al reves') (Cola $txt)
+  }
+  Comprueba 'la consola dice donde esta la lista' ($r.Salida.Contains('cobertura-faltan.md'))
+}
+
+$Pruebas['m14 cobertura: P4 - un @Test que ya existia y al que el lote le quita la asercion tambien se mira: el lote no vale y el motivo nombra el test'] = {
+  $e = Escenario-Cob 'm14-p4-cambiado' @(, @('service/BajaService', 10, 2)) @{} @{} $false
+  $r = Cob-Fix $e 'cob-quita-asercion'
+  Igual 'sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $fich = [regex]::Escape('src/test/java/com/acme/plantillabatch/service/BajaServiceTest.java')
+  Comprueba 'NO PASA con el nombre del test que ya existia y su fichero' ($r.Salida -match ('NO PASA: El test sumaBase \(' + $fich + '\) no tiene ninguna asercion \(assert\*')) (Cola $r.Salida)
+  Comprueba 'sin Maven' ($r.Salida -match 'Sin Maven: el intento ya incumple las reglas del paso') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
+}
+
+$Pruebas['m14 cobertura: P1 - el lote que escribe sus tests en otro fichero y no en <Clase>Test.java no vale: dice cual falta'] = {
+  $e = Escenario-Cob-Una 'm14-p1-otro-fichero'
+  $r = Cob-Fix $e 'cob-otro-fichero'
+  Igual 'sale con 2' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'NO PASA: No has escrito AltaServiceTest.java, y donde va' ($r.Salida -match 'NO PASA: No has escrito AltaServiceTest\.java: escribe o amplia src/test/java/<mismo paquete>/AltaServiceTest\.java') (Cola $r.Salida)
+  Comprueba 'sin Maven' ($r.Salida -match 'Sin Maven: el intento ya incumple las reglas del paso') (Cola $r.Salida)
+  Comprueba 'el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  Igual 'no hay commits nuevos' 'inicial' (GitEn $e.Wt @('log', '--format=%s'))
 }
 
 # ================================ LANZADOR ================================

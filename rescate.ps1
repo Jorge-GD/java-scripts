@@ -66,6 +66,10 @@ USO
   # Solo con -Repo y -Sonar: -Modo fix, -Paso sonar y -Auto. Deja .rescate\sonar-faltan.md con lo que no ha podido arreglar.
   .\rescate.ps1 -Repo C:\ruta\batch -Sonar C:\ruta\informe.xlsx
 
+  # Con -Cobertura: paso 'cobertura' el ultimo. Escribe solo tests (nada fuera de src/test), una clase por lote, hasta CoberturaMinima (80 %).
+  # Solo con -Repo y -Cobertura: -Modo fix, -Paso cobertura y -Auto. Deja .rescate\cobertura-faltan.md con lo que falta y los // OJO.
+  .\rescate.ps1 -Repo C:\ruta\batch -Cobertura
+
   # Con modelo de reserva: si el principal se atasca con un fichero, prueba el otro
   .\rescate.ps1 -Modo fix ... -Todo -Modelo <principal> -ModeloB <reserva>
 
@@ -126,7 +130,8 @@ param(
   [string]$Plantilla = '',
   [string]$Legacy = '',
   [string]$Sonar = '',       # informe de Sonar (.xlsx, hoja Issues Breakdown): anade el paso 'sonar' al final y arregla sus incidencias; sin -Modo hace el fix entero
-  [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar')][string]$Paso = '',
+  [switch]$Cobertura,        # anade el paso 'cobertura' al final: escribe tests, clase a clase, hasta llegar a CoberturaMinima; sin -Modo hace el fix entero
+  [ValidateSet('', 'build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar', 'cobertura')][string]$Paso = '',
   [string]$Modelo = '',
   [string]$ModeloB = '',     # modelo de reserva cuando el principal se atasca con un fichero (vacio = ModeloB de la config)
   # Esfuerzo de razonamiento de Copilot (--effort). Vacio = el que tenga Copilot.
@@ -162,7 +167,7 @@ else { $SonarPromptReal = ''; $SonarRecetasReal = @(); $SonarNoAutomatizarReal =
 # ============================ CONFIGURACION ============================
 # Los flags de Copilot, la ruta de Maven y las carpetas ignoradas estan en comun.ps1.
 $Cfg += @{
-  Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar')   # sonar solo existe con -Sonar
+  Orden  = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'paridad', 'e2e', 'tests', 'calidad', 'sonar', 'cobertura')   # sonar solo existe con -Sonar; cobertura, con -Cobertura
   Capas  = @('domain', 'application', 'infrastructure')   # si no hay plantilla
   # Reglas de dependencias. En = carpeta (relativa al paquete base).
   # No = regex sobre el import; {base} es el paquete base del proyecto.
@@ -203,7 +208,7 @@ $Cfg += @{
   )
   # Como se reconoce un test que lanza un job de verdad
   LanzaJob              = 'launchJob\s*\(|JobLauncherTestUtils|[jJ]obLauncher\s*\.\s*run\s*\(|[jJ]obOperator\s*\.\s*start\s*\(|SpringApplication\s*\.\s*run\s*\('
-  PasosDeUnoEnUno       = @('paridad', 'e2e')   # un job por llamada a Copilot
+  PasosDeUnoEnUno       = @('paridad', 'e2e', 'cobertura')   # un job (o una clase) por llamada a Copilot
   # Pasos en los que la IA revisa antes todos los ficheros y escribe un plan
   PasosConPlan          = @('estructura', 'hexagonal', 'ficheros', 'config')
   # Calidad. Reglas que cuentan como error (el fix las arregla y las exige en
@@ -1475,6 +1480,364 @@ function Write-SonarFaltan {
   Info ('Lista de Sonar: ' + $ruta)
 }
 
+# =============================== COBERTURA ===============================
+# El paso 'cobertura' (-Cobertura) escribe tests, una clase por lote, hasta que la cobertura de lineas llega a $Cfg.CoberturaMinima. La medida
+# es Get-Cobertura (comun.ps1, JaCoCo por coordenadas, sin tocar el pom); $script:Cob guarda la ultima (con sinCubrir: fichero -> lineas sin
+# cubrir, del jacoco.xml). Solo se mide en el paso cobertura (o en el diagnostico con -Cobertura): $script:MedirCobertura.
+
+# Un porcentaje para el texto: un decimal como mucho y coma.
+function Format-Pct([double]$V) { return ("$([math]::Round($V, 1, [System.MidpointRounding]::AwayFromZero))").Replace('.', ',') }
+
+# Las lineas sin cubrir de cada fuente segun target/site/jacoco/jacoco.xml: fichero ('src/main/java/...') -> numeros de linea. Vacio si no hay XML.
+function Get-CoberturaSinCubrir([string]$Dir) {
+  $res = @{}
+  $ruta = Join-Ruta $Dir 'target/site/jacoco/jacoco.xml'
+  if (-not (Test-Path -LiteralPath $ruta)) { return $res }
+  $doc = New-Object System.Xml.XmlDocument
+  try {
+    $ajustes = New-Object System.Xml.XmlReaderSettings
+    $ajustes.DtdProcessing = [System.Xml.DtdProcessing]::Ignore   # el XML de JaCoCo declara un DTD (report.dtd) que no esta a mano
+    $ajustes.XmlResolver = $null
+    $lector = [System.Xml.XmlReader]::Create($ruta, $ajustes)
+    try { $doc.Load($lector) } finally { $lector.Close() }
+  }
+  catch { return $res }
+  foreach ($p in @($doc.SelectNodes('//package'))) {
+    foreach ($sf in @($p.SelectNodes('sourcefile'))) {
+      $l = New-Object System.Collections.Generic.List[int]
+      foreach ($ln in @($sf.SelectNodes('line'))) {
+        if ([int]$ln.GetAttribute('ci') -eq 0 -and [int]$ln.GetAttribute('mi') -gt 0) { $l.Add([int]$ln.GetAttribute('nr')) }
+      }
+      $res['src/main/java/' + $p.GetAttribute('name') + '/' + $sf.GetAttribute('name')] = $l.ToArray()
+    }
+  }
+  return $res
+}
+
+# Los numeros de linea como rangos: 3, 5, 6, 7, 10 -> '3, 5-7, 10'.
+function Get-RangosLineas([int[]]$Lineas) {
+  $l = @($Lineas | Sort-Object -Unique)
+  $out = New-Object System.Collections.Generic.List[string]
+  $i = 0
+  while ($i -lt $l.Count) {
+    $j = $i
+    while ($j + 1 -lt $l.Count -and $l[$j + 1] -eq $l[$j] + 1) { $j++ }
+    if ($j -gt $i) { $out.Add("$($l[$i])-$($l[$j])") } else { $out.Add("$($l[$i])") }
+    $i = $j + 1
+  }
+  return ($out -join ', ')
+}
+
+# Mide la cobertura del arbol de trabajo (los tests tienen que pasar): Get-Cobertura con las filas por clase y, si midio, las lineas sin cubrir.
+function Measure-Cobertura {
+  $previos = @(Get-Cambios $RepoRoot)
+  $c = Get-Cobertura $RepoRoot (Join-Path $Work 'cobertura.log') $true $true
+  [void](Remove-Ruido $RepoRoot $previos)   # lo que deja Maven fuera de target no entra en los commits
+  $c['sinCubrir'] = @{}
+  if ($c.medida) { $c['sinCubrir'] = Get-CoberturaSinCubrir $RepoRoot }
+  return $c
+}
+
+# Un record sin ningun metodo (solo componentes, y como mucho un constructor compacto): no tiene comportamiento que probar.
+function Test-RecordSinMetodos([string]$Texto) {
+  $l = Get-Limpio $Texto
+  $m = [regex]::Match($l, '(?m)^\s*(?:(?:public|protected|private|static|final|sealed|strictfp)\s+)*record\s+\w+\s*(?:<[^>]*>)?\s*\(')
+  if (-not $m.Success) { return $false }
+  $prof = 1
+  $i = $m.Index + $m.Length
+  while ($i -lt $l.Length -and $prof -gt 0) {
+    if ($l[$i] -eq '(') { $prof++ } elseif ($l[$i] -eq ')') { $prof-- }
+    $i++
+  }
+  $cuerpo = $l.Substring($i)
+  $llave = $cuerpo.IndexOf('{')
+  if ($llave -lt 0) { return $true }
+  return (-not [regex]::IsMatch($cuerpo.Substring($llave), '\)\s*(?:throws\s+[\w.,\s]+)?\{'))
+}
+
+# Una clase de CoberturaExcluir? $Rel: su ruta relativa (src/main/java/...).
+function Test-CoberturaExcluida([string]$Rel) {
+  $texto = $null
+  foreach ($x in @($Cfg.CoberturaExcluir | ForEach-Object { "$_" } | Where-Object { $_ })) {
+    if ($x -ceq 'records-sin-metodos' -or $x.StartsWith('texto:')) {
+      if ($null -eq $texto) {
+        $texto = ''
+        $p = Join-Ruta $RepoRoot $Rel
+        if (Test-Path -LiteralPath $p -PathType Leaf) { $texto = [System.IO.File]::ReadAllText($p) }
+      }
+      if ($x -ceq 'records-sin-metodos') { if (Test-RecordSinMetodos $texto) { return $true } }
+      elseif ([regex]::IsMatch($texto, $x.Substring(6))) { return $true }
+    }
+    elseif ([regex]::IsMatch($Rel, $x, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { return $true }
+  }
+  return $false
+}
+
+# La seccion de cobertura del diagnostico. Con $PuedeMedir (hay Maven con tests) y en el paso cobertura, mide; si no, usa la ultima medida.
+# Hallazgos: ninguno si el total llega al objetivo; si no, un error por fuente con lineas sin cubrir (sumando sus clases internas), de las que
+# mas faltan a las que menos, sin las excluidas. Sin medida, un aviso con el motivo. $script:CobExcluidas: las excluidas que tenian lineas sin cubrir.
+function Add-CoberturaHallazgos([bool]$PuedeMedir) {
+  $script:CobFresca = $false
+  if ($PuedeMedir -and $script:MedirCobertura -and $script:Build.Compila -and $script:Build.TestsOk) {
+    $script:Cob = Measure-Cobertura
+    $script:CobFresca = $true
+    $script:CobCommit = Get-Head $RepoRoot
+  }
+  $c = $script:Cob
+  $script:CobExcluidas = @()
+  if (-not $c) { return }
+  if (-not $c.medida) { Add-Hallazgo 'cobertura' 'aviso' '' 0 "no se ha podido medir la cobertura: $($c.motivo)"; return }
+  $filas = New-Object System.Collections.Generic.List[object]
+  $excluidas = New-Object System.Collections.Generic.List[string]
+  foreach ($g in @($c.clases | Where-Object { $_.Fichero } | Group-Object -Property Fichero)) {
+    $faltan = [long](($g.Group | Measure-Object -Property Faltan -Sum).Sum)
+    $cubiertas = [long](($g.Group | Measure-Object -Property Cubiertas -Sum).Sum)
+    if ($faltan -le 0) { continue }
+    if (Test-CoberturaExcluida $g.Name) { $excluidas.Add($g.Name); continue }
+    $filas.Add([pscustomobject]@{ Fichero = $g.Name; Faltan = $faltan; Cubiertas = $cubiertas })
+  }
+  $script:CobExcluidas = @($excluidas | Sort-Object)
+  if ($c.porcentaje -ge [double]$Cfg.CoberturaMinima) { return }
+  foreach ($f in @($filas | Sort-Object @{ Expression = 'Faltan'; Descending = $true }, Fichero)) {
+    $total = $f.Faltan + $f.Cubiertas
+    Add-Hallazgo 'cobertura' 'error' $f.Fichero 0 ("$($f.Cubiertas)/$total lineas (" + (Format-Pct (100.0 * $f.Cubiertas / $total)) + ' %)')
+  }
+}
+
+# Cubiertas y total de lineas de una fuente segun la medida $Cob (sumando sus clases internas); $null si no esta o no hay medida.
+function Get-CoberturaDeFichero($Cob, [string]$Fichero) {
+  if (-not $Cob -or -not $Cob.medida) { return $null }
+  $f = @($Cob.clases | Where-Object { $_.Fichero -eq $Fichero })
+  if ($f.Count -eq 0) { return $null }
+  $cub = [long](($f | Measure-Object -Property Cubiertas -Sum).Sum)
+  $falt = [long](($f | Measure-Object -Property Faltan -Sum).Sum)
+  return [pscustomobject]@{ Cubiertas = $cub; Total = $cub + $falt }
+}
+
+# Los metodos de test (@Test, @ParameterizedTest, @RepeatedTest, @TestFactory) de un texto: nombre -> cuerpo, sin comentarios ni literales.
+function Get-MetodosTest([string]$Texto) {
+  $l = (Get-Limpio $Texto).Replace("`r", '')
+  $res = [ordered]@{}
+  foreach ($m in [regex]::Matches($l, '@(?:Test|ParameterizedTest|RepeatedTest|TestFactory)\b')) {
+    $ini0 = $m.Index + $m.Length
+    $s = [regex]::Match($l.Substring($ini0), '(\w+)\s*\([^)]*\)\s*(?:throws\s+[\w.,\s]+)?\{')
+    if (-not $s.Success) { continue }
+    $ini = $ini0 + $s.Index + $s.Length   # justo despues de la llave
+    $prof = 1
+    $i = $ini
+    while ($i -lt $l.Length -and $prof -gt 0) {
+      if ($l[$i] -eq '{') { $prof++ } elseif ($l[$i] -eq '}') { $prof-- }
+      $i++
+    }
+    $clave = $s.Groups[1].Value
+    $k = 2
+    while ($res.Contains($clave)) { $clave = $s.Groups[1].Value + '#' + $k; $k++ }
+    $res[$clave] = $l.Substring($ini, [math]::Max(0, $i - $ini - 1))
+  }
+  return $res
+}
+
+# Los tests nuevos o cambiados (frente a $Viejo) sin una asercion de verdad: @{ Nombre; Vacio } (Vacio: solo hay assertTrue(true) y parecidos).
+function Get-TestsSinAsercion([string]$Nuevo, [string]$Viejo) {
+  $antes = Get-MetodosTest $Viejo
+  $out = @()
+  $rxAsercion = '\b(?:assert\w*|verify\w*|fail)\s*\(|\.\s*should\w*\s*\('
+  $rxVacia = '\bassertTrue\s*\(\s*true\s*[,)]|\bassertFalse\s*\(\s*false\s*[,)]'
+  $ahora = Get-MetodosTest $Nuevo
+  foreach ($k in @($ahora.Keys)) {
+    $cuerpo = $ahora[$k]
+    if ($antes.Contains($k) -and $antes[$k] -ceq $cuerpo) { continue }
+    $nombre = ($k -replace '#\d+$', '')
+    if (-not [regex]::IsMatch($cuerpo, $rxAsercion)) { $out += [pscustomobject]@{ Nombre = $nombre; Vacio = $false } }
+    elseif (-not [regex]::IsMatch([regex]::Replace($cuerpo, $rxVacia, ''), $rxAsercion)) { $out += [pscustomobject]@{ Nombre = $nombre; Vacio = $true } }
+  }
+  return $out
+}
+
+# Lo que un intento de cobertura no puede hacer sin Maven, como lista de problemas (cada uno sale como su linea NO PASA):
+#  (P1) tocar algo que no sea de src/test/ (src/main, el pom...): la logica de negocio no cambia;
+#       no escribir <Clase>Test.java, que es el que se repite en P2;
+#  (P4) un test nuevo sin asercion de verdad, o con @Disabled/@Ignore, Thread.sleep o un catch vacio anadidos.
+# $Tocados: las rutas del git status del intento; $Check: el commit bueno; $LoteH: el hallazgo (la clase) del lote.
+function Get-CoberturaProblemas([string[]]$Tocados, [string]$Check, $LoteH) {
+  $p = New-Object System.Collections.Generic.List[string]
+  $fuera = @($Tocados | Where-Object { -not $_.StartsWith('src/test/') })
+  if ($fuera.Count -gt 0) { $p.Add('Has tocado ficheros que no son de src/test/: ' + (($fuera | Select-Object -First 8) -join ', ') + '. Este paso solo escribe tests: la logica de negocio no se toca. Deshaz esos cambios.') }
+  $clase = [System.IO.Path]::GetFileNameWithoutExtension("$(@($LoteH)[0].Fichero)")
+  if (@($Tocados | Where-Object { $_ -match ('(^|/)' + [regex]::Escape($clase) + 'Test\.java$') }).Count -eq 0) {
+    $p.Add("No has escrito ${clase}Test.java: escribe o amplia src/test/java/<mismo paquete>/${clase}Test.java.")
+  }
+  $rxDes = '@(?:[\w.]+\.)?(?:Disabled|Ignore)\b'
+  $rxSleep = '\.\s*sleep\s*\('
+  $rxCatch = '\bcatch\s*\([^)]*\)\s*\{\s*(?:/\*C\*/\s*)*\}'
+  foreach ($t in @($Tocados | Where-Object { $_.StartsWith('src/test/') -and $_.EndsWith('.java') })) {
+    $ruta = Join-Ruta $RepoRoot $t
+    if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { continue }
+    $nuevo = [System.IO.File]::ReadAllText($ruta)
+    $viejo = ''
+    $r = Invoke-Git $RepoRoot @('show', "${Check}:$t")
+    if ($r.Codigo -eq 0) { $viejo = ($r.Salida -join "`n") }
+    $ln = Get-Limpio $nuevo
+    $lv = Get-Limpio $viejo
+    foreach ($x in @(Get-TestsSinAsercion $nuevo $viejo)) {
+      if ($x.Vacio) { $p.Add("El test $($x.Nombre) ($t) no tiene ninguna asercion de verdad: assertTrue(true) no prueba nada. Comprueba un valor concreto con assertEquals, assertThrows, assertThat o verify.") }
+      else { $p.Add("El test $($x.Nombre) ($t) no tiene ninguna asercion (assert*, verify, assertThrows, assertThat...). Comprueba un valor concreto.") }
+    }
+    if ([regex]::Matches($ln, $rxDes).Count -gt [regex]::Matches($lv, $rxDes).Count) { $p.Add("Has anadido un test desactivado (@Disabled o @Ignore) en $t. Quitalo: un test desactivado no cubre nada.") }
+    if ([regex]::Matches($ln, $rxSleep).Count -gt [regex]::Matches($lv, $rxSleep).Count) { $p.Add("Has anadido Thread.sleep en $t. Un test no espera tiempo: sincroniza por el resultado.") }
+    if ([regex]::Matches($ln, $rxCatch).Count -gt [regex]::Matches($lv, $rxCatch).Count) { $p.Add("Has anadido un catch vacio en $t. Un catch sin cuerpo se traga el fallo: deja que el test falle.") }
+  }
+  return $p.ToArray()
+}
+
+# (P2) Los tests de la clase pasan $Cfg.CoberturaRepeticiones veces seguidas (mvn test -Dtest=<Clase>Test). Devuelve $null si pasan todas o
+# @{ Motivo; Detalle } con la primera que falla: un test que a veces falla es inestable y el lote no vale.
+function Test-CoberturaRepeticiones([string]$Clase) {
+  $n = [int]$Cfg.CoberturaRepeticiones
+  $previos = @(Get-Cambios $RepoRoot)
+  try {
+    for ($k = 1; $k -le $n; $k++) {
+      $reg = Join-Path $Work "cobertura-rep-$k.log"
+      Info "  Repeticion $k de $n de ${Clase}Test (Maven)..."
+      $r = Invoke-MavenTope $RepoRoot (@($Cfg.MvnTests) + @("-Dtest=${Clase}Test")) "Maven (repeticion $k de $n de ${Clase}Test)" $reg
+      if ($r.Codigo -ne 0 -or $r.Tope) {
+        $det = @($r.Salida | Where-Object { $_ -match '\[ERROR\]|FAIL' } | Select-Object -First 6 | ForEach-Object { '  - ' + $_.Trim() })
+        $motivo = "Los tests de $Clase son inestables: fallan en la repeticion $k de $n de 'mvn test -Dtest=${Clase}Test' (registro: .rescate/cobertura-rep-$k.log). Quita lo que dependa del orden, del reloj, de la red o del azar."
+        return [pscustomobject]@{ Motivo = $motivo; Detalle = $det }
+      }
+    }
+  }
+  finally { [void](Remove-Ruido $RepoRoot $previos) }
+  return $null
+}
+
+# Prompt de un lote de cobertura: una clase. Con $Correccion es el de reparacion (el intento anterior sigue en el arbol; la clase no se repite).
+function New-PromptCobertura($LoteH, [string]$Correccion, $Consejo, $Reflexiones) {
+  $h = @($LoteH)[0]
+  $fichero = "$($h.Fichero)"
+  $clase = [System.IO.Path]::GetFileNameWithoutExtension($fichero)
+  $rel = $fichero -replace '^src/main/java/', ''
+  $dir = ''
+  if ($rel.Contains('/')) { $dir = $rel.Substring(0, $rel.LastIndexOf('/')) }
+  $rutaTest = 'src/test/java/' + $(if ($dir) { $dir + '/' } else { '' }) + $clase + 'Test.java'
+  $sin = ''
+  if ($script:Cob -and $script:Cob.sinCubrir -and $script:Cob.sinCubrir.ContainsKey($fichero)) { $sin = Get-RangosLineas ([int[]]@($script:Cob.sinCubrir[$fichero])) }
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("# Tarea de cobertura: paso 'cobertura'")
+  $l.Add('')
+  if ($Correccion) {
+    $l.Add('Tu intento anterior sigue en el arbol de trabajo. No vuelvas a explorar el repo: arregla solo esto.')
+    $l.Add('')
+    $l.Add('## CORRECCION: tu intento anterior no paso las comprobaciones')
+    $l.Add('Corrige esto sin deshacer lo que estaba bien:')
+    $l.Add($Correccion)
+    foreach ($x in (Get-TextoReflexiones $Reflexiones $true)) { $l.Add($x) }
+    $l.Add('')
+  }
+  else {
+    $l.Add('Trabaja SOLO en el repositorio actual (un proyecto Maven de Java).')
+    $l.Add('')
+    $l.Add('## Que hay que hacer')
+    $l.Add("$($Cfg.CoberturaPrompt)".TrimEnd())
+    $l.Add('')
+  }
+  $l.Add('## Hallazgos de este lote (resuelve estos y nada mas)')
+  $l.Add((Get-LineaHallazgo $h))
+  if ($sin) { $l.Add("Lineas que JaCoCo da como no cubiertas: $sin") }
+  $l.Add("Tu test: $rutaTest")
+  $l.Add('')
+  if ($Consejo) { foreach ($x in (Get-TextoConsejoLote $Consejo)) { $l.Add($x) } }
+  if (-not $Correccion) {
+    $l.Add("## La clase ($fichero)")
+    $l.Add('```java')
+    $l.Add(([System.IO.File]::ReadAllText((Join-Ruta $RepoRoot $fichero))).TrimEnd())
+    $l.Add('```')
+    $l.Add('')
+    $pt = Join-Ruta $RepoRoot $rutaTest
+    if (Test-Path -LiteralPath $pt -PathType Leaf) {
+      $l.Add("## Su test, que ya existe ($rutaTest): amplialo, no lo reescribas")
+      $l.Add('```java')
+      $l.Add(([System.IO.File]::ReadAllText($pt)).TrimEnd())
+      $l.Add('```')
+    }
+    else { $l.Add("## Su test no existe todavia: crea $rutaTest") }
+    $l.Add('')
+  }
+  $l.Add('## Reglas obligatorias')
+  foreach ($x in $TextoReglas) { $l.Add($x) }
+  $l.Add('')
+  $l.Add('## Al terminar')
+  foreach ($x in (Get-TextoAlTerminar (Get-OrdenMaven) 'cobertura')) { $l.Add($x) }
+  if (-not $Correccion) { foreach ($x in (Get-TextoReflexiones $Reflexiones $false)) { $l.Add($x) } }
+  return ($l -join "`n")
+}
+
+# Las lineas de 'Faltan estas clases' (una por clase pendiente, con su motivo), las de las excluidas y los // OJO de los tests, como lista de textos.
+function Get-CoberturaLineasFaltan([int]$Tope) {
+  $l = New-Object System.Collections.Generic.List[string]
+  $c = $script:Cob
+  $pend = @($script:Hall | Where-Object { $_.Cat -eq 'cobertura' -and $_.Sev -eq 'error' })
+  if ($c -and $c.medida -and $c.porcentaje -lt [double]$Cfg.CoberturaMinima) {
+    if ($pend.Count -eq 0) { $l.Add('Lo que falta esta en clases que CoberturaExcluir no propone: no hay clase que probar.') }
+    else {
+      $l.Add("Faltan estas clases ($($pend.Count)):")
+      $k = 0
+      foreach ($x in $pend) {
+        $k++
+        if ($Tope -gt 0 -and $k -gt $Tope) { $l.Add("  ... y $($pend.Count - $Tope) mas (todas en .rescate/cobertura-faltan.md)"); break }
+        $motivo = 'sin intentar en esta pasada'
+        $info = $script:AtascadosInfo["cobertura|$($x.Fichero)"]
+        if ($info) { $motivo = "atascada tras los intentos: $($info.motivo)" }
+        elseif ($script:CobHechas -contains $x.Fichero) { $motivo = 'probada y mejorada, pero aun le faltan lineas' }
+        elseif ($script:CobTope) { $u = [int]$Cfg.CoberturaClasesMax; $motivo = "sin intentar: tope de $u " + $(if ($u -eq 1) { 'clase' } else { 'clases' }) + ' por pasada (CoberturaClasesMax)' }
+        $l.Add("  - $($x.Fichero) - $($x.Detalle): $motivo")
+      }
+    }
+  }
+  $ex = @($script:CobExcluidas)
+  if ($ex.Count -gt 0) {
+    $l.Add("No se proponen (CoberturaExcluir): $($ex.Count) " + $(if ($ex.Count -eq 1) { 'clase' } else { 'clases' }) + ' con lineas sin cubrir:')
+    foreach ($x in $ex) { $l.Add("  - $x") }
+  }
+  $ojos = New-Object System.Collections.Generic.List[string]
+  foreach ($f in @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java'))) {
+    $rel = Get-Rel $RepoRoot $f.FullName
+    $n = 0
+    foreach ($linea in [System.IO.File]::ReadAllLines($f.FullName)) {
+      $n++
+      if ($linea -match '//\s*OJO:\s*parece un error') { $ojos.Add("  - ${rel}:$n - " + $linea.Trim()) }
+    }
+  }
+  if ($ojos.Count -gt 0) {
+    $l.Add('Comportamientos que parecen un error del codigo (fijados tal cual en el test, a revisar por una persona):')
+    foreach ($x in $ojos) { $l.Add($x) }
+  }
+  return $l.ToArray()
+}
+
+# Al acabar el paso cobertura: 'Cobertura: X % -> Y % (objetivo Z %)', lo que falta con su motivo, las excluidas y los // OJO; en la consola y en
+# .rescate/cobertura-faltan.md.
+function Write-CoberturaFaltan {
+  $c = $script:Cob
+  $obj = [double]$Cfg.CoberturaMinima
+  if (-not $c -or -not $c.medida) {
+    $motivo = 'los tests no pasan o el proyecto no compila'
+    if ($c) { $motivo = "$($c.motivo)" }
+    $cab = "Cobertura: sin medir ($motivo)."
+  }
+  else {
+    $ini = $c.porcentaje
+    if ($null -ne $script:CobInicial) { $ini = $script:CobInicial }
+    $cab = "Cobertura: $(Format-Pct $ini) % -> $(Format-Pct $c.porcentaje) % (objetivo $(Format-Pct $obj) %)"
+  }
+  $ruta = Join-Path $Work 'cobertura-faltan.md'
+  [System.IO.File]::WriteAllText($ruta, ((@('# Cobertura: lo que falta', '', $cab, '') + @(Get-CoberturaLineasFaltan 0)) -join "`n") + "`n")
+  Info ''
+  if ($c -and $c.medida -and $c.porcentaje -ge $obj) { Bien $cab } else { Aviso $cab }
+  foreach ($x in @(Get-CoberturaLineasFaltan 30)) { if ($x -match '^Faltan ') { Aviso $x } else { Info $x } }
+  Info ('Lista de cobertura: ' + $ruta)
+}
+
 # ============================== DIAGNOSTICO ==============================
 # $Motivo (opcional) va en una propiedad aparte, solo si lo hay: no entra en el detalle ni en la clave del hallazgo (Get-ClaveHallazgo), y un
 # hallazgo sin motivo es igual que siempre en hallazgos.json.
@@ -1754,6 +2117,9 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   # ---------- sonar (solo con -Sonar) ----------
   if ($Sonar) { Add-SonarHallazgos }
 
+  # ---------- cobertura (solo con -Cobertura) ----------
+  if ($Cobertura) { Add-CoberturaHallazgos ([bool]($ConBuild -and $ConTests)) }
+
   return $script:H.ToArray()
 }
 
@@ -1764,10 +2130,13 @@ function Get-Cuenta($Hall, [string]$Cat, [string]$Sev = 'error') {
 # Primer paso con errores pendientes (sin contar lo que ya se dio por atascado).
 function Get-SiguientePaso($Hall) {
   foreach ($c in $Cfg.Orden) {
+    if ($c -eq 'cobertura' -and $script:CobHecha) { continue }   # una pasada por ejecucion: lo que le falte sale en su resumen
     $f = @($Hall | Where-Object { $_.Cat -eq $c -and $_.Sev -eq 'error' } | ForEach-Object { $_.Fichero } | Select-Object -Unique)
     if ($script:Atascados.ContainsKey($c)) { $f = @($f | Where-Object { $script:Atascados[$c] -notcontains $_ }) }
     if ($f.Count -gt 0) { return $c }
   }
+  # con -Cobertura, el paso que falta aunque aun no haya hallazgos: la cobertura solo se mide en su paso (una vez por ejecucion)
+  if ($Cobertura -and -not $script:CobHecha -and (-not $script:Cob -or (Get-Cuenta $Hall 'cobertura') -gt 0)) { return 'cobertura' }
   return ''
 }
 
@@ -1843,6 +2212,7 @@ $TextoPaso = @{
   paridad    = 'Migra desde el ORIGINAL el job listado, que falta en este repo. Conserva EXACTAMENTE su nombre de job (con ese nombre lo lanza el planificador). Sigue la estructura de la PLANTILLA: adaptador de entrada (job y step), caso de uso, puertos y adaptadores de salida. Reutiliza los puertos y adaptadores que ya existan en este repo. Misma logica que el original.'
   e2e        = 'Crea un test de integracion para el job listado, copiando el patron de los tests de integracion de la PLANTILLA. El test lanza el job real de principio a fin con los adaptadores locales (sftp desactivado), base de datos en memoria y los servicios externos simulados; comprueba que termina en COMPLETED y que la salida es la esperada. Usa los datos de src/test/resources/e2e/<nombre-del-job>/ si existen; si no, crea alli datos sinteticos minimos (nunca datos reales). La salida esperada se deduce de la logica del ORIGINAL, no de ejecutar el codigo nuevo. El test debe contener el nombre del job. Si el test falla porque el codigo migrado no hace lo mismo que el original, corrige el codigo, no el test.'
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
+  cobertura  = 'Escribe o amplia el test de la clase listada hasta cubrir sus lineas sin cubrir, sin tocar nada fuera de src/test/ (el detalle va en el prompt del lote).'
   sonar      = 'Corrige las incidencias de Sonar listadas SIN cambiar el comportamiento ni la API publica (el detalle de lo que se pide va en el prompt del lote).'
   calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. No toques nada mas de esos ficheros.'
 }
@@ -1906,8 +2276,8 @@ function Get-TextoReferencias {
   return ($l + '')
 }
 
-# En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
-function Get-ConTests([string]$PasoId) { return [bool]((-not $SinTests) -or ($PasoId -eq 'tests') -or ($PasoId -eq 'e2e')) }
+# En cada lote se ejecutan los tests (salvo -SinTests); en 'tests', 'e2e' y 'cobertura', siempre.
+function Get-ConTests([string]$PasoId) { return [bool]((-not $SinTests) -or ($PasoId -eq 'tests') -or ($PasoId -eq 'e2e') -or ($PasoId -eq 'cobertura')) }
 
 # La orden que la IA ejecuta dentro de su sesion para ver, sin Maven, lo que ha roto: este mismo script en -Modo comprobar, con el
 # mismo PowerShell (5.1 o 7) y los parametros que deciden donde se trabaja.
@@ -1955,6 +2325,7 @@ function Get-TextoAlTerminar([string]$Mvn, [string]$PasoId) {
 # Con CORRECCION es el prompt corto de reparacion: el intento anterior sigue en el arbol y no hay que explorar de nuevo.
 function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $null, $Reflexiones = @()) {
   if ($PasoId -eq 'sonar') { return (New-PromptSonar $LoteH $Correccion $Consejo $Reflexiones) }
+  if ($PasoId -eq 'cobertura') { return (New-PromptCobertura $LoteH $Correccion $Consejo $Reflexiones) }
   if ($Correccion) { return (New-PromptReparacion $PasoId $LoteH $Correccion $Consejo $Reflexiones) }
   $mvn = Get-OrdenMaven
   $l = New-Object System.Collections.Generic.List[string]
@@ -2823,7 +3194,7 @@ function Undo-IntentoCortado([string]$Rama) {
 }
 
 function Invoke-Fix {
-  if (-not $PlantillaRoot -and -not ($Sonar -and $Paso -eq 'sonar')) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
+  if (-not $PlantillaRoot -and -not (($Sonar -and $Paso -eq 'sonar') -or $Paso -eq 'cobertura')) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
   # --- rama de rescate y foto del estado actual: nada se pierde ---
   # Con worktree ya estamos en su rama rescate/. Solo con -SinWorktree se crea aqui.
@@ -2852,14 +3223,15 @@ function Invoke-Fix {
   # Si es el mismo commit del ultimo diagnostico con Maven (el del ultimo lote del paso anterior) y el arbol esta limpio, sirven sus hallazgos.
   $head0 = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
   $cache = $script:HallCache
-  if ($cache -and $cache.Commit -eq $head0 -and @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -eq 0) {
+  if ($Paso -eq 'cobertura') { $script:MedirCobertura = $true }   # el diagnostico inicial ya mide: el paso necesita sus tests y su cobertura
+  if ($cache -and $cache.Commit -eq $head0 -and (-not $script:MedirCobertura -or $script:CobCommit -eq $head0) -and @((Invoke-Git $RepoRoot @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -eq 0) {
     Info 'Diagnostico inicial: mismo commit y arbol limpio que en el ultimo diagnostico con Maven: reutilizo sus hallazgos.'
     $hall = @($cache.Hall)
     $script:Build = $cache.Build
   }
   else {
     Info 'Diagnostico inicial (compilando)...'
-    $hall = @(Invoke-Diagnostico $true (-not $SinTests))
+    $hall = @(Invoke-Diagnostico $true ((-not $SinTests) -or $script:MedirCobertura))
   }
   $script:Hall = $hall
   Write-Informe $hall
@@ -2872,13 +3244,31 @@ function Invoke-Fix {
     if ($script:Atascados.ContainsKey('build')) { Fallo "El proyecto no compila y 'build' se ha quedado atascado: no sigo con '$paso'."; $script:Parar = $true; return }
     Fallo "El proyecto no compila: primero hay que hacer -Paso build."; exit 2
   }
-  $esSonar = ($paso -eq 'sonar')   # el paso de Sonar no depende de los anteriores: no avisa de ellos
+  $esSonar = ($paso -eq 'sonar')
+  $esCob = ($paso -eq 'cobertura')
+  $indep = ($esSonar -or $esCob)   # sonar y cobertura no dependen de los pasos anteriores: no avisan de ellos
   foreach ($c in $Cfg.Orden) {
     if ($c -eq $paso) { break }
     $q = Get-Cuenta $hall $c
-    if ($q -gt 0 -and -not $esSonar) { Aviso "Ojo: quedan $q errores en el paso anterior '$c'." }
+    if ($q -gt 0 -and -not $indep) { Aviso "Ojo: quedan $q errores en el paso anterior '$c'." }
   }
-  # En cada lote se ejecutan los tests (salvo -SinTests); en 'tests' y 'e2e', siempre.
+  # cobertura: mide con los tests al empezar (una vez por pasada) y apunta el punto de partida del resumen
+  if ($esCob) {
+    $script:MedirCobertura = $true
+    $script:CobHechas = @()
+    $script:CobTope = $false
+    if (-not $script:Cob -or $script:CobCommit -ne (Get-Head $RepoRoot)) {
+      Info 'Midiendo la cobertura (Maven con JaCoCo)...'
+      $hall = @(Invoke-Diagnostico $true $true)
+      $script:Hall = $hall
+    }
+    if (-not $script:Build.Compila) { Fallo 'El proyecto no compila: primero hay que hacer -Paso build.'; exit 2 }
+    if (-not $script:Build.TestsOk) { Fallo 'Los tests no pasan: sin ellos no se puede medir la cobertura. Primero -Paso tests.'; exit 2 }
+    if (-not $script:Cob -or -not $script:Cob.medida) { Fallo "No se ha podido medir la cobertura: $($script:Cob.motivo)"; exit 2 }
+    if ($null -eq $script:CobInicial) { $script:CobInicial = $script:Cob.porcentaje }
+    Info "Cobertura de partida: $(Format-Pct $script:Cob.porcentaje) % (objetivo $(Format-Pct ([double]$Cfg.CoberturaMinima)) %)."
+  }
+  # En cada lote se ejecutan los tests (salvo -SinTests); en 'tests', 'e2e' y 'cobertura', siempre.
   $conTests = (Get-ConTests $paso)
   if ($conTests -and $script:Build.Compila -and -not $script:Build.TestsEjecutados) { $hall = @(Invoke-Diagnostico $true $true) }
   $loteEf = $Lote
@@ -2907,12 +3297,19 @@ function Invoke-Fix {
     if ($pend.Count -eq 0) { break }
     $stuck = @()
     if ($script:Atascados.ContainsKey($paso)) { $stuck = @($script:Atascados[$paso]) }
-    $fichs = @($pend | ForEach-Object { $_.Fichero } | Select-Object -Unique | Where-Object { $stuck -notcontains $_ })
+    $fichs = @($pend | ForEach-Object { $_.Fichero } | Select-Object -Unique | Where-Object { $stuck -notcontains $_ -and $script:CobHechas -notcontains $_ })
     $cand = @($fichs | Select-Object -Skip $Saltar)
     $tam = $loteEf
     if ($cand.Count -gt 0 -and $unoAUno.ContainsKey($cand[0])) { $tam = 1 }
     $sel = @($cand | Select-Object -First $tam)
     if ($sel.Count -eq 0) { break }
+    if ($esCob -and $script:CobHechas.Count -ge [int]$Cfg.CoberturaClasesMax) {
+      $script:CobTope = $true
+      $u = [int]$Cfg.CoberturaClasesMax
+      Info ''
+      Aviso ("Tope de gasto: $u " + $(if ($u -eq 1) { 'clase' } else { 'clases' }) + " en esta pasada (CoberturaClasesMax); las que quedan no se intentan.")
+      break
+    }
     # el intento con el consejo va con -Modelo, una sola vez y sin reflexion (despues no hay otro)
     $conIntento = ($sel.Count -eq 1 -and $consejoDe.ContainsKey($sel[0]))
     $mod = ''; $duda = $null; $intentos = $MaxIntentos
@@ -2930,6 +3327,7 @@ function Invoke-Fix {
     $hallAntes = @{}
     foreach ($x in @($hall | Where-Object { $_.Sev -eq 'error' })) { $hallAntes[(Get-ClaveHallazgo $x)] = $true }
     $antesCompila = $script:Build.Compila
+    $cobAntes = $script:Cob   # la medida del commit bueno: el lote la compara con la de cada intento
     $check = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
     Info ''
     Info "--- Lote $n : $($loteH.Count) hallazgo(s) en $($sel.Count) fichero(s); pendientes del paso: $($pend.Count) ---"
@@ -3030,10 +3428,11 @@ function Invoke-Fix {
       $fuera = @($tocados | Where-Object { -not $_.StartsWith('src/') -and $_ -ne 'pom.xml' })
       if ($fuera.Count -gt 0) { $blandos += ('ha tocado ficheros fuera de src: ' + (($fuera | Select-Object -First 6) -join ', ')) }
 
-      # sonar: lo que el intento no puede hacer (ficheros, tests, diff). Si ya incumple algo, el intento no vale y Maven no cambia nada.
-      $sonarMal = @()
-      if ($esSonar) { $sonarMal = @(Get-SonarProblemas $cambios $check $loteH); $problemas += $sonarMal }
-      if ($sonarMal.Count -gt 0) {
+      # sonar y cobertura: lo que el intento no puede hacer (ficheros, tests, diff). Si ya incumple algo, el intento no vale y Maven no cambia nada.
+      $reglasMal = @()
+      if ($esSonar) { $reglasMal = @(Get-SonarProblemas $cambios $check $loteH); $problemas += $reglasMal }
+      if ($esCob) { $reglasMal = @(Get-CoberturaProblemas $tocados $check $loteH); $problemas += $reglasMal }
+      if ($reglasMal.Count -gt 0) {
         Info '  Sin Maven: el intento ya incumple las reglas del paso.'
         $hall2 = @(Invoke-Diagnostico $false $false)
       }
@@ -3045,14 +3444,14 @@ function Invoke-Fix {
       $antesPaso = $antes[$paso]
       if ($esSonar) { $antesPaso -= (Get-SonarDejadas $loteH) }   # las dejadas con motivo no cuentan para bajar
       if (-not $script:Build.Compila -and ($paso -ne 'build' -or $antesCompila)) { $problemas += 'El proyecto no compila.' }
-      if ($d -ge $antesPaso) { $problemas += "Los hallazgos de '$paso' no han bajado ($antesPaso -> $d)." }
+      if (-not $esCob -and $d -ge $antesPaso) { $problemas += "Los hallazgos de '$paso' no han bajado ($antesPaso -> $d)." }
       $empeorados = @()   # los pasos que el intento ha empeorado: sus hallazgos nuevos salen en el detalle
       foreach ($c in $Cfg.Orden) {
         if ($c -eq $paso) { break }
         # sonar vale para cualquier repo Java: build, tests, hexagonal (reglas del codigo) y calidad (la comprueba despues, con su propio aviso) cuentan siempre;
         # la colocacion (estructura, ficheros, config, paridad, e2e) solo si hay plantilla
-        if ($esSonar -and $c -eq 'calidad') { continue }
-        if ($esSonar -and -not $PlantillaRoot -and @('estructura', 'ficheros', 'config', 'paridad', 'e2e') -contains $c) { continue }
+        if ($indep -and $c -eq 'calidad') { continue }
+        if ($indep -and -not $PlantillaRoot -and @('estructura', 'ficheros', 'config', 'paridad', 'e2e') -contains $c) { continue }
         $q = Get-Cuenta $hall2 $c
         if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)."; $empeorados += $c }
       }
@@ -3065,6 +3464,33 @@ function Invoke-Fix {
         $problemas += "Tu codigo anade hallazgos de calidad ($($antes['calidad']) -> $qc). Lo que escribas lleva Javadoc y sigue las reglas de calidad."
         $empeorados += 'calidad'
       }
+      # cobertura: (P2) los tests de la clase pasan CoberturaRepeticiones veces seguidas y (P3) su cobertura sube sin que baje el total.
+      # Solo si lo demas va bien: cada comprobacion es un Maven.
+      $cobSube = $false; $cobDetalle = @()
+      if ($esCob -and $problemas.Count -eq 0) {
+        $claseCob = [System.IO.Path]::GetFileNameWithoutExtension($sel[0])
+        $rep = Test-CoberturaRepeticiones $claseCob
+        if ($rep) { $problemas += $rep.Motivo; $cobDetalle = @($rep.Detalle) }
+        else {
+          $c1 = $script:Cob
+          if (-not $script:CobFresca -or -not $c1 -or -not $c1.medida) { $problemas += "No he podido medir la cobertura tras tu intento: $($c1.motivo)" }
+          else {
+            $a = Get-CoberturaDeFichero $cobAntes $sel[0]
+            $b = Get-CoberturaDeFichero $c1 $sel[0]
+            if (-not $b -or -not $a -or $b.Cubiertas -le $a.Cubiertas) {
+              $txt = '?'
+              if ($a -and $b) { $txt = "$($a.Cubiertas)/$($a.Total) -> $($b.Cubiertas)/$($b.Total) lineas" }
+              $problemas += "La cobertura de $claseCob no sube ($txt). Tus tests tienen que ejecutar lineas que hoy no ejecuta ninguno: mira las lineas sin cubrir del prompt."
+            }
+            else {
+              $cobSube = $true
+              if ($c1.cubiertas -lt $cobAntes.cubiertas) { $problemas += "La cobertura total baja ($($cobAntes.cubiertas) -> $($c1.cubiertas) lineas cubiertas): tu cambio ha dejado sin cubrir lineas que antes cubria un test. Restaura lo que cambiaste de los otros tests." }
+            }
+          }
+        }
+      }
+      $mejoraPaso = ($d -lt $antesPaso)
+      if ($esCob) { $mejoraPaso = $cobSube }
       $nuevos = @(Get-HallazgosNuevos $hall2 $empeorados $hallAntes | Select-Object -First 20)
 
       if ($problemas.Count -eq 0) { $ok = $true; break }
@@ -3074,8 +3500,8 @@ function Invoke-Fix {
       $detalle = @((@($nuevos) + @($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20)) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos
-      if ($sonarMal.Count -gt 0) { $detalle += ('  - ficheros que has tocado: ' + (($tocados | Select-Object -First 12) -join ', ')) }
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20)) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos + $cobDetalle
+      if ($reglasMal.Count -gt 0) { $detalle += ('  - ficheros que has tocado: ' + (($tocados | Select-Object -First 12) -join ', ')) }
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
       # por pantalla, lo que se ha roto primero; el resto, y la correccion completa, en el fichero del intento
       $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
@@ -3089,7 +3515,7 @@ function Invoke-Fix {
         $sha = Save-ArbolIntento
         if ($sha) {
           $mejor = @{ Sha = $sha; Peso = $peso; Problemas = $problemas.Count; Nuevos = $nuevos.Count; Correccion = $correccion; Intento = $i; Lote = $n; Base = $check; Ref = ''
-            Sirve = ($script:Build.Compila -and $sonarMal.Count -eq 0 -and $d -lt $antesPaso) }
+            Sirve = ($script:Build.Compila -and $reglasMal.Count -eq 0 -and $mejoraPaso) }
         }
       }
       elseif ($i -lt $intentos) {
@@ -3112,6 +3538,7 @@ function Invoke-Fix {
       Remove-Intento   # la marca se va cuando el lote ya esta deshecho, no antes
       $script:Build = $buildAntes
       if ($esSonar) { $script:SonarBase = $null }   # las dejadas de un lote que no pasa no valen: la base se vuelve a leer del disco
+      if ($esCob) { $script:Cob = $cobAntes }   # la medida del intento deshecho no vale
       Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $intentos intento(s)."
       $problemas | ForEach-Object { Aviso "  - $_" }
       @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
@@ -3157,12 +3584,14 @@ function Invoke-Fix {
         $nota += "`n    recomendada: $($d0.elegida) (tipo $($d0.tipo)). Por que: $($d0.porque)"
       }
       Add-Atascado $paso $f ($problemas -join ' ') $d0
+      if ($esCob) { $script:CobHechas += $f }
       Save-Atascados
       [System.IO.File]::AppendAllText((Join-Path $Work 'atascados.md'), $nota + "`n")
       foreach ($x in $sel) { $unoAUno.Remove($x); $mejorDe.Remove($x) }
       # la cascada de un fichero (de uno en uno, reserva, consejo) cuenta una vez, al quedar atascado, no una por escalon
       $script:Fallos++
-      if (-not $esSonar -and $script:Fallos -ge $Cfg.MaxFallosSeguidos) {   # en sonar un fichero atascado no para la pasada: todo sale contado al final
+      if (-not $esSonar -and $script:Fallos -ge $Cfg.MaxFallosSeguidos) {
+        if ($esCob) { $script:Hall = $hall; $script:CobHecha = $true; Write-CoberturaFaltan }   # en sonar un fichero atascado no para la pasada: todo sale contado al final
         Fallo "PARO: $($script:Fallos) ficheros atascados seguidos, sin ningun lote bueno entre medias. Puede ser un problema de Copilot, de Maven o de un flag, no del codigo."
         Info "Ultimas lineas de Copilot (.rescate/lote-$paso-$n-*.log):"
         $rc.Salida | Select-Object -Last 8 | ForEach-Object { Info "  $_" }
@@ -3179,6 +3608,7 @@ function Invoke-Fix {
     }
     Remove-Intento   # la marca se va cuando el lote ya esta commiteado (o ha fallado el commit y los cambios son del usuario), no antes
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado; los cambios siguen en el arbol de trabajo: ' + ($r.Salida -join ' ')); exit 3 }
+    if ($esCob) { $script:CobHechas += $sel[0]; $script:CobCommit = Get-Head $RepoRoot }   # esa clase no se vuelve a proponer en esta pasada; la medida es la de este commit
     if ($esSonar) {   # lo que el modelo ha dejado con motivo y lo que este lote ha resuelto (con su commit) queda en la base
       if (-not $sinCambios) { Set-SonarResueltas (Get-Head $RepoRoot) }
       Save-SonarBase
@@ -3193,7 +3623,9 @@ function Invoke-Fix {
     Write-Informe $hall
     if ($sinCambios) { Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Sin cambios que guardar: el modelo ha dejado con su motivo todo lo del lote." }
     else {
-      Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho."
+      $cobTxt = ''
+      if ($esCob -and $cobAntes -and $script:Cob -and $script:Cob.medida) { $cobTxt = " Cobertura total: $(Format-Pct $cobAntes.porcentaje) % -> $(Format-Pct $script:Cob.porcentaje) %." }
+      Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Commit hecho.$cobTxt"
       (Invoke-Git $RepoRoot @('show', '--stat', '--oneline', '--format=%h %s', 'HEAD')).Salida | Select-Object -First 25 | ForEach-Object { Info "  $_" }
     }
     $blandos | ForEach-Object { Aviso "  REVISA: $_" }
@@ -3207,12 +3639,14 @@ function Invoke-Fix {
 
   $script:Hall = $hall
   $script:HallCache = @{ Commit = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim(); Hall = $hall; Build = $script:Build }
+  if ($esCob) { $script:CobHecha = $true }
   Show-Resumen $hall
   if ($esSonar) { Write-SonarFaltan }
+  if ($esCob) { Write-CoberturaFaltan }
   $sig = Get-SiguientePaso $hall
   $script:Siguiente = $sig
   if ($sig) { Info "Siguiente paso pendiente: $sig  ->  vuelve a lanzar con -Modo fix (o -Paso $sig)" }
-  else { Show-SinPasos 'Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
+  elseif (-not $esCob) { Show-SinPasos 'Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
 }
 
 # ================================ COMPROBAR ================================
@@ -3250,15 +3684,22 @@ function Invoke-Comprobar {
 
 # ================================= MAIN =================================
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fallo "No encuentro 'git' en el PATH."; exit 1 }
-# Con -Sonar y sin -Modo: el fix entero del paso sonar, sin parar a preguntar entre lotes
-if ($Sonar) {
+# Con -Sonar o -Cobertura y sin -Modo: el fix entero de ese paso, sin parar a preguntar entre lotes
+if ($Sonar -or $Cobertura) {
   if (-not $PSBoundParameters.ContainsKey('Modo')) {
     $Modo = 'fix'
-    if (-not $Paso -and -not $Todo) { $Paso = 'sonar' }
+    if (-not $Paso -and -not $Todo) {
+      if ($Sonar) {
+        $Paso = 'sonar'
+        if ($Cobertura) { Aviso "Con -Sonar y -Cobertura sin -Paso ni -Todo solo hago el paso 'sonar': despues lanza -Cobertura sola (o usa -Todo)." }
+      }
+      else { $Paso = 'cobertura' }
+    }
   }
   $Auto = [switch]$true
 }
 if ($Paso -eq 'sonar' -and -not $Sonar) { Fallo "El paso 'sonar' necesita -Sonar <informe.xlsx>."; exit 1 }
+if ($Paso -eq 'cobertura' -and -not $Cobertura) { Fallo "El paso 'cobertura' necesita -Cobertura."; exit 1 }
 if ($Sonar) {
   $Sonar = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Sonar)
   if (-not (Test-Path -LiteralPath $Sonar -PathType Leaf)) { Fallo "No existe el informe de Sonar: $Sonar"; exit 1 }
@@ -3299,9 +3740,10 @@ if (-not $SinWorktree -and -not (Get-Rama $OrigenRoot).StartsWith('rescate/')) {
   }
 }
 
-# El paso sonar solo existe con -Sonar, y va el ultimo
-$Cfg.Orden = @($Cfg.Orden | Where-Object { $_ -ne 'sonar' })
+# El paso sonar solo existe con -Sonar, y el de cobertura con -Cobertura (detras de sonar): van los ultimos
+$Cfg.Orden = @($Cfg.Orden | Where-Object { $_ -ne 'sonar' -and $_ -ne 'cobertura' })
 if ($Sonar) { $Cfg.Orden += 'sonar' }
+if ($Cobertura) { $Cfg.Orden += 'cobertura' }
 
 $Work = Join-Path $RepoRoot '.rescate'
 if (-not $soloLee -and -not (Test-Path -LiteralPath $Work)) { [void](New-Item -ItemType Directory -Path $Work) }
@@ -3324,6 +3766,14 @@ Initialize-ConfigReintentos
 $script:H = $null
 $script:Build = $null
 $script:BasePkg = ''
+$script:Cob = $null            # la ultima medida de cobertura (Measure-Cobertura); solo con -Cobertura
+$script:CobCommit = ''         # el commit al que corresponde
+$script:CobHecha = $false      # el paso cobertura ya se ha hecho en esta ejecucion
+$script:CobHechas = @()        # las fuentes que esta pasada ya ha intentado (cada una, una vez por pasada)
+$script:CobInicial = $null     # el porcentaje al empezar el paso (el X de 'Cobertura: X % -> Y %')
+$script:CobTope = $false       # la pasada se ha parado en CoberturaClasesMax
+$script:CobExcluidas = @()     # las clases con lineas sin cubrir que CoberturaExcluir no propone
+$script:MedirCobertura = $false
 $script:Cal = $null
 if ($PlantillaRoot) {
   if (-not $soloLee) { Info 'Leyendo la plantilla...' }
@@ -3335,6 +3785,7 @@ switch ($Modo) {
   'comprobar' { exit @(Invoke-Comprobar)[-1] }
   'diagnostico' {
     if ($SinBuild) { Info 'Diagnostico sin Maven...' } else { Info 'Diagnostico (ejecutando Maven, puede tardar)...' }
+    $script:MedirCobertura = [bool]$Cobertura   # con -Cobertura el diagnostico mide la cobertura (un Maven mas, con los tests)
     $hall = @(Invoke-Diagnostico (-not $SinBuild) (-not $SinTests))
     Write-Informe $hall
     Show-Resumen $hall
