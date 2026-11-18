@@ -1150,7 +1150,7 @@ $Pruebas['60 m20b (g): -Deshacer salta un commit donde el caso no se pudo ejecut
 
 $Pruebas['61 m20b (h): -Deshacer quita el revert que no arregla el caso: otro revert encima, el aviso en rojo y la rama con su contenido de antes'] = {
   $base = "minimo=5.00`nsegundos=0`nmayus=no`nrelleno1=1`nrelleno2=2`nrelleno3=3`nrelleno4=4`n"
-  $e = Nuevo-Escenario 'm20b-deshacer-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) 'minimo=5.00' $base
+  $e = Nuevo-Escenario 'm20b-deshacer-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) 'minimo=5.00' $base.TrimEnd("`n")
   $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
   $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
   $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
@@ -1162,7 +1162,8 @@ $Pruebas['61 m20b (h): -Deshacer quita el revert que no arregla el caso: otro re
   Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
   Comprueba 'dice en rojo que deshacer ese commit no arregla el caso y que lo deja como estaba' ($r.Salida.Contains("Deshacer $(Corto $c3) no arregla cargaJob/caso-01: lo vuelvo a dejar como estaba")) (Cola $r.Salida)
   Igual 'la rama lleva dos commits nuevos: el revert y el revert del revert' 2 (GitEn $e.Wt @('rev-list', '--count', "$c5..HEAD"))
-  Igual 'el ultimo es el revert del revert' 'Revert "Revert "sube el limite""' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  $ultimo = GitEn $e.Wt @('log', '-1', '--format=%s')
+  Comprueba 'el ultimo es el revert del revert (git nuevo lo titula Reapply, el viejo Revert "Revert ...")' ($ultimo -ceq 'Reapply "sube el limite"' -or $ultimo -ceq 'Revert "Revert "sube el limite""') $ultimo
   Igual 'regla.txt queda como en el ultimo commit de antes' $final (Lee $e.Wt 'regla.txt')
   Igual 'sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
   $c = @(Culpables $e)
