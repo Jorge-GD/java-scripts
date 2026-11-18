@@ -4349,5 +4349,57 @@ $Pruebas['m10 sonar: todo en ASCII (el script, el banco y los falsos)'] = {
   }
 }
 
+# ================================ M14: PASO COBERTURA ================================
+# El paso 'cobertura' (-Cobertura) escribe tests hasta que la cobertura de lineas llega al objetivo. Los falsos son cobertura-mvn.ps1 y
+# cobertura-copilot.ps1: la cobertura de una clase sale de marcadores (un '// LINEAS: n' en su fuente y los '// CUBRE: n' de su test).
+$CabJacoco = 'GROUP,PACKAGE,CLASS,INSTRUCTION_MISSED,INSTRUCTION_COVERED,BRANCH_MISSED,BRANCH_COVERED,LINE_MISSED,LINE_COVERED,COMPLEXITY_MISSED,COMPLEXITY_COVERED,METHOD_MISSED,METHOD_COVERED'
+
+# Una fila de jacoco.csv como la de JaCoCo: paquete, clase, lineas sin cubrir y cubiertas (lo demas, de relleno).
+function Fila-Jacoco([string]$Paquete, [string]$Clase, [int]$Faltan, [int]$Cubiertas) {
+  return "batch,$Paquete,$Clase,$($Faltan * 3),$($Cubiertas * 3),2,1,$Faltan,$Cubiertas,3,1,1,1"
+}
+
+$Pruebas['m14 cobertura: Get-Cobertura con un jacoco.csv de 3 clases devuelve clases con sus lineas y la ruta del fichero; el total no cambia'] = {
+  $raiz = Join-Path $Dir 'm14-clases'
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  Escribe $raiz 'src/main/java/com/acme/batch/service/TotalService.java' "package com.acme.batch.service;`npublic class TotalService {}`n"
+  Escribe $raiz 'src/main/java/com/acme/batch/service/ReciboService.java' "package com.acme.batch.service;`npublic class ReciboService {}`n"
+  $csv = Join-Path $Dir 'm14-clases.csv'
+  [System.IO.File]::WriteAllText($csv, (@($CabJacoco, (Fila-Jacoco 'com.acme.batch.service' 'TotalService' 8 2), (Fila-Jacoco 'com.acme.batch.service' 'ReciboService' 0 10), (Fila-Jacoco 'com.acme.batch.config' 'AppConfig' 3 0)) -join "`n") + "`n")
+  $f = Join-Path $Dir 'm14-clases.ps1'
+  [System.IO.File]::WriteAllText($f, @'
+param([string]$Sis, [string]$Mvn, [string]$Carpeta, [string]$Registro)
+. (Join-Path $Sis 'comun.ps1')
+$Cfg.MvnExe = $Mvn
+$Cfg.SegundosLatido = 0
+$o = Get-Cobertura $Carpeta $Registro $true $true
+$sin = Get-Cobertura $Carpeta $Registro $true
+'CAMPOS ' + (@($sin.Keys) -join ' ')
+ConvertTo-Json -InputObject $o -Depth 6 -Compress
+'@)
+  $env:RESCATE_JACOCO_CSV = $csv
+  try { $r = Lanzar $f @((Split-Path -Parent $Script), (Join-Path $falsos 'mvn.ps1'), $raiz, (Join-Path $Dir 'm14-clases.log')) }
+  finally { $env:RESCATE_JACOCO_CSV = '' }
+  $o = $null
+  $lineas = @($r.Salida -split "`r?`n")
+  try { $o = $lineas[-1] | ConvertFrom-Json } catch { }
+  if (-not $o) { Comprueba 'la salida es un JSON' $false (Cola $r.Salida); return }
+  Igual 'sin pedir las clases, los campos son los de siempre' 'CAMPOS medida porcentaje cubiertas total minima motivo' (@($lineas | Where-Object { $_ -match '^CAMPOS ' })[0])
+  Comprueba 'medida' ($o.medida -eq $true) (Cola $r.Salida)
+  Igual 'el total sigue igual: 12 cubiertas' 12 $o.cubiertas
+  Igual 'el total sigue igual: 23 lineas' 23 $o.total
+  Igual 'el total sigue igual: 52,2 %' 52.2 $o.porcentaje
+  Igual 'la minima sigue en 80' 80 $o.minima
+  $c = @($o.clases)
+  Igual 'hay 3 clases, una por fila del csv' 3 $c.Count
+  Igual 'la primera clase lleva paquete y nombre' 'com.acme.batch.service.TotalService' $c[0].Clase
+  Igual 'su fichero es la ruta relativa del .java' 'src/main/java/com/acme/batch/service/TotalService.java' $c[0].Fichero
+  Igual 'faltan 8' 8 $c[0].Faltan
+  Igual 'y 2 cubiertas' 2 $c[0].Cubiertas
+  Igual 'la segunda esta entera cubierta' '0/10' ("$($c[1].Faltan)/$($c[1].Cubiertas)")
+  Igual 'la tercera no tiene .java en el repo: su fichero va vacio' '' "$($c[2].Fichero)"
+  Igual 'y sus numeros salen igual' '3/0' ("$($c[2].Faltan)/$($c[2].Cubiertas)")
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

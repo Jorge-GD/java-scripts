@@ -326,8 +326,12 @@ function Get-Head([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', 'HEAD'
 # (prepare-agent, test y report) con su salida en $Registro. Lee target\site\jacoco\jacoco.csv por el nombre de sus columnas y suma
 # todas las filas. Sin medida (medida false y porcentaje nulo) el motivo dice por que: nunca sale un 0 % que no se ha medido.
 # Con $Compila en $false (el diagnostico dice que no compila) no lanza Maven.
-function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
+# Con $ConClases en $true devuelve ademas clases (por defecto no: migracion.ps1 guarda el objeto tal cual en sus datos): una fila por fila del CSV,
+# con Clase (paquete.clase), Fichero (la ruta relativa src/main/java/... del .java, o '' si no esta), Faltan y Cubiertas (lineas); vacia si no se
+# ha medido. Una clase interna (Externa$Interna) lleva el fichero de la externa.
+function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila, [bool]$ConClases = $false) {
   $o = [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = $Cfg.CoberturaMinima; motivo = '' }
+  if ($ConClases) { $o.clases = @() }
   if (-not $Compila) { $o.motivo = 'el migrado no compila'; return $o }
   $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
   if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
@@ -347,9 +351,22 @@ function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
   if (($cab -cnotcontains 'LINE_MISSED') -or ($cab -cnotcontains 'LINE_COVERED')) { $o.motivo = 'el CSV de JaCoCo no tiene las columnas LINE_MISSED y LINE_COVERED'; return $o }
   $faltan = [long]0
   $cubiertas = [long]0
-  try { foreach ($f in @($lineas | ConvertFrom-Csv)) { $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED } }
+  $clases = New-Object System.Collections.Generic.List[object]
+  try {
+    foreach ($f in @($lineas | ConvertFrom-Csv)) {
+      $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED
+      $paq = "$($f.PACKAGE)".Trim()
+      $cls = "$($f.CLASS)".Trim()
+      $rel = 'src/main/java/' + ($paq.Replace('.', '/') + '/').TrimStart('/') + $cls.Split('$')[0] + '.java'
+      if (-not (Test-Path -LiteralPath (Join-Ruta $Dir $rel) -PathType Leaf)) { $rel = '' }
+      $nombre = $cls
+      if ($paq) { $nombre = "$paq.$cls" }
+      $clases.Add([pscustomobject]@{ Clase = $nombre; Fichero = $rel; Faltan = [long]$f.LINE_MISSED; Cubiertas = [long]$f.LINE_COVERED })
+    }
+  }
   catch { $o.motivo = 'el CSV de JaCoCo no se puede leer: ' + $_.Exception.Message; return $o }
   if ($faltan + $cubiertas -eq 0) { $o.motivo = 'ninguna linea medible'; return $o }
+  if ($ConClases) { $o.clases = $clases.ToArray() }
   $o.medida = $true
   $o.cubiertas = $cubiertas
   $o.total = $faltan + $cubiertas
