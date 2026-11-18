@@ -74,9 +74,9 @@ USO
   # decidir una persona, se apunta en .rescate/atascados.md (y .json) y sigue.
   # La pasada siguiente no vuelve a intentar un atascado si su fichero no ha
   # cambiado y no hay commits tuyos desde entonces (-Reintentar lo fuerza).
-  # Con "Reflexionar": true en .rescate/config.json (apagado por defecto), tras
-  # cada intento que no pasa el modelo de las dudas reflexiona (por que no paso,
-  # que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del plan
+  # Con "Reflexionar" (encendido por defecto; "Reflexionar": false en
+  # .rescate/config.json lo apaga), tras cada intento que no pasa el modelo de las
+  # dudas reflexiona (por que no paso, que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del plan
   # tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
   # Todo queda en .rescate/decisiones.md; lo que le toca a una persona sale al
   # final en "Te toca decidir".
@@ -208,10 +208,11 @@ $Cfg += @{
   # El modelo de reserva si no se pasa -ModeloB (migracion.ps1 lanza el fix sin el). Vacio = sin reserva.
   ModeloB               = ''
   # Tras cada intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
-  # Apagado: en la medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no bajo ni los atascados
-  # ni los lotes deshechos (0 y 0 con y sin ella, dos pasadas de cada), y la pasada tardo de 3 a 4 veces mas y costo
-  # de 5 a 8 veces mas.
-  Reflexionar           = $false
+  # Encendida por decision del usuario el 18-11, al ver atascos reales con las mismas cuentas en los tres intentos. La
+  # medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no tuvo ningun atasco en ninguno de sus
+  # brazos (0 y 0 con y sin ella, dos pasadas de cada), y con ella la pasada tardo de 3 a 4 veces mas y costo de 5 a 8
+  # veces mas. Se apaga con "Reflexionar": false.
+  Reflexionar           = $true
   LineasDiff            = 300   # lineas del diff del intento que recibe la reflexion
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')

@@ -1651,13 +1651,6 @@ $Pruebas['m6 reflexion: sin las cuatro secciones se sigue sin ella; con Reflexio
   $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion'
   Igual 'con Reflexionar en false sale con 0' 0 $r2.Codigo
   Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e2 'reflexion').Count
-  # sin Reflexionar en la config: apagada (en la medida del M6 no bajo ni atascados ni lotes deshechos)
-  $e3 = Escenario-M6 'm6-reflexion-defecto'
-  Escribe $e3.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
-  $r3 = Fix-M6 $e3 'estructura' 2 @() 'nada-sin-correccion'
-  Igual 'sin decir nada en la config sale con 0' 0 $r3.Codigo
-  Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e3 'reflexion').Count
-  Comprueba 'la cabecera dice que va sin reflexion' ($r3.Salida -match '\(sin reflexion\)') (Cola $r3.Salida)
 }
 
 # ============= M7: UN LOTE NO CAMBIA COMO SE TRATAN LOS ERRORES =============
@@ -1923,6 +1916,18 @@ $Pruebas['m8 reflexion: si aun falta una seccion, el aviso dice que titulos trae
   $e2 = Escenario-M6 'm8-reflexion-sin-titulos' @{ Reflexionar = $true }
   $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion;reflexion-sin-titulos'
   Comprueba 'sin titulos dice que no trae ninguno' ($r2.Salida -match "(?m)^  A la reflexion le falta 'Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer': sigo sin ella\. No trae ningun titulo \(ver \.rescate/reflexion-estructura-1-1\.md\)\.") (Cola $r2.Salida)
+}
+
+$Pruebas['m8 reflexion: sin decir nada en la config, corre tras un intento que no pasa y el siguiente la lleva'] = {
+  $e = Escenario-M6 'm8-reflexion-defecto'
+  Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'hay una reflexion, tras el primer intento' 1 (Llamadas-M6 $e 'reflexion').Count
+  $l = @(Llamadas-M6 $e 'lote')
+  Igual 'dos intentos' 2 $l.Count
+  if ($l.Count -eq 2) { Comprueba 'el segundo lleva la reflexion en la CORRECCION' ((Correccion-De (Prompt-M6 $e $l[1])) -match 'REFLEXION-MARCA-estructura-1-1') (Prompt-M6 $e $l[1]) }
+  Comprueba 'la cabecera no dice que va sin reflexion' ($r.Salida -notmatch '\(sin reflexion\)') (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
