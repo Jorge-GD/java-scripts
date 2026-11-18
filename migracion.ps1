@@ -32,8 +32,8 @@ QUE HACE (esta version: la lectura del original, hasta los datos para explicarlo
                 datos\pruebas\<job>.json; los jobs sin reglas ni errores lo llevan montado por el script
     lectura-hecha
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
-  que te toca) y 1-batch-original.html (que hace el batch, job a job), con informe.ps1 y las plantillas de
-  informe\. Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
+  que te toca), 1-batch-original.html (que hace el batch, job a job) y 2-problemas.html (los problemas del
+  migrado), con informe.ps1 y las plantillas de informe\. Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
   las tareas hechas y sigue donde se quedo. Las atascadas tampoco se repiten (salvo
@@ -115,7 +115,7 @@ function Save-Estado {
   Write-Json (Join-Path $Datos 'estado.json') $Estado
 }
 
-# Las dos paginas del informe (index.html y 1-batch-original.html) con lo que haya hasta ahora. Si no se pueden montar,
+# Las tres paginas del informe (index.html, 1-batch-original.html y 2-problemas.html) con lo que haya hasta ahora. Si no se pueden montar,
 # se avisa y la pasada sigue: son una vista de los datos, no parte del trabajo.
 function Save-Informes {
   try { Write-Informes -Salida $Salida }

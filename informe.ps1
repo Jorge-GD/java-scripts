@@ -1,16 +1,17 @@
 <#
-informe.ps1 - Las paginas HTML del informe de migracion: la portada (index.html) y que hace el batch original
-(1-batch-original.html). Las monta el script con los datos de datos\ (sin IA, sin JavaScript y sin nada externo: se
-abren con doble clic). Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito: todo el texto
-que ve la persona (con sus acentos) esta en las plantillas de informe\ (marco.html, index.html y
-1-batch-original.html; estilo.css se incrusta dentro de cada pagina).
+informe.ps1 - Las paginas HTML del informe de migracion: la portada (index.html), que hace el batch original
+(1-batch-original.html) y los problemas del migrado (2-problemas.html). Las monta el script con los datos de datos\ (sin IA,
+sin JavaScript y sin nada externo: se abren con doble clic). Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito: todo el texto
+que ve la persona (con sus acentos) esta en las plantillas de informe\ (marco.html, index.html,
+1-batch-original.html y 2-problemas.html; estilo.css se incrusta dentro de cada pagina).
 Se carga con '. (Join-Path $PSScriptRoot 'informe.ps1')' despues de comun.ps1 y tareas.ps1, desde migracion.ps1 o
 desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
-    Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, variables.json) y
-    escribe <Salida>\index.html y <Salida>\1-batch-original.html con lo que haya. Un dato que falta (una fase sin hacer)
+    Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, variables.json,
+    hallazgos-antes.json y diagnostico-antes.md) y escribe <Salida>\index.html, <Salida>\1-batch-original.html y
+    <Salida>\2-problemas.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
 
@@ -37,6 +38,11 @@ $IconosTipo = @{
 }
 # Las fases del script, en orden, y de que tipo son sus tareas
 $FasesInforme = @(@('fichas-clase', 'ficha-clase'), @('mapa', 'definicion-job'), @('fichas-job', 'ficha-job'), @('resumen', 'resumen'), @('pruebas-pre', 'prueba-pre'))
+# Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
+$TextosBuild = @(
+  @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
+  @('compila: SI | tests: OK', 'ok'), @('compila: SI | tests: FALLAN', 'fallan')
+)
 # Los ficheros de la carpeta del informe: ruta, trozo que lo explica, icono y si es una pagina del informe
 $FicherosInforme = @(
   @('index.html', 'f-index', 'f-fichero', $true), @('1-batch-original.html', 'f-original', 'f-fichero', $true),
@@ -231,7 +237,7 @@ function Read-DatosInforme([string]$Salida) {
   $D = [pscustomobject]@{
     Salida = $Salida; Estado = (Read-JsonSuave (Join-Path $datos 'estado.json')); Mapa = (Read-JsonSuave (Join-Path $datos 'mapa.json'))
     Resumen = (Read-JsonSuave (Join-Path $datos 'resumen.json')); Variables = @(Read-JsonSuave (Join-Path $datos 'variables.json') | Where-Object { $null -ne $_ })
-    Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @()
+    Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos)
   }
   if ($D.Mapa) {
     $porNombre = @{}
@@ -489,6 +495,66 @@ function Get-FicherosHtml($D, $T) {
   return ($filas -join "`n")
 }
 
+# ============================ LA PAGINA DE PROBLEMAS ============================
+# El nombre de un area: el de la plantilla o, si no lo tiene, su identificador.
+function Get-NombreArea($T, [string]$Id) {
+  if ($T.ContainsKey("area-$Id")) { return (Format-Trozo $T "area-$Id") }
+  return (ConvertTo-TextoHtml $Id)
+}
+
+# La frase del estado del build y su etiqueta: Medido si el motor dijo uno de sus cinco textos; si no, no se sabe.
+function Get-BuildHtml($T, $Diag) {
+  foreach ($b in $TextosBuild) {
+    if ($Diag.Estado -ceq $b[0]) { return [pscustomobject]@{ Etiqueta = (Format-Trozo $T 'et-medido'); Frase = (Format-Trozo $T ('estado-build-' + $b[1])) } }
+  }
+  return [pscustomobject]@{ Etiqueta = (Format-Trozo $T 'et-sin'); Frase = (Format-Trozo $T 'estado-build-desconocido') }
+}
+
+function Get-FilaProblemaHtml($T, $H, [string]$Sev) {
+  $donde = ''
+  if ($H.Fichero) {
+    $d = [string]$H.Fichero
+    if ([int]$H.Linea -gt 0) { $d += ':' + [int]$H.Linea }
+    $donde = Format-Trozo $T 'fila-donde' @{ TEXTO = $d }
+  }
+  return (Format-Trozo $T 'fila-prob' @{ SEV = $Sev; MARCA = (Format-Trozo $T "marca-$Sev"); DONDE = $donde; DETALLE = $H.Detalle })
+}
+
+# Un area con sus hallazgos: primero los errores y luego los avisos, y como se arregla si la plantilla lo sabe.
+function Get-GrupoProblemasHtml($T, $A) {
+  $filas = @($A.Errores | ForEach-Object { Get-FilaProblemaHtml $T $_ 'error' }) + @($A.Avisos | ForEach-Object { Get-FilaProblemaHtml $T $_ 'aviso' })
+  $como = ''
+  if ($T.ContainsKey("arregla-$($A.Id)")) { $como = Format-Trozo $T 'area-como' @{ TEXTO = (Format-Trozo $T "arregla-$($A.Id)") } }
+  return (Format-Trozo $T 'area-grupo' @{
+      ID = $A.Id; NOMBRE = (Get-NombreArea $T $A.Id); ERRORES = "$(@($A.Errores).Count)"; AVISOS = "$(@($A.Avisos).Count)"
+      ETIQUETA = (Format-Trozo $T 'et-medido'); COMO = $como; FILAS = ($filas -join "`n")
+    })
+}
+
+function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
+  $diag = Format-Trozo $T 'sin-datos' @{ FASE = 'diagnostico'; ETIQUETA = (Format-Trozo $T 'et-sin') }
+  if ($D.Diag) {
+    $build = Get-BuildHtml $T $D.Diag
+    $ref = Format-Trozo $T 'ref-desconocida' @{ ETIQUETA = (Format-Trozo $T 'et-sin') }
+    $i = $D.Diag.Incumple
+    if ($i) { $ref = Format-Trozo $T 'ref-cifras' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); CAPAS = $i.Capas; FICHEROS = $i.Ficheros; CALIDAD = $i.Calidad; SECRETOS = $i.Secretos } }
+    $respuesta = ''
+    if ($D.Estado -and $T.ContainsKey("respuesta-$($D.Estado.respuesta)")) { $respuesta = Format-Trozo $T "respuesta-$($D.Estado.respuesta)" }
+    $conErrores = @($D.Diag.Areas | Where-Object { @($_.Errores).Count -gt 0 })
+    $soloAvisos = @($D.Diag.Areas | Where-Object { @($_.Errores).Count -eq 0 -and @($_.Avisos).Count -gt 0 })
+    $vacias = @($D.Diag.Areas | Where-Object { @($_.Errores).Count -eq 0 -and @($_.Avisos).Count -eq 0 })
+    $sinProblemas = ''
+    if ($vacias.Count -gt 0) {
+      $sinProblemas = Format-Trozo $T 'sin-prob' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); ITEMS = (Format-Lista $T 'sin-prob-item' $vacias { param($a) @{ NOMBRE = (Get-NombreArea $T $a.Id) } }) }
+    }
+    $diag = Format-Trozo $T 'diagnostico' @{
+      ETIQUETA_BUILD = $build.Etiqueta; FRASE = $build.Frase; REFERENCIA = $ref; ETIQUETA = (Format-Trozo $T 'et-medido'); ERRORES = "$($D.Diag.Errores)"; AVISOS = "$($D.Diag.Avisos)"
+      RESPUESTA = $respuesta; GRUPOS = ((@($conErrores) + @($soloAvisos) | ForEach-Object { Get-GrupoProblemasHtml $T $_ }) -join "`n"); SINPROB = $sinProblemas
+    }
+  }
+  return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag })
+}
+
 function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
   $est = $D.Estado
   $fase = ''
@@ -538,13 +604,14 @@ function Write-Informes {
   $estilo = Read-PlantillaInforme 'estilo.css'
   $batch = Get-BatchInforme $D
   $paginas = @(
-    @{ Fichero = 'index.html'; Actual = 'ACTUAL_INDEX'; Otra = 'ACTUAL_ORIGINAL'; Titulo = 'titulo-index'; Cuerpo = { param($D, $T, $C) Get-CuerpoIndex $D $T $C } },
-    @{ Fichero = '1-batch-original.html'; Actual = 'ACTUAL_ORIGINAL'; Otra = 'ACTUAL_INDEX'; Titulo = 'titulo-original'; Cuerpo = { param($D, $T, $C) Get-CuerpoOriginal $D $T $C } }
+    @{ Fichero = 'index.html'; Actual = 'ACTUAL_INDEX'; Titulo = 'titulo-index'; Cuerpo = { param($D, $T, $C) Get-CuerpoIndex $D $T $C } },
+    @{ Fichero = '1-batch-original.html'; Actual = 'ACTUAL_ORIGINAL'; Titulo = 'titulo-original'; Cuerpo = { param($D, $T, $C) Get-CuerpoOriginal $D $T $C } },
+    @{ Fichero = '2-problemas.html'; Actual = 'ACTUAL_PROBLEMAS'; Titulo = 'titulo-problemas'; Cuerpo = { param($D, $T, $C) Get-CuerpoProblemas $D $T $C } }
   )
   foreach ($p in $paginas) {
     $plantilla = Split-Plantilla (Read-PlantillaInforme $p.Fichero)
     $T = Merge-Trozos $marco.Trozos $plantilla.Trozos
-    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = '' }
+    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = '' }
     $v[$p.Actual] = Format-Trozo $T 'actual'
     Save-PaginaInforme (Join-Path $Salida $p.Fichero) (Expand-Plantilla $marco.Cuerpo $v)
   }

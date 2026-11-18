@@ -1,0 +1,68 @@
+<header class="cab-prob">
+  <h1>Problemas del batch migrado</h1>
+  <p class="lede"><code>{{MIGRADO}}</code> comparado con la referencia <code>{{PLANTILLA}}</code>. Primero las áreas con errores.</p>
+</header>
+
+{{{DIAGNOSTICO}}}
+<!--TROZO titulo-problemas-->Problemas del batch migrado {{BATCH}}<!--FIN-->
+<!--TROZO diagnostico--><section class="panel" id="estado-build" aria-labelledby="t-build">
+  <h2 id="t-build">Compilación y tests</h2>
+  <p>{{{ETIQUETA_BUILD}}}</p>
+  <p>{{{FRASE}}}</p>
+</section>
+
+<section class="panel" id="referencia" aria-labelledby="t-referencia">
+  <h2 id="t-referencia">Lo que incumple la propia referencia</h2>
+  <p>Lo que la referencia hace se permite también en el migrado, salvo el Javadoc. Estas son las reglas del motor que ella misma no cumple.</p>
+  {{{REFERENCIA}}}
+</section>
+
+<section class="panel" id="total" aria-labelledby="t-total">
+  <h2 id="t-total">Lo que hay que corregir</h2>
+  <p>{{{ETIQUETA}}}</p>
+  <p class="total-l"><b>{{ERRORES}} errores y {{AVISOS}} avisos</b></p>
+  {{{RESPUESTA}}}
+</section>
+
+{{{GRUPOS}}}
+{{{SINPROB}}}<!--FIN-->
+<!--TROZO ref-cifras--><p>{{{ETIQUETA}}}</p>
+  <div class="cifras">
+    <p><b>{{CAPAS}}</b>capas</p>
+    <p><b>{{FICHEROS}}</b>ficheros</p>
+    <p><b>{{CALIDAD}}</b>calidad</p>
+    <p><b>{{SECRETOS}}</b>secretos</p>
+  </div><!--FIN-->
+<!--TROZO ref-desconocida--><p>{{{ETIQUETA}}}</p>
+  <p>No se sabe: el diagnóstico no dice cuántas reglas incumple la referencia.</p><!--FIN-->
+<!--TROZO respuesta-corregir--><p>Qué pasará con ellos: al acabar la lectura se corrigen los errores.</p><!--FIN-->
+<!--TROZO respuesta-parar--><p>Qué pasará con ellos: has pedido parar tras el informe: no se corrige nada.</p><!--FIN-->
+<!--TROZO area-grupo--><section class="prob-grupo" aria-labelledby="g-{{ID}}">
+  <header class="pg-cab"><h2 id="g-{{ID}}">{{{NOMBRE}}}</h2><span class="pg-num">{{ERRORES}} errores, {{AVISOS}} avisos</span>{{{ETIQUETA}}}</header>
+  {{{COMO}}}
+  <ul class="filas">
+{{{FILAS}}}
+  </ul>
+</section><!--FIN-->
+<!--TROZO area-como--><p class="pg-como"><b>Cómo se arregla:</b> {{{TEXTO}}}</p><!--FIN-->
+<!--TROZO fila-prob-->    <li class="fila s-{{SEV}}">{{{MARCA}}}{{{DONDE}}}<span class="q">{{DETALLE}}</span></li><!--FIN-->
+<!--TROZO fila-donde--><code class="d">{{TEXTO}}</code><!--FIN-->
+<!--TROZO marca-error--><span class="sev sev-error"><svg aria-hidden="true"><use href="#e-error"/></svg>Error</span><!--FIN-->
+<!--TROZO marca-aviso--><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Aviso</span><!--FIN-->
+<!--TROZO sin-prob--><div class="sin-prob">
+  <b>Sin problemas:</b>
+  <ul>
+{{{ITEMS}}}
+  </ul>
+  {{{ETIQUETA}}}
+</div><!--FIN-->
+<!--TROZO sin-prob-item-->    <li>{{{NOMBRE}}}</li><!--FIN-->
+<!--TROZO arregla-build-->Dejar el pom y las dependencias como los de la referencia y que el proyecto compile con Java 21.<!--FIN-->
+<!--TROZO arregla-estructura-->Mover las clases a la capa y al paquete que les corresponden, con la misma estructura de carpetas que la referencia.<!--FIN-->
+<!--TROZO arregla-hexagonal-->Quitar las dependencias prohibidas entre capas: el dominio no depende de nada externo y la aplicación solo de sus puertos.<!--FIN-->
+<!--TROZO arregla-ficheros-->Sustituir el acceso directo a ficheros por los puertos y adaptadores de ficheros y SFTP de la referencia, sin rutas fijas.<!--FIN-->
+<!--TROZO arregla-config-->Pasar la configuración a propiedades validadas que se leen de variables de entorno y sacar los secretos del código y de los ficheros de configuración.<!--FIN-->
+<!--TROZO arregla-paridad-->Migrar el job del original que falta, con el mismo nombre.<!--FIN-->
+<!--TROZO arregla-e2e-->Escribir una prueba de extremo a extremo por job que lo lance de principio a fin y compruebe su salida.<!--FIN-->
+<!--TROZO arregla-tests-->Hacer que los tests pasen: adaptarlos a la nueva estructura o corregir el fallo real de la migración.<!--FIN-->
+<!--TROZO arregla-calidad-->Resolver los avisos de calidad sin cambiar el comportamiento: Javadoc, inyección por constructor, logger en lugar de la consola y catch vacíos.<!--FIN-->

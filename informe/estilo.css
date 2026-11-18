@@ -183,6 +183,27 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .glosario dt{font-weight:800;font-size:20px}
 .glosario dd{max-width:46ch}
 
+/* problemas del migrado: portada (barras por area) y pagina de problemas */
+.total-l{margin-top:12px;font-size:20px}
+.cab-prob .lede{margin-top:8px}
+.prob-grupo{margin-top:32px;background:var(--surf);border:2px solid var(--ink)}
+.pg-cab{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:12px 16px;background:var(--bg);border-bottom:2px solid var(--ink)}
+.pg-cab h2{flex:1 1 200px;font-size:22px}
+.pg-num{font-weight:700;font-variant-numeric:tabular-nums}
+.pg-como{padding:12px 16px;max-width:66ch}
+.filas{display:grid}
+.fila{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;align-items:baseline;padding:12px 16px;border-top:2px solid var(--edge);border-left:4px solid var(--st,var(--edge))}
+.fila .q{grid-column:2;overflow-wrap:anywhere}
+.fila .d{font-weight:600}
+.s-error{--st:var(--mal)}
+.s-aviso{--st:var(--toca)}
+.sev{display:inline-flex;align-items:center;gap:8px;font-weight:700}
+.sev svg{width:20px;height:20px;flex:none}
+.sev-error{color:var(--mal)}
+.sev-aviso{color:var(--toca)}
+.sin-prob{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;margin-top:32px;padding:16px;background:var(--surf);border:2px dashed var(--ink)}
+.sin-prob ul{display:flex;flex-wrap:wrap;gap:8px 16px}
+
 @container (max-width:860px){
   .flujo{grid-template-columns:minmax(0,1fr);gap:8px}
   .flecha{justify-self:center;transform:rotate(90deg);height:28px;width:24px}
