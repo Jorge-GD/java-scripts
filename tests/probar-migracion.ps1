@@ -4190,5 +4190,234 @@ $Pruebas['m15 resumen: los prompts piden los cinco datos, "no consta" si falta, 
   }
 }
 
+# ===================== M13: UN CASO POR CADA REGLA SIN CASO =====================
+# Las reglas que prueba-pre dejo en sinCaso: una tarea caso-pre por cada una (fase casos-pre, justo despues de pruebas-pre). El Copilot falso de
+# estas pruebas es copilot-m6.ps1, que escribe el caso y le pasa lo demas a copilot.ps1.
+$script:CorridasCasos = @{}
+function Corrida-Casos([string]$Guion) {
+  if (-not $script:CorridasCasos.ContainsKey($Guion)) {
+    $e = Escenario-Dos ('casos' + $script:CorridasCasos.Count) @() @{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1') }
+    $script:CorridasCasos[$Guion] = [pscustomobject]@{ E = $e; R = (Migra $e (Basicos $e) $Guion) }
+  }
+  return $script:CorridasCasos[$Guion]
+}
+$FaltaUna = 'prueba-falta-siempre:^prueba-pre:'
+
+$Pruebas['m13 casos: una tarea caso-pre por cada regla o error de sinCaso, con la regla, el guion que ya hay y los hechos; la huella sigue a lo que recibe'] = {
+  $codigo = @'
+$Datos = '{{DIR}}'
+$mapa = [pscustomobject]@{ jobs = @(
+    [pscustomobject]@{ job = 'cargaRecibosJob'; clases = @([pscustomobject]@{ ficha = 'clase-aaaaaaaa' }) },
+    [pscustomobject]@{ job = 'informeCobrosJob'; clases = @([pscustomobject]@{ ficha = 'clase-bbbbbbbb' }) },
+    [pscustomobject]@{ job = 'avisosJob'; clases = @() }) }
+Write-Json (Join-Path $Datos 'fichas/clase-aaaaaaaa.json') ([ordered]@{ id = 'clase-aaaaaaaa'; clase = 'CargaReader'; datos = @(
+      [ordered]@{ tipo = 'entrada-fichero'; texto = 'Lee el fichero de recibos del banco.' },
+      [ordered]@{ tipo = 'regla'; texto = 'Rechaza el recibo cuyo importe es menor de 5 euros.' },
+      [ordered]@{ tipo = 'error'; texto = 'Si el fichero no existe, avisa y no sigue.' }) })
+Write-Json (Join-Path $Datos 'fichas/clase-bbbbbbbb.json') ([ordered]@{ id = 'clase-bbbbbbbb'; clase = 'InformeWriter'; datos = @([ordered]@{ tipo = 'regla'; texto = 'El informe solo lleva los recibos cobrados.' }) })
+function Pruebas([string]$Job, $SinCaso) {
+  Write-Json (Join-Path $Datos ('pruebas/' + $Job + '.json')) ([ordered]@{ job = $Job
+      preparar = @([ordered]@{ texto = 'Deja el fichero de recibos en la carpeta de entrada.'; refs = @('clase-aaaaaaaa#0') })
+      casos = @([ordered]@{ titulo = 'Recibo correcto'; entrada = 'Un recibo de 20 euros.'; esperado = 'Se carga.'; refs = @('clase-aaaaaaaa#0') })
+      comprobar = @([ordered]@{ texto = 'Mira la tabla de recibos pendientes.'; refs = @('clase-aaaaaaaa#0') })
+      sinCaso = @($SinCaso); redaccion = 'hecha' })
+}
+function Falta([string]$Ref, [string]$Tipo, [string]$Texto) { return [ordered]@{ ref = $Ref; tipo = $Tipo; texto = $Texto } }
+Pruebas 'cargaRecibosJob' @((Falta 'clase-aaaaaaaa#1' 'regla' 'Rechaza el recibo cuyo importe es menor de 5 euros.'), (Falta 'clase-aaaaaaaa#2' 'error' 'Si el fichero no existe, avisa y no sigue.'))
+Pruebas 'informeCobrosJob' @((Falta 'clase-bbbbbbbb#0' 'regla' 'El informe solo lleva los recibos cobrados.'))
+Pruebas 'avisosJob' @()
+$t = @(Get-TareasCaso $mapa $false)
+'N=' + $t.Count
+'TIPOS=' + (@($t | ForEach-Object { $_.tipo } | Select-Object -Unique) -join ',')
+'IDS=' + (@($t | ForEach-Object { $_.id } | Select-Object -Unique).Count)
+'JOBS=' + (@($t | ForEach-Object { $_.entradas.job }) -join ',')
+'REFS=' + (@($t | ForEach-Object { $_.entradas.ref }) -join ',')
+'SALIDA=' + $t[0].salida
+$p = Get-Prompt $t[1] '' ''
+[System.IO.File]::WriteAllText((Join-Path $Datos 'prompt.txt'), $p)
+function Huellas { return (@(Get-TareasCaso $mapa $false | ForEach-Object { $_.entradas.huella }) -join ',') }
+$h0 = Huellas
+'H0=' + $h0
+Write-Json (Join-Path $Datos 'tareas/prueba-x.json') ([ordered]@{ id = 'prueba-x' })
+'IGUAL=' + ((Huellas) -eq $h0)
+Pruebas 'informeCobrosJob' @((Falta 'clase-bbbbbbbb#0' 'regla' 'El informe solo lleva los recibos cobrados y los pendientes.'))
+$h1 = (Huellas) -split ','
+'CAMBIA=' + (@(0..2 | Where-Object { $h1[$_] -ne ($h0 -split ',')[$_] }) -join ',')
+$t = @(Get-TareasCaso $mapa $false)
+$t[0].estado = 'hecha'
+Save-Tarea $t[0]
+'HECHA=' + (@(Get-TareasCaso $mapa $false)[0].estado)
+'FIN'
+'@
+  $d = Join-Path $Dir 'casos-tareas'
+  $r = En-Biblioteca 'casos-tareas' $codigo.Replace('{{DIR}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^(\w+)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'tres reglas sin caso (dos en un job, una en otro, ninguna en el tercero): tres tareas' '3' $v['N']
+  Igual 'todas del tipo caso-pre' 'caso-pre' $v['TIPOS']
+  Igual 'con ids distintos' '3' $v['IDS']
+  Igual 'por job y por regla, en el orden de sinCaso' 'cargaRecibosJob,cargaRecibosJob,informeCobrosJob' $v['JOBS']
+  Igual 'cada una con la referencia de su regla' 'clase-aaaaaaaa#1,clase-aaaaaaaa#2,clase-bbbbbbbb#0' $v['REFS']
+  $p = ''
+  if (Test-Path -LiteralPath (Join-Path $d 'prompt.txt')) { $p = [System.IO.File]::ReadAllText((Join-Path $d 'prompt.txt')) }
+  Comprueba 'el prompt de la segunda: TIPO, job, regla con su referencia y su texto' ($p -match '(?m)^TIPO: caso-pre\r?$' -and $p -match '(?m)^JOB: cargaRecibosJob\r?$' -and $p -match '(?m)^REGLA: clase-aaaaaaaa#2\r?$' -and $p -match '(?m)^clase-aaaaaaaa#2 \[error\] Si el fichero no existe') ($p.Substring(0, [Math]::Min(400, $p.Length)))
+  Comprueba 'lleva el guion que ya tiene: lo que se prepara, los casos con su titulo y lo que se comprueba' ($p.Contains('Deja el fichero de recibos en la carpeta de entrada.') -and $p -match '(?m)^- Recibo correcto\r?$' -and $p.Contains('Mira la tabla de recibos pendientes.')) ''
+  Comprueba 'lleva los hechos del job para las referencias' ($p -match '(?m)^clase-aaaaaaaa#0 \[entrada-fichero\]' -and $p -match '(?m)^clase-aaaaaaaa#1 \[regla\]') ''
+  Comprueba 'no manda leer nada ni lleva nombres de clase' ($p -notmatch '(?m)^LEER:' -and $p -notmatch 'CargaReader') ''
+  Comprueba 'con las tareas hechas de antes no cambia la huella; con otro texto en una regla, solo cambia la de esa' ($v['IGUAL'] -eq 'True' -and $v['CAMBIA'] -eq '2') "$($v['IGUAL']) $($v['CAMBIA'])"
+  Igual 'una tarea hecha con la misma huella se reutiliza' 'hecha' $v['HECHA']
+}
+
+$Pruebas['m13 casos: un caso vale si lleva la referencia de la regla, usa hechos que existen, no nombra clases ni repite un titulo'] = {
+  $codigo = @'
+$Fuentes = @('CargaReader', 'GestorRecibos') | ForEach-Object { [pscustomobject]@{ BaseName = $_ } }
+$base = Join-Path '{{DIR}}' ([guid]::NewGuid().ToString('N').Substring(0, 6))
+function Caso($Caso) {
+  $dir = Join-Path $base ('c' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  [System.IO.File]::WriteAllText((Join-Path $dir '.rescate/tareas/casopre-x.json'), (ConvertTo-Json -InputObject $Caso -Depth 5))
+  $datos = "clase-aaaaaaaa#0 [entrada-fichero] Lee el fichero.`nclase-aaaaaaaa#1 [regla] Rechaza menos de 5 euros.`nclase-aaaaaaaa#2 [error] Avisa si falta el fichero."
+  $t = [pscustomobject]@{ id = 'casopre-x'; tipo = 'caso-pre'; intentos = 0; entradas = [pscustomobject]@{ job = 'cargaRecibosJob'; ref = 'clase-aaaaaaaa#1'; tipo = 'regla'; datos = $datos; titulos = @('Recibo correcto', 'Fichero sin recibos') } }
+  $r = Test-Salida $t $dir ''
+  if ($r.Ok) { return ('BIEN ' + $r.Ficha.ref + ' ' + $r.Ficha.caso.titulo + ' ' + (@($r.Ficha.caso.refs) -join '+')) }
+  return ('MAL ' + $r.Motivo)
+}
+function Buen([hashtable]$Cambios = @{}) {
+  $c = [ordered]@{ titulo = 'Recibo de 4,99 euros'; entrada = 'Un recibo de 4,99 euros.'; esperado = 'Se rechaza y queda en el fichero de rechazados.'; refs = @('clase-aaaaaaaa#1') }
+  foreach ($k in $Cambios.Keys) { $c[$k] = $Cambios[$k] }
+  return $c
+}
+'C1=' + (Caso (Buen))
+'C2=' + (Caso (Buen @{ refs = @('clase-aaaaaaaa#1', 'clase-aaaaaaaa#2') }))
+'C3=' + (Caso (Buen @{ refs = @('clase-aaaaaaaa#2') }))
+'C4=' + (Caso (Buen @{ refs = @('clase-aaaaaaaa#1', 'clase-00000000#9') }))
+'C5=' + (Caso (Buen @{ refs = @() }))
+'C6=' + (Caso (Buen @{ titulo = 'Caso con GestorRecibos' }))
+'C7=' + (Caso (Buen @{ titulo = '  RECIBO CORRECTO ' }))
+'C8=' + (Caso (Buen @{ esperado = '   ' }))
+'C9=' + (Caso (Buen @{ refs = 'clase-aaaaaaaa#1' }))
+'C10=' + (Caso (Buen @{ entrada = 'Mira Recibo.java' }))
+'FIN'
+'@
+  $r = En-Biblioteca 'caso-valida' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'caso-valida'))
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^(C\d+)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'un caso bueno vale y devuelve la regla, el titulo y las refs' 'BIEN clase-aaaaaaaa#1 Recibo de 4,99 euros clase-aaaaaaaa#1' $v['C1']
+  Comprueba 'con refs de mas (otros hechos que si existen) tambien vale' ($v['C2'] -match '^BIEN' -and $v['C2'] -match 'clase-aaaaaaaa#1\+clase-aaaaaaaa#2') $v['C2']
+  Comprueba 'sin la referencia de la regla no vale y el motivo la dice' ($v['C3'] -match '^MAL' -and $v['C3'] -match 'clase-aaaaaaaa#1' -and $v['C3'] -match 'regla') $v['C3']
+  Comprueba 'una referencia que no existe no vale y el motivo la dice' ($v['C4'] -match '^MAL' -and $v['C4'] -match 'clase-00000000#9') $v['C4']
+  Comprueba 'sin ninguna referencia, tampoco' ($v['C5'] -match '^MAL' -and $v['C5'] -match 'refs') $v['C5']
+  Comprueba 'un nombre de clase en el titulo no vale y el motivo lo nombra' ($v['C6'] -match '^MAL' -and $v['C6'] -match 'GestorRecibos') $v['C6']
+  Comprueba 'un titulo igual a uno que ya hay (sin mayusculas ni espacios de mas) no vale' ($v['C7'] -match '^MAL' -and $v['C7'] -match 'titulo' -and $v['C7'] -match 'Recibo correcto') $v['C7']
+  Comprueba 'un campo en blanco no vale y el motivo lo nombra' ($v['C8'] -match '^MAL' -and $v['C8'] -match 'esperado') $v['C8']
+  Comprueba 'refs que no es una lista no vale' ($v['C9'] -match '^MAL' -and $v['C9'] -match 'refs') $v['C9']
+  Comprueba 'un fichero .java en un texto no vale' ($v['C10'] -match '^MAL' -and $v['C10'] -match 'Recibo\.java') $v['C10']
+}
+
+$Pruebas['m13 casos: una salida buena anade el caso a datos/pruebas/<job>.json y la regla sale de sinCaso; el resto del guion queda como estaba'] = {
+  $c = Corrida-Casos $FaltaUna
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $t = @(Tareas $e 'caso-pre')
+  Igual 'dos reglas sin caso (una en cada job): dos tareas caso-pre' 2 $t.Count
+  Igual 'las dos hechas, en un intento' 'hecha 1 hecha 1' (@($t | ForEach-Object { "$($_.estado) $($_.intentos)" }) -join ' ')
+  Igual 'dos llamadas de caso-pre, ni una mas' 2 (Llamadas-De (Llamadas $e.Wt) 'casopre-').Count
+  Comprueba 'sin ficha de job que acote los hechos, el prompt lleva la regla de la tarea' ((Prompt-De $e $t[0]) -match ('(?m)^REGLA: ' + [regex]::Escape($t[0].entradas.ref) + '\r?$')) ''
+  Igual 'sin esfuerzo de lectura ni --add-dir: solo redacta, con high' 'True' (@(Llamadas-De (Llamadas $e.Wt) 'casopre-' | Where-Object { $_.flags -notmatch '--add-dir' -and $_.flags -match '--effort=high' }).Count -eq 2)
+  foreach ($job in @('cargaJob', 'informeJob')) {
+    $x = Pruebas-De $e $job
+    $tj = @($t | Where-Object { $_.entradas.job -eq $job })
+    Igual "${job}: una tarea" 1 $tj.Count
+    if ($tj.Count -ne 1) { continue }
+    Igual "${job}: sinCaso vacio" 0 @($x.sinCaso).Count
+    $nuevo = @($x.casos | Where-Object { @($_.refs) -contains $tj[0].entradas.ref })
+    Comprueba "${job}: el caso nuevo lleva la referencia de la regla, esta al final y tiene titulo, entrada y esperado" ($nuevo.Count -ge 1 -and $x.casos[-1].titulo -match [regex]::Escape($tj[0].entradas.ref) -and $x.casos[-1].entrada -and $x.casos[-1].esperado) ($x.casos | ConvertTo-Json -Compress -Depth 4)
+    Igual "${job}: redaccion hecha, y preparar y comprobar como estaban" 'hecha True' "$($x.redaccion) $(@($x.preparar).Count -ge 1 -and @($x.comprobar).Count -ge 1)"
+  }
+  Igual 'la fase acaba en hecha' 'hecha' (Estado $e).fase
+  $i = Pagina $e.Out 'index.html'
+  Comprueba 'la portada tiene la fase de los casos y cuenta sus dos tareas hechas' ($i -match 'Casos de las reglas sin caso' -and $i -notmatch '(?s)Reglas sin caso de prueba \(\d') ''
+  $u = Pagina $e.Out '1-batch-original.html'
+  Comprueba 'la pagina 1 ya no lista reglas sin caso' ($u -notmatch 'Reglas sin caso de prueba') ''
+}
+
+$Pruebas['m13 casos: un caso sin la referencia de la regla o con un titulo repetido no vale (el motivo lo dice) y la regla se queda en sinCaso'] = {
+  $c = Corrida-Casos "$FaltaUna;caso-sin-ref:^caso-pre:cargaJob`$;caso-titulo-repetido:^caso-pre:informeJob`$"
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $t = @(Tareas $e 'caso-pre')
+  Igual 'dos tareas, las dos atascadas tras dos intentos' 'atascada 2 atascada 2' (@($t | Sort-Object { $_.entradas.job } | ForEach-Object { "$($_.estado) $($_.intentos)" }) -join ' ')
+  $a = @($t | Where-Object { $_.entradas.job -eq 'cargaJob' })[0]
+  $b = @($t | Where-Object { $_.entradas.job -eq 'informeJob' })[0]
+  Comprueba 'cargaJob: el motivo pide la referencia de la regla' ($a.motivo -match [regex]::Escape($a.entradas.ref) -and $a.motivo -match 'regla') $a.motivo
+  Comprueba 'cargaJob: el reintento lleva esa correccion' ((Prompt-De $e $a) -match ('(?s)## CORRECCI.*' + [regex]::Escape($a.entradas.ref))) ''
+  Comprueba 'informeJob: el motivo habla del titulo repetido' ($b.motivo -match 'titulo' -and $b.motivo -match 'ya hay') $b.motivo
+  foreach ($job in @('cargaJob', 'informeJob')) {
+    $x = Pruebas-De $e $job
+    $tj = @($t | Where-Object { $_.entradas.job -eq $job })[0]
+    Igual "${job}: la regla se queda en sinCaso" $tj.entradas.ref (@($x.sinCaso | ForEach-Object { $_.ref }) -join ',')
+    Comprueba "${job}: y ningun caso nuevo (el guion es el que dio prueba-pre)" (@($x.casos | Where-Object { @($_.refs) -contains $tj.entradas.ref }).Count -eq 0) ($x.casos | ConvertTo-Json -Compress -Depth 4)
+  }
+  Igual 'la fase acaba aunque se atasquen' 'hecha' (Estado $e).fase
+  $u = Pagina $e.Out '1-batch-original.html'
+  Comprueba 'la pagina 1 sigue listando las dos reglas sin caso' ([regex]::Matches($u, 'Reglas sin caso de prueba').Count -eq 2) ''
+}
+
+$Pruebas['m13 casos: un nombre de clase en el titulo o la referencia que falta en el primer intento se corrigen en el reintento y el caso entra'] = {
+  $c = Corrida-Casos "$FaltaUna;caso-sin-ref-una-vez:^caso-pre:cargaJob`$;caso-clase-en-texto:^caso-pre:informeJob`$"
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $t = @(Tareas $e 'caso-pre')
+  Igual 'las dos hechas en el segundo intento' 'hecha 2 hecha 2' (@($t | ForEach-Object { "$($_.estado) $($_.intentos)" }) -join ' ')
+  $b = @($t | Where-Object { $_.entradas.job -eq 'informeJob' })[0]
+  Comprueba 'el reintento de informeJob nombra la clase y lleva el esfuerzo high' ((Prompt-De $e $b) -match '(?s)## CORRECCI.*CargaReader') ''
+  foreach ($job in @('cargaJob', 'informeJob')) {
+    $x = Pruebas-De $e $job
+    Igual "${job}: sinCaso vacio y el caso dentro" '0 True' "$(@($x.sinCaso).Count) $(@($x.casos | Where-Object { $_.titulo -match 'Caso de la regla' }).Count -eq 1)"
+  }
+}
+
+$Pruebas['m13 casos: al relanzar no se repite ninguna tarea hecha ni se duplica el caso; un batch con pruebas-pre hecha de antes tambien genera las tareas'] = {
+  $c = Corrida-Casos $FaltaUna
+  $e = $c.E
+  $antes = (Llamadas $e.Wt).Count
+  $casos0 = @((Pruebas-De $e 'cargaJob').casos).Count
+  $r = Migra $e (Basicos $e) $FaltaUna
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'sin ninguna llamada nueva' $antes (Llamadas $e.Wt).Count
+  Igual 'el guion de cargaJob sigue igual: el caso no se duplica' $casos0 @((Pruebas-De $e 'cargaJob').casos).Count
+  Igual 'y sinCaso sigue vacio' 0 @((Pruebas-De $e 'cargaJob').sinCaso).Count
+  # un batch que paso por pruebas-pre antes de que hubiera casos-pre: sin tareas caso-pre, pero con sus pruebas hechas
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/tareas') -File -Filter 'casopre-*.json')) { Remove-Item -LiteralPath $f.FullName }
+  Igual 'sin tareas caso-pre' 0 @(Tareas $e 'caso-pre').Count
+  $antes = (Llamadas $e.Wt).Count
+  $pre0 = (Llamadas-De (Llamadas $e.Wt) 'prueba-').Count
+  $r = Migra $e (Basicos $e) $FaltaUna
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'dos tareas caso-pre nuevas, hechas' 'hecha hecha' (@(Tareas $e 'caso-pre' | ForEach-Object { $_.estado }) -join ' ')
+  Igual 'dos llamadas nuevas, las de caso-pre' 2 ((Llamadas $e.Wt).Count - $antes)
+  Igual 'y ninguna nueva de prueba-pre (sus tareas estaban hechas)' $pre0 (Llamadas-De (Llamadas $e.Wt) 'prueba-').Count
+  Igual 'cargaJob: el caso esta una sola vez y sinCaso sigue vacio' "$casos0 0" "$(@((Pruebas-De $e 'cargaJob').casos).Count) $(@((Pruebas-De $e 'cargaJob').sinCaso).Count)"
+}
+
+$Pruebas['m13 casos: prueba-local.ps1 sigue leyendo los casos de datos/pruebas/<job>.json, asi que el caso nuevo sale entre los que va a preparar'] = {
+  $c = Corrida-Casos $FaltaUna
+  $e = $c.E
+  $x = Pruebas-De $e 'cargaJob'
+  $nuevo = @($x.casos | Where-Object { $_.titulo -match 'Caso de la regla' })
+  Comprueba 'hay un caso de caso-pre en el guion de cargaJob' ($nuevo.Count -eq 1) ($x.casos | ConvertTo-Json -Compress -Depth 4)
+  # lo mismo que hace prueba-local.ps1 con la carpeta: todos los .json con job, y un caso-NN por cada elemento de casos
+  $dir = Get-Ruta $e.Out 'datos/pruebas'
+  $pruebas = @(Get-ChildItem -LiteralPath $dir -File -Filter '*.json' | Sort-Object Name | ForEach-Object { Lee-Json $_.FullName } | Where-Object { $_.job })
+  $p = @($pruebas | Where-Object { $_.job -eq 'cargaJob' })[0]
+  $titulos = @(@($p.casos) | ForEach-Object { [string]$_.titulo })
+  Comprueba 'entre los casos que prepara, con su numero, esta el nuevo' ($nuevo.Count -eq 1 -and $titulos -contains $nuevo[0].titulo) ($titulos -join ' | ')
+  Igual 'y son uno mas que los que dio prueba-pre' (@($x.casos).Count) $titulos.Count
+  $src = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'prueba-local.ps1'))
+  Comprueba 'prueba-local.ps1 lee la carpeta datos/pruebas y recorre $Prueba.casos (si cambia, esta prueba hay que mirarla)' ($src -match "datos/pruebas'\) -File -Filter '\*\.json'" -and $src -match '(?m)foreach \(\$c in @\(\$Prueba\.casos\)\)') ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

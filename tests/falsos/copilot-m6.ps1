@@ -56,6 +56,55 @@ $guiones = @("$env:RESCATE_FALSO" -split ';' | Where-Object { $_ })
 $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
 $raiz = (Get-Location).Path
 $rescate = Join-Path $raiz '.rescate'
+
+# ---- migracion.ps1 (tests/probar-migracion.ps1): sin .rescate/prompt.md. TIPO: caso-pre lo escribe este falso (un caso por regla sin caso);
+# lo demas es de copilot.ps1. La clave de los regex de RESCATE_FALSO es caso-pre:<job>. Cada llamada deja .rescate/falso/<tarea>-<pid>.txt como
+# las de copilot.ps1 (id, flags, correccion, guion, inicio, fin). ----
+#   (vacio)               el caso bueno: titulo propio, entrada, esperado y la referencia de la regla
+#   caso-sin-ref          el caso lleva refs de otros hechos, no la de la regla (siempre)
+#   caso-sin-ref-una-vez  como caso-sin-ref, solo en el primer intento
+#   caso-clase-en-texto   el titulo nombra la clase CargaReader (solo en el primer intento)
+#   caso-titulo-repetido  el titulo es el del primer caso que ya tenia el guion (siempre)
+if (-not (Test-Path -LiteralPath (Join-Path $rescate 'prompt.md'))) {
+  $textoM = ''
+  for ($i = 0; $i -lt $args.Count - 1; $i++) { if ("$($args[$i])" -eq '-p') { $textoM = "$($args[$i + 1])" } }
+  $rutaM = [regex]::Match($textoM, '\.rescate/tareas/\S+\.prompt\.md')
+  $promptM = ''
+  if ($rutaM.Success) { $promptM = [System.IO.File]::ReadAllText((Join-Path (Join-Path $rescate 'tareas') (Split-Path $rutaM.Value -Leaf))) }
+  if ($promptM -notmatch '(?m)^TIPO: caso-pre\s*$') {
+    & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
+    exit $LASTEXITCODE
+  }
+  $salidaM = ([regex]::Match($promptM, '(?m)^ESCRIBIR: (.+?)\s*$')).Groups[1].Value
+  $idM = [System.IO.Path]::GetFileName($salidaM) -replace '\.json$', ''
+  $jobM = ([regex]::Match($promptM, '(?m)^JOB: (.+?)\s*$')).Groups[1].Value
+  $reglaM = ([regex]::Match($promptM, '(?m)^REGLA: (\S+)\s*$')).Groups[1].Value
+  $correccionM = ($promptM -match '## CORRECCI')
+  $guionM = ''
+  foreach ($g in $guiones) {
+    $nombre, $solo = ($g -split ':', 2)
+    if (-not $solo) { $solo = '.' }
+    if ($nombre -and -not $guionM -and ('caso-pre:' + $jobM) -match $solo) { $guionM = $nombre }
+  }
+  $dirM = Join-Path $rescate 'falso'
+  [void](New-Item -ItemType Directory -Path $dirM -Force)
+  $regM = Join-Path $dirM ($idM + '-' + $PID + '.txt')
+  [System.IO.File]::WriteAllLines($regM, [string[]]@("id=$idM", "pid=$PID", "flags=$flags", "correccion=$correccionM", "guion=$guionM", ('inicio=' + [DateTime]::UtcNow.Ticks)))
+  $hechosM = @([regex]::Matches($promptM, '(?m)^(clase-[0-9a-f]{8}#\d+) \[') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+  $otros = @($hechosM | Where-Object { $_ -cne $reglaM })
+  $refsM = @($reglaM)
+  if ($guionM -eq 'caso-sin-ref' -or ($guionM -eq 'caso-sin-ref-una-vez' -and -not $correccionM)) { $refsM = @($otros | Select-Object -First 1) }
+  $tituloM = "Caso de la regla $reglaM de $jobM"
+  if ($guionM -eq 'caso-clase-en-texto' -and -not $correccionM) { $tituloM = 'Carga con CargaReader' }
+  if ($guionM -eq 'caso-titulo-repetido') { $tituloM = ([regex]::Match($promptM, '(?m)^Casos que ya hay:\s*\r?\n- (.+?)\s*$')).Groups[1].Value }
+  $jsonM = ConvertTo-Json -InputObject ([ordered]@{ titulo = $tituloM; entrada = "Lo que se mete para la regla $reglaM."; esperado = "Lo que tiene que pasar con la regla $reglaM."; refs = $refsM }) -Depth 4
+  $rutaOut = $raiz
+  foreach ($s in $salidaM.Split('/')) { if ($s) { $rutaOut = Join-Path $rutaOut $s } }
+  [System.IO.File]::WriteAllText($rutaOut, $jsonM)
+  [System.IO.File]::AppendAllText($regM, ('fin=' + [DateTime]::UtcNow.Ticks + "`n"))
+  'hecho'
+  exit 0
+}
 $prompt = [System.IO.File]::ReadAllText((Join-Path $rescate 'prompt.md'))
 $titulo = ($prompt -split "`r?`n")[0]
 $log = Join-Path $rescate 'llamadas-m6.log'
