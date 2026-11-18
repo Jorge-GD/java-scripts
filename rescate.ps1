@@ -1236,6 +1236,13 @@ function Invoke-Pre {
   Info ('Ajustes propios de este repo (palabras de la config antigua, comandos Maven...): ' + $cfgRepo)
 }
 
+# Lo que dice el script cuando ya no hay paso que arreglar: que no quedan errores, o, si hay atascados, que no quedan
+# pasos que arregle solo (lo atascado le toca al usuario y sale en la lista del final).
+function Show-SinPasos([string]$Pie) {
+  if ($script:Atascados.Count -gt 0) { Info 'No quedan pasos que el script pueda arreglar solo.' }
+  else { Bien "No quedan errores. $Pie" }
+}
+
 function Invoke-Fix {
   if (-not $PlantillaRoot) { Aviso 'Sin -Plantilla el arreglo va a ciegas. Muy recomendable pasarla.' }
 
@@ -1268,7 +1275,7 @@ function Invoke-Fix {
 
   $paso = $Paso
   if (-not $paso) { $paso = Get-SiguientePaso $hall }
-  if (-not $paso) { $script:Siguiente = ''; Bien 'No quedan errores. Revisa los avisos del informe y pasa tu pipeline.'; return }
+  if (-not $paso) { $script:Siguiente = ''; Show-SinPasos 'Revisa los avisos del informe y pasa tu pipeline.'; return }
   if ($paso -ne 'build' -and -not $script:Build.Compila) { Fallo "El proyecto no compila: primero hay que hacer -Paso build."; exit 2 }
   foreach ($c in $Cfg.Orden) {
     if ($c -eq $paso) { break }
@@ -1433,7 +1440,7 @@ function Invoke-Fix {
   $sig = Get-SiguientePaso $hall
   $script:Siguiente = $sig
   if ($sig) { Info "Siguiente paso pendiente: $sig  ->  vuelve a lanzar con -Modo fix (o -Paso $sig)" }
-  else { Bien 'No quedan errores. Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
+  else { Show-SinPasos 'Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
 }
 
 # ================================= MAIN =================================

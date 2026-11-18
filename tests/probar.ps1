@@ -1296,5 +1296,22 @@ $Pruebas['reintento: el detalle de la correccion lleva los hallazgos de la ruta 
   Comprueba 'y el hallazgo de la ruta nueva, con los paquetes que valen' ($p -match "- src/main/java/com/acme/life/infrastructure/util/\w+\.java - subpaquete 'infrastructure/util' no existe en la plantilla \(alli: [^)]*adapters[^)]*\)") $p
 }
 
+$Pruebas['final: con un paso atascado no dice que no quedan errores; con la pasada limpia, si'] = {
+  $e = Nuevo-Escenario 'final-atascado'
+  # solo estructura (y tests: con un Orden sin 'tests' el script cuenta mal los tests fallando) para que no haya otro paso pendiente
+  Pon-Config $e @{ Orden = @('estructura', 'tests') }
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1') 'nada'
+  Igual 'sale con 2, como siempre' 2 $r.Codigo
+  Comprueba 'no dice que no quedan errores' ($r.Salida -notmatch 'No quedan errores') (Cola $r.Salida)
+  Comprueba 'dice que no quedan pasos que arregle solo' ($r.Salida -match 'No quedan pasos que el script pueda arreglar solo') (Cola $r.Salida)
+  Comprueba 'y despues, lo que se ha quedado sin arreglar' ($r.Salida -match '(?s)No quedan pasos.*Se ha quedado sin arreglar') (Cola $r.Salida)
+  $e2 = Nuevo-Escenario 'final-limpio'
+  Pon-Config $e2 @{ Orden = @('estructura', 'tests') }
+  $r2 = Rescate @('-Modo', 'fix', '-Repo', $e2.Repo, '-Plantilla', $e2.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1')
+  Igual 'la pasada limpia sale con 0' 0 $r2.Codigo
+  Comprueba 'la pasada limpia dice que no quedan errores' ($r2.Salida -match 'No quedan errores') (Cola $r2.Salida)
+  Comprueba 'y no habla de pasos sin arreglar' ($r2.Salida -notmatch 'No quedan pasos|Se ha quedado sin arreglar') (Cola $r2.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
