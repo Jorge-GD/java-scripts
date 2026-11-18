@@ -1275,15 +1275,25 @@ function Write-FinCopilot($R) {
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
-# $Que es lo que dice el latido mientras Copilot trabaja.
+# $Que es lo que dice el latido mientras Copilot trabaja. Con tope ($Cfg.MinutosCopilot): pasado, se para Copilot con sus
+# procesos hijos (Invoke-Proceso, que lo lanza como Invoke-Nativo: misma entrada y misma codificacion) y la llamada sale con
+# Codigo -1 y Tope, el mensaje que dice que se ha pasado (tambien por la consola); sin tope, Tope vale ''. Devuelve Codigo,
+# Salida (las lineas: las de la salida y despues las de errores) y Tope; la salida queda tambien en $Log.
 function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [string]$Que = 'Copilot') {
   if (-not $Mod) { $Mod = $Modelo }
   if (-not $Esf) { $Esf = $Esfuerzo }
   $a = Get-ArgsCopilot 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.' $Mod $Esf @($PlantillaRoot, $LegacyRoot) ([bool]$SinInstrucciones)
   $latido = Start-Latido $Que $Cfg.SegundosLatido
-  try { $r = Invoke-Nativo $script:Copilot.Ruta $a $RepoRoot }
+  try { $p = Invoke-Proceso $script:Copilot.Ruta $a $RepoRoot ([int][Math]::Ceiling([double]$Cfg.MinutosCopilot * 60)) $true }
   finally { Stop-Latido $latido }
-  [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
+  $salida = @()
+  if ($p.Texto) { $salida = @(($p.Texto -replace '\r?\n$', '') -split '\r?\n') }
+  [System.IO.File]::WriteAllLines($Log, [string[]]$salida)
+  $r = [pscustomobject]@{ Codigo = $p.Codigo; Salida = $salida; Tope = '' }
+  if ($p.Agotado) {
+    $r.Tope = "Copilot se ha pasado del tope de $($Cfg.MinutosCopilot) min y se ha parado ($Que)."
+    Aviso $r.Tope
+  }
   return $r
 }
 
@@ -1465,9 +1475,17 @@ function Test-PaqueteEnPlantilla([string]$Rel, $Cal) {
   return $false
 }
 
-# Los paquetes que un plan nombra y la plantilla no tiene, como 'paquete (en <nombre tal como esta escrito>)': los de '## Piezas
-# comunes' (nombres completos de clase, con '.' o con '/') y los de las lineas 'destino:' de '## Ficheros'. Lee con tolerancia: lo que
-# no se entiende, no se comprueba. Sin plantilla, nada.
+# Existe un paquete en el repo que se migra? Si su carpeta esta bajo el paquete base (src/main/java/<paquete base>/): lo que ya
+# esta alli lo dio por bueno el paso 'estructura'. El paquete base es el del ultimo diagnostico ($script:BasePkg): no se recorre
+# el repo otra vez. Antes del primer diagnostico no hay paquete base y no se encuentra nada.
+function Test-PaqueteEnRepo([string]$Rel) {
+  $base = Join-Ruta (Join-Ruta $RepoRoot 'src/main/java') ($script:BasePkg -replace '\.', '/')
+  return (Test-Path -LiteralPath (Join-Ruta $base $Rel) -PathType Container)
+}
+
+# Los paquetes que un plan nombra y ni la plantilla ni el repo tienen, como 'paquete (en <nombre tal como esta escrito>)': los de
+# '## Piezas comunes' (nombres completos de clase, con '.' o con '/') y los de las lineas 'destino:' de '## Ficheros'. Lee con
+# tolerancia: lo que no se entiende, no se comprueba. Sin plantilla, nada.
 function Get-PaquetesFueraDePlantilla([string]$Plan, $Cal) {
   if (-not $Cal -or $Cal.Paquetes.Count -eq 0) { return @() }
   $nombres = New-Object System.Collections.Generic.List[string]
@@ -1484,7 +1502,7 @@ function Get-PaquetesFueraDePlantilla([string]$Plan, $Cal) {
   $fuera = [ordered]@{}
   foreach ($n in $nombres) {
     $rel = Get-PaqueteDePlan $n $Cal
-    if ($rel -and -not $fuera.Contains($rel) -and -not (Test-PaqueteEnPlantilla $rel $Cal)) { $fuera[$rel] = $n }
+    if ($rel -and -not $fuera.Contains($rel) -and -not (Test-PaqueteEnPlantilla $rel $Cal) -and -not (Test-PaqueteEnRepo $rel)) { $fuera[$rel] = $n }
   }
   return @($fuera.Keys | ForEach-Object { "$_ (en $($fuera[$_]))" })
 }
@@ -2133,7 +2151,8 @@ function Invoke-Fix {
       $esf = ''
       if ($i -ge 2 -or $escalon) { $esf = Get-EsfuerzoReintento }
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i)"
-      if ($rc.Codigo -ne 0) {
+      # pasado el tope (Copilot se ha parado y la consola ya lo ha dicho) el intento se evalua tal cual: ni se repite ni cuenta como un fallo de Copilot
+      if ($rc.Codigo -ne 0 -and -not $rc.Tope) {
         Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc
         # un fallo de Copilot sin tocar nada no es un intento del modelo: se repite la llamada una vez
         $nada = (((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check) -and (((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida -join "`n") -eq $estadoAntes)
@@ -2146,7 +2165,7 @@ function Invoke-Fix {
             $esf = $menor[0]; $script:EsfReintento = $esf
           }
           $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i-repeticion.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i, repeticion)"
-          if ($rc.Codigo -ne 0) { Aviso "  Copilot termino otra vez con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i-repeticion.log)"; Write-FinCopilot $rc }
+          if ($rc.Codigo -ne 0 -and -not $rc.Tope) { Aviso "  Copilot termino otra vez con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i-repeticion.log)"; Write-FinCopilot $rc }
         }
       }
 
