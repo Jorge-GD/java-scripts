@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pom-pmd.xml - Proyecto vacio que solo lleva la configuracion de PMD para analisis.ps1.
+  maven-pmd-plugin no deja pasar por linea de comandos ni el ruleset ni la lista de ficheros: sus parametros
+  rulesets e includes no tienen propiedad de usuario (-D). Este pom los toma de propiedades, asi se lanza con
+    mvn -f analisis/pom-pmd.xml -Danalisis.repo=<repo> -Danalisis.ruleset=<pmd-sonar.xml> -Danalisis.pmd=<version>
+        [-Danalisis.includes=<ficheros relativos al repo, con coma>] org.apache.maven.plugins:maven-pmd-plugin:<version>:pmd
+  y el pom del repo analizado no se toca. El repo es la carpeta de fuentes (los includes son rutas relativas a el),
+  y target/pmd.xml queda en target/ del repo. Solo ASCII.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.acme.analisis</groupId>
+  <artifactId>pmd-sonar</artifactId>
+  <version>1</version>
+  <properties>
+    <analisis.repo>.</analisis.repo>
+    <analisis.ruleset>pmd-sonar.xml</analisis.ruleset>
+    <analisis.includes>**/src/main/java/**/*.java</analisis.includes>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <build>
+    <directory>${analisis.repo}/target</directory>
+    <sourceDirectory>${analisis.repo}</sourceDirectory>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-pmd-plugin</artifactId>
+        <version>${analisis.pmd}</version>
+        <configuration>
+          <rulesets>
+            <ruleset>${analisis.ruleset}</ruleset>
+          </rulesets>
+          <includes>${analisis.includes}</includes>
+          <excludes>
+            <exclude>**/target/**</exclude>
+            <exclude>**/.rescate/**</exclude>
+          </excludes>
+          <targetJdk>21</targetJdk>
+          <format>xml</format>
+          <skipEmptyReport>false</skipEmptyReport>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
