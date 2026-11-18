@@ -102,12 +102,25 @@ Cada llamada a la IA es `copilot -p` con `--model` y `--effort`
 | `-EsfuerzoPlan <nivel>` | Esfuerzo de la revisión previa (pensar). | El de `-Esfuerzo`. |
 | `-Esfuerzo <nivel>` | Esfuerzo de los lotes de arreglo (escribir). | El que tenga Copilot. |
 | `-ModeloB <id>` | Modelo de reserva cuando el principal se atasca con un fichero. | No hay reserva. |
+| `-ModeloDudas <id>` | Modelo fuerte de las dudas: el consejo y la reflexión (abajo). También `ModeloDudas` en `ajustes.json` o `.rescate/config.json`. | El de `-Modelo`. |
+| `-EsfuerzoDudas <nivel>` | Esfuerzo del modelo de las dudas. También `EsfuerzoDudas` en los ajustes. | `max`; si Copilot no lo acepta, `xhigh` y luego `high`. |
 
 Niveles: `low`, `medium`, `high`, `xhigh`, `max`. No todos los modelos admiten todos.
 
 ```powershell
-.\rescate.ps1 -Modo fix -Repo ... -Plantilla ... -Modelo <id-del-modelo> -EsfuerzoPlan high -Esfuerzo medium
+.\rescate.ps1 -Modo fix -Repo ... -Plantilla ... -Modelo <id-del-modelo> -EsfuerzoPlan high -Esfuerzo medium -ModeloDudas <id-fuerte>
 ```
+
+### Atascados, consejo y reflexión
+
+- **Atascados.** Lo que la IA no sabe arreglar se apunta en `.rescate/atascados.json` (paso, fichero, motivo, huella del fichero y commit). En la pasada siguiente no se vuelve a intentar: el script lo dice una vez («N ficheros atascados de antes: no los reintento (usa -Reintentar)»). Se vuelve a intentar con `-Reintentar`, si el fichero ha cambiado o si desde que se atascó hay un commit que no es de un lote del script (por ejemplo, la pieza común que faltaba, hecha a mano en otro fichero).
+- **Consejo.** Cuando un fichero se atasca también con el modelo de reserva, el modelo de las dudas da 3 opciones, elige una y dice si es de `codigo` o de `persona` (cambia el comportamiento de negocio, sube versiones del framework o del parent, toca credenciales o entornos, o pide información que no está en los repos). Si es de código, se hace un intento más con esa opción; si no, el fichero queda atascado con las 3 opciones en `atascados.md`. Con `-Auto`, las dudas del plan se resuelven igual: las de código van al plan como «## Decisiones» y las de persona salen al final en «Te toca decidir». Sin `-Auto`, el plan pregunta como siempre.
+- **Reflexión (opcional).** Tras cada intento que no pasa, el modelo de las dudas escribe `.rescate/reflexion-<paso>-<lote>-<intento>.md` (qué se intentó, por qué no pasó, qué hacer ahora, qué no hacer). Va en la corrección siguiente, al reintento de uno en uno, al modelo de reserva y al consejo. Va **apagada por defecto**: se enciende con `"Reflexionar": true` en `.rescate/config.json`. En nuestra medida (noviembre de 2026, Haiku, el caso de dos ficheros que necesitan la misma pieza común), acertó el diagnóstico, pero no bajó ni los atascados ni los lotes deshechos (0 y 0 con ella y sin ella, en dos pasadas de cada), y la pasada tardó de 3 a 4 veces más.
+- Todo queda en `.rescate/decisiones.md`.
+
+Tras cada Maven, el script borra los ficheros nuevos sin seguimiento que Maven deja fuera de `target` y `.rescate` (las salidas de algunos tests); los que ha creado la IA se quedan.
+
+Con `-Todo` y sin `.rescate/contrato.json`, el script hace antes lo del modo `pre` (la lista de jobs del original) y avisa de que esa lista no la ha revisado nadie.
 
 ### El paso `calidad`
 

@@ -72,9 +72,10 @@ USO
   # decidir una persona, se apunta en .rescate/atascados.md (y .json) y sigue.
   # La pasada siguiente no vuelve a intentar un atascado si su fichero no ha
   # cambiado y no hay commits tuyos desde entonces (-Reintentar lo fuerza).
-  # Tras cada intento que no pasa, el modelo de las dudas reflexiona (por que no
-  # paso, que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del
-  # plan tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
+  # Con "Reflexionar": true en .rescate/config.json (apagado por defecto), tras
+  # cada intento que no pasa el modelo de las dudas reflexiona (por que no paso,
+  # que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del plan
+  # tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
   # Todo queda en .rescate/decisiones.md; lo que le toca a una persona sale al
   # final en "Te toca decidir".
   .\rescate.ps1 -Modo fix ... -Todo -ModeloDudas <id-fuerte> -EsfuerzoDudas max
@@ -203,7 +204,10 @@ $Cfg += @{
   ModeloDudas           = ''
   EsfuerzoDudas         = 'max'
   # Tras cada intento que no pasa, el modelo de las dudas explica por que y que hacer, y el siguiente intento lo lleva.
-  Reflexionar           = $true
+  # Apagado: en la medida del M6 (el caso de dos ficheros que necesitan la misma pieza comun) no bajo ni los atascados
+  # ni los lotes deshechos (0 y 0 con y sin ella, dos pasadas de cada), y la pasada tardo de 3 a 4 veces mas y costo
+  # de 5 a 8 veces mas.
+  Reflexionar           = $false
   LineasDiff            = 300   # lineas del diff del intento que recibe la reflexion
   # Maven
   MvnCompilar           = @('-q', '-B', '-DskipTests', 'test-compile')
@@ -1755,7 +1759,7 @@ function Invoke-Fix {
       else {
         $con = Invoke-ConsejoAtascado $paso $f $hall $motivos[$f] @($reflexiones | Where-Object { $_.Ficheros -contains $f })
         if ($con -and $con.Dudas[0].tipo -eq 'codigo') {
-          Info ('  -> consejo: ' + (Get-Elegida $con.Dudas[0]) + '. Lo intento una vez mas con el (modelo de -Modelo).')
+          Info ('  -> consejo: ' + (Get-Elegida $con.Dudas[0]).TrimEnd('.') + '. Lo intento una vez mas con el (modelo de -Modelo).')
           $consejoDe[$f] = $con
           continue
         }

@@ -1629,6 +1629,13 @@ $Pruebas['m6 reflexion: sin las cuatro secciones se sigue sin ella; con Reflexio
   $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion'
   Igual 'con Reflexionar en false sale con 0' 0 $r2.Codigo
   Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e2 'reflexion').Count
+  # sin Reflexionar en la config: apagada (en la medida del M6 no bajo ni atascados ni lotes deshechos)
+  $e3 = Escenario-M6 'm6-reflexion-defecto'
+  Escribe $e3.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-m6.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); Orden = @('estructura', 'tests') }))
+  $r3 = Fix-M6 $e3 'estructura' 2 @() 'nada-sin-correccion'
+  Igual 'sin decir nada en la config sale con 0' 0 $r3.Codigo
+  Igual 'y no hay ninguna reflexion' 0 (Llamadas-M6 $e3 'reflexion').Count
+  Comprueba 'la cabecera dice que va sin reflexion' ($r3.Salida -match '\(sin reflexion\)') (Cola $r3.Salida)
 }
 
 # ================================ LANZADOR ================================
