@@ -4459,6 +4459,235 @@ $Pruebas['m10 sonar: todo en ASCII (el script, el banco y los falsos)'] = {
   }
 }
 
+# ===== M21: EN SONAR EL MODELO SOLO COMPILA, Y CADA INTENTO DEJA SU TIEMPO APUNTADO =====
+# Usan los falsos de M10 (Escenario-Sonar, copilot.ps1, m20a-mvn.ps1) y m21-copilot.ps1 (tarda y no toca nada). El Maven de mentira deja cada
+# llamada en .rescate/mvn-llamadas.log; con RESCATE_MVN_ESPERA=<n>, cada llamada tarda n segundos mas.
+$CabeceraIntentos = "fecha`tpaso`tlote`tintento`tficheros`thallazgos`treglas`tseg_copilot`tseg_maven`tresultado`tpuerta"
+$MvnConTests = '\| -q -B -DskipTests=false -Dmaven\.test\.skip=false -Dmaven\.test\.failure\.ignore=false test$'
+
+# Una incidencia (de Inc) de la clase $Clase, en la primera linea que lleva $Frag.
+function Inc-M21($E, [string]$Clase, [string]$Msg, [string]$Frag = 'int resultado') {
+  $ruta = $RutaSv + 'service/' + $Clase + '.java'
+  return , (Inc 'CRITICAL' $Msg 'BUG' ($Clase + '.java') $ruta ((Linea-De (Lee $E.Repo $ruta) $Frag).ToString() + 'L'))
+}
+
+# Las llamadas de Maven con tests que ha hecho el script en el worktree.
+function Mvn-Tests-M21($E) {
+  return @([System.IO.File]::ReadAllLines((Get-Ruta $E.Wt '.rescate/mvn-llamadas.log')) | Where-Object { $_ -match $MvnConTests })
+}
+
+# .rescate/intentos.tsv del worktree: la cabecera, las lineas y cada fila con sus columnas (campo -> texto). $null si no existe.
+function Intentos-M21($E) {
+  $ruta = Get-Ruta $E.Wt '.rescate/intentos.tsv'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { return $null }
+  $l = @([System.IO.File]::ReadAllLines($ruta))
+  $cab = @($l[0] -split "`t")
+  $filas = @()
+  foreach ($x in @($l | Select-Object -Skip 1)) {
+    $v = @($x -split "`t")
+    $o = [ordered]@{ Campos = $v.Count }
+    for ($k = 0; $k -lt $cab.Count; $k++) { $o[$cab[$k]] = $v[$k] }
+    $filas += [pscustomobject]$o
+  }
+  return [pscustomobject]@{ Cabecera = $l[0]; Lineas = $l; Filas = $filas }
+}
+
+$Pruebas['m21 (a): en sonar el prompt manda solo compilar, y el script pasa los tests en sus puertas'] = {
+  $e = Escenario-Sonar 'm21-a' @('service/TotalService')
+  Informe-Sonar $e.Xlsx @(, (Inc-M21 $e 'TotalService' 'Fix this null dereference.'))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt lleva la orden de compilar y dice que los tests los pasa el script' ($prompt -match '(?m)^- Ejecuta: .* -q -B -DskipTests test-compile  y corrige hasta que compile\. Los tests los pasa el script despues\.$') $prompt
+  Comprueba 'y no lleva la orden de los tests' ($prompt -notmatch 'DskipTests=false' -and $prompt -notmatch 'corrige los tests que fallen') $prompt
+  $t = @(Mvn-Tests-M21 $e)
+  Comprueba 'el script ejecuta Maven con tests: el diagnostico y el intento' ($t.Count -ge 2) ($t -join ' // ')
+  Comprueba 'el lote pasa y se guarda' ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+}
+
+$Pruebas['m21 (a2): con -SinTests el script no pasa tests y el prompt de sonar sigue como antes: compilar, sin decir que los pasa el script'] = {
+  $e = Escenario-Sonar 'm21-a2' @('service/TotalService')
+  Informe-Sonar $e.Xlsx @(, (Inc-M21 $e 'TotalService' 'Fix this null dereference.'))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-SinTests')
+  Igual 'sale con 0' 0 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt compila y no habla de tests' ($prompt -match '(?m)^- Ejecuta: .* -q -B -DskipTests test-compile  y corrige hasta que compile\.$' -and $prompt -notmatch 'Los tests los pasa el script') $prompt
+  Igual 'el script no ejecuta tests' 0 @(Mvn-Tests-M21 $e).Count
+}
+
+$Pruebas['m21 (b): el prompt de otro paso (calidad) sigue llevando los tests, y su intento tambien deja su linea con reglas -'] = {
+  $e = Escenario-Sonar 'm21-b' @('service/TotalService') @{} @('service/SinDoc1', 'service/SinDoc2')
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'calidad', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'nada'
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt lleva la orden de los tests' ($prompt -match '(?m)^- Ejecuta: .* -q -B -DskipTests=false "-Dmaven\.test\.skip=false" "-Dmaven\.test\.failure\.ignore=false" test  y corrige los tests que fallen\.$') $prompt
+  Comprueba 'y no dice que los tests los pasa el script' ($prompt -notmatch 'Los tests los pasa el script') $prompt
+  $t = Intentos-M21 $e
+  if (-not $t) { Comprueba 'existe .rescate/intentos.tsv' $false (Cola $r.Salida); return }
+  Igual 'una sola linea de intento' 1 $t.Filas.Count
+  Igual 'paso calidad' 'calidad' $t.Filas[0].paso
+  Igual 'sin familias fuera de sonar: reglas -' '-' $t.Filas[0].reglas
+  Igual 'no pasa (Copilot no cambio nada)' 'no pasa' $t.Filas[0].resultado
+  Comprueba 'la consola cuenta los tiempos del paso calidad' ($r.Salida -match 'Tiempos del paso calidad: 1 intentos, Copilot [\d,]+ min, Maven [\d,]+ min \(detalle: \.rescate/intentos\.tsv\)') (Cola $r.Salida)
+}
+
+$Pruebas['m21 (c): dos lotes, uno que no pasa y otro que si: intentos.tsv con la cabecera y una linea por intento'] = {
+  $e = Escenario-Sonar 'm21-c' @('service/TotalService', 'service/ReciboService')
+  $incs = @((Inc-M21 $e 'TotalService' 'ATASCA: this one cannot be fixed.'), (Inc-M21 $e 'ReciboService' 'Fix this bug in ReciboService.'))
+  Informe-Sonar $e.Xlsx $incs
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '2', '-Lote', '1') 'sonar-atasca'
+  Igual 'sale con 2 (hay un fichero atascado)' 2 $r.Codigo
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $t = Intentos-M21 $e
+  if (-not $t) { Comprueba 'existe .rescate/intentos.tsv' $false (Cola $r.Salida); return }
+  Igual 'la cabecera, con las 11 columnas' $CabeceraIntentos $t.Cabecera
+  Igual 'una linea por intento: 2 del lote 1 y 1 del lote 2' 3 $t.Filas.Count
+  Igual 'todas con sus 11 campos' '11 11 11' ((@($t.Filas | ForEach-Object { $_.Campos })) -join ' ')
+  Igual 'paso' 'sonar sonar sonar' ((@($t.Filas | ForEach-Object { $_.paso })) -join ' ')
+  Igual 'lote' '1 1 2' ((@($t.Filas | ForEach-Object { $_.lote })) -join ' ')
+  Igual 'intento' '1 2 1' ((@($t.Filas | ForEach-Object { $_.intento })) -join ' ')
+  Igual 'resultado' 'no pasa|no pasa|pasa' ((@($t.Filas | ForEach-Object { $_.resultado })) -join '|')
+  Igual 'ficheros y hallazgos del lote: 1 y 1' '1/1 1/1 1/1' ((@($t.Filas | ForEach-Object { $_.ficheros + '/' + $_.hallazgos })) -join ' ')
+  Igual 'reglas: la familia de la incidencia del lote (sin receta, el mensaje)' 'ATASCA: this one cannot be fixed.|ATASCA: this one cannot be fixed.|Fix this bug in ReciboService.' ((@($t.Filas | ForEach-Object { $_.reglas })) -join '|')
+  Comprueba 'la fecha es yyyy-MM-dd HH:mm:ss' (@($t.Filas | Where-Object { $_.fecha -notmatch '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$' }).Count -eq 0) ((@($t.Filas | ForEach-Object { $_.fecha })) -join ' / ')
+  Comprueba 'los segundos de Copilot y de Maven son numeros' (@($t.Filas | Where-Object { $_.seg_copilot -notmatch '^\d+$' -or $_.seg_maven -notmatch '^\d+$' }).Count -eq 0) ((@($t.Filas | ForEach-Object { $_.seg_copilot + '/' + $_.seg_maven })) -join ' ')
+  Igual 'puerta del que no pasa: la primera' 'No has cambiado ningun fichero.' $t.Filas[0].puerta
+  Igual 'puerta del que pasa: vacia' '' $t.Filas[2].puerta
+  Comprueba 'la consola cuenta los tiempos del paso: 3 intentos' ($r.Salida -match 'Tiempos del paso sonar: 3 intentos, Copilot [\d,]+ min, Maven [\d,]+ min \(detalle: \.rescate/intentos\.tsv\)') (Cola $r.Salida)
+}
+
+$Pruebas['m21 (c2): un intento que cambia el codigo pero no baja los hallazgos apunta su puerta, sin tabuladores ni saltos y cortada a 200'] = {
+  $proh = @(@{ Rx = 'NOSONAR'; Modo = 'anadida'; Motivo = ("inicio`tcon tab`ny salto " + ('x' * 300)) })
+  $e = Escenario-Sonar 'm21-c2' @('service/TotalService') @{ SonarProhibido = $proh }
+  Informe-Sonar $e.Xlsx @(, (Inc-M21 $e 'TotalService' 'Fix this bug in TotalService.'))
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') 'sonar-nosonar'
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $t = Intentos-M21 $e
+  if (-not $t) { Comprueba 'existe .rescate/intentos.tsv' $false (Cola $r.Salida); return }
+  Igual 'una linea' 1 $t.Filas.Count
+  Igual 'con sus 11 campos: ningun tabulador del motivo la parte' 11 $t.Filas[0].Campos
+  Igual 'no pasa' 'no pasa' $t.Filas[0].resultado
+  Igual 'la puerta mide 200' 200 $t.Filas[0].puerta.Length
+  Comprueba 'y es el primer problema, con el tabulador y el salto cambiados por espacios' ($t.Filas[0].puerta.StartsWith('Cambio no permitido: inicio con tab y salto xxx')) $t.Filas[0].puerta
+}
+
+$Pruebas['m21 (c3): los segundos de Copilot suman la repeticion, y los de Maven son los del intento'] = {
+  $e = Escenario-Sonar 'm21-c3' @('service/TotalService') @{ CopilotExe = (Join-Path $falsos 'm21-copilot.ps1') }
+  Informe-Sonar $e.Xlsx @(, (Inc-M21 $e 'TotalService' 'Fix this bug in TotalService.'))
+  $env:RESCATE_M21_ESPERA = '2'
+  try { $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1') }
+  finally { Remove-Item Env:\RESCATE_M21_ESPERA -ErrorAction SilentlyContinue }
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'Copilot falla sin tocar nada y el script repite la llamada' ($r.Salida -match 'repito la llamada una vez') (Cola $r.Salida)
+  $t = Intentos-M21 $e
+  if (-not $t) { Comprueba 'existe .rescate/intentos.tsv' $false (Cola $r.Salida); return }
+  Igual 'una linea' 1 $t.Filas.Count
+  Comprueba 'seg_copilot: las dos llamadas de 2 s (la repeticion cuenta)' ([int]$t.Filas[0].seg_copilot -ge 4) "seg_copilot=$($t.Filas[0].seg_copilot)"
+  Igual 'sin Maven en el intento (no cambio nada): seg_maven 0' '0' $t.Filas[0].seg_maven
+  Igual 'no pasa' 'no pasa' $t.Filas[0].resultado
+  Igual 'la puerta: no cambio nada' 'No has cambiado ningun fichero.' $t.Filas[0].puerta
+}
+
+$Pruebas['m21 (c4): seg_maven es lo que tardan los Maven del intento, sin el diagnostico de antes'] = {
+  $e = Escenario-Sonar 'm21-c4' @('service/TotalService')
+  Informe-Sonar $e.Xlsx @(, (Inc-M21 $e 'TotalService' 'Fix this null dereference.'))
+  $env:RESCATE_MVN_ESPERA = '4'
+  try { $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1') }
+  finally { Remove-Item Env:\RESCATE_MVN_ESPERA -ErrorAction SilentlyContinue }
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $t = Intentos-M21 $e
+  if (-not $t) { Comprueba 'existe .rescate/intentos.tsv' $false (Cola $r.Salida); return }
+  Igual 'una linea, y pasa' 'pasa' $t.Filas[0].resultado
+  $s = [int]$t.Filas[0].seg_maven
+  Comprueba 'un Maven de 4 s en el intento: entre 4 y 7 (el del diagnostico de antes no cuenta)' ($s -ge 4 -and $s -lt 8) "seg_maven=$s"
+}
+
+$Pruebas['m21 (d): relanzar anade lineas a intentos.tsv: ni borra las de antes ni repite la cabecera'] = {
+  $e = Escenario-Sonar 'm21-d' @('service/TotalService', 'service/ReciboService')
+  Informe-Sonar $e.Xlsx @((Inc-M21 $e 'TotalService' 'Fix this bug in TotalService.'), (Inc-M21 $e 'ReciboService' 'Fix this bug in ReciboService.'))
+  $a = @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-Lote', '1', '-MaxLotes', '1')
+  $r1 = Sonar-Lanza $e $a
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r1.Salida); return }
+  $t1 = Intentos-M21 $e
+  if (-not $t1) { Comprueba 'existe .rescate/intentos.tsv' $false (Cola $r1.Salida); return }
+  Igual 'tras la primera pasada: cabecera y una linea' 2 $t1.Lineas.Count
+  $r2 = Sonar-Lanza $e $a
+  $t2 = Intentos-M21 $e
+  Igual 'tras la segunda: cabecera y dos lineas' 3 $t2.Lineas.Count
+  Igual 'la linea de antes sigue igual' $t1.Lineas[1] $t2.Lineas[1]
+  Igual 'la cabecera esta una sola vez' 1 @($t2.Lineas | Where-Object { $_ -eq $CabeceraIntentos }).Count
+  Igual 'las dos lineas son pasa' 'pasa pasa' ((@($t2.Filas | ForEach-Object { $_.resultado })) -join ' ')
+  Comprueba 'la segunda pasada cuenta solo sus tiempos: 1 intentos' ($r2.Salida -match 'Tiempos del paso sonar: 1 intentos,') (Cola $r2.Salida)
+}
+
+$Pruebas['m21 (e): sonar-por-familia.tsv cuenta por familia (dos con receta y una sin ella) y la consola ensena la tabla'] = {
+  $rec = @(
+    @{ Nombre = 'complejidad'; Rx = 'cognitive complexity'; Texto = 'RECETA-M21-UNO' },
+    @{ Rx = 'remove this unused'; Texto = 'RECETA-M21-DOS' })
+  $e = Escenario-Sonar 'm21-e' @('service/TotalService', 'service/ReciboService', 'service/PagoService') @{ SonarRecetas = $rec }
+  $incs = @(
+    (Inc-M21 $e 'TotalService' 'Refactor this method to reduce its Cognitive Complexity from 25 to the 15 allowed.'),
+    (Inc-M21 $e 'ReciboService' 'Refactor this method to reduce its Cognitive Complexity from 18 to the 15 allowed.'),
+    (Inc-M21 $e 'PagoService' 'Refactor this method to reduce its Cognitive Complexity from 40 to the 15 allowed.'),
+    (Inc-M21 $e 'ReciboService' 'Remove this unused private "total" field.' 'return resultado'),
+    (Inc-M21 $e 'PagoService' 'Remove this unused private "saldo" field.' 'return resultado'),
+    (Inc-M21 $e 'TotalService' 'Define a constant instead of duplicating this literal "abc" 3 times.' 'return resultado'))
+  Informe-Sonar $e.Xlsx $incs
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '0')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $ruta = Get-Ruta $e.Wt '.rescate/sonar-por-familia.tsv'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { Comprueba 'existe .rescate/sonar-por-familia.tsv' $false (Cola $r.Salida); return }
+  $l = @([System.IO.File]::ReadAllLines($ruta))
+  Igual 'la cabecera' "familia`tincidencias`tficheros`treceta" $l[0]
+  Igual 'tres familias' 4 $l.Count
+  Igual 'la de la receta con nombre: 3 incidencias en 3 ficheros' "complejidad`t3`t3`tsi" $l[1]
+  Igual 'la receta sin nombre es receta-N, con N su lugar en SonarRecetas: 2 en 2' "receta-2`t2`t2`tsi" $l[2]
+  Igual 'la que no tiene receta: el mensaje con las comillas y las cifras en #' "Define a constant instead of duplicating this literal # # times.`t1`t1`tno" $l[3]
+  Comprueba 'la consola ensena la tabla: la primera familia' ($r.Salida -match '(?m)^\s*3\s+3\s+si\s+complejidad\s*$') (Cola $r.Salida)
+  Comprueba 'la segunda' ($r.Salida -match '(?m)^\s*2\s+2\s+si\s+receta-2\s*$') (Cola $r.Salida)
+  Comprueba 'la tercera' ($r.Salida -match '(?m)^\s*1\s+1\s+no\s+Define a constant instead of duplicating this literal # # times\.\s*$') (Cola $r.Salida)
+  Comprueba 'y una linea con el total y la ruta del fichero' ($r.Salida -match 'Total: 6 incidencias en 3 familias \(detalle: \.rescate/sonar-por-familia\.tsv\)') (Cola $r.Salida)
+}
+
+$Pruebas['m21 (e2): la consola ensena las 10 primeras familias y el fichero las lleva todas, de mas a menos'] = {
+  $nombres = @('alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta', 'iota', 'kappa', 'lambda', 'mu')
+  $e = Escenario-Sonar 'm21-e2' @('service/TotalService')
+  $incs = @()
+  foreach ($n in $nombres) { $incs += , (Inc 'CRITICAL' "Do the $n thing." 'BUG' 'TotalService.java' ($RutaSv + 'service/TotalService.java') '') }
+  $incs += , (Inc 'CRITICAL' 'Do the mu thing.' 'BUG' 'TotalService.java' ($RutaSv + 'service/TotalService.java') '')
+  Informe-Sonar $e.Xlsx $incs
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '0')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $ruta = Get-Ruta $e.Wt '.rescate/sonar-por-familia.tsv'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { Comprueba 'existe .rescate/sonar-por-familia.tsv' $false (Cola $r.Salida); return }
+  $l = @([System.IO.File]::ReadAllLines($ruta))
+  Igual 'el fichero: la cabecera y las 12 familias' 13 $l.Count
+  Igual 'la primera es la que mas incidencias lleva (mu, 2)' "Do the mu thing.`t2`t1`tno" $l[1]
+  Igual 'la consola ensena 10 familias' 10 @($r.Salida -split "`n" | Where-Object { $_ -match '^\s*\d+\s+\d+\s+no\s+Do the ' }).Count
+  Comprueba 'y el total: 13 incidencias en 12 familias' ($r.Salida -match 'Total: 13 incidencias en 12 familias \(detalle: \.rescate/sonar-por-familia\.tsv\)') (Cola $r.Salida)
+}
+
+$Pruebas['m21 (f): si intentos.tsv no se puede escribir (es una carpeta) sale un aviso y el lote sigue'] = {
+  $e = Escenario-Sonar 'm21-f' @('service/TotalService')
+  $total = $RutaSv + 'service/TotalService.java'
+  Informe-Sonar $e.Xlsx @(, (Inc-M21 $e 'TotalService' 'Fix this null dereference.'))
+  [void](New-Item -ItemType Directory -Path (Get-Ruta $e.Repo '.rescate/intentos.tsv') -Force)
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-SinWorktree')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'un aviso dice que no ha podido apuntar el intento' ($r.Salida -match 'No he podido apuntar el intento en .*intentos\.tsv') (Cola $r.Salida)
+  Comprueba 'el lote sigue y pasa' ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+  Comprueba 'hay un commit del lote' ((GitEn $e.Repo @('log', '--format=%s')) -match 'rescate\(sonar\): lote 1, hallazgos 1 a 0') (GitEn $e.Repo @('log', '--format=%s'))
+  Comprueba 'la linea marcada ha cambiado' ((Lee $e.Repo $total) -match 'int resultado = a \+ b \+ 0;')
+  Comprueba 'intentos.tsv sigue siendo una carpeta' (Test-Path -LiteralPath (Get-Ruta $e.Repo '.rescate/intentos.tsv') -PathType Container)
+}
+
+$Pruebas['m21: todo en ASCII (el falso nuevo)'] = {
+  $f = Join-Path $falsos 'm21-copilot.ps1'
+  Igual 'sin bytes fuera de ASCII en m21-copilot.ps1' 0 @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
+}
+
 # ================================ M14: PASO COBERTURA ================================
 # El paso 'cobertura' (-Cobertura) escribe tests hasta que la cobertura de lineas llega al objetivo. Los falsos son cobertura-mvn.ps1 y
 # cobertura-copilot.ps1: la cobertura de una clase sale de marcadores (un '// LINEAS: n' en su fuente y los '// CUBRE: n' de su test).
