@@ -102,12 +102,7 @@ function New-Copia([string]$Repo, [string]$Commit, [string]$Dir) {
   return ''
 }
 
-# Lo cambiado en una copia desde lo ultimo que se dio por bueno (su indice de git): rutas relativas, sin .rescate (los
-# prompts) ni target.
-function Get-Cambios([string]$Dir) {
-  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).rescate', ':(exclude)target')
-  return @($r.Salida | Where-Object { $_.Length -gt 3 -and $_[1] -ne ' ' } | ForEach-Object { $_.Substring(3).Trim('"') })
-}
+# Lo cambiado en una copia desde lo ultimo que se dio por bueno (su indice de git) lo da Get-Cambios, de comun.ps1.
 
 # Da por bueno lo que hay en la copia (al indice) y apunta su base: el commit y el arbol del indice.
 function Save-Copia([string]$Dir) {
@@ -145,8 +140,8 @@ function Copy-Carpeta([string]$De, [string]$A) {
 
 # ================================ MAVEN ================================
 # Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido y sin saltarse los
-# tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar:
-# no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
+# tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar
+# (Remove-Ruido, de comun.ps1): no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
 # Codigo y Salida.
 function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
   $script:Mavens++
@@ -156,12 +151,7 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
   $latido = Start-Latido "Maven, $Que" ([int]$Cfg.SegundosLatido)
   try { $r = Invoke-Nativo (Get-Mvn $Dir) (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) $Dir }
   finally { Stop-Latido $latido; $env:JAVA_HOME = $antes }
-  $ruido = @(Get-Cambios $Dir | Where-Object { $previos -notcontains $_ })
-  if ($ruido.Count -gt 0) {
-    [void](Invoke-Git $Dir (@('clean', '-fdq', '--') + $ruido))
-    $quedan = @(Get-Cambios $Dir | Where-Object { $ruido -contains $_ })
-    if ($quedan.Count -gt 0) { [void](Invoke-Git $Dir (@('checkout', '-q', '--') + $quedan)) }
-  }
+  [void](Remove-Ruido $Dir $previos)
   [System.IO.File]::WriteAllText((Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')), (($r.Salida -join "`n") + "`n"), $Utf8)
   return $r
 }

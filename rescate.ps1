@@ -583,9 +583,16 @@ function Invoke-Build([bool]$ConTests) {
   if ($ConTests -and (Test-Path -LiteralPath $rep)) { Remove-Item -LiteralPath $rep -Recurse -Force }
   if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
   if ($ConTests) { $que = 'Maven (tests)' } else { $que = 'Maven (compilar)' }
+  $previos = @(Get-Cambios $RepoRoot)
   $latido = Start-Latido $que $Cfg.SegundosLatido
   try { $r = Invoke-Nativo (Get-Mvn $RepoRoot) $a $RepoRoot }
   finally { Stop-Latido $latido }
+  # lo que deja Maven fuera de target se quita (Remove-Ruido, la regla de prueba-local.ps1): no entra en los commits
+  $ruido = @(Remove-Ruido $RepoRoot $previos)
+  if ($ruido.Count -gt 0 -and -not $script:RuidoDicho) {
+    $script:RuidoDicho = $true
+    Info ('Maven deja ficheros fuera de target (' + (($ruido | Select-Object -First 3) -join ', ') + '): los quito despues de cada ejecucion, no entran en los commits.')
+  }
   [System.IO.File]::WriteAllLines((Join-Path $Work 'build.log'), [string[]]$r.Salida)
   if ($r.Codigo -eq 0) {
     if ($ConTests) { $b.TestsEjecutados = $true; $b.TestsOk = $true }
