@@ -4985,6 +4985,11 @@ $Pruebas['m20a (a2): con Maven saliendo con 1 los hallazgos son los mismos: uno 
   Igual 'tres hallazgos de tests, uno por metodo, y el segundo "dos" (una sobrecarga) con su numero' ("falla dos (2) en $ClaseM20a|falla dos en $ClaseM20a|falla uno en $ClaseM20a") ((@($d.H | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
   $s = Diagnostica-M20a $e 'xml-sin-casos'
   Igual 'un fallo de la clase entera, sin <testcase> que lo lleve, tambien sale: numerado' ("test 1 de 3 que fallan en $ClaseM20a|test 2 de 3 que fallan en $ClaseM20a|test 3 de 3 que fallan en $ClaseM20a") ((@($s.H | ForEach-Object { $_.Detalle }) | Sort-Object) -join '|')
+  # con Maven saliendo con 0 (testFailureIgnore en el pom) el fallo de la clase entera tambien hace fallar los tests
+  Escribe $e.Repo 'pom.xml' (Pom-Surefire '<testFailureIgnore>true</testFailureIgnore>')
+  [void](GitEn $e.Repo @('commit', '-q', '-am', 'testFailureIgnore'))
+  $z = Diagnostica-M20a $e 'xml-sin-casos'
+  Comprueba 'con Maven saliendo con 0, el fallo de la clase entera hace que los tests fallen' ($z.R.Codigo -eq 0 -and $z.R.Salida -match 'compila: SI \| tests: FALLAN') (Cola $z.R.Salida)
 }
 
 $Pruebas['m20a (b): Maven sale con 0, hay un test en src/test/java y no se ha ejecutado ninguno (skipTests en el pom): hallazgo de tests en pom.xml'] = {
