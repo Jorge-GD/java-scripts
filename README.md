@@ -43,7 +43,7 @@ Compara tu repo con una **plantilla** (un repo ya migrado y aprobado) y trabaja 
 
 | Fase | Usa IA | Qué hace |
 |---|---|---|
-| Diagnóstico | no | Cuenta los hallazgos por paso: `build`, `estructura`, `hexagonal`, `ficheros`, `config`, `paridad`, `e2e`, `tests`, `calidad`. No toca código. |
+| Diagnóstico | no | Cuenta los hallazgos por paso: `build`, `estructura`, `hexagonal`, `ficheros`, `config`, `paridad`, `e2e`, `tests`, `calidad` (y `sonar`, si pasas `-Sonar`). No toca código. |
 | Worktree | no | Crea al lado una carpeta `<repo>-rescate` con una rama `rescate/...`. Tu carpeta y tu rama no se tocan. |
 | Plan | sí, solo lectura | Antes de arreglar un paso, Copilot lee **todos** los ficheros con hallazgos y la plantilla, y escribe `.rescate/plan-<paso>.md`. Tú lo lees y lo corriges. |
 | Arreglo | sí | Arregla un paso en lotes pequeños siguiendo el plan. Tras cada lote se repite el diagnóstico entero y el script decide si el lote vale. |
@@ -77,6 +77,9 @@ Mientras espera a Copilot o a Maven escribe una línea cada minuto (`... sigue: 
 
 # 3) Arreglar el siguiente paso, lote a lote, con pausa para revisar
 .\rescate.ps1 -Modo fix -Repo C:\ruta\batch-life -Plantilla C:\ruta\batch-terminado
+
+# 3 bis) Forma corta con un informe de Sonar: arregla sus incidencias, sin plantilla ni parar entre lotes
+.\rescate.ps1 -Repo C:\ruta\batch -Sonar C:\ruta\informe.xlsx
 
 # 4) Al acabar: revisar y traer los cambios a tu rama
 git -C C:\ruta\batch-life diff --stat <tu-rama>...<rama-rescate>
@@ -143,6 +146,23 @@ Comprueba, por texto, el código de `src/main`:
 El Javadoc se exige aunque la plantilla no lo tenga. Las demás reglas bajan a aviso si la plantilla también las incumple.
 Para apagar una regla, quítala de `CalidadErrores` en `.rescate/config.json`.
 
+### El paso `sonar`
+
+Opcional y para cualquier proyecto Maven de Java: no necesita `-Plantilla` ni `-Legacy`. Sin `-Sonar` el paso no existe (ni fila en la tabla ni cuenta).
+
+| Parámetro | Para qué |
+|---|---|
+| `-Sonar <informe.xlsx>` | El informe de Sonar (la hoja `Issues Breakdown`; si no está, la primera hoja que tenga `Severity`, `Message`, `Issue Type` y `Path`). Añade el paso `sonar` el último. Solo con `-Repo` y `-Sonar`, hace el arreglo entero del paso `sonar`, sin parar entre lotes (`-Modo fix`, `-Paso sonar` y `-Auto` quedan puestos). Con `-Todo`, va detrás de los demás pasos. |
+
+- Arregla solo Java y solo lo que dicen `SonarTipos` (por defecto `BUG` y `VULNERABILITY`, salvo `MINOR` e `INFO`) y `SonarSeveridades` (`BLOCKER`, `CRITICAL`, `MAJOR`). Las columnas se buscan por nombre y alias (`SonarColumnas`). Del xlsx solo se lee la hoja de incidencias.
+- Lo sagrado es no cambiar la lógica de negocio. En un lote se pueden cambiar `.java` y crear `.java` nuevos en `src/main/java` y `src/test/java`, pero una clase nueva va en el mismo paquete que una clase que el lote arregla. No valen tocar otros ficheros, borrar o renombrar nada de `src/test`, ni borrar o renombrar una clase de `src/main/java` cuyo nombre aparece en `src/main/resources`. `SonarProhibido` (en `.rescate/config.json`) añade reglas sobre el diff entero del lote, con las líneas de las clases nuevas como añadidas: silenciar a Sonar, desactivar tests, quitar `@Test`, `catch` genéricos. Cada entrada puede llevar `Si` (solo se aplica si algún mensaje del lote casa) y `Salvo` (no se aplica si algún mensaje del lote casa).
+- `SonarRecetas`: texto por regla que se añade al prompt del lote cuando algún mensaje la cumple (`Avisar` lista al final lo que cambia el resultado a propósito). `SonarNoAutomatizar`: mensajes que no se mandan al modelo.
+- El modelo puede dejar una incidencia con su motivo en `.rescate/sonar-sin-arreglar.txt`: no se reintenta ni cuenta como atasco. Un fichero atascado tampoco para la pasada.
+- Al acabar, «Faltan N de Sonar» con la lista agrupada por motivo, también en `.rescate/sonar-faltan.md`, y los mensajes sin receta ni exclusión con su cuenta.
+- `.rescate/sonar-base.json` guarda el hash del xlsx y, por incidencia, su unidad de código y si esta pasada la resolvió (regla y commit del lote). Con otro xlsx la base se rehace y la anterior queda en `.rescate/sonar-base-anterior.json`.
+
+El ciclo: pasada con `-Sonar`, push, Sonar en tu CI, xlsx nuevo, otra pasada.
+
 ### Quién ya lo hizo
 
 Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 2026):
@@ -152,7 +172,7 @@ Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 20
 | Checkstyle: [MissingJavadocType](https://checkstyle.org/checks/javadoc/missingjavadoctype.html) y [MissingJavadocMethod](https://checkstyle.org/checks/javadoc/missingjavadocmethod.html) | Exige Javadoc en lo público. | **Adaptado**: mismo criterio, escrito por texto para que el script no necesite instalar nada. |
 | OpenRewrite: [UpgradeToJava21](https://docs.openrewrite.org/recipes/java/migrate/upgradetojava21) y [SpringBatch4To5Migration](https://docs.openrewrite.org/recipes/java/spring/batch/springbatch4to5migration) | Recetas que hacen solas la parte mecánica de la migración. | Recomendado **antes** de este script: lo mecánico lo hace mejor una receta que una IA. |
 | [ArchUnit](https://www.archunit.org/userguide/html/000_Index.html) (`onionArchitecture()`) | Tests que vigilan las capas. | Recomendado **después**, para que la arquitectura no se vuelva a romper. |
-| Sonar | Análisis de calidad completo. | Este script no lo sustituye. |
+| Sonar | Análisis de calidad completo. | Este script no lo sustituye: con `-Sonar` arregla las incidencias de un informe suyo. |
 
 ### Pruebas
 
@@ -166,6 +186,7 @@ Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 20
 ### Límites
 
 - Proyectos Maven de un solo módulo.
+- Sin Sonar en local, «resuelta» quiere decir que la línea marcada ha cambiado; la prueba de verdad es volver a pasar Sonar y relanzar con el xlsx nuevo.
 - Las comprobaciones son por imports y texto: avisan de lo evidente. No sustituyen la revisión de una persona.
 - El worktree no trae los ficheros que git ignora (configuración local, `.env`). El script los lista al crearlo.
 
