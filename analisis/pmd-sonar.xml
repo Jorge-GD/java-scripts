@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  pmd-sonar.xml - Reglas de PMD que miden lo mismo que reglas de Sonar Java de tipo BUG o de
+  severidad MAJOR o CRITICAL. Es el ruleset de analisis.ps1. Nada de estilo. Solo ASCII.
+  Cada regla lleva la clave de Sonar a la que equivale.
+-->
+<ruleset name="pmd-sonar"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+  <description>Reglas de PMD equivalentes a reglas de Sonar Java (BUG, MAJOR y CRITICAL).</description>
+
+  <!-- Complejidad. Sonar avisa por ENCIMA de su umbral y PMD avisa DESDE su nivel: el nivel es el umbral mas uno. -->
+  <!-- java:S3776 Cognitive Complexity of methods should not be too high (CRITICAL, umbral 15) -->
+  <rule ref="category/java/design.xml/CognitiveComplexity">
+    <properties>
+      <property name="reportLevel" value="16"/>
+    </properties>
+  </rule>
+  <!-- java:S1541 Methods should not be too complex (MAJOR, umbral 10) -->
+  <rule ref="category/java/design.xml/CyclomaticComplexity">
+    <properties>
+      <property name="methodReportLevel" value="11"/>
+      <property name="classReportLevel" value="100000"/>
+    </properties>
+  </rule>
+
+  <!-- Codigo sin uso -->
+  <!-- java:S1068 Unused private fields should be removed (MAJOR) -->
+  <rule ref="category/java/bestpractices.xml/UnusedPrivateField"/>
+  <!-- java:S1144 Unused private methods should be removed (MAJOR) -->
+  <rule ref="category/java/bestpractices.xml/UnusedPrivateMethod"/>
+  <!-- java:S1172 Unused method parameters should be removed (MAJOR) -->
+  <rule ref="category/java/bestpractices.xml/UnusedFormalParameter"/>
+  <!-- java:S1481 Unused local variables should be removed (MINOR en Sonar; la pide el encargo) -->
+  <rule ref="category/java/bestpractices.xml/UnusedLocalVariable"/>
+
+  <!-- Fallos claros -->
+  <!-- java:S108 Nested blocks of code should not be left empty (MAJOR): el catch vacio; con un comentario dentro Sonar lo acepta -->
+  <rule ref="category/java/errorprone.xml/EmptyCatchBlock">
+    <properties>
+      <property name="allowCommentedBlocks" value="true"/>
+    </properties>
+  </rule>
+  <!-- java:S4973 Strings and Boxed types should be compared using equals() (CRITICAL) -->
+  <rule ref="category/java/errorprone.xml/UseEqualsToCompareStrings"/>
+  <!-- java:S2095 Resources should be closed (BLOCKER, BUG) -->
+  <rule ref="category/java/errorprone.xml/CloseResource"/>
+  <!-- java:S1206 equals(Object) and hashCode() should be overridden in pairs (CRITICAL, BUG) -->
+  <rule ref="category/java/errorprone.xml/OverrideBothEqualsAndHashcode"/>
+  <!-- java:S1143 Jump statements should not occur in finally blocks (CRITICAL) -->
+  <rule ref="category/java/errorprone.xml/ReturnFromFinallyBlock"/>
+  <!-- java:S1994 for loop incrementers should modify the variable being tested in the loop's stop condition (CRITICAL, BUG) -->
+  <rule ref="category/java/errorprone.xml/JumbledIncrementer"/>
+  <!-- java:S1181 Throwable and Error should not be caught (MAJOR) -->
+  <rule ref="category/java/errorprone.xml/AvoidCatchingThrowable"/>
+  <!-- java:S1147 Exit methods should not be called (CRITICAL) -->
+  <rule ref="category/java/errorprone.xml/DoNotTerminateVM"/>
+  <!-- java:S1751 Loops with at most one iteration should be refactored (MAJOR) -->
+  <rule ref="category/java/errorprone.xml/AvoidBranchingStatementAsLastInLoop"/>
+  <!-- java:S1168 Empty arrays and collections should be returned instead of null (MAJOR) -->
+  <rule ref="category/java/errorprone.xml/ReturnEmptyCollectionRatherThanNull"/>
+  <!-- java:S1148 Throwable.printStackTrace(...) should not be called (CRITICAL) -->
+  <rule ref="category/java/bestpractices.xml/AvoidPrintStackTrace"/>
+  <!-- java:S106 Standard outputs should not be used directly to log anything (MAJOR) -->
+  <rule ref="category/java/bestpractices.xml/SystemPrintln"/>
+</ruleset>
