@@ -28,6 +28,8 @@
 #   muchos-ficheros    un lote que lleva LeerFichero.java: sin CORRECCION crea 10 clases mas que abren ficheros (LeerOtro1..10:
 #                      el paso 'ficheros' pasa de 3 hallazgos a 13) y con CORRECCION no cambia nada; los demas lotes, como siempre
 #   falla-copilot      un lote sale con 1 tras escribir nueve lineas (dos de ellas vacias o en blanco) y sin cambiar nada
+#   primer-lote-falla  el primer lote de la pasada no cambia nada; los demas, como siempre
+#   falla-una-vez      el primer lote de la pasada sale con 1 sin cambiar nada (escribe SALIDA-UNICA); los demas, como siempre
 #   ve-marca           cada lote deja en .rescate/marca-vista.log lo que decia .rescate/intento-en-curso.json al llegar
 #                      ('sin marca' si no estaba)
 $todos = $args
@@ -135,6 +137,9 @@ if ($guiones -contains 've-marca') {
   if (Test-Path -LiteralPath $marca) { $texto = [System.IO.File]::ReadAllText($marca).Trim() }
   [System.IO.File]::AppendAllText((Join-Path $rescate 'marca-vista.log'), "$texto`n")
 }
+$primero = (@([System.IO.File]::ReadAllLines($log) | Where-Object { $_ -match '^\d+ \| lote \|' }).Count -eq 1)
+if ($guiones -contains 'primer-lote-falla' -and $primero) { 'no hago nada'; exit 0 }
+if ($guiones -contains 'falla-una-vez' -and $primero) { 'SALIDA-UNICA'; exit 1 }
 if ($guiones -contains 'falla-copilot') {
   'SALIDA-A primera'; 'SALIDA-B'; ''; 'SALIDA-C'; 'SALIDA-D'; '   '; 'SALIDA-E'; 'SALIDA-F'; 'SALIDA-G ultima'
   exit 1

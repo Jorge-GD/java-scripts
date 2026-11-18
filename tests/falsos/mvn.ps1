@@ -8,6 +8,14 @@
 if ($args -contains '--version') { 'Apache Maven 3.9.8 (de mentira)'; exit 0 }
 if ($env:RESCATE_MVN_ESPERA) { Start-Sleep -Seconds ([int]$env:RESCATE_MVN_ESPERA) }
 $raiz = (Get-Location).Path
+# Cada llamada deja una linea en .rescate/mvn-llamadas.log (si hay .rescate): '<llamadas de Copilot del M6 hasta ahora> | <argumentos>'.
+$resc = Join-Path $raiz '.rescate'
+if (Test-Path -LiteralPath $resc) {
+  $nc = 0
+  $lm = Join-Path $resc 'llamadas-m6.log'
+  if (Test-Path -LiteralPath $lm) { $nc = @([System.IO.File]::ReadAllLines($lm)).Count }
+  [System.IO.File]::AppendAllText((Join-Path $resc 'mvn-llamadas.log'), "$nc | $($args -join ' ')`n")
+}
 $conJacoco = (@($args | Where-Object { "$_" -match 'jacoco-maven-plugin' }).Count -gt 0)
 $conRewrite = (@($args | Where-Object { "$_" -match 'rewrite-maven-plugin' }).Count -gt 0)
 if ($conJacoco -and $env:RESCATE_MVN_ERROR) { '[ERROR] ' + $env:RESCATE_MVN_ERROR; exit 1 }

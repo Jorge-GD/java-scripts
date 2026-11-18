@@ -1993,5 +1993,63 @@ $Pruebas['m8 reflexion: sin decir nada en la config, corre tras un intento que n
   Comprueba 'la cabecera no dice que va sin reflexion' ($r.Salida -notmatch '\(sin reflexion\)') (Cola $r.Salida)
 }
 
+# ===== M9 (parte A): ARREGLOS RAPIDOS QUE AHORRAN HORAS =====
+# Los ficheros de un lote, de una linea de llamadas-m6.log.
+function Ficheros-Del-Lote([string]$Linea) { return @((([regex]::Match($Linea, '^\d+ \| lote \|[^|]*\| (.*)$')).Groups[1].Value) -split ',' | Where-Object { $_ }) }
+
+$Pruebas['m9 lotes: tras deshacer un lote, los ficheros de despues vuelven al tamano del paso'] = {
+  $e = Escenario-M6 'm9-tamano'
+  # cinco clases sueltas mas: con Suelta y PolizaService, siete ficheros con hallazgos de estructura
+  foreach ($k in 1..5) { Escribe $e.Repo "src/main/java/com/acme/life/Extra$k.java" "package com.acme.life;`n`n/** Clase $k. */`npublic class Extra$k {`n}`n" }
+  [void](GitEn $e.Repo @('add', '--', 'src'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'cinco clases mas'))
+  $r = Fix-M6 $e 'estructura' 1 @('-Lote', '5') 'primer-lote-falla'
+  Igual 'sale con 0' 0 $r.Codigo
+  $tam = @(Llamadas-M6 $e 'lote' | ForEach-Object { (Ficheros-Del-Lote $_).Count })
+  Igual 'un lote de 5 (deshecho), cinco de uno y el ultimo con los dos que quedaban' '5,1,1,1,1,1,2' ($tam -join ',')
+}
+
+$Pruebas['m9 maven: el paso siguiente reutiliza el diagnostico del ultimo lote (mismo commit, arbol limpio) y no lanza Maven al empezar'] = {
+  $e = Escenario-M6 'm9-maven' @{ Orden = @('estructura', 'ficheros') }
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1')
+  $pasos = (($r.Salida -split "`n") | Where-Object { $_ -match "=== Paso|Lote \d+ (OK|DESHECHO)|Diagnostico inicial" }) -join ' / '
+  Comprueba 'hace el lote de estructura y pasa al paso siguiente' ($r.Salida -match "Lote \d+ OK: 'estructura'" -and $r.Salida -match "=== Paso 'ficheros'") $pasos
+  Comprueba 'dice que reutiliza los hallazgos' ($r.Salida -match 'mismo commit y arbol limpio que en el ultimo diagnostico con Maven: reutilizo sus hallazgos') $pasos
+  Igual 'y solo lo dice una vez: el diagnostico inicial del primer paso si lanza Maven' 1 ([regex]::Matches($r.Salida, 'reutilizo sus hallazgos')).Count
+  $log = Get-Ruta $e.Wt '.rescate/mvn-llamadas.log'
+  if (-not (Test-Path -LiteralPath $log)) { Comprueba 'hay registro de llamadas a Maven' $false (Cola $r.Salida); return }
+  # llamadas a Maven por cada "llamadas de Copilot hasta ahora": el diagnostico inicial (0) cuesta lo que cuesta un diagnostico
+  $por = @{}
+  foreach ($l in [System.IO.File]::ReadAllLines($log)) { if ($l -match '^(\d+) \|') { $por[[int]$Matches[1]] = 1 + [int]$por[[int]$Matches[1]] } }
+  $resumen = (($por.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
+  $c0 = [int]$por[0]
+  Comprueba 'el diagnostico inicial lanza Maven' ($c0 -gt 0) $resumen
+  $de = @($por.Keys | Where-Object { $por[$_] -gt $c0 })
+  Comprueba 'entre el ultimo lote de un paso y el inicio del siguiente no sube el contador de Maven' ($de.Count -eq 0) $resumen
+}
+
+$Pruebas['m9 fallos seguidos: la cascada de un fichero cuenta como un fallo, no uno por escalon'] = {
+  $e = Escenario-M6 'm9-cascada' @{ MaxFallosSeguidos = 3 }
+  $r = Fix-M6 $e 'estructura' 1 @('-ModeloB', 'modelo-b') 'nada-sin-correccion'
+  Comprueba 'no hay paro por lotes deshechos seguidos' ($r.Salida -notmatch 'PARO') (Cola $r.Salida)
+  Comprueba 'los dos ficheros acaban atascados' (@([regex]::Matches($r.Salida, 'ATASCADO en')).Count -eq 2) (Cola $r.Salida)
+  Igual 'sale con 2, el de los atascados' 2 $r.Codigo
+}
+
+$Pruebas['m9 copilot: si sale con error sin cambiar nada se repite una vez sin gastar intento; si vuelve a salir igual, cuenta'] = {
+  $e = Escenario-M6 'm9-repite' @{ Orden = @('estructura') }
+  $r = Fix-M6 $e 'estructura' 1 @() 'falla-una-vez'
+  Igual 'sale con 0' 0 $r.Codigo
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'el primer lote hizo dos llamadas con los mismos ficheros' ($lotes.Count -ge 2 -and ((Ficheros-Del-Lote $lotes[0]) -join ',') -eq ((Ficheros-Del-Lote $lotes[1]) -join ',')) ($lotes -join ' / ')
+  Comprueba 'lo dice' ($r.Salida -match 'repito la llamada una vez \(no cuenta como intento\)') (Cola $r.Salida)
+  Comprueba 'y el lote pasa con su unico intento' ($r.Salida -match "Lote 1 OK: 'estructura'" -and $r.Salida -notmatch 'DESHECHO') (Cola $r.Salida)
+  $e2 = Escenario-M6 'm9-repite-siempre' @{ Orden = @('estructura') }
+  $r2 = Fix-M6 $e2 'estructura' 1 @() 'falla-copilot'
+  $l2 = @(Llamadas-M6 $e2 'lote')
+  Comprueba 'si vuelve a salir igual, el lote se deshace con su unico intento' ($r2.Salida -match 'Lote 1 DESHECHO: no paso las comprobaciones tras 1 intento\(s\)') (Cola $r2.Salida)
+  Comprueba 'tras repetir una vez, no mas' ($l2.Count -ge 2 -and ((Ficheros-Del-Lote $l2[0]) -join ',') -eq ((Ficheros-Del-Lote $l2[1]) -join ',') -and ((Ficheros-Del-Lote $l2[2]) -join ',') -ne ((Ficheros-Del-Lote $l2[0]) -join ',')) ($l2 -join ' / ')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
