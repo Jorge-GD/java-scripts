@@ -10,9 +10,8 @@ Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto 
 DEFINE al cargarse: las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
-PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, FicherosComparar, EstadosComparar, ListasJob, Papeles, TiposDato, JavaExe, JacocoPlugin y
-CoberturaMinima) y
-las funciones. El lanzador de programas (Get-Lanzador y lo que usa) y $Utf8 son de comun.ps1.
+PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, FicherosComparar, EstadosComparar, ListasJob, Papeles, TiposDato y JavaExe) y
+las funciones. El lanzador de programas (Get-Lanzador y lo que usa), $Utf8 y la cobertura (Get-Cobertura, JacocoPlugin y CoberturaMinima) son de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $Cfg            el de comun.ps1 (este fichero le anade sus claves al cargarse)
@@ -52,8 +51,6 @@ $Cfg += @{
   CasosMax           = 40     # casos de la prueba en pre de un job
   FicherosComparar   = 3      # ficheros del migrado que se le dan a la comparacion de una clase del original
   EstadosComparar    = @('igual', 'distinto', 'falta', 'no-lo-se')   # lo que puede decir la IA de un dato (sin-pieza lo pone el script)
-  JacocoPlugin       = 'org.jacoco:jacoco-maven-plugin:0.8.16'   # el preflight prueba en el equipo estas mismas coordenadas
-  CoberturaMinima    = 80     # por ciento de lineas cubiertas por los tests por debajo del cual la cobertura se marca como baja
   # Que datos de las fichas de clase van a cada lista de la ficha de job (cada tipo de dato, a una)
   ListasJob          = [ordered]@{
     necesita   = @('entrada-fichero', 'tabla-lee', 'parametro', 'config')
@@ -1212,42 +1209,6 @@ function Save-Comparaciones($Tareas) {
     $o = [ordered]@{ ficha = $t.ficha; clase = $t.entradas.clase; ficheroOriginal = $t.entradas.fichero; migrado = @($t.entradas.migrado); momento = $t.entradas.momento; commit = $t.entradas.commit; datos = @($t.resultado.comparacion) }
     Write-Json (Join-Path (Join-Path $Datos 'comparacion') ($t.ficha + '.json')) $o
   }
-}
-
-# ============================== COBERTURA ==============================
-# La cobertura de lineas de los tests del migrado ($Dir, el worktree), con JaCoCo por coordenadas y sin tocar el pom: un solo Maven
-# (prepare-agent, test y report) con su salida en $Registro. Lee target\site\jacoco\jacoco.csv por el nombre de sus columnas y suma
-# todas las filas. Sin medida (medida false y porcentaje nulo) el motivo dice por que: nunca sale un 0 % que no se ha medido.
-# Con $Compila en $false (el diagnostico dice que no compila) no lanza Maven.
-function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
-  $o = [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = $Cfg.CoberturaMinima; motivo = '' }
-  if (-not $Compila) { $o.motivo = 'el migrado no compila'; return $o }
-  $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
-  if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
-  $j = $Cfg.JacocoPlugin
-  $r = Invoke-MavenTope $Dir @('-B', "${j}:prepare-agent", 'test', "${j}:report") 'Maven (cobertura)' $Registro
-  if ($r.Tope) { $o.motivo = $r.Tope; return $o }
-  if ($r.Codigo -ne 0) {
-    $e = @($r.Salida | Where-Object { "$_" -match '^\[ERROR\]\s*\S' } | Select-Object -First 1)
-    $o.motivo = "Maven ha salido con error (codigo $($r.Codigo))"
-    if ($e.Count -gt 0) { $o.motivo = 'Maven ha salido con error: ' + ("$($e[0])" -replace '^\[ERROR\]\s*', '').Trim() }
-    return $o
-  }
-  if (-not (Test-Path -LiteralPath $csv)) { $o.motivo = 'Maven no ha dejado target/site/jacoco/jacoco.csv: hay tests?'; return $o }
-  $lineas = @([System.IO.File]::ReadAllLines($csv, $Utf8) | Where-Object { $_.Trim() })
-  $cab = @()
-  if ($lineas.Count -gt 0) { $cab = @($lineas[0] -split ',' | ForEach-Object { $_.Trim().Trim('"') }) }
-  if (($cab -cnotcontains 'LINE_MISSED') -or ($cab -cnotcontains 'LINE_COVERED')) { $o.motivo = 'el CSV de JaCoCo no tiene las columnas LINE_MISSED y LINE_COVERED'; return $o }
-  $faltan = [long]0
-  $cubiertas = [long]0
-  try { foreach ($f in @($lineas | ConvertFrom-Csv)) { $faltan += [long]$f.LINE_MISSED; $cubiertas += [long]$f.LINE_COVERED } }
-  catch { $o.motivo = 'el CSV de JaCoCo no se puede leer: ' + $_.Exception.Message; return $o }
-  if ($faltan + $cubiertas -eq 0) { $o.motivo = 'ninguna linea medible'; return $o }
-  $o.medida = $true
-  $o.cubiertas = $cubiertas
-  $o.total = $faltan + $cubiertas
-  $o.porcentaje = [math]::Round(100.0 * $cubiertas / $o.total, 1, [System.MidpointRounding]::AwayFromZero)
-  return $o
 }
 
 # ================================ APTITUD ================================
