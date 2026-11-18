@@ -71,7 +71,7 @@ USO
   # duda es de codigo, un intento mas con el consejo; si no pasa, o la tiene que
   # decidir una persona, se apunta en .rescate/atascados.md (y .json) y sigue.
   # La pasada siguiente no vuelve a intentar un atascado si su fichero no ha
-  # cambiado (-Reintentar lo fuerza).
+  # cambiado y no hay commits tuyos desde entonces (-Reintentar lo fuerza).
   # Tras cada intento que no pasa, el modelo de las dudas reflexiona (por que no
   # paso, que hacer) y el siguiente intento lo lleva. Con -Auto, las dudas del
   # plan tambien las resuelve el (las de codigo van al plan, en ## Decisiones).
@@ -1025,6 +1025,9 @@ function New-Prompt([string]$PasoId, $LoteH, [string]$Correccion, $Consejo = $nu
   return ($l -join "`n")
 }
 
+# Los titulos markdown (#...) de un texto, cambiados por $Como ('$1' es el titulo sin almohadillas).
+function Convert-Titulos([string]$Texto, [string]$Como) { return ($Texto.Trim() -replace '(?m)^[ \t]*#+[ \t]*(.*?)[ \t\r]*$', $Como) }
+
 # Las reflexiones de los intentos que no pasaron, para un prompt: una seccion (dentro de la CORRECCION si $Dentro). Los
 # titulos de cada reflexion pasan a lineas normales, para no romper las secciones del prompt.
 function Get-TextoReflexiones($Reflexiones, [bool]$Dentro) {
@@ -1032,7 +1035,7 @@ function Get-TextoReflexiones($Reflexiones, [bool]$Dentro) {
   $h = '##'
   if ($Dentro) { $h = '###' }
   $l = @('', "$h Lo que ya se intento y por que fallo", 'Un revisor ha leido los intentos de estos ficheros que no pasaron. No repitas lo que dice que no hay que hacer.')
-  foreach ($r in $Reflexiones) { $l += @('', "$h# $($r.Titulo)", ($r.Texto.Trim() -replace '(?m)^[ \t]*#+[ \t]*(.*?)[ \t\r]*$', '$1:')) }
+  foreach ($r in $Reflexiones) { $l += @('', "$h# $($r.Titulo)", (Convert-Titulos $r.Texto '$1:')) }
   return $l
 }
 
@@ -1253,7 +1256,7 @@ function Add-Decisiones([string[]]$Lineas) { [System.IO.File]::AppendAllText((Jo
 function Invoke-Fuerte([string]$Log, [string]$Salida, [string]$Que) {
   $lista = @($script:EsfDudas) + @(Get-EsfuerzosMenores $script:EsfDudas)
   for ($k = 0; $k -lt $lista.Count; $k++) {
-    if ($k -gt 0) { Aviso ("  Copilot no ha aceptado el esfuerzo '$($lista[$k - 1])' del modelo de las dudas (" + (@($r.Salida) | Select-Object -Last 1) + "): pruebo '$($lista[$k])'.") }
+    if ($k -gt 0) { Aviso ("  Copilot ha fallado con el esfuerzo '$($lista[$k - 1])' del modelo de las dudas (puede que no lo admita; " + (@($r.Salida) | Select-Object -Last 1) + "): pruebo '$($lista[$k])'.") }
     $script:EsfDudas = $lista[$k]
     $r = Invoke-SoloLectura $Log $script:ModDudas $script:EsfDudas $Que
     if ($r.Codigo -eq 0 -or (Test-Path -LiteralPath $Salida)) { break }
@@ -1379,7 +1382,7 @@ function Invoke-ConsejoAtascado([string]$PasoId, [string]$Fichero, $Hall, [strin
 
 # Reflexion tras el intento $I del lote $N, que no ha pasado ($Correccion: los NO PASA con su detalle). Recibe el objetivo
 # del paso, los hallazgos del lote, el plan, el diff del intento (contra $Check, hasta LineasDiff lineas) y los ficheros
-# nuevos. Solo se comprueba la forma: las cuatro secciones con texto. Devuelve Id, Titulo, Texto y Ficheros, o nada.
+# nuevos. Solo se comprueba la forma: las cuatro secciones con texto. Devuelve Titulo, Texto y Ficheros, o nada.
 function Invoke-Reflexion([string]$PasoId, [int]$N, [int]$I, $LoteH, [string[]]$Sel, [string]$Check, [string]$Correccion) {
   $id = "$PasoId-$N-$I"
   $ruta = Join-Path $Work "reflexion-$id.md"
@@ -1406,8 +1409,8 @@ function Invoke-Reflexion([string]$PasoId, [int]$N, [int]$I, $LoteH, [string[]]$
   $texto = [System.IO.File]::ReadAllText($ruta)
   $falta = @('Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer' | Where-Object { @(Get-SeccionPlan $texto $_ | Where-Object { $_.Trim() }).Count -eq 0 })
   if ($falta.Count -gt 0) { Aviso ("  A la reflexion le falta '" + ($falta -join "', '") + "': sigo sin ella."); return }
-  Add-Decisiones (@("## Reflexion: paso '$PasoId', lote $N, intento $I ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))", ('Ficheros: ' + ($Sel -join ', ')), "Esfuerzo: $($script:EsfDudas) | fichero: .rescate/reflexion-$id.md", '') + ($texto.Trim() -replace '(?m)^[ \t]*#+[ \t]*(.*?)[ \t\r]*$', '### $1'))
-  return [pscustomobject]@{ Id = $id; Titulo = "Lote $N, intento $I"; Texto = $texto; Ficheros = $Sel }
+  Add-Decisiones (@("## Reflexion: paso '$PasoId', lote $N, intento $I ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))", ('Ficheros: ' + ($Sel -join ', ')), "Esfuerzo: $($script:EsfDudas) | fichero: .rescate/reflexion-$id.md", '') + (Convert-Titulos $texto '### $1'))
+  return [pscustomobject]@{ Titulo = "Lote $N, intento $I"; Texto = $texto; Ficheros = $Sel }
 }
 
 # ================================= PRE =================================
@@ -1527,8 +1530,9 @@ function Read-Atascados {
   try { $todos = @([System.IO.File]::ReadAllText($p) | ConvertFrom-Json | ForEach-Object { $_ }) }
   catch { Aviso 'atascados.json no es JSON valido: lo ignoro.'; return }
   foreach ($a in $todos) {
-    if ($Reintentar -or -not $a.paso -or -not $a.fichero -or (Get-HuellaFichero $a.fichero) -ne "$($a.huella)" -or (Test-CommitsAjenos "$($a.commit)")) { continue }
-    Add-Atascado $a.paso $a.fichero "$($a.motivo)" $a.consejo
+    $fi = "$($a.fichero)"   # vacio si el hallazgo no es de un fichero (no hay adaptador SFTP...)
+    if ($Reintentar -or -not $a.paso -or (Get-HuellaFichero $fi) -ne "$($a.huella)" -or (Test-CommitsAjenos "$($a.commit)")) { continue }
+    Add-Atascado $a.paso $fi "$($a.motivo)" $a.consejo
   }
   Save-Atascados
   if ($script:AtascadosInfo.Count -gt 0) { Info "$($script:AtascadosInfo.Count) ficheros atascados de antes: no los reintento (usa -Reintentar)" }
@@ -1591,7 +1595,10 @@ function Invoke-Fix {
   $paso = $Paso
   if (-not $paso) { $paso = Get-SiguientePaso $hall }
   if (-not $paso) { $script:Siguiente = ''; Show-SinPasos 'Revisa los avisos del informe y pasa tu pipeline.'; return }
-  if ($paso -ne 'build' -and -not $script:Build.Compila) { Fallo "El proyecto no compila: primero hay que hacer -Paso build."; exit 2 }
+  if ($paso -ne 'build' -and -not $script:Build.Compila) {
+    if ($script:Atascados.ContainsKey('build')) { Fallo "El proyecto no compila y 'build' se ha quedado atascado: no sigo con '$paso'."; $script:Parar = $true; return }
+    Fallo "El proyecto no compila: primero hay que hacer -Paso build."; exit 2
+  }
   foreach ($c in $Cfg.Orden) {
     if ($c -eq $paso) { break }
     $q = Get-Cuenta $hall $c
@@ -1618,7 +1625,7 @@ function Invoke-Fix {
   $planB = @{}
   $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
   $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
-  $reflexiones = @()   # las reflexiones del paso (Id, Titulo, Texto, Ficheros)
+  $reflexiones = @()   # las reflexiones del paso (Titulo, Texto, Ficheros)
   for ($n = 1; $n -le $MaxLotes; $n++) {
     $pend = @($hall | Where-Object { $_.Cat -eq $paso -and $_.Sev -eq 'error' })
     if ($pend.Count -eq 0) { break }
@@ -1776,7 +1783,10 @@ function Invoke-Fix {
     $d = Get-Cuenta $hall2 $paso
     $r = Invoke-Git $RepoRoot (@('commit', '-q', '-m', "rescate($paso): lote $n, hallazgos $($antes[$paso]) a $d") + $Cfg.CommitArgs)
     if ($r.Codigo -ne 0) { Fallo ('git commit ha fallado; los cambios siguen en el arbol de trabajo: ' + ($r.Salida -join ' ')); exit 3 }
-    if ($conIntento) { Write-Consejo $consejoDe[$sel[0]] "atascado en '$paso': $($sel[0])" @('si, commit ' + ((Invoke-Git $RepoRoot @('log', '-1', '--format=%h')).Salida -join '').Trim()) }
+    if ($conIntento) {
+      Write-Consejo $consejoDe[$sel[0]] "atascado en '$paso': $($sel[0])" @('si, commit ' + ((Invoke-Git $RepoRoot @('log', '-1', '--format=%h')).Salida -join '').Trim())
+      $consejoDe.Remove($sel[0])   # si al fichero le quedan hallazgos, su lote siguiente va como uno normal
+    }
     $hall = $hall2
     $script:Fallos = 0
     Write-Informe $hall
@@ -1918,7 +1928,7 @@ switch ($Modo) {
     if ($script:Atascados.Count -gt 0) {
       Fallo ''
       Fallo 'Se ha quedado sin arreglar (lo unico que te toca mirar):'
-      foreach ($k in $Cfg.Orden) { if ($script:Atascados.ContainsKey($k)) { $script:Atascados[$k] | ForEach-Object { Fallo "  [$k] $_" } } }
+      foreach ($k in $Cfg.Orden) { if ($script:Atascados.ContainsKey($k)) { $script:Atascados[$k] | ForEach-Object { if ($_) { Fallo "  [$k] $_" } else { Fallo "  [$k] (repo)" } } } }
       Info ('Detalle: ' + (Join-Path $Work 'atascados.md'))
     }
     $decidir = @($script:Decidir) + @($script:AtascadosInfo.Values | Where-Object { $_.consejo -and $_.consejo.tipo -eq 'persona' } | ForEach-Object {
@@ -1930,7 +1940,7 @@ switch ($Modo) {
       Info ('Las 3 opciones de cada duda, con su porque: ' + (Join-Path $Work 'decisiones.md'))
     }
     if ($script:Atascados.Count -gt 0) {
-      Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano (la pasada siguiente lo intenta si el fichero cambia), o volver a lanzar con -Reintentar.'
+      Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano (la pasada siguiente lo intenta si el fichero cambia o si haces un commit), o volver a lanzar con -Reintentar.'
       exit 2
     }
   }

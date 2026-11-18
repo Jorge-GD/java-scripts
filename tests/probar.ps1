@@ -1371,15 +1371,45 @@ $Pruebas['m6 atascados: se recuerdan entre pasadas; -Reintentar o un cambio del 
   $r4 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
   $n4 = (Lotes-Suelta $e).Count
   Comprueba 'si el fichero ha cambiado, se intenta' ($n4 -gt $n3) (Cola $r4.Salida)
-  # la pieza que le faltaba la arregla una persona en otro fichero, con un commit suyo: el atascado no cambia, pero se intenta
   $r5 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
   Igual 'sin nada nuevo desde que se atasco, no se intenta' $n4 (Lotes-Suelta $e).Count
+  # un lote del script (su commit no es ajeno) que cambia el atascado: se intenta por la huella
+  Escribe $e.Wt $SueltaM6 ((Lee $e.Wt $SueltaM6) + "// tocado por otro lote`n")
+  [void](GitEn $e.Wt @('add', '--', $SueltaM6))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'rescate(estructura): lote 9, hallazgos 1 a 1'))
+  $r5b = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
+  $n5 = (Lotes-Suelta $e).Count
+  Comprueba 'si un lote del script cambia el fichero, se intenta' ($n5 -gt $n4) (Cola $r5b.Salida)
+  # la pieza que le faltaba la arregla una persona en otro fichero, con un commit suyo: el atascado no cambia, pero se intenta
   Escribe $e.Wt 'docs/pieza-comun.md' "La pieza comun, hecha a mano.`n"
   [void](GitEn $e.Wt @('add', '--', 'docs/pieza-comun.md'))
   [void](GitEn $e.Wt @('commit', '-q', '-m', 'pieza comun hecha a mano'))
   $r6 = Fix-M6 $e 'estructura' 1 @() 'atasca;consejo-nada'
-  Comprueba 'con un commit que no es del script desde que se atasco, se intenta' ((Lotes-Suelta $e).Count -gt $n4) (Cola $r6.Salida)
+  Comprueba 'con un commit que no es del script desde que se atasco, se intenta' ((Lotes-Suelta $e).Count -gt $n5) (Cola $r6.Salida)
   Comprueba 'y no dice que no lo reintenta' ($r6.Salida -notmatch 'no los reintento') (Cola $r6.Salida)
+}
+
+$Pruebas['m6 atascados: un hallazgo sin fichero (no hay adaptador SFTP) tambien se recuerda'] = {
+  $e = Escenario-M6 'm6-atascado-repo' @{ Orden = @('ficheros') }
+  $r = Fix-M6 $e 'ficheros' 1 @() 'nada-sin-correccion;consejo-nada'
+  Igual 'la primera pasada sale con 2' 2 $r.Codigo
+  Comprueba 'el del adaptador SFTP queda atascado y sale como (repo)' ($r.Salida -match '\[ficheros\] \(repo\)') (Cola $r.Salida)
+  $n1 = (Llamadas-M6 $e 'lote').Count
+  $r2 = Fix-M6 $e 'ficheros' 1 @() 'nada-sin-correccion;consejo-nada'
+  Comprueba 'la segunda pasada los recuerda todos' ($r2.Salida -match '3 ficheros atascados de antes: no los reintento') (Cola $r2.Salida)
+  Igual 'y no llama a Copilot para ninguno' $n1 (Llamadas-M6 $e 'lote').Count
+}
+
+$Pruebas['m6 atascados: si build se atasca y el proyecto no compila, -Todo para con la lista y Te toca decidir'] = {
+  $e = Escenario-M6 'm6-build' @{ Orden = @('build', 'estructura') }
+  Escribe $e.Repo $SueltaM6 ((Lee $e.Repo $SueltaM6) + "// NO_COMPILA`n")
+  [void](GitEn $e.Repo @('add', '--', $SueltaM6))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'no compila'))
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Todo', '-SinPlan', '-Si', '-MaxIntentos', '1') 'atasca;consejo-persona'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'dice que no compila' ($r.Salida -match 'no compila') (Cola $r.Salida)
+  Comprueba 'lista el atascado de build' ($r.Salida -match ('\[build\] ' + [regex]::Escape($SueltaM6))) (Cola $r.Salida)
+  Comprueba 'y la duda de persona en Te toca decidir' ((Te-Toca $r.Salida) -match 'OPCION-C-MARCA') (Cola $r.Salida)
 }
 
 $Pruebas['m6 ruido: lo que deja Maven fuera de target no entra en los commits; lo que crea la IA, si'] = {
