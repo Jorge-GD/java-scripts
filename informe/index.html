@@ -7,7 +7,7 @@
     <div><dt>Referencia</dt><dd>{{PLANTILLA}}</dd></div>
     <div><dt>Modelo</dt><dd>{{MODELO}}</dd></div>
     <div><dt>Empezó</dt><dd>{{EMPEZO}}</dd></div>
-    <div><dt>Lleva</dt><dd>{{LLEVA}}</dd></div>
+    <div><dt>{{{DURACION_ROTULO}}}</dt><dd>{{DURACION}}</dd></div>
   </dl>
   <p class="meta">{{{ETIQUETA}}}</p>
   <div class="cifras">
@@ -45,8 +45,11 @@
 </section>
 <!--TROZO titulo-index-->Informe de migración {{BATCH}}<!--FIN-->
 <!--TROZO modelo-defecto-->el que Copilot tenga por defecto<!--FIN-->
+<!--TROZO rotulo-lleva-->Lleva<!--FIN-->
+<!--TROZO rotulo-duro-->Duró<!--FIN-->
 <!--TROZO estado-hecha--><div class="estado estado-ok"><p>La lectura del original ha terminado.</p></div><!--FIN-->
-<!--TROZO estado-corregida--><div class="estado estado-ok"><p>La lectura del original y la corrección han terminado.</p></div><!--FIN-->
+<!--TROZO estado-terminada--><div class="estado estado-ok"><p>La pasada ha terminado: lectura, corrección y pruebas.</p></div><!--FIN-->
+<!--TROZO estado-terminada-sin--><div class="estado estado-ok"><p>La pasada ha terminado, sin corregir.</p></div><!--FIN-->
 <!--TROZO estado-curso--><div class="estado"><p>La pasada no ha terminado: va por la fase {{FASE}}.</p></div><!--FIN-->
 <!--TROZO estado-parada--><div class="estado estado-parada"><p>La pasada se ha parado en la fase {{FASE}}: {{MOTIVO}}.</p></div><!--FIN-->
 <!--TROZO parada--><div class="parada-info">
@@ -56,7 +59,7 @@
   <p>Pega este texto en Copilot para que te diga qué hacer. Después vuelve a lanzar el mismo comando y sigue donde se quedó.</p>
   <pre class="cmd">{{AYUDA}}</pre>
 </div><!--FIN-->
-<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ninguna diferencia con el original, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
+<!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ninguna diferencia con el original, ningún caso distinto al ejecutar los dos, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
 <!--TROZO toca-grupo--><div class="grupo">
   <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
   <p>{{TEXTO}}</p>
@@ -76,6 +79,13 @@
 <!--TROZO toca-tecnicos-titulo-->Datos con nombres de clase ({{N}})<!--FIN-->
 <!--TROZO toca-tecnicos-texto-->Estos datos no salen en la página para negocio porque nombran clases del original. Están en datos/jobs/<job>.json con tecnico: true. Las clases que no caben en la redacción de un job están en su campo fuera.<!--FIN-->
 <!--TROZO toca-fuera-->    <li>{{{CABECERA}}}<span class="motivo">No caben en la redacción estas clases: {{CLASES}}.</span></li><!--FIN-->
+<!--TROZO toca-distintos-titulo-->Distintos al ejecutar los dos ({{N}})<!--FIN-->
+<!--TROZO toca-distintos-texto-->Casos en los que el migrado deja algo distinto que el original con las mismas entradas. Es lo más fiable del informe: míralos primero. El detalle está en la página Original frente a migrado.<!--FIN-->
+<!--TROZO toca-distinto-->    <li>{{{CABECERA}}}<span class="motivo">{{TITULO}}. {{FICHERO}}: original «{{ORIGINAL}}», migrado «{{MIGRADO}}»</span></li><!--FIN-->
+<!--TROZO toca-localfallo-titulo-->Prueba en local sin hacer ({{N}})<!--FIN-->
+<!--TROZO toca-localfallo-texto-->No se ha podido ejecutar el original frente al migrado. Sin esa prueba, lo único que compara el informe es la lectura de la IA. El detalle está en la página Original frente a migrado.<!--FIN-->
+<!--TROZO toca-localfallo-->    <li><span class="motivo">prueba-local.ps1 ha salido con código {{CODIGO}}: {{DETALLE}}</span></li><!--FIN-->
+<!--TROZO cab-caso--><code>{{JOB}}</code> <code>{{CASO}}</code> <!--FIN-->
 <!--TROZO toca-diferencias-titulo-->Diferencias con el original ({{N}})<!--FIN-->
 <!--TROZO toca-diferencias-texto-->Datos del original que, según la IA, el migrado hace distinto o no hace. Están uno a uno en la página Original frente a migrado, con las citas de los dos lados.<!--FIN-->
 <!--TROZO toca-arreglos-titulo-->Arreglos atascados ({{N}})<!--FIN-->
@@ -97,14 +107,19 @@
 <!--TROZO fase-pruebas-pre-->Guion de prueba en pre<!--FIN-->
 <!--TROZO fase-comparar-->Comparación con el original<!--FIN-->
 <!--TROZO fase-correccion-->Corrección del migrado<!--FIN-->
+<!--TROZO fase-prueba-local-->Prueba en local<!--FIN-->
 <!--TROZO estado-fase-hecha-->Hecha<!--FIN-->
 <!--TROZO estado-fase-curso-->Por aquí va<!--FIN-->
 <!--TROZO estado-fase-espera-->Sin empezar<!--FIN-->
+<!--TROZO estado-fase-saltada-->Saltada<!--FIN-->
 <!--TROZO cuenta-diagnostico-->errores: {{ERRORES}}, avisos: {{AVISOS}}<!--FIN-->
 <!--TROZO cuenta-cobertura-->, cobertura: {{{VALOR}}}<!--FIN-->
 <!--TROZO cuenta-correccion-->commits: {{COMMITS}}, atascados: {{ATASCADOS}}<!--FIN-->
 <!--TROZO cuenta-tareas-->hechas: {{HECHAS}}, atascadas: {{ATASCADAS}}, pendientes: {{PENDIENTES}}<!--FIN-->
 <!--TROZO cuenta-jobs-->jobs: {{JOBS}}, clases sin job: {{SINJOB}}<!--FIN-->
+<!--TROZO cuenta-local-->{{CASOS}} casos: {{IGUALES}} iguales, {{DISTINTOS}} distintos, {{SIN}} sin probar<!--FIN-->
+<!--TROZO cuenta-local-fallo-->no se ha podido: mira la página 3<!--FIN-->
+<!--TROZO cuenta-local-saltada-->-SinPruebaLocal<!--FIN-->
 <!--TROZO cuenta-ninguna-->sin tareas<!--FIN-->
 <!--TROZO duracion-->{{H}} h {{M}} min<!--FIN-->
 <!--TROZO duracion-corta-->{{M}} min<!--FIN-->
@@ -114,7 +129,7 @@
 <!--TROZO f-index-->Esta portada.<!--FIN-->
 <!--TROZO f-original-->Qué hace el batch original, para negocio.<!--FIN-->
 <!--TROZO f-problemas-->Los problemas del migrado, por área y con su gravedad.<!--FIN-->
-<!--TROZO f-comparar-->El original frente al migrado, dato a dato y job a job, tal como llegó el migrado.<!--FIN-->
+<!--TROZO f-comparar-->El original frente al migrado: arriba, la prueba ejecutando los dos con las mismas entradas; debajo, la lectura de la IA, dato a dato y job a job.<!--FIN-->
 <!--TROZO f-correcciones-->Qué se ha corregido, qué queda y por qué, área por área.<!--FIN-->
 <!--TROZO f-hallazgos-despues-->Los problemas que quedan tras corregir, con la misma forma que los de antes.<!--FIN-->
 <!--TROZO f-diagnostico-despues-->El informe del diagnóstico del migrado tras corregir: estado del build y cuenta por área.<!--FIN-->
@@ -124,6 +139,9 @@
 <!--TROZO f-cobertura-despues-log-->Lo que dijo Maven al medir la cobertura tras corregir.<!--FIN-->
 <!--TROZO f-correcciones-json-->Los commits de arreglo, lo que quedó atascado, los hallazgos resueltos y las variables nuevas.<!--FIN-->
 <!--TROZO f-correccion-log-->Lo que dijo el motor de arreglos durante la corrección. Para mirar si algo falla.<!--FIN-->
+<!--TROZO f-prueba-local-json-->El resultado de ejecutar el original y el migrado con las mismas entradas: cada caso, si sale igual o distinto y las líneas que cambian.<!--FIN-->
+<!--TROZO f-prueba-local-->Los arneses, las entradas y las salidas de la prueba en local, para mirar a mano un caso.<!--FIN-->
+<!--TROZO f-prueba-local-log-->Lo que dijo la prueba en local mientras corría. Para mirar si algo falla.<!--FIN-->
 <!--TROZO f-datos-->Los datos de los que salen estas páginas.<!--FIN-->
 <!--TROZO f-estado-->En qué fase va la pasada, el modelo y, si se paró, por qué.<!--FIN-->
 <!--TROZO f-hallazgos-->Cada problema que encontró el diagnóstico del migrado: área, gravedad, fichero y línea.<!--FIN-->

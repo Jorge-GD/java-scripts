@@ -1042,12 +1042,77 @@ function Get-PalabrasClase([string]$Nombre) {
   return @([regex]::Matches($Nombre, '\p{Lu}\p{Ll}{3,}') | ForEach-Object { $_.Value } | Select-Object -Unique)
 }
 
+# Que fue de cada .java que la correccion renombro o borro, entre <Base> y HEAD de $Dir: la ruta de partida (relativa, con /) -> las
+# rutas de ahora. Un renombrado (git diff -M) va a su nueva ruta. De un borrado se sigue lo que tenia: va a los ficheros donde aparecen
+# anadidas 2 o mas de sus lineas (de 10 caracteres o mas, sin repetir), las que mas comparten primero y luego por ruta; sin ninguno,
+# la lista sale vacia. Con orden ordinal. Sin cambios o si git falla, el mapa sale vacio: nunca para la pasada.
+function Get-MapaMovidos([string]$Dir, [string]$Base) {
+  $mapa = New-Object 'System.Collections.Generic.SortedDictionary[string,string[]]' ([System.StringComparer]::Ordinal)
+  $rango = "$Base...HEAD"
+  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'diff', '--name-status', '-M', '--no-color', '--no-ext-diff', $rango, '--', '*.java')
+  if ($r.Codigo -ne 0) { return , $mapa }
+  $borrados = @()
+  foreach ($l in $r.Salida) {
+    $c = $l.Split("`t")
+    if ($c[0] -clike 'R*' -and $c.Count -ge 3) { $mapa[$c[1]] = @($c[2]) }
+    elseif ($c[0] -ceq 'D' -and $c.Count -ge 2) { $borrados += $c[1] }
+  }
+  if ($borrados.Count -eq 0) { return , $mapa }
+  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', $rango, '--', '*.java')
+  if ($r.Codigo -ne 0) { return , $mapa }
+  # las lineas quitadas de cada fichero de partida y las puestas en cada fichero de ahora; despues del primer @@ de un fichero
+  # todo lo que empieza por - o + es una linea (una quitada que empiece por -- no es una cabecera)
+  $quitadas = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]'
+  $puestas = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]'
+  $a = ''
+  $b = ''
+  $dentro = $false
+  foreach ($l in $r.Salida) {
+    if ($l.StartsWith('diff --git ')) { $a = ''; $b = ''; $dentro = $false }
+    elseif (-not $dentro) {
+      if ($l.StartsWith('--- a/')) { $a = $l.Substring(6).TrimEnd("`t") }
+      elseif ($l.StartsWith('+++ b/')) { $b = $l.Substring(6).TrimEnd("`t") }
+      elseif ($l.StartsWith('@@')) { $dentro = $true }
+    }
+    elseif (($l.StartsWith('-') -and $a) -or ($l.StartsWith('+') -and $b)) {
+      $t = $l.Substring(1).Trim()
+      if ($t.Length -lt 10) { continue }
+      $lado = $puestas
+      $ruta = $b
+      if ($l.StartsWith('-')) { $lado = $quitadas; $ruta = $a }
+      if (-not $lado.ContainsKey($ruta)) { $lado[$ruta] = New-Object 'System.Collections.Generic.HashSet[string]' }
+      [void]$lado[$ruta].Add($t)
+    }
+  }
+  foreach ($d in $borrados) {
+    $claves = @()
+    if ($quitadas.ContainsKey($d)) {
+      foreach ($p in $puestas.Keys) {
+        $n = 0
+        foreach ($t in $quitadas[$d]) { if ($puestas[$p].Contains($t)) { $n++ } }
+        if ($n -ge 2) { $claves += ((999999 - $n).ToString('D6') + $p) }
+      }
+    }
+    $claves = [string[]]$claves
+    [System.Array]::Sort($claves, [System.StringComparer]::Ordinal)
+    $mapa[$d] = @($claves | ForEach-Object { $_.Substring(6) })
+  }
+  return , $mapa
+}
+
 # Los ficheros del migrado (de $Java, los .java del worktree) que lee la comparacion de una clase del original: los que se
-# llaman como ella; si no hay ninguno, los que comparten alguna palabra de su nombre, los que mas primero y luego por ruta.
+# llaman como ella; si no hay ninguno, los de ahora a los que fue el fichero que se llamaba como ella (el mapa de lo que movio la
+# correccion, en su orden); si sigue sin haber, los que comparten alguna palabra de su nombre, los que mas primero y luego por ruta.
 # FicherosComparar como mucho. Sin ninguno, la clase no se compara con IA.
-function Select-FicherosMigrado([string]$Clase, $Java) {
+function Select-FicherosMigrado([string]$Clase, $Java, $Mapa) {
+  $rutas = @($Java | ForEach-Object { Get-Rel $RepoRoot $_.FullName })
   $mismos = @($Java | Where-Object { $_.BaseName -ceq $Clase } | ForEach-Object { Get-Rel $RepoRoot $_.FullName } | Sort-Object)
   if ($mismos.Count -gt 0) { return @($mismos | Select-Object -First ([int]$Cfg.FicherosComparar)) }
+  $movidos = @()
+  foreach ($vieja in $Mapa.Keys) {
+    if ([System.IO.Path]::GetFileNameWithoutExtension($vieja) -ceq $Clase) { $movidos += @($Mapa[$vieja] | Where-Object { $rutas -ccontains $_ }) }
+  }
+  if ($movidos.Count -gt 0) { return @($movidos | Select-Object -Unique | Select-Object -First ([int]$Cfg.FicherosComparar)) }
   $palabras = @(Get-PalabrasClase $Clase)
   $candidatos = @()
   foreach ($f in $Java) {
@@ -1057,11 +1122,16 @@ function Select-FicherosMigrado([string]$Clase, $Java) {
   return @($candidatos | Sort-Object @{ Expression = 'N'; Descending = $true }, Rel | Select-Object -First ([int]$Cfg.FicherosComparar) | ForEach-Object { $_.Rel })
 }
 
-# Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea. Sin ninguno
-# no hay llamada: la tarea nace hecha, con todos sus datos 'sin-pieza'. La huella es la de los datos de la ficha, no la de las rutas:
-# una tarea hecha sigue valiendo aunque la correccion mueva ficheros del worktree.
-function Get-TareasComparar([bool]$ConservarAtascadas) {
+# Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea, con el
+# commit del worktree con el que se eligieron y el momento: despues-de-corregir si hay algun commit rescate( entre <Base> y HEAD (lo
+# dice git, no el orden de las fases), antes-de-corregir si no. Sin ficheros no hay llamada: la tarea nace hecha, con todos sus datos
+# 'sin-pieza'. La huella lleva el HEAD ademas de los datos de la ficha: con un commit nuevo la comparacion se rehace y con el mismo no.
+function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
   $java = @(Get-JavaOriginal $RepoRoot)
+  $mapa = Get-MapaMovidos $RepoRoot $Base
+  $head = Get-Head $RepoRoot
+  $momento = 'antes-de-corregir'
+  if (@((Invoke-Git $RepoRoot @('log', '--format=%s', "$Base..HEAD")).Salida | Where-Object { $_ -match '^rescate\(' }).Count -gt 0) { $momento = 'despues-de-corregir' }
   $tareas = @()
   foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $Datos 'fichas') -File -Filter 'clase-*.json' | Sort-Object Name)) {
     $x = Read-Json $f.FullName
@@ -1073,8 +1143,11 @@ function Get-TareasComparar([bool]$ConservarAtascadas) {
       $lineas += "   Original: $($x.fichero):$($lista[$k].linea) | cita: $($lista[$k].cita)"
     }
     $texto = $lineas -join "`n"
-    $migrado = @(Select-FicherosMigrado $x.clase $java)
-    $entradas = [pscustomobject]@{ clase = $x.clase; fichero = $x.fichero; migrado = $migrado; ndatos = $lista.Count; datos = $texto; huella = (Get-Hash8 $texto) }
+    $migrado = @(Select-FicherosMigrado $x.clase $java $mapa)
+    $entradas = [pscustomobject]@{
+      clase = $x.clase; fichero = $x.fichero; migrado = $migrado; ndatos = $lista.Count; datos = $texto
+      huella = (Get-Hash8 ($texto + '|' + $head)); commit = $head.Substring(0, 7); momento = $momento
+    }
     $t = New-TareaTipo 'comparar-pieza' ('comparar-' + $x.id) $x.id ('datos/comparacion/' + $x.id + '.json') $entradas
     if ($migrado.Count -eq 0) {
       $t.estado = 'hecha'
@@ -1129,10 +1202,11 @@ function Test-Comparar($T, [string]$Dir) {
   return (New-Resultado $true '' ([ordered]@{ comparacion = @($lista | Sort-Object { $_.dato }) }))
 }
 
-# Escribe datos\comparacion\<ficha>.json de cada tarea hecha: la clase, su fichero del original, los del migrado y, por dato, lo que se dijo.
+# Escribe datos\comparacion\<ficha>.json de cada tarea hecha: la clase, su fichero del original, los del migrado, el momento y el commit con que se
+# eligieron y, por dato, lo que se dijo.
 function Save-Comparaciones($Tareas) {
   foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
-    $o = [ordered]@{ ficha = $t.ficha; clase = $t.entradas.clase; ficheroOriginal = $t.entradas.fichero; migrado = @($t.entradas.migrado); datos = @($t.resultado.comparacion) }
+    $o = [ordered]@{ ficha = $t.ficha; clase = $t.entradas.clase; ficheroOriginal = $t.entradas.fichero; migrado = @($t.entradas.migrado); momento = $t.entradas.momento; commit = $t.entradas.commit; datos = @($t.resultado.comparacion) }
     Write-Json (Join-Path (Join-Path $Datos 'comparacion') ($t.ficha + '.json')) $o
   }
 }
