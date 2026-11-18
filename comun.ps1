@@ -18,6 +18,7 @@ $Cfg = @{
   MvnExe        = ''      # vacio = mvnw del repo o, si no hay, mvn del PATH
   DirsIgnorados = @('.git', 'target', '.rescate', 'node_modules', '.idea', '.vscode', '.github', '.mvn')
   SegundosLatido = 60     # cada cuantos segundos escribe '... sigue' mientras espera a Copilot o a Maven (0 = nunca)
+  MinutosMaven   = 30     # tope de cada llamada a Maven, en minutos (admite decimales); pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida
 }
 
 # ============================== UTILIDADES ==============================
@@ -249,6 +250,25 @@ function Get-Mvn([string]$Raiz) {
   if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $w = Join-Path $Raiz 'mvnw.cmd' } else { $w = Join-Path $Raiz 'mvnw' }
   if (Test-Path -LiteralPath $w) { return $w }
   return 'mvn'
+}
+
+# Maven en $Dir con los argumentos $A, con latido ($Que) y con tope: pasados $Cfg.MinutosMaven minutos se para Maven con sus
+# procesos hijos (Stop-Proceso) y la llamada cuenta como fallida (Codigo -1). Lo que haya escrito queda en $Registro. Devuelve
+# Codigo, Salida (las lineas: las de la salida y despues las de errores) y Tope: '' o el mensaje que dice que se ha pasado, que
+# sale tambien por la consola. Lo usan rescate.ps1, la cobertura de tareas.ps1 y prueba-local.ps1: una sola regla.
+function Invoke-MavenTope([string]$Dir, [string[]]$A, [string]$Que, [string]$Registro) {
+  $latido = Start-Latido $Que $Cfg.SegundosLatido
+  try { $p = Invoke-Proceso (Get-Mvn $Dir) $A $Dir ([int][Math]::Ceiling([double]$Cfg.MinutosMaven * 60)) }
+  finally { Stop-Latido $latido }
+  $salida = @()
+  if ($p.Texto) { $salida = @(($p.Texto -replace '\r?\n$', '') -split '\r?\n') }
+  [System.IO.File]::WriteAllText($Registro, (($salida -join "`n") + "`n"), $Utf8)
+  $r = [pscustomobject]@{ Codigo = $p.Codigo; Salida = $salida; Tope = '' }
+  if ($p.Agotado) {
+    $r.Tope = "Maven se ha pasado del tope de $($Cfg.MinutosMaven) min y se ha parado ($Que). Registro: $Registro."
+    Aviso $r.Tope
+  }
+  return $r
 }
 
 # Huella de una carpeta de solo lectura, para detectar si alguien la toca.

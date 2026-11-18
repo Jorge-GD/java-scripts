@@ -139,27 +139,27 @@ function Copy-Carpeta([string]$De, [string]$A) {
 }
 
 # ================================ MAVEN ================================
-# Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido y sin saltarse los
-# tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar
+# Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido, con tope (MinutosMaven) y sin
+# saltarse los tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar
 # (Remove-Ruido, de comun.ps1): no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
-# Codigo y Salida.
+# Codigo, Salida y Tope (Invoke-MavenTope, de comun.ps1).
 function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
   $script:Mavens++
   $previos = @(Get-Cambios $Dir)
   $antes = $env:JAVA_HOME
   if ($EsOriginal -and $JavaLegacy) { $env:JAVA_HOME = $JavaLegacy }
-  $latido = Start-Latido "Maven, $Que" ([int]$Cfg.SegundosLatido)
-  try { $r = Invoke-Nativo (Get-Mvn $Dir) (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) $Dir }
-  finally { Stop-Latido $latido; $env:JAVA_HOME = $antes }
+  try { $r = Invoke-MavenTope $Dir (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) "Maven, $Que" (Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')) }
+  finally { $env:JAVA_HOME = $antes }
   [void](Remove-Ruido $Dir $previos)
-  [System.IO.File]::WriteAllText((Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')), (($r.Salida -join "`n") + "`n"), $Utf8)
   return $r
 }
 
-# Lo que sirve para entender un fallo de Maven: las primeras lineas [ERROR] o, si no hay, las ultimas.
-function Get-FalloMaven($Salida) {
-  $e = @($Salida | Where-Object { $_ -match '^\[ERROR\]' } | Select-Object -First ([int]$Cfg.LineasError))
-  if ($e.Count -eq 0) { $e = @($Salida | Select-Object -Last ([int]$Cfg.LineasError)) }
+# Lo que sirve para entender un fallo de Maven (lo que da Invoke-Maven): pasado el tope, el mensaje; si no, las primeras
+# lineas [ERROR] o, si no hay, las ultimas.
+function Get-FalloMaven($Maven) {
+  if ($Maven.Tope) { return $Maven.Tope }
+  $e = @($Maven.Salida | Where-Object { $_ -match '^\[ERROR\]' } | Select-Object -First ([int]$Cfg.LineasError))
+  if ($e.Count -eq 0) { $e = @($Maven.Salida | Select-Object -Last ([int]$Cfg.LineasError)) }
   return ($e -join "`n")
 }
 
@@ -176,7 +176,7 @@ function Get-Porque([string]$Sal, $Maven) {
   $err = Join-Path $Sal 'error.txt'
   if (Test-Path -LiteralPath $err) { return ('error.txt: ' + (@([System.IO.File]::ReadAllLines($err) | Select-Object -First ([int]$Cfg.LineasError)) -join "`n")) }
   if ($null -eq $Maven) { return 'no ha dejado estado.txt.' }
-  return ("no ha dejado estado.txt. Maven dice:`n" + (Get-FalloMaven $Maven.Salida))
+  return ("no ha dejado estado.txt. Maven dice:`n" + (Get-FalloMaven $Maven))
 }
 
 # ================================ TAREAS ================================
@@ -323,7 +323,7 @@ function Test-Arnes($T, [string[]]$Jobs) {
     if ($m) { return $m }
   }
   $r = Invoke-Maven $dir $esOrig @('test-compile') "arnes $($T.entradas.repo), compilar"
-  if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r.Salida)) }
+  if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r)) }
   foreach ($j in $Jobs) { foreach ($c in @('vacio', 'otro')) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/$c") -Force) } }
   Remove-Carpeta (Join-Ruta $dir 'target/prueba-local')
   $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio') "arnes $($T.entradas.repo), caso vacio"
@@ -594,12 +594,15 @@ function Compare-Caso([string]$A, [string]$B) {
 # El resultado de un caso: igual, distinto (con sus diferencias), no determinista, no se pudo preparar o sin probar en
 # local, con su motivo. Los ficheros que cambian entre las dos ejecuciones del original no se comparan; el resto, si.
 # Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
+# Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
 function Get-Resultado($T) {
   $j = $T.entradas.job
   $c = $T.entradas.caso
   $o = [ordered]@{ job = $j; caso = $c; titulo = $T.entradas.titulo; resultado = 'no se pudo preparar'; motivo = ''; diferencias = @() }
   $s1 = Join-Ruta $Local "salidas/original/$j/$c"
   $noAplica = Join-Ruta $Local "casos/$j/$c/no-aplica.txt"
+  $parado = @(@('original', 'original-2', 'migrado') | ForEach-Object { $script:Maven["$_|$j|$c"] } | Where-Object { $_ -and $_.Tope })
+  if ($parado.Count -gt 0) { $o.motivo = $parado[0].Tope; return $o }
   if ($T.estado -ne 'hecha') { $o.motivo = "La IA no ha podido preparar sus entradas: $($T.motivo)"; return $o }
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
   if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j|$c"]); return $o }
@@ -721,11 +724,11 @@ try {
   $RutasCopia = @($RutasCopia | Select-Object -Unique | Sort-Object Length -Descending)
   $r = Invoke-Maven $CopiaOrig $true @('test-compile') 'compilar el original'
   if ($r.Codigo -ne 0) {
-    if ($JavaLegacy) { Stop-Arranque ("El original no compila ni con -JavaLegacy ${JavaLegacy}:`n" + (Get-FalloMaven $r.Salida)) }
-    Stop-Arranque ("El original no compila con el JDK de Maven. Vuelve a lanzar con -JavaLegacy <carpeta del JDK del original (8 u 11)>. Maven dice:`n" + (Get-FalloMaven $r.Salida))
+    if ($JavaLegacy) { Stop-Arranque ("El original no compila ni con -JavaLegacy ${JavaLegacy}:`n" + (Get-FalloMaven $r)) }
+    Stop-Arranque ("El original no compila con el JDK de Maven. Vuelve a lanzar con -JavaLegacy <carpeta del JDK del original (8 u 11)>. Maven dice:`n" + (Get-FalloMaven $r))
   }
   $r = Invoke-Maven $CopiaMig $false @('test-compile') 'compilar el migrado'
-  if ($r.Codigo -ne 0) { Stop-Arranque ("El migrado no compila. Maven dice:`n" + (Get-FalloMaven $r.Salida)) }
+  if ($r.Codigo -ne 0) { Stop-Arranque ("El migrado no compila. Maven dice:`n" + (Get-FalloMaven $r)) }
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()

@@ -1228,8 +1228,11 @@ $Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote s
   try { $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) }
   finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = ''; $env:RESCATE_MVN_DESDE = '' }
   $seg = $reloj.Elapsed.TotalSeconds
+  # el diagnostico inicial hace una sola llamada de tests (la 1.a, que pasa); se cuelgan todas las demas (la del lote y los reintentos
+  # de uno en uno, hasta que paran los lotes deshechos seguidos), y cada llamada colgada anota 2 PID
   $cuenta = @([System.IO.File]::ReadAllLines((Join-Path $carpPids 'cuenta.txt')))
-  Igual 'el diagnostico inicial hace una sola llamada de tests y la del lote es la segunda' 2 $cuenta.Count
+  $colgadas = @([System.IO.File]::ReadAllLines((Join-Path $carpPids 'pids.txt')) | Where-Object { $_ }).Count
+  Comprueba 'la 1.a llamada de tests (el diagnostico inicial) pasa y se cuelgan todas las demas, desde la del lote' ($cuenta.Count -ge 2 -and $colgadas -eq 2 * ($cuenta.Count - 1)) "llamadas: $($cuenta.Count), PID anotados: $colgadas"
   Comprueba 'el lote 1 se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
   Comprueba 'y la consola dice que Maven se paso' ($r.Salida -match [regex]::Escape('Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (tests)). Registro: ')) (Cola $r.Salida)
   Comprueba 'sin ningun commit del lote' (-not (Hay-Commit-Del-Lote $e)) (Cola $r.Salida)

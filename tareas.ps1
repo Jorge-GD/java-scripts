@@ -1148,10 +1148,8 @@ function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
   $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
   if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
   $j = $Cfg.JacocoPlugin
-  $latido = Start-Latido 'Maven (cobertura)' $Cfg.SegundosLatido
-  try { $r = Invoke-Nativo (Get-Mvn $Dir) @('-B', "${j}:prepare-agent", 'test', "${j}:report") $Dir }
-  finally { Stop-Latido $latido }
-  [System.IO.File]::WriteAllText($Registro, ((@($r.Salida) -join "`n") + "`n"), $Utf8)
+  $r = Invoke-MavenTope $Dir @('-B', "${j}:prepare-agent", 'test', "${j}:report") 'Maven (cobertura)' $Registro
+  if ($r.Tope) { $o.motivo = $r.Tope; return $o }
   if ($r.Codigo -ne 0) {
     $e = @($r.Salida | Where-Object { "$_" -match '^\[ERROR\]\s*\S' } | Select-Object -First 1)
     $o.motivo = "Maven ha salido con error (codigo $($r.Codigo))"
