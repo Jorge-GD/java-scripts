@@ -1214,6 +1214,151 @@ $Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote s
   Comprueba-Tope $carpPids $seg 30 (Join-Path (Join-Path $e.Wt '.rescate') 'build.log')
 }
 
+# ============================ TOPE DE COPILOT ============================
+# Pasados MinutosCopilot minutos se para Copilot con sus procesos hijos y la llamada cuenta como fallida (Codigo -1, Tope con el
+# mensaje). El intento se evalua como cualquier otro y no se repite la llamada por el 'rc distinto de 0 sin cambios' del M9 A.
+# Estas pruebas lo cuelgan con tests/falsos/copilot-dormido.ps1 (lanza un hijo que duerme y duerme 40 s) y un tope de 0.05 min (3 s).
+
+# Lo que se comprueba en todo tope hecho con copilot-dormido.ps1: sus PID (el del falso y el de su hijo, en $CarpetaPids\pids.txt)
+# ya no viven (10 s de plazo) y la pasada entera ha tardado menos de $Limite s (el falso duerme 40 por llamada).
+function Comprueba-Tope-Copilot([string]$CarpetaPids, [double]$Segundos, [int]$Limite) {
+  $nums = @()
+  $f = Join-Path $CarpetaPids 'pids.txt'
+  if (Test-Path -LiteralPath $f) { $nums = @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ } | ForEach-Object { [int]$_ }) }
+  $plazo = (Get-Date).AddSeconds(10)
+  do {
+    $vivos = @($nums | Where-Object { Proceso-Vivo $_ })
+    if ($vivos.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 200
+  } while ((Get-Date) -lt $plazo)
+  Comprueba 'Copilot se colgo (anoto su PID y el de su hijo) y ninguno de los dos vive' ($nums.Count -ge 2 -and $vivos.Count -eq 0) ("PID: $($nums -join ' '), vivos: $($vivos -join ' ')")
+  Comprueba "la pasada no espero al falso: menos de $Limite s" ($Segundos -lt $Limite) "$Segundos s"
+}
+
+# Lanza rescate.ps1 con estos argumentos y el Copilot que se cuelga en las llamadas cuya primera linea del prompt casa con $Cuelga
+# ($Antes: antes de colgarse hace lo que haria el Copilot normal). Devuelve R (codigo y consola), Segundos, Pids (la carpeta de los
+# PID), Llamadas (las que se colgaron: una linea por llamada) y Dormidos (los PID anotados).
+function Rescate-Dormido($E, [string]$Cuelga, [string[]]$A, [bool]$Antes = $false) {
+  $carp = Join-Path (Split-Path -Parent $E.Repo) 'cop-pids'
+  $env:RESCATE_COP_CUELGA = $Cuelga
+  $env:RESCATE_COP_PIDS = $carp
+  if ($Antes) { $env:RESCATE_COP_ANTES = '1' }
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  try { $r = Rescate $A }
+  finally { $env:RESCATE_COP_CUELGA = ''; $env:RESCATE_COP_PIDS = ''; $env:RESCATE_COP_ANTES = '' }
+  $seg = $reloj.Elapsed.TotalSeconds
+  $cuenta = Join-Path $carp 'cuenta.txt'
+  $llamadas = @()
+  if (Test-Path -LiteralPath $cuenta) { $llamadas = @([System.IO.File]::ReadAllLines($cuenta) | Where-Object { $_ }) }
+  return [pscustomobject]@{ R = $r; Segundos = $seg; Pids = $carp; Llamadas = $llamadas }
+}
+
+$TopeCopilotLote = 'Copilot se ha pasado del tope de 0.05 min y se ha parado (Copilot (paso estructura, lote 1, intento 1)).'
+
+$Pruebas['tope de Copilot: un lote que se cuelga se para con sus hijos, la consola lo dice, el intento se evalua y no se repite la llamada'] = {
+  $e = Nuevo-Escenario 'cop-tope-lote'
+  Pon-Config $e @{ CopilotExe = (Join-Path $falsos 'copilot-dormido.ps1'); MinutosCopilot = 0.05 }
+  $x = Rescate-Dormido $e 'rescate de migracion: paso' (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix)
+  $r = $x.R
+  Comprueba 'la consola dice que Copilot se paso del tope de 0.05 min (el de .rescate/config.json) y que se ha parado' (@($r.Salida -split "`n") -contains $TopeCopilotLote) (Cola $r.Salida)
+  Comprueba 'el intento se evalua: no cambio ningun fichero y el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO: no paso las comprobaciones tras 1 intento\(s\)' -and (Lee $e.Wt '.rescate/intento-estructura-1-1.md') -match 'No has cambiado ningun fichero') (Cola $r.Salida)
+  Comprueba 'no se repite la llamada por salir con error sin cambios' ($r.Salida -notmatch 'repito la llamada una vez' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/lote-estructura-1-1-repeticion.log'))) (Cola $r.Salida)
+  Comprueba 'y el registro del intento esta' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/lote-estructura-1-1.log')) (Cola $r.Salida)
+  Comprueba-Tope-Copilot $x.Pids $x.Segundos 30
+}
+
+$Pruebas['tope de Copilot: si Copilot arregla y despues se cuelga, el intento se evalua con lo que dejo en el arbol y pasa'] = {
+  $e = Nuevo-Escenario 'cop-tope-arregla'
+  Pon-Config $e @{ CopilotExe = (Join-Path $falsos 'copilot-dormido.ps1'); MinutosCopilot = 0.05 }
+  $x = Rescate-Dormido $e 'rescate de migracion: paso' (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) $true
+  $r = $x.R
+  Comprueba 'la consola dice que Copilot se paso del tope' (@($r.Salida -split "`n") -contains $TopeCopilotLote) (Cola $r.Salida)
+  Comprueba 'las puertas dan por bueno lo que dejo: lote 1 OK' ($r.Salida -match "Lote 1 OK: 'estructura'" -and $r.Salida -notmatch 'DESHECHO') (Cola $r.Salida)
+  Comprueba 'hay commit del lote' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(estructura\): lote 1') (Cola $r.Salida)
+  Igual 'una sola llamada a Copilot, sin repeticion' 1 $x.Llamadas.Count
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba-Tope-Copilot $x.Pids $x.Segundos 30
+}
+
+$Pruebas['tope de Copilot: sin pasar el tope todo sigue igual: el registro, la salida de la consola y la repeticion del M9 A'] = {
+  $e = Escenario-M6 'cop-tope-igual' @{ Orden = @('estructura') }
+  $r = Fix-M6 $e 'estructura' 1 @() 'falla-copilot'
+  $nueve = "SALIDA-A primera`nSALIDA-B`n`nSALIDA-C`nSALIDA-D`n   `nSALIDA-E`nSALIDA-F`nSALIDA-G ultima"
+  $reg = (Lee $e.Wt '.rescate/lote-estructura-1-1.log') -replace "`r", ''
+  Igual 'el registro lleva las nueve lineas que escribio Copilot' ($nueve + "`n") $reg
+  Comprueba 'la consola dice el codigo y el registro' ($r.Salida -match [regex]::Escape('Copilot termino con codigo 1 (ver .rescate/lote-estructura-1-1.log)')) (Cola $r.Salida)
+  Comprueba 'y sus ultimas cinco lineas con texto' ($r.Salida -match '(?m)^    SALIDA-C' -and $r.Salida -match '(?m)^    SALIDA-G ultima' -and $r.Salida -notmatch '(?m)^    SALIDA-B') (Cola $r.Salida)
+  Comprueba 'sin cambios y sin tope, se repite la llamada una vez' ($r.Salida -match 'repito la llamada una vez \(no cuenta como intento\)' -and $r.Salida -match 'Copilot termino otra vez con codigo 1') (Cola $r.Salida)
+  Comprueba 'y no habla de ningun tope' ($r.Salida -notmatch 'se ha pasado del tope') (Cola $r.Salida)
+  Comprueba 'el lote se deshace con su unico intento' ($r.Salida -match 'Lote 1 DESHECHO: no paso las comprobaciones tras 1 intento\(s\)') (Cola $r.Salida)
+}
+
+$GuionCfgCopilot = @'
+param([string]$Sis, [string]$Repo)
+. (Join-Path $Sis 'comun.ps1')
+'DEFECTO ' + $Cfg.MinutosCopilot
+$d = Read-CfgFile (Get-RutaAjustes) @() $false
+'AJUSTES ' + $Cfg.MinutosCopilot
+Read-Config $Repo
+'REPO ' + $Cfg.MinutosCopilot
+'@
+
+$Pruebas['tope de Copilot: MinutosCopilot vale 20 por defecto, admite decimales y lo pisan ajustes.json y .rescate/config.json (el del repo, el ultimo)'] = {
+  $e = Nuevo-Escenario 'cop-tope-config'
+  $f = Join-Path $Dir 'cop-tope-guion.ps1'
+  [System.IO.File]::WriteAllText($f, $GuionCfgCopilot)
+  $casa = Join-Path $Dir 'cop-tope-casa'
+  [void](New-Item -ItemType Directory -Path $casa -Force)
+  [System.IO.File]::WriteAllText((Join-Path $casa 'ajustes.json'), '{ "MinutosCopilot": 7.5 }')
+  Pon-Config $e @{ MinutosCopilot = 0.25 }
+  $antes = $env:RESCATE_HOME
+  try {
+    $env:RESCATE_HOME = $CasaVacia
+    $v1 = Claves-Del-Guion (Lanzar $f @((Split-Path -Parent $Script), $e.Repo)).Salida
+    $env:RESCATE_HOME = $casa
+    $v2 = Claves-Del-Guion (Lanzar $f @((Split-Path -Parent $Script), $e.Repo)).Salida
+  }
+  finally { $env:RESCATE_HOME = $antes }
+  Igual 'el tope por defecto es de 20 minutos' '20' $v1['DEFECTO']
+  Igual 'sin ajustes.json sigue valiendo 20' '20' $v1['AJUSTES']
+  Igual 'con ajustes.json vale lo que dice (7.5, con decimales)' '7.5' $v2['AJUSTES']
+  Igual 'el config.json del repo manda sobre el de por defecto' '0.25' $v1['REPO']
+  Igual 'y sobre el de ajustes.json' '0.25' $v2['REPO']
+}
+
+$GuionNativo = @'
+param([string]$Sis, [string]$Falso, [string]$Como)
+. (Join-Path $Sis 'comun.ps1')
+$p = Invoke-Proceso $Falso @() '' 20 ($Como -eq '1')
+'CODIGO ' + $p.Codigo
+'TEXTO ' + $p.Texto.Trim()
+'@
+
+$Pruebas['tope de Copilot: Invoke-Proceso con ComoNativo hereda la entrada del script, como Invoke-Nativo; sin ComoNativo la cierra, como siempre'] = {
+  $f = Join-Path $Dir 'cop-nativo-guion.ps1'
+  [System.IO.File]::WriteAllText($f, $GuionNativo)
+  $lee = Join-Path $Dir 'cop-lee-entrada.ps1'
+  [System.IO.File]::WriteAllText($lee, "'ENTRADA[' + [Console]::In.ReadToEnd().Trim() + ']'`n")
+  $sis = Split-Path -Parent $Script
+  $v1 = Claves-Del-Guion (Lanzar $f @($sis, $lee, '1') '' @('hola')).Salida
+  $v0 = Claves-Del-Guion (Lanzar $f @($sis, $lee, '0') '' @('hola')).Salida
+  Igual 'ComoNativo: el hijo lee lo que recibe el script' 'ENTRADA[hola]' $v1['TEXTO']
+  Igual 'sin ComoNativo: la entrada esta cerrada' 'ENTRADA[]' $v0['TEXTO']
+  Igual 'los dos salen con 0' '0 0' ($v1['CODIGO'] + ' ' + $v0['CODIGO'])
+}
+
+$Pruebas['tope de Copilot: la revision previa que se cuelga cuenta como fallida: sin plan, la consola lo dice y no se repite'] = {
+  $e = Nuevo-Escenario 'cop-tope-plan'
+  Pon-Config $e @{ CopilotExe = (Join-Path $falsos 'copilot-dormido.ps1'); MinutosCopilot = 0.05 }
+  $x = Rescate-Dormido $e 'revision previa' @('-Modo', 'plan', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinBuild', '-Si')
+  $r = $x.R
+  Comprueba 'la consola dice que la revision previa se paso del tope' (@($r.Salida -split "`n") -contains 'Copilot se ha pasado del tope de 0.05 min y se ha parado (Copilot (revision previa, paso estructura)).') (Cola $r.Salida)
+  Comprueba 'cuenta como fallida, igual que hoy: no ha escrito el plan y sigue sin plan' ($r.Salida -match 'Copilot no ha escrito el plan \(ver \.rescate/plan-estructura\.log\)\. Sigo sin plan\.' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/plan-estructura.md'))) (Cola $r.Salida)
+  Igual 'una sola llamada a Copilot' 1 $x.Llamadas.Count
+  Igual 'sale con 0, como cuando Copilot falla' 0 $r.Codigo
+  Comprueba-Tope-Copilot $x.Pids $x.Segundos 30
+}
+
 # ============================ SFTP COMO REGLA FIJA ============================
 # Si el batch migrado maneja ficheros, tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la
 # referencia y tambien sin ella. El interruptor ExigirSftp (por defecto true) lo apaga: entonces solo se exige lo que la referencia tiene.

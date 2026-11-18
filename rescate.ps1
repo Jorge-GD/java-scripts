@@ -1275,15 +1275,25 @@ function Write-FinCopilot($R) {
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
-# $Que es lo que dice el latido mientras Copilot trabaja.
+# $Que es lo que dice el latido mientras Copilot trabaja. Con tope ($Cfg.MinutosCopilot): pasado, se para Copilot con sus
+# procesos hijos (Invoke-Proceso, que lo lanza como Invoke-Nativo: misma entrada y misma codificacion) y la llamada sale con
+# Codigo -1 y Tope, el mensaje que dice que se ha pasado (tambien por la consola); sin tope, Tope vale ''. Devuelve Codigo,
+# Salida (las lineas: las de la salida y despues las de errores) y Tope; la salida queda tambien en $Log.
 function Invoke-Copilot([string]$Log, [string]$Mod = '', [string]$Esf = '', [string]$Que = 'Copilot') {
   if (-not $Mod) { $Mod = $Modelo }
   if (-not $Esf) { $Esf = $Esfuerzo }
   $a = Get-ArgsCopilot 'Lee el fichero .rescate/prompt.md y sigue sus instrucciones al pie de la letra.' $Mod $Esf @($PlantillaRoot, $LegacyRoot) ([bool]$SinInstrucciones)
   $latido = Start-Latido $Que $Cfg.SegundosLatido
-  try { $r = Invoke-Nativo $script:Copilot.Ruta $a $RepoRoot }
+  try { $p = Invoke-Proceso $script:Copilot.Ruta $a $RepoRoot ([int][Math]::Ceiling([double]$Cfg.MinutosCopilot * 60)) $true }
   finally { Stop-Latido $latido }
-  [System.IO.File]::WriteAllLines($Log, [string[]]$r.Salida)
+  $salida = @()
+  if ($p.Texto) { $salida = @(($p.Texto -replace '\r?\n$', '') -split '\r?\n') }
+  [System.IO.File]::WriteAllLines($Log, [string[]]$salida)
+  $r = [pscustomobject]@{ Codigo = $p.Codigo; Salida = $salida; Tope = '' }
+  if ($p.Agotado) {
+    $r.Tope = "Copilot se ha pasado del tope de $($Cfg.MinutosCopilot) min y se ha parado ($Que)."
+    Aviso $r.Tope
+  }
   return $r
 }
 
@@ -2133,7 +2143,8 @@ function Invoke-Fix {
       $esf = ''
       if ($i -ge 2 -or $escalon) { $esf = Get-EsfuerzoReintento }
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i)"
-      if ($rc.Codigo -ne 0) {
+      # pasado el tope (Copilot se ha parado y la consola ya lo ha dicho) el intento se evalua tal cual: ni se repite ni cuenta como un fallo de Copilot
+      if ($rc.Codigo -ne 0 -and -not $rc.Tope) {
         Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc
         # un fallo de Copilot sin tocar nada no es un intento del modelo: se repite la llamada una vez
         $nada = (((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim() -eq $check) -and (((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida -join "`n") -eq $estadoAntes)
@@ -2146,7 +2157,7 @@ function Invoke-Fix {
             $esf = $menor[0]; $script:EsfReintento = $esf
           }
           $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i-repeticion.log") $mod $esf "Copilot (paso $paso, lote $n, intento $i, repeticion)"
-          if ($rc.Codigo -ne 0) { Aviso "  Copilot termino otra vez con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i-repeticion.log)"; Write-FinCopilot $rc }
+          if ($rc.Codigo -ne 0 -and -not $rc.Tope) { Aviso "  Copilot termino otra vez con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i-repeticion.log)"; Write-FinCopilot $rc }
         }
       }
 

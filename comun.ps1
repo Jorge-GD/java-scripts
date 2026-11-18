@@ -19,6 +19,7 @@ $Cfg = @{
   DirsIgnorados = @('.git', 'target', '.rescate', 'node_modules', '.idea', '.vscode', '.github', '.mvn')
   SegundosLatido = 60     # cada cuantos segundos escribe '... sigue' mientras espera a Copilot o a Maven (0 = nunca)
   MinutosMaven   = 30     # tope de cada llamada a Maven, en minutos (admite decimales); pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida
+  MinutosCopilot = 20     # tope de cada llamada a Copilot de rescate.ps1, en minutos (admite decimales); pasado, se para Copilot con sus procesos hijos
 }
 
 # ============================== UTILIDADES ==============================
@@ -132,8 +133,9 @@ function Get-TextoPipe($Tarea) {
 }
 
 # Un programa con tope de tiempo. Lo lanza con Get-Lanzador (un .ps1 va por PowerShell, un .cmd por cmd), como a Copilot, y
-# devuelve Codigo, Texto (salida y errores), Agotado y Segundos.
-function Invoke-Proceso([string]$Exe, [string[]]$A, [string]$Dir, [int]$Segundos) {
+# devuelve Codigo, Texto (salida y errores), Agotado y Segundos. Con $ComoNativo se comporta como Invoke-Nativo en lo que ve el
+# programa: hereda la entrada del script (no la cierra) y su salida se decodifica con la codificacion de la consola.
+function Invoke-Proceso([string]$Exe, [string[]]$A, [string]$Dir, [int]$Segundos, [bool]$ComoNativo = $false) {
   $v = [pscustomobject]@{ Codigo = -1; Texto = ''; Agotado = $false; Segundos = 0 }
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
   $l = Get-Lanzador $Exe $A
@@ -143,13 +145,15 @@ function Invoke-Proceso([string]$Exe, [string[]]$A, [string]$Dir, [int]$Segundos
   if ($Dir) { $pi.WorkingDirectory = $Dir }
   $pi.UseShellExecute = $false
   $pi.CreateNoWindow = $true
-  $pi.RedirectStandardInput = $true
+  $pi.RedirectStandardInput = -not $ComoNativo
   $pi.RedirectStandardOutput = $true
   $pi.RedirectStandardError = $true
-  $pi.StandardOutputEncoding = $Utf8
-  $pi.StandardErrorEncoding = $Utf8
+  $codificacion = $Utf8
+  if ($ComoNativo) { $codificacion = [Console]::OutputEncoding }
+  $pi.StandardOutputEncoding = $codificacion
+  $pi.StandardErrorEncoding = $codificacion
   $p = [System.Diagnostics.Process]::Start($pi)
-  $p.StandardInput.Close()
+  if (-not $ComoNativo) { $p.StandardInput.Close() }
   $o = $p.StandardOutput.ReadToEndAsync()
   $e = $p.StandardError.ReadToEndAsync()
   while (-not $p.HasExited) {
