@@ -957,6 +957,22 @@ function Get-HallazgosNuevos($Hall, [string[]]$Cats, $Antes) {
   return @($Hall | Where-Object { $_.Sev -eq 'error' -and $Cats -contains $_.Cat -and -not $Antes.ContainsKey((Get-ClaveHallazgo $_)) })
 }
 
+# Las lineas de un detalle para pantalla (y para atascados.md): hasta 8, con sangria, y si hay mas, cuantas faltan y en que
+# fichero estan todas ($Ruta: la correccion completa del intento).
+function Get-LineasDetalle([string[]]$Detalle, [string]$Ruta) {
+  $l = @(@($Detalle) | Select-Object -First 8 | ForEach-Object { '    ' + "$_".Trim() })
+  if (@($Detalle).Count -gt 8) { $l += "    ($(@($Detalle).Count - 8) mas en $Ruta)" }
+  return $l
+}
+
+# La correccion completa de un intento que no paso (la que recibe el siguiente, con su detalle) en
+# .rescate/intento-<paso>-<lote>-<i>.md. Devuelve su ruta relativa a la raiz.
+function Save-CorreccionIntento([string]$PasoId, [int]$N, [int]$I, [string[]]$Sel, [string]$Correccion) {
+  $cab = @("# Paso '$PasoId', lote $N, intento ${I}: no paso", ('Ficheros: ' + ($Sel -join ', ')), '')
+  [System.IO.File]::WriteAllText((Join-Path $Work "intento-$PasoId-$N-$I.md"), ((($cab + $Correccion) -join "`n") + "`n"))
+  return ".rescate/intento-$PasoId-$N-$I.md"
+}
+
 # La opcion que ha elegido el consejo en una duda.
 function Get-Elegida($Duda) { return "$(@($Duda.opciones)[[int]$Duda.elegida - 1])" }
 
@@ -1071,6 +1087,16 @@ function Test-Copilot {
   if (-not $script:Copilot.Ruta -and $Modo -ne 'pre') { Fallo $script:Copilot.Mensaje; exit 1 }
 }
 
+# Lo ultimo que dijo Copilot al salir con un codigo distinto de 0 (hasta 5 lineas no vacias), para ver el motivo sin abrir
+# el registro.
+function Write-FinCopilot($R) {
+  foreach ($x in @(@($R.Salida) | Where-Object { "$_".Trim() } | Select-Object -Last 5)) {
+    $t = "$x".TrimEnd()
+    if ($t.Length -gt 200) { $t = $t.Substring(0, 200) + '...' }
+    Aviso "    $t"
+  }
+}
+
 # Llama a Copilot CLI sin sesion interactiva (copilot -p). El modelo y el
 # esfuerzo de razonamiento son los de -Modelo y -Esfuerzo, salvo que la
 # llamada pida otros (modelo de reserva, esfuerzo de la revision previa).
@@ -1147,6 +1173,38 @@ function Get-SeccionPlan([string]$Texto, [string]$Titulo) {
   foreach ($x in ($Texto -split "`r?`n")) {
     $t = Get-TituloPlan $x
     if ($null -ne $t) { $dentro = ($t -eq $Titulo); continue }
+    if ($dentro) { $sal += $x }
+  }
+  return $sal
+}
+
+# Las cuatro secciones de una reflexion, con el titulo con el que se comparan (como Get-TituloPlan).
+$TitulosReflexion = @('Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer')
+
+# El titulo de una linea de la reflexion tal como esta escrito, sin adornos: una linea '#' a '####' o una linea entera en
+# negrita, con o sin numero delante ('1.', '1)'), sin '*', sin signos de pregunta y sin ':' ni '.' al final. $null si la
+# linea no es un titulo.
+function Get-TituloEscrito([string]$Linea) {
+  $t = $null
+  if ($Linea -match '^\s*#{1,4}\s+(\S.*)$') { $t = $Matches[1] }
+  elseif ($Linea -match '^\s*(?:\d+[.)]\s*)?(\*\*[^*]+\*\*[:.]?)\s*$') { $t = $Matches[1] }
+  if ($null -eq $t) { return $null }
+  $t = ($t -replace '[*\u00BF?]', '').Trim()
+  $t = ($t -replace '^\d+[.)]\s*', '' -replace '\s*#+$', '' -replace '\s*[:.]+$', '' -replace '\s+', ' ').Trim()
+  if (-not $t) { return $null }
+  return $t
+}
+
+# Las lineas de una seccion de la reflexion, o @() si no esta. Un titulo que no es de los cuatro es texto de la seccion en
+# la que esta.
+function Get-SeccionReflexion([string]$Texto, [string]$Titulo) {
+  $sal = @(); $dentro = $false
+  foreach ($x in ($Texto -split "`r?`n")) {
+    $t = Get-TituloEscrito $x
+    if ($null -ne $t) {
+      $k = Get-TituloPlan "## $t"
+      if ($TitulosReflexion -contains $k) { $dentro = ($k -eq $Titulo); continue }
+    }
     if ($dentro) { $sal += $x }
   }
   return $sal
@@ -1333,7 +1391,7 @@ function Invoke-Consejo([string[]]$Contexto, [bool]$Una, [string]$Que) {
     Info "  Pido consejo al modelo de las dudas ($Que)..."
     $r = Invoke-Fuerte (Join-Path $Work "consejo-$n.log") $ruta "Copilot (consejo, $Que)"
     if (-not (Test-Path -LiteralPath $ruta)) {
-      if ($r.Codigo -ne 0) { Aviso "  Copilot ha fallado (codigo $($r.Codigo), ver .rescate/consejo-$n.log): sigo sin consejo."; return $null }
+      if ($r.Codigo -ne 0) { Aviso "  Copilot ha fallado (codigo $($r.Codigo), ver .rescate/consejo-$n.log): sigo sin consejo."; Write-FinCopilot $r; return $null }
       $motivo = "no has escrito .rescate/consejo-$n.json"
       continue
     }
@@ -1433,8 +1491,14 @@ function Invoke-Reflexion([string]$PasoId, [int]$N, [int]$I, $LoteH, [string[]]$
   [void](Invoke-Fuerte (Join-Path $Work "reflexion-$id.log") $ruta "Copilot (reflexion, paso $PasoId, lote $N, intento $I)")
   if (-not (Test-Path -LiteralPath $ruta)) { Aviso "  No hay reflexion (ver .rescate/reflexion-$id.log): sigo sin ella."; return }
   $texto = [System.IO.File]::ReadAllText($ruta)
-  $falta = @('Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer' | Where-Object { @(Get-SeccionPlan $texto $_ | Where-Object { $_.Trim() }).Count -eq 0 })
-  if ($falta.Count -gt 0) { Aviso ("  A la reflexion le falta '" + ($falta -join "', '") + "': sigo sin ella."); return }
+  $falta = @($TitulosReflexion | Where-Object { @(Get-SeccionReflexion $texto $_ | Where-Object { $_.Trim() }).Count -eq 0 })
+  if ($falta.Count -gt 0) {
+    $trae = @($texto -split "`r?`n" | ForEach-Object { Get-TituloEscrito $_ } | Where-Object { $_ } | Select-Object -First 8)
+    $queTrae = 'No trae ningun titulo'
+    if ($trae.Count -gt 0) { $queTrae = "Trae los titulos '" + ($trae -join "', '") + "'" }
+    Aviso ("  A la reflexion le falta '" + ($falta -join "', '") + "': sigo sin ella. $queTrae (ver .rescate/reflexion-$id.md).")
+    return
+  }
   Add-Decisiones (@("## Reflexion: paso '$PasoId', lote $N, intento $I ($(Get-Date -Format 'yyyy-MM-dd HH:mm'))", ('Ficheros: ' + ($Sel -join ', ')), "Esfuerzo: $($script:EsfDudas) | fichero: .rescate/reflexion-$id.md", '') + (Convert-Titulos $texto '### $1'))
   return [pscustomobject]@{ Titulo = "Lote $N, intento $I"; Texto = $texto; Ficheros = $Sel }
 }
@@ -1681,13 +1745,15 @@ function Invoke-Fix {
     $sel | ForEach-Object { Info "  $_" }
 
     $ok = $false; $correccion = ''; $hall2 = @(); $blandos = @(); $problemas = @()
+    $detalle = @(); $rutaCorr = ''   # los del ultimo intento que no paso (para el aviso del lote deshecho y para atascados.md)
     $g0 = Get-Guardas   # una vez por lote: los reintentos se comparan con el estado bueno
     for ($i = 1; $i -le $intentos; $i++) {
+      $detalle = @(); $rutaCorr = ''
       $refl = @($reflexiones | Where-Object { @($_.Ficheros | Where-Object { $sel -contains $_ }).Count -gt 0 })
       [System.IO.File]::WriteAllText((Join-Path $Work 'prompt.md'), (New-Prompt $paso $loteH $correccion $duda $refl))
       Info "  Copilot trabajando (intento $i de $intentos)..."
       $rc = Invoke-Copilot (Join-Path $Work "lote-$paso-$n-$i.log") $mod '' "Copilot (paso $paso, lote $n, intento $i)"
-      if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)" }
+      if ($rc.Codigo -ne 0) { Aviso "  Copilot termino con codigo $($rc.Codigo) (ver .rescate/lote-$paso-$n-$i.log)"; Write-FinCopilot $rc }
 
       # -- guardas duras: si saltan, no hay reintento --
       $g1 = Get-Guardas
@@ -1706,6 +1772,7 @@ function Invoke-Fix {
       if ($cambios.Count -eq 0) {
         $problemas = @('No has cambiado ningun fichero.')
         $correccion = '- No has cambiado ningun fichero. Resuelve los hallazgos del lote.'
+        $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
         if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
         continue
       }
@@ -1752,11 +1819,14 @@ function Invoke-Fix {
       $problemas | ForEach-Object { Aviso "  NO PASA: $_" }
       # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva),
       # y lo nuevo de los pasos que ha empeorado (y de calidad)
-      $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
+      $detalle = @((@($nuevos) + @($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $nuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20)) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
+      # por pantalla, lo que se ha roto primero; el resto, y la correccion completa, en el fichero del intento
+      $rutaCorr = Save-CorreccionIntento $paso $n $i $sel $correccion
+      @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
       if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }
 
@@ -1766,6 +1836,8 @@ function Invoke-Fix {
       $script:Build = $buildAntes
       Aviso "Lote $n DESHECHO: no paso las comprobaciones tras $intentos intento(s)."
       $problemas | ForEach-Object { Aviso "  - $_" }
+      @(Get-LineasDetalle $detalle $rutaCorr) | ForEach-Object { Aviso $_ }
+      if ($rutaCorr) { Aviso "  Correccion completa del ultimo intento: $rutaCorr" }
       $conMod = ''
       if ($mod) { $conMod = ", con $mod" }
       foreach ($f in $sel) {
@@ -1802,6 +1874,7 @@ function Invoke-Fix {
       Fallo "ATASCADO en '$paso': $f. Lo apunto y sigo con el resto."
       $d0 = $null
       $nota = "- [$paso] ${f}: " + ($problemas -join ' ') + " (registro: .rescate/lote-$paso-$n-*.log)"
+      if ($rutaCorr) { $nota += "`n  Ultimo intento (correccion completa en ${rutaCorr}):`n" + (@(Get-LineasDetalle $detalle $rutaCorr) -join "`n") }
       if ($con) {
         $d0 = $con.Dudas[0]
         $nota += "`n  Consejo (.rescate/consejo-$($con.N).json): $($d0.duda)"

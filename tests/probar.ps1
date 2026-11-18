@@ -1779,5 +1779,90 @@ $Pruebas['m8 detalle: si ningun paso anterior empeora, el detalle no lleva halla
   Comprueba 'ni lista hallazgos de estructura' ($c -notmatch 'Suelta\.java|PolizaService\.java') $c
 }
 
+# ===== M8 (parte 6): DESCRIPTIVO POR CONSOLA Y EN LOS LOGS =====
+# Lo que sale por consola en el intento $I de un lote: desde su 'Copilot trabajando (intento I de N)' hasta el siguiente
+# intento, el siguiente lote o el final (el aviso del lote deshecho va dentro del ultimo intento).
+function Consola-Del-Intento([string]$Salida, [int]$I) {
+  return ([regex]::Match($Salida, "(?s)Copilot trabajando \(intento $I de \d+\)\.\.\.(.*?)(?=Copilot trabajando \(intento|--- Lote \d|\z)")).Groups[1].Value
+}
+
+# Las lineas del detalle de un texto de consola: con 4 espacios y '- '.
+function Detalle-De-Consola([string]$Texto) { return @($Texto -split "`r?`n" | Where-Object { $_ -match '^    - ' }) }
+
+$Pruebas['m8 consola: tras los NO PASA salen las lineas del detalle (lo roto primero) y la correccion completa queda en .rescate/intento-*.md'] = {
+  $e = Escenario-M6 'm8-consola' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'mueve-a-util'
+  $c1 = Consola-Del-Intento $r.Salida 1
+  $det = Detalle-De-Consola $c1
+  $nuevoL = '    - ' + $LeerMovidoM8 + " - subpaquete 'infrastructure/util' no existe en la plantilla"
+  Comprueba 'tras los NO PASA sale el detalle del intento' ($det.Count -gt 0 -and $c1.IndexOf('NO PASA') -ge 0 -and $c1.IndexOf('NO PASA') -lt $c1.IndexOf($det[0])) $c1
+  Comprueba 'su primera linea es lo nuevo de estructura, con fichero y regla' ($det.Count -gt 0 -and $det[0].StartsWith($nuevoL)) (($det | Select-Object -First 2) -join ' / ')
+  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales' }).Count -eq 1) $c1
+  Comprueba 'con tan pocas lineas no dice que falten' ($c1 -notmatch ' mas en ') $c1
+  $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
+  if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
+  $f1 = Lee $e.Wt '.rescate/intento-ficheros-1-1.md'
+  Comprueba 'el fichero lleva los motivos y el detalle completo' ($f1 -match "Has empeorado el paso anterior 'estructura' \(2 -> 3 hallazgos\)" -and $f1 -match 'Detalle:' -and $f1.Contains($LeerMovidoM8) -and $f1 -match '\(repo\) - no hay adaptador SFTP') $f1
+  Comprueba 'el intento 2 tiene el suyo' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-ficheros-1-2.md'))
+  $lotes = @(Llamadas-M6 $e 'lote')
+  if ($lotes.Count -ge 2) {
+    $c = Correccion-De (Prompt-M6 $e $lotes[1])
+    $detalle = $f1.Substring($f1.IndexOf('Detalle:')).Trim()
+    Comprueba 'es la misma correccion que recibe el intento siguiente' ($c.Contains($detalle)) $c
+  }
+}
+
+$Pruebas['m8 consola: con mas de 8 lineas salen 8 y dice cuantas faltan; el lote deshecho y el atascado traen su detalle'] = {
+  $e = Escenario-M6 'm8-consola-8' @{ Orden = @('ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'muchos-ficheros'
+  $c1 = Consola-Del-Intento $r.Salida 1
+  $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
+  if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
+  $total = @((Lee $e.Wt '.rescate/intento-ficheros-1-1.md') -split "`r?`n" | Where-Object { $_ -match '^  - ' }).Count
+  Comprueba 'el fichero del intento lleva mas de 8 lineas de detalle' ($total -gt 8) "$total"
+  Igual 'por consola salen 8 lineas del detalle' 8 (Detalle-De-Consola $c1).Count
+  $mas = [regex]::Match($c1, '(?m)^    \((\d+) mas en \.rescate/intento-ficheros-1-1\.md\)\s*$')
+  Comprueba 'y dice cuantas faltan y donde estan' ($mas.Success -and [int]$mas.Groups[1].Value -eq ($total - 8)) "$($mas.Value) / total $total"
+  # el lote deshecho: sus motivos, 8 lineas del detalle del ultimo intento y donde esta su correccion completa
+  $c2 = Consola-Del-Intento $r.Salida 2
+  $i = $c2.IndexOf('Lote 1 DESHECHO')
+  if ($i -lt 0) { Comprueba 'el lote 1 se deshace' $false (Cola $r.Salida); return }
+  $des = $c2.Substring($i)
+  Igual 'el aviso del lote deshecho trae 8 lineas del detalle del ultimo intento' 8 (Detalle-De-Consola $des).Count
+  Comprueba 'con cuantas faltan' ($des -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-1-2\.md\)') $des
+  Comprueba 'y la ruta de la correccion completa del ultimo intento' ($des -match 'Correccion completa del ultimo intento: \.rescate/intento-ficheros-1-2\.md') $des
+  # el atascado: su nota lleva las lineas del detalle del ultimo intento
+  $at = Lee $e.Wt '.rescate/atascados.md'
+  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
+}
+
+$Pruebas['m8 consola: si Copilot sale con un codigo distinto de 0 salen las ultimas 5 lineas no vacias de su salida'] = {
+  $e = Escenario-M6 'm8-copilot-rc' @{ Orden = @('estructura') }
+  $r = Fix-M6 $e 'estructura' 1 @() 'falla-copilot'
+  $c1 = Consola-Del-Intento $r.Salida 1
+  Comprueba 'dice el codigo y el registro, como antes' ($c1 -match 'Copilot termino con codigo 1 \(ver \.rescate/lote-estructura-1-1\.log\)') $c1
+  $salen = @('SALIDA-C', 'SALIDA-D', 'SALIDA-E', 'SALIDA-F', 'SALIDA-G ultima' | Where-Object { $c1 -match ('(?m)^    ' + [regex]::Escape($_) + '\s*$') })
+  Igual 'salen sus ultimas 5 lineas no vacias, con sangria' 5 $salen.Count
+  Comprueba 'y no las anteriores' ($c1 -notmatch 'SALIDA-A|SALIDA-B') $c1
+}
+
+$Pruebas['m8 reflexion: el lector acepta titulos con # a ####, numerados, en negrita y con signos de pregunta'] = {
+  $e = Escenario-M6 'm8-reflexion-formato' @{ Reflexionar = $true }
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion;reflexion-formato'
+  Comprueba 'no dice que falte ninguna seccion' ($r.Salida -notmatch 'A la reflexion le falta') (Cola $r.Salida)
+  $l = @(Llamadas-M6 $e 'lote')
+  if ($l.Count -lt 2) { Comprueba 'dos intentos' $false ($l -join ' / '); return }
+  Comprueba 'y el segundo intento lleva la reflexion' ((Prompt-M6 $e $l[1]) -match 'REFLEXION-MARCA-estructura-1-1') (Cola $r.Salida)
+}
+
+$Pruebas['m8 reflexion: si aun falta una seccion, el aviso dice que titulos trae y la ruta del fichero'] = {
+  $e = Escenario-M6 'm8-reflexion-trae' @{ Reflexionar = $true }
+  $r = Fix-M6 $e 'estructura' 2 @() 'nada-sin-correccion;reflexion-mala'
+  Comprueba 'dice lo que falta, los titulos que trae y el fichero' ($r.Salida -match "(?m)^  A la reflexion le falta 'Que hacer ahora', 'Que no hacer': sigo sin ella\. Trae los titulos 'Que se intento', 'Por que no paso' \(ver \.rescate/reflexion-estructura-1-1\.md\)\.") (Cola $r.Salida)
+  $e2 = Escenario-M6 'm8-reflexion-sin-titulos' @{ Reflexionar = $true }
+  $r2 = Fix-M6 $e2 'estructura' 2 @() 'nada-sin-correccion;reflexion-sin-titulos'
+  Comprueba 'sin titulos dice que no trae ninguno' ($r2.Salida -match "(?m)^  A la reflexion le falta 'Que se intento', 'Por que no paso', 'Que hacer ahora', 'Que no hacer': sigo sin ella\. No trae ningun titulo \(ver \.rescate/reflexion-estructura-1-1\.md\)\.") (Cola $r2.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

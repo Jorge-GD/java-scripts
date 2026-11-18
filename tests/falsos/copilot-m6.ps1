@@ -11,6 +11,9 @@
 #   consejo-elegida-4  el consejo elige la opcion 4; en el reintento (con CORRECCION), bien y de codigo
 #   consejo-nada       no escribe el consejo y sale con 0
 #   reflexion-mala     la reflexion trae solo dos de las cuatro secciones
+#   reflexion-formato  la reflexion trae las cuatro secciones con otros titulos: ###, numerado, en negrita, con signos de
+#                      pregunta y con acentos
+#   reflexion-sin-titulos  la reflexion es un parrafo sin ningun titulo
 #   sin-max            con --effort=max sale con 1 sin escribir nada (un Copilot que no admite ese esfuerzo)
 #   atasca             un lote que lleva Suelta.java no cambia nada, salvo que el prompt traiga el consejo
 #   atasca-siempre     un lote que lleva Suelta.java no cambia nada nunca
@@ -79,7 +82,13 @@ if ($titulo -match 'reflexion') {
   Apunta 'reflexion' $m.Groups[2].Value
   $marca = 'REFLEXION-MARCA-' + $m.Groups[2].Value
   $t = @('## Que se intento', "$marca mover las clases.", '', '## Por que no paso', 'No cambio nada.')
-  if ($guiones -notcontains 'reflexion-mala') { $t += @('', '## Que hacer ahora', 'Mover la clase a application/usecases.', '', '## Que no hacer', 'No tocar el pom.xml.') }
+  if ($guiones -contains 'reflexion-sin-titulos') { $t = @("$marca No cambio nada y hay que mover las clases a otro paquete.") }
+  if ($guiones -contains 'reflexion-formato') {
+    $e = [char]0xE9; $o = [char]0xF3; $q = [char]0xBF
+    $t = @("### 1. Qu$e se intent$o", "$marca mover las clases.", '', "## 2) Por qu$e no pas$o", 'No cambio nada.', '',
+      "## **Qu$e hacer ahora**", 'Mover la clase a application/usecases.', '', "#### ${q}Qu$e no hacer?", 'No tocar el pom.xml.')
+  }
+  elseif ($guiones -notcontains 'reflexion-mala' -and $guiones -notcontains 'reflexion-sin-titulos') { $t += @('', '## Que hacer ahora', 'Mover la clase a application/usecases.', '', '## Que no hacer', 'No tocar el pom.xml.') }
   Escribir ".rescate/$($m.Groups[1].Value)" ($t -join "`n")
   'reflexion escrita'
   exit 0
@@ -115,6 +124,22 @@ foreach ($l in ($prompt -split "`r?`n")) {
 }
 $fichs = @($fichs | Select-Object -Unique)
 Apunta 'lote' ($fichs -join ',')
+if ($guiones -contains 'falla-copilot') {
+  'SALIDA-A primera'; 'SALIDA-B'; ''; 'SALIDA-C'; 'SALIDA-D'; '   '; 'SALIDA-E'; 'SALIDA-F'; 'SALIDA-G ultima'
+  exit 1
+}
+if ($guiones -contains 'muchos-ficheros' -and @($fichs | Where-Object { $_ -match 'LeerFichero\.java$' }).Count -gt 0) {
+  if ($prompt -notmatch '## CORRECCION') {
+    foreach ($k in 1..10) {
+      Escribir "src/main/java/com/acme/life/application/usecases/LeerOtro$k.java" (@(
+          'package com.acme.life.application.usecases;', '', 'import java.io.File;', '', "/** Caso de uso $k que lee un fichero de entrada. */",
+          "public class LeerOtro$k {", '', '    /**', '     * Dice si el fichero existe.', '     *', '     * @param ruta ruta del fichero',
+          '     * @return true si existe', '     */', '    public boolean existe(String ruta) {', '        return new File(ruta).exists();',
+          '    }', '}', '') -join "`n")
+    }
+  }
+  exit 0
+}
 $conSuelta = (@($fichs | Where-Object { $_ -match 'Suelta\.java$' }).Count -gt 0)
 if ($guiones -contains 'atasca-siempre' -and $conSuelta) { 'no hago nada'; exit 0 }
 if ($guiones -contains 'atasca' -and $conSuelta -and $prompt -notmatch '## Consejo') { 'no hago nada'; exit 0 }
