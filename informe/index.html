@@ -1,6 +1,7 @@
 <header class="cab-port">
   <h1>La pasada sobre <code>{{BATCH}}</code></h1>
   {{{ESTADO}}}
+  {{{SIGUIENTE}}}
   <dl class="ficha">
     <div><dt>Migrado</dt><dd>{{MIGRADO}}</dd></div>
     <div><dt>Original</dt><dd>{{ORIGINAL}}</dd></div>
@@ -59,6 +60,33 @@
   <p>Pega este texto en Copilot para que te diga qué hacer. Después vuelve a lanzar el mismo comando y sigue donde se quedó.</p>
   <pre class="cmd">{{AYUDA}}</pre>
 </div><!--FIN-->
+<!--TROZO siguiente--><section class="panel" id="siguiente-paso" aria-labelledby="t-siguiente">
+  <h2 id="t-siguiente">Siguiente paso</h2>
+  {{{TEXTO}}}
+  {{{COMANDO}}}
+</section>
+<p class="muted">El flujo completo está en <code>FLUJO.md</code>, junto a los scripts.</p><!--FIN-->
+<!--TROZO siguiente-comando--><pre class="cmd">{{COMANDO}}</pre><!--FIN-->
+<!--TROZO siguiente-corriendo--><p class="lede">Sigue trabajando: va por la fase {{FASE}}. No hagas nada. Si la consola se ha cerrado, lanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-cortada--><p class="lede">La pasada se ha cortado en la fase {{FASE}} porque pediste un límite de tareas (<code>-Limite</code>). No hay nada roto. Para seguir, relanza el mismo comando sin <code>-Limite</code>:</p><!--FIN-->
+<!--TROZO siguiente-parada-copilot-no-responde--><p class="lede">Se ha parado porque Copilot no responde: varias llamadas seguidas han fallado (sesión, cuota o red). Comprueba que Copilot responde en otra ventana y relanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-parada-tope-de-tiempo--><p class="lede">Se ha llegado al tope de tiempo (<code>-MaxHoras</code>). No hay nada roto. Relanza el mismo comando para seguir:</p><!--FIN-->
+<!--TROZO siguiente-parada-no-compila--><p class="lede">Después de corregir, el migrado no compila. Mira <code>registros\correccion.log</code>, arregla en <code>{{WORKTREE}}</code> (la copia de rescate), haz commit allí y relanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-parada-lotes-deshechos--><p class="lede">Se han atascado 6 ficheros seguidos, sin ningún arreglo bueno entre medias. Casi siempre es Copilot, Maven o un parámetro, no el código. Mira el último <code>lote-*.log</code> de <code>{{WORKTREE}}\.rescate</code> y relanza el mismo comando. Al relanzar no se reintentan esos ficheros (en FLUJO.md, «Ficheros atascados»):</p><!--FIN-->
+<!--TROZO siguiente-parada-guardas--><p class="lede">Alguien ha cambiado el original o la referencia mientras trabajaba el script. Mira <code>git status</code> y <code>git diff</code> en esa carpeta, déjala como estaba y relanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-parada-git--><p class="lede">El script no ha podido hacer un commit. Mira el mensaje de git en el registro (<code>{{REGISTRO}}</code>) y relanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-parada-otro--><p class="lede">Ha fallado el propio script (<code>{{MOTIVO}}</code>). Pega el mensaje y las últimas líneas del registro en el chat de Copilot (el texto listo para pegar está más abajo) y relanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-distinto-corregido--><p class="lede">La corrección ha cambiado el resultado de {{N}} casos. Busca el commit que los rompe y deshazlo:</p><!--FIN-->
+<!--TROZO siguiente-distinto-corregido-uno--><p class="lede">La corrección ha cambiado el resultado de 1 caso. Busca el commit que lo rompe y deshazlo:</p><!--FIN-->
+<!--TROZO siguiente-distinto--><p class="lede">{{N}} casos dan distinto que el original. Míralos en la <a href="3-original-vs-migrado.html">página 3</a>.</p><!--FIN-->
+<!--TROZO siguiente-distinto-uno--><p class="lede">1 caso da distinto que el original. Míralo en la <a href="3-original-vs-migrado.html">página 3</a>.</p><!--FIN-->
+<!--TROZO siguiente-local-jdk--><p class="lede">La prueba en local no se ha podido hacer: el original no compila con el JDK de Maven. Relanza con <code>-JavaLegacy</code> y la ruta del JDK del original (8 u 11):</p><!--FIN-->
+<!--TROZO siguiente-local-fallo--><p class="lede">La prueba en local no se ha podido hacer: {{DETALLE}}. Sin ella, la página 3 solo tiene lo que la IA ha leído. Arregla la causa y relanza el mismo comando:</p><!--FIN-->
+<!--TROZO siguiente-local-saltada--><p class="lede">La prueba en local no se ha hecho: lanzaste con <code>-SinPruebaLocal</code>. Para ejecutar el original y el migrado con las mismas entradas, relanza el mismo comando (sin esa opción):</p><!--FIN-->
+<!--TROZO siguiente-parar-con-problemas--><p class="lede">Tu código da lo mismo que el original. Para corregir los {{N}} problemas de la <a href="2-problemas.html">página 2</a>:</p><!--FIN-->
+<!--TROZO siguiente-parar-con-problemas-uno--><p class="lede">Tu código da lo mismo que el original. Para corregir el problema de la <a href="2-problemas.html">página 2</a>:</p><!--FIN-->
+<!--TROZO siguiente-corregido--><p class="lede">Revisa los cambios y tráelos a tu rama:</p><!--FIN-->
+<!--TROZO siguiente-pre--><p class="lede">Pruébalo en pre: cada job tiene su guion en la <a href="1-batch-original.html">página 1</a>.</p><!--FIN-->
 <!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ninguna diferencia con el original, ningún caso distinto al ejecutar los dos, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
 <!--TROZO toca-grupo--><div class="grupo">
   <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
@@ -75,7 +103,7 @@
 <!--TROZO toca-dudas-titulo-->Dudas de las fichas de job ({{N}})<!--FIN-->
 <!--TROZO toca-dudas-texto-->Lo que la IA dice que no se puede saber con lo que leyó.<!--FIN-->
 <!--TROZO toca-sincaso-titulo-->Reglas sin caso de prueba ({{N}})<!--FIN-->
-<!--TROZO toca-sincaso-texto-->Reglas del código que ningún caso de prueba en pre cubre. Hay que escribirles un caso a mano.<!--FIN-->
+<!--TROZO toca-sincaso-texto-->Reglas del código que ningún caso de prueba en pre cubre. El script pide un caso por cada una; estas son las que no ha conseguido. Escríbeles el caso a mano o relanza el mismo comando para que lo intente otra vez con <code>-Reintentar</code>.<!--FIN-->
 <!--TROZO toca-tecnicos-titulo-->Datos con nombres de clase ({{N}})<!--FIN-->
 <!--TROZO toca-tecnicos-texto-->Estos datos no salen en la página para negocio porque nombran clases del original. Están en datos/jobs/<job>.json con tecnico: true. Las clases que no caben en la redacción de un job están en su campo fuera.<!--FIN-->
 <!--TROZO toca-fuera-->    <li>{{{CABECERA}}}<span class="motivo">No caben en la redacción estas clases: {{CLASES}}.</span></li><!--FIN-->
@@ -105,6 +133,7 @@
 <!--TROZO fase-fichas-job-->Redacción de cada job<!--FIN-->
 <!--TROZO fase-resumen-->Resumen y glosario<!--FIN-->
 <!--TROZO fase-pruebas-pre-->Guion de prueba en pre<!--FIN-->
+<!--TROZO fase-casos-pre-->Casos de las reglas sin caso<!--FIN-->
 <!--TROZO fase-comparar-->Comparación con el original<!--FIN-->
 <!--TROZO fase-correccion-->Corrección del migrado<!--FIN-->
 <!--TROZO fase-prueba-local-->Prueba en local<!--FIN-->

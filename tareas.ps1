@@ -10,7 +10,7 @@ Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto 
 DEFINE al cargarse: las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
-PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, FicherosComparar, EstadosComparar, ListasJob, Papeles, TiposDato y JavaExe) y
+PasosDefinicionMax, PasosFichaMax, GlosarioMax, ResumenCaracteresJob, ResumenCaracteresDato, RellenoProhibido, CasosMax, FicherosComparar, EstadosComparar, ListasJob, Papeles, TiposDato y JavaExe) y
 las funciones. El lanzador de programas (Get-Lanzador y lo que usa), $Utf8 y la cobertura (Get-Cobertura, JacocoPlugin y CoberturaMinima) son de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
@@ -48,6 +48,11 @@ $Cfg += @{
   PasosDefinicionMax = 20     # pasos de un job en la definicion
   PasosFichaMax      = 12     # pasos de una ficha de job
   GlosarioMax        = 15
+  ResumenCaracteresJob = 1500  # lo que se le da al resumen de cada job: sus listas (lo que necesita, deja, envia y sus reglas), todas juntas
+  ResumenCaracteresDato = 160  # una linea de esas listas se corta a esto
+  # Frases que no dicen nada: un texto que las lleva no vale (sin mayusculas ni acentos, solo palabras enteras)
+  RellenoProhibido   = @('de forma clara', 'clara y ordenada', 'de manera eficiente', 'toda la informacion disponible', 'facilita', 'garantiza', 'optimiza',
+    'listo para revisarse', 'las personas responsables', 'diversos', 'distintos procesos')
   CasosMax           = 40     # casos de la prueba en pre de un job
   FicherosComparar   = 3      # ficheros del migrado que se le dan a la comparacion de una clase del original
   EstadosComparar    = @('igual', 'distinto', 'falta', 'no-lo-se')   # lo que puede decir la IA de un dato (sin-pieza lo pone el script)
@@ -156,6 +161,9 @@ function Get-Plantilla([string]$Tipo) {
   return $script:Plantillas[$Tipo]
 }
 
+# Las frases de relleno que no valen, para el prompt: entre comillas y separadas por comas.
+function Get-TextoRelleno { return ((@($Cfg.RellenoProhibido) | ForEach-Object { '"' + $_ + '"' }) -join ', ') }
+
 # Lo que va en cada {{CLAVE}} de la plantilla de una tarea. $Leer es el fichero del original que se lee.
 # Una tarea con entradas.prompt (las de prueba-local.ps1) trae ahi sus claves.
 function Get-VariablesPrompt($T, [string]$Leer) {
@@ -167,9 +175,10 @@ function Get-VariablesPrompt($T, [string]$Leer) {
       $v.FICHERO = $Leer; $v.RELATIVO = $e.fichero; $v.LINEAS = "$($e.desde)-$($e.hasta)"
       $v.JOBS = (@($e.jobs) -join ', '); $v.CLASES = ((Get-NombresClases) -join ', '); $v.PASOS_MAX = "$($Cfg.PasosDefinicionMax)"
     }
-    'ficha-job' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.PASOS_MAX = "$($Cfg.PasosFichaMax)" }
+    'ficha-job' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.PASOS_MAX = "$($Cfg.PasosFichaMax)"; $v.RELLENO = Get-TextoRelleno }
     'prueba-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.VARIABLES = $e.variables; $v.CASOS_MAX = "$($Cfg.CasosMax)" }
-    'resumen' { $v.JOBS = $e.datos; $v.GLOSARIO_MAX = "$($Cfg.GlosarioMax)" }
+    'caso-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.REGLA = $e.regla; $v.REGLA_REF = $e.ref; $v.GUION = $e.guion }
+    'resumen' { $v.JOBS = $e.datos; $v.GLOSARIO_MAX = "$($Cfg.GlosarioMax)"; $v.RELLENO = Get-TextoRelleno }
     'comparar-pieza' {
       $v.FICHERO = $Leer; $v.CLASE = $e.clase; $v.DATOS = $e.datos
       $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
@@ -333,6 +342,24 @@ function Test-LenguajeNegocio($Campos) {
   return ('Esto es para gente de negocio y no puede llevar nombres de clases: ' + ($mal -join '; ') + '. Cuenta lo que hace con palabras normales.')
 }
 
+# Las frases de relleno (RellenoProhibido) que lleva cada texto: sin mayusculas ni acentos y solo como palabras enteras
+# ('facilita' no salta con 'facilitara'). Devuelve '' si no hay ninguna; si la hay, el motivo, que pide el dato concreto.
+function Test-Relleno($Campos) {
+  $mal = @()
+  foreach ($k in $Campos.Keys) {
+    $plano = ConvertTo-Plano ([string]$Campos[$k])
+    foreach ($f in @($Cfg.RellenoProhibido)) {
+      if ($plano -match ('(?<![\p{L}\p{N}])' + [regex]::Escape((ConvertTo-Plano $f)) + '(?![\p{L}\p{N}])')) { $mal += "$k lleva '$f'" }
+    }
+  }
+  if ($mal.Count -eq 0) { return '' }
+  return ('Hay frases de relleno, que no cuentan nada: ' + ($mal -join '; ') + '. Cambialas por el dato concreto (que datos lee y de donde, que hace con ellos, que deja y a quien le llega). Si ese dato no esta en lo que te he dado, escribe: no consta.')
+}
+
+function ConvertTo-Plano([string]$Texto) {
+  return ([regex]::Replace($Texto.Normalize([System.Text.NormalizationForm]::FormD), '\p{Mn}', '')).ToLowerInvariant()
+}
+
 # Comprueba la definicion de los jobs de un fichero: exactamente los jobs pedidos, de 1 a PasosDefinicionMax
 # pasos cada uno, clases de la lista cerrada del original y citas que salen en el fichero.
 function Test-DefinicionJob($T, [string]$Dir, [string]$Leer) {
@@ -418,6 +445,8 @@ function Test-FichaJob($T, [string]$Dir) {
   }
   $m = Test-LenguajeNegocio $campos
   if ($m) { return (New-Resultado $false $m $null) }
+  $m = Test-Relleno $campos
+  if ($m) { return (New-Resultado $false $m $null) }
   $dudas = @($o.dudas | Where-Object { Test-Texto $_ })
   return (New-Resultado $true '' ([ordered]@{ job = $o.job; titulo = $o.titulo; paraQue = $o.paraQue; pasos = $pasos; dudas = $dudas }))
 }
@@ -452,6 +481,8 @@ function Test-Resumen($T, [string]$Dir) {
     $i++
   }
   $m = Test-LenguajeNegocio $campos
+  if ($m) { return (New-Resultado $false $m $null) }
+  $m = Test-Relleno $campos
   if ($m) { return (New-Resultado $false $m $null) }
   return (New-Resultado $true '' ([ordered]@{ resumen = $o.resumen; orden = $orden; glosario = $glosario }))
 }
@@ -513,6 +544,31 @@ function Test-PruebaPre($T, [string]$Dir) {
   return (New-Resultado $true '' ([ordered]@{ job = $o.job; preparar = @($listas['preparar']); casos = @($listas['casos']); comprobar = @($listas['comprobar']); sinCaso = $sinCaso }))
 }
 
+# Comprueba el caso de una regla sin caso (entradas.ref es la regla; entradas.datos, los hechos con su referencia; entradas.titulos, los
+# titulos de los casos que ya hay): titulo, entrada y esperado con texto; refs con al menos una referencia, todas de los hechos (o la de la
+# regla), y la de la regla entre ellas; sin nombres de clase; y un titulo que no repita (sin mayusculas ni espacios de mas) el de un caso.
+function Test-CasoPre($T, [string]$Dir) {
+  $s = Read-Salida $T $Dir
+  if (-not $s.Ok) { return $s }
+  $o = $s.Ficha
+  $campos = [ordered]@{}
+  foreach ($c in @('titulo', 'entrada', 'esperado')) {
+    if (-not (Test-Texto $o.$c)) { return (New-Resultado $false "Falta el campo '$c' (o esta vacio)." $null) }
+    $campos[$c] = $o.$c
+  }
+  if (($o.refs -isnot [array]) -or @($o.refs).Count -eq 0) { return (New-Resultado $false "El campo 'refs' tiene que ser una lista con al menos una referencia: la de la regla, $($T.entradas.ref)." $null) }
+  $validas = @{ $T.entradas.ref = $true }
+  foreach ($m in [regex]::Matches([string]$T.entradas.datos, '(?m)^(clase-[0-9a-f]{8}#\d+) \[')) { $validas[$m.Groups[1].Value] = $true }
+  $malas = @($o.refs | Where-Object { ($_ -isnot [string]) -or -not $validas.ContainsKey($_) })
+  if ($malas.Count -gt 0) { return (New-Resultado $false "refs lleva referencias que no estan en los hechos de arriba: $(@($malas | ForEach-Object { "$_" }) -join ', '). Copia las referencias tal cual." $null) }
+  if (@($o.refs) -cnotcontains $T.entradas.ref) { return (New-Resultado $false "refs tiene que llevar la referencia de la regla que falta: $($T.entradas.ref) ($($T.entradas.regla -replace '^\S+ \[[^\]]*\] ', ''))." $null) }
+  $repetido = @($T.entradas.titulos | Where-Object { (ConvertTo-Plano ([string]$_).Trim()) -ceq (ConvertTo-Plano $o.titulo.Trim()) })
+  if ($repetido.Count -gt 0) { return (New-Resultado $false "El titulo '$($o.titulo)' es el de un caso que ya hay en el guion ('$($repetido[0])'): ponle uno que diga que prueba este." $null) }
+  $m = Test-LenguajeNegocio $campos
+  if ($m) { return (New-Resultado $false $m $null) }
+  return (New-Resultado $true '' ([ordered]@{ ref = $T.entradas.ref; caso = [ordered]@{ titulo = $o.titulo; entrada = $o.entrada; esperado = $o.esperado; refs = @($o.refs) } }))
+}
+
 # Comprueba lo que ha escrito Copilot segun el tipo de la tarea.
 function Test-Salida($T, [string]$Dir, [string]$Leer) {
   switch ($T.tipo) {
@@ -520,6 +576,7 @@ function Test-Salida($T, [string]$Dir, [string]$Leer) {
     'ficha-job' { return (Test-FichaJob $T $Dir) }
     'resumen' { return (Test-Resumen $T $Dir) }
     'prueba-pre' { return (Test-PruebaPre $T $Dir) }
+    'caso-pre' { return (Test-CasoPre $T $Dir) }
     'comparar-pieza' { return (Test-Comparar $T $Dir) }
     default { return (Test-Ficha $T $Dir $Leer) }
   }
@@ -902,8 +959,52 @@ function Save-Jobs($Mapa, $Tareas) {
 }
 
 # ================================== RESUMEN ==================================
-# La tarea del resumen: de cada job del mapa, el titulo, el para que y los pasos de su redaccion, si esta hecha
-# (si no, solo su nombre). Sin ninguna redaccion hecha no hay tarea.
+# Las listas de un job que se le dan al resumen, de datos\jobs\<job>.json: lo que necesita, lo que deja, a quien lo envia y sus reglas,
+# un dato por linea (sin los tecnicos, que nombran clases) y cada linea cortada a ResumenCaracteresDato. Entre las cuatro, hasta
+# ResumenCaracteresJob caracteres: se reparte dato a dato (el primero de cada lista, luego el segundo...) para que ninguna se quede sin sitio.
+# Una lista sin datos dice "no consta".
+function Get-ListasResumen([string]$Job) {
+  $cab = [ordered]@{ necesita = 'NECESITA'; produce = 'DEJA'; conexiones = 'SE ENVIA A'; reglas = 'REGLAS' }
+  $ruta = Get-RutaJob $Job
+  $f = $null
+  if (Test-Path -LiteralPath $ruta) { $f = Read-Json $ruta }
+  $lineas = [ordered]@{}
+  $cogidas = @{}
+  $gastado = 0
+  foreach ($k in $cab.Keys) {
+    $lineas[$k] = @()
+    $cogidas[$k] = @()
+    if ($f) {
+      foreach ($x in @($f.$k)) {
+        if ($x -and -not $x.tecnico -and (Test-Texto $x.texto)) {
+          $l = ($x.texto -replace '\s+', ' ').Trim()
+          if ($l.Length -gt [int]$Cfg.ResumenCaracteresDato) { $l = $l.Substring(0, [int]$Cfg.ResumenCaracteresDato - 3) + '...' }
+          $lineas[$k] += ('- ' + $l)
+        }
+      }
+    }
+    if ($lineas[$k].Count -eq 0) { $gastado += ($cab[$k] + ': no consta').Length + 1 } else { $gastado += ($cab[$k] + ':').Length + 1 }
+  }
+  $abiertas = @($cab.Keys | Where-Object { $lineas[$_].Count -gt 0 })
+  for ($i = 0; $abiertas.Count -gt 0; $i++) {
+    foreach ($k in @($abiertas)) {
+      if ($i -ge $lineas[$k].Count) { $abiertas = @($abiertas | Where-Object { $_ -ne $k }); continue }
+      $coste = $lineas[$k][$i].Length + 1
+      if (($gastado + $coste) -gt [int]$Cfg.ResumenCaracteresJob) { $abiertas = @($abiertas | Where-Object { $_ -ne $k }); continue }
+      $cogidas[$k] += $lineas[$k][$i]
+      $gastado += $coste
+    }
+  }
+  $b = ''
+  foreach ($k in $cab.Keys) {
+    if ($lineas[$k].Count -eq 0) { $b += $cab[$k] + ": no consta`n" }
+    else { $b += $cab[$k] + ":`n" + ((@($cogidas[$k]) | ForEach-Object { "$_`n" }) -join '') }
+  }
+  return $b
+}
+
+# La tarea del resumen: de cada job del mapa, el titulo, el para que y los pasos de su redaccion, si esta hecha (si no, solo su
+# nombre), y las listas del job (Get-ListasResumen). Sin ninguna redaccion hecha no hay tarea.
 function Get-TareasResumen($Mapa, [bool]$ConservarAtascadas) {
   $bloques = @()
   $hechas = 0
@@ -916,7 +1017,8 @@ function Get-TareasResumen($Mapa, [bool]$ConservarAtascadas) {
       $hechas++
       $b += "TITULO: $($f.titulo)`nPARA QUE: $($f.paraQue -replace '\s+', ' ')`nPASOS: " + ((@($f.pasos) | ForEach-Object { $_.titulo }) -join '; ') + "`n"
     }
-    else { $b += "(Sin redaccion: de este job solo se sabe el nombre.)`n" }
+    else { $b += "(Sin redaccion: de este job no hay titulo, ni para que, ni pasos.)`n" }
+    $b += Get-ListasResumen $j.job
     $bloques += $b
   }
   if ($hechas -eq 0) { return @() }
@@ -1033,6 +1135,69 @@ function Save-Pruebas($Mapa, $Tareas) {
       if ($atascada) { $o['redaccion'] = 'atascada' } else { $o['redaccion'] = 'hecha' }
     }
     Write-Json (Join-Path (Join-Path $Datos 'pruebas') ((Get-NombreJob $j.job) + '.json')) $o
+  }
+}
+
+# ============================ UN CASO POR REGLA SIN CASO ============================
+# El guion de un job (datos\pruebas\<job>.json) como texto para el prompt: lo que se prepara, los casos (solo su titulo) y lo que se comprueba.
+function Get-TextoGuion($Prueba) {
+  $lista = {
+    param($Items, [string]$Campo)
+    $l = @($Items | Where-Object { $null -ne $_ } | ForEach-Object { '- ' + (($_.$Campo -replace '\s+', ' ').Trim()) })
+    if ($l.Count -eq 0) { return '(nada)' }
+    return ($l -join "`n")
+  }
+  return ("Antes de lanzar el job:`n" + (& $lista $Prueba.preparar 'texto') + "`nCasos que ya hay:`n" + (& $lista $Prueba.casos 'titulo') + "`nAl acabar, lo que se mira:`n" + (& $lista $Prueba.comprobar 'texto'))
+}
+
+# Una tarea caso-pre por cada regla o error que prueba-pre dejo en sinCaso (datos\pruebas\<job>.json, escrito por Save-Pruebas): recibe la regla,
+# el guion que ya tiene el job y los hechos de Get-ContextoPrueba. La huella sigue a todo eso: si prueba-pre rehace el guion, se piden otra vez.
+function Get-TareasCaso($Mapa, [bool]$ConservarAtascadas) {
+  $tareas = @()
+  foreach ($j in @($Mapa.jobs)) {
+    $n = Get-NombreJob $j.job
+    $ruta = Join-Path (Join-Path $Datos 'pruebas') ($n + '.json')
+    if (-not (Test-Path -LiteralPath $ruta)) { continue }
+    $p = Read-Json $ruta
+    $faltan = @($p.sinCaso | Where-Object { $null -ne $_ })
+    if ($faltan.Count -eq 0) { continue }
+    $c = Get-ContextoPrueba $j
+    $guion = Get-TextoGuion $p
+    $titulos = @($p.casos | Where-Object { $null -ne $_ } | ForEach-Object { [string]$_.titulo })
+    foreach ($x in $faltan) {
+      $regla = "$($x.ref) [$($x.tipo)] $($x.texto -replace '\s+', ' ')"
+      $entradas = [pscustomobject]@{ job = $j.job; ref = $x.ref; tipo = $x.tipo; regla = $regla; pasos = $c.Pasos; datos = $c.Datos; guion = $guion; titulos = $titulos
+        huella = (Get-Hash8 ($regla + "`n" + $c.Pasos + "`n" + $c.Datos + "`n" + $guion)) }
+      $tareas += , (Restore-Tarea (New-TareaTipo 'caso-pre' ('casopre-' + $n + '-' + (Get-Hash8 $x.ref)) '' ('datos/pruebas/' + $n + '.json') $entradas) $ConservarAtascadas)
+    }
+  }
+  return $tareas
+}
+
+# Pone en datos\pruebas\<job>.json el caso de cada tarea caso-pre hecha (al final de casos, sin pasar de CasosMax ni repetir un titulo) y
+# deja en sinCaso solo las reglas que ningun caso cubre. Las atascadas no cambian nada: su regla se queda en sinCaso. Se puede aplicar
+# otra vez sobre el mismo fichero: no duplica nada.
+function Save-Casos($Mapa, $Tareas) {
+  foreach ($j in @($Mapa.jobs)) {
+    $hechas = @($Tareas | Where-Object { $_.estado -eq 'hecha' -and $_.entradas.job -ceq $j.job })
+    if ($hechas.Count -eq 0) { continue }
+    $ruta = Join-Path (Join-Path $Datos 'pruebas') ((Get-NombreJob $j.job) + '.json')
+    $p = Read-Json $ruta
+    $casos = @($p.casos | Where-Object { $null -ne $_ })
+    $vistos = @{}
+    foreach ($c in $casos) { $vistos[(ConvertTo-Plano ([string]$c.titulo).Trim())] = $true }
+    foreach ($t in $hechas) {
+      $c = $t.resultado.caso
+      $k = ConvertTo-Plano ([string]$c.titulo).Trim()
+      if ($vistos.ContainsKey($k) -or $casos.Count -ge [int]$Cfg.CasosMax) { continue }
+      $vistos[$k] = $true
+      $casos += [ordered]@{ titulo = $c.titulo; entrada = $c.entrada; esperado = $c.esperado; refs = @($c.refs) }
+    }
+    $cubiertas = @{}
+    foreach ($c in $casos) { foreach ($r in @($c.refs)) { $cubiertas[[string]$r] = $true } }
+    $p.casos = $casos
+    $p.sinCaso = @($p.sinCaso | Where-Object { $null -ne $_ -and -not $cubiertas.ContainsKey([string]$_.ref) })
+    Write-Json $ruta $p
   }
 }
 

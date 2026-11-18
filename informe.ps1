@@ -16,6 +16,11 @@ FUNCION PUBLICA
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
 
+  Get-SiguientePaso -Est <estado.json> -D <datos del informe>
+    Lo unico que le toca hacer ahora a la persona, y su comando listo para copiar: la primera de ocho situaciones que se cumple (ver FLUJO.md,
+    "Siguiente paso"). Devuelve Caso (el nombre de la situacion; la portada tiene un texto por cada una), Comando y los datos que el texto
+    usa. La portada lo pone en un recuadro arriba del todo. $D lleva Correccion, PruebaLocal y Diag; sin ellos, cuentan como vacios.
+
   Read-Diagnostico -Datos <carpeta datos> [-Cuando antes|despues]
     Los problemas del migrado (hallazgos-<Cuando>.json y diagnostico-<Cuando>.md): por area, en el orden de la tabla del .md, con
     Errores y Avisos (las listas y sus cuentas), el Estado del build y lo que Incumple la referencia. $null si falta un fichero.
@@ -38,7 +43,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # De que tipo son las tareas de cada fase del script (las demas fases no tienen tareas)
-$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'comparar' = 'comparar-pieza' }
+$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'casos-pre' = 'caso-pre'; 'comparar' = 'comparar-pieza' }
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -628,7 +633,7 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
 # Las fases de la pasada en el orden en que se hacen, que depende de la respuesta: con corregir, la comparacion y la prueba en local van
 # despues de la correccion; si no, la comparacion va antes. lectura-hecha y hecha no se pintan: marcan el sitio de esos dos estados.
 function Get-OrdenFases($D) {
-  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre')
+  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar', 'prueba-local', 'hecha')) }
   return @($lectura + @('comparar', 'lectura-hecha', 'correccion', 'prueba-local', 'hecha'))
 }
@@ -1094,6 +1099,91 @@ function Get-CuerpoCorrecciones($D, $T, [string]$Cuerpo) {
   return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); CORRECCION = $pagina })
 }
 
+# ============================== EL SIGUIENTE PASO ==============================
+# Un valor en la linea de comandos: tal cual si es una palabra sencilla (un modelo, una rama) y, si no, entre comillas.
+function Format-ArgComando([string]$Valor) {
+  if ($Valor -match '^[\w\.\-/]+$') { return $Valor }
+  return ('"' + $Valor + '"')
+}
+
+# La linea con la que se lanzo la pasada, montada con estado.json: las rutas entre comillas, el modelo si lo hay, -SoloInforme o -Si segun
+# $Respuesta (parar o corregir) y -JavaLegacy si hay ($Java).
+function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java) {
+  $c = '.\migracion.ps1 -Legacy "' + $Est.legacy + '" -Migrado "' + $Est.migrado + '" -Plantilla "' + $Est.plantilla + '"'
+  if ($Est.modelo) { $c += ' -Modelo ' + (Format-ArgComando ([string]$Est.modelo)) }
+  if ($Respuesta -ceq 'parar') { $c += ' -SoloInforme' } elseif ($Respuesta -ceq 'corregir') { $c += ' -Si' }
+  if ($Java) { $c += ' -JavaLegacy "' + $Java + '"' }
+  return $c
+}
+
+# Lo que hay que hacer ahora: la primera de estas situaciones que se cumple. Devuelve Caso (corriendo, parada, cortada, distinto-corregido,
+# distinto, local-jdk, local-fallo, local-saltada, parar-con-problemas, corregido o pre), Comando ('' si no hay), y lo que dicen los textos: Fase, Motivo,
+# Detalle, Registro, Worktree y N. $Est es estado.json; $D, los datos del informe (Correccion, PruebaLocal y Diag.Errores).
+#   1 fin vacio: sigue corriendo        2 parada      (extra: fin escrito pero la fase sin acabar, por -Limite: cortada)
+#   3 distintos y hubo correccion       4 distintos sin correccion
+#   5 la prueba en local fallo o se salto (con el JDK del original: local-jdk)
+#   6 respuesta parar y quedan errores en la pagina 2        7 correccion completa con commits        8 lo demas: pre
+function Get-SiguientePaso($Est, $D) {
+  $r = [ordered]@{ Caso = ''; Fase = [string]$Est.fase; Motivo = ''; Detalle = ''; Registro = ''; Worktree = [string]$Est.worktree; N = 0; Comando = '' }
+  $respuesta = [string]$Est.respuesta
+  $java = [string]$Est.javaLegacy
+  $pasada = Get-ComandoPasada $Est $respuesta $java
+  $origen = [string]$Est.ramaOrigen
+  if (-not $origen -and $D.Correccion) { $origen = [string]$D.Correccion.base }
+  if (-not $origen) { $origen = '<tu-rama>' }
+  $distintos = 0
+  if ($D.PruebaLocal) { $distintos = @(Get-CasosDistintos $D.PruebaLocal).Count }
+  $corregido = [bool]($D.Correccion -and @($D.Correccion.commits | Where-Object { $null -ne $_ }).Count -gt 0)
+  $errores = 0
+  if ($D.Diag) { $errores = [int]$D.Diag.Errores }
+  $local = ''
+  if ($Est.pruebaLocal) { $local = [string]$Est.pruebaLocal.resultado }
+  if (-not ([string]$Est.fin).Trim()) { $r.Caso = 'corriendo'; $r.Comando = $pasada }
+  elseif ($Est.parada) {
+    $r.Caso = 'parada'; $r.Motivo = [string]$Est.parada.motivo; $r.Detalle = [string]$Est.parada.detalle; $r.Registro = [string]$Est.parada.registro; $r.Comando = $pasada
+  }
+  elseif ([string]$Est.fase -cne 'hecha') { $r.Caso = 'cortada'; $r.Comando = $pasada }
+  elseif ($distintos -gt 0 -and $corregido) {
+    $r.Caso = 'distinto-corregido'; $r.N = $distintos
+    $r.Comando = '.\prueba-local.ps1 -Legacy "' + $Est.legacy + '" -Migrado "' + $Est.migrado + '" -Desde ' + (Format-ArgComando $origen) + ' -Deshacer'
+    if ($java) { $r.Comando += ' -JavaLegacy "' + $java + '"' }
+  }
+  elseif ($distintos -gt 0) { $r.Caso = 'distinto'; $r.N = $distintos }
+  elseif ($local -ceq 'fallo' -and $Est.pruebaLocal.jdkOriginal -eq $true -and -not $java) {
+    $r.Caso = 'local-jdk'; $r.Detalle = [string]$Est.pruebaLocal.detalle
+    $r.Comando = Get-ComandoPasada $Est $respuesta 'C:\ruta\jdk-del-original'
+  }
+  elseif ($local -ceq 'fallo') { $r.Caso = 'local-fallo'; $r.Detalle = [string]$Est.pruebaLocal.detalle; $r.Comando = $pasada }
+  elseif ($local -ceq 'saltada') { $r.Caso = 'local-saltada'; $r.Comando = $pasada }
+  elseif ($respuesta -ceq 'parar' -and $errores -gt 0) { $r.Caso = 'parar-con-problemas'; $r.N = $errores; $r.Comando = Get-ComandoPasada $Est 'corregir' $java }
+  elseif ($corregido -and $D.Correccion.completa -eq $true) {
+    $rama = [string]$Est.rama
+    if (-not $rama) { $rama = [string]$D.Correccion.rama }
+    $git = 'git -C "' + $Est.migrado + '" '
+    $r.Caso = 'corregido'
+    $r.Comando = (@(($git + 'log --oneline ' + (Format-ArgComando ($origen + '..' + $rama))), ($git + 'diff --stat ' + (Format-ArgComando ($origen + '...' + $rama))), ($git + 'merge ' + (Format-ArgComando $rama))) -join "`n")
+  }
+  else { $r.Caso = 'pre' }
+  return [pscustomobject]$r
+}
+
+# El recuadro "Siguiente paso" de la portada y, debajo, la linea que manda a FLUJO.md. El texto de cada situacion es un trozo de la plantilla:
+# siguiente-<caso> (las paradas, siguiente-parada-<motivo> o siguiente-parada-otro) y, con N = 1, la variante -uno si la hay. '' sin estado.json.
+function Get-SiguienteHtml($D, $T) {
+  if (-not $D.Estado) { return '' }
+  $s = Get-SiguientePaso $D.Estado $D
+  $nombre = 'siguiente-' + $s.Caso
+  if ($s.Caso -ceq 'parada') {
+    $nombre = 'siguiente-parada-' + $s.Motivo
+    if (-not $T.ContainsKey($nombre)) { $nombre = 'siguiente-parada-otro' }
+  }
+  if ($s.N -eq 1 -and $T.ContainsKey("$nombre-uno")) { $nombre += '-uno' }
+  $texto = Format-Trozo $T $nombre @{ FASE = $s.Fase; MOTIVO = $s.Motivo; DETALLE = $s.Detalle; REGISTRO = $s.Registro; WORKTREE = $s.Worktree; N = "$($s.N)" }
+  $comando = ''
+  if ($s.Comando) { $comando = Format-Trozo $T 'siguiente-comando' @{ COMANDO = $s.Comando } }
+  return (Format-Trozo $T 'siguiente' @{ TEXTO = $texto; COMANDO = $comando })
+}
+
 function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
   $est = $D.Estado
   $fase = ''
@@ -1122,7 +1212,7 @@ function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
       BATCH = (Get-BatchInforme $D); ESTADO = $estado; MIGRADO = (Get-Hoja $e.migrado); ORIGINAL = (Get-Hoja $e.legacy); PLANTILLA = (Get-Hoja $e.plantilla)
       MODELO = $modelo; EMPEZO = (Get-TextoFecha $T $e.creado); DURACION_ROTULO = $rotulo; DURACION = $duracion
       ETIQUETA = (Format-Trozo $T 'et-medido'); ETIQUETA_FASES = (Format-Trozo $T 'et-medido')
-      HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente']; PARADA = $parada
+      HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente']; PARADA = $parada; SIGUIENTE = (Get-SiguienteHtml $D $T)
       TOCA = (Get-TocaHtml $D $T); PROBLEMAS = (Get-ProblemasPortada $D $T); FASES = $fases; FICHEROS = (Get-FicherosHtml $D $T)
     })
 }
