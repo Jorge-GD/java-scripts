@@ -4020,5 +4020,175 @@ $Pruebas['m16 siguiente: la portada de una parada, de una pasada con problemas p
   Comprueba 'pre: sin comando y con la pagina 1' ($s -notmatch '<pre' -and (Texto-Plano $s) -match 'Pru.balo en pre: cada job tiene su guion en la p.gina 1' -and $s -match 'href="1-batch-original\.html"') $s
 }
 
+# ===================== M15: RESUMEN Y FICHAS DE JOB CONCRETOS =====================
+# Lo que lleva el resumen de cada job (de datos\jobs\<job>.json), el tope por job y las frases de relleno.
+$Pruebas['m15 resumen: el prompt lleva por job lo que necesita, lo que deja, a quien lo envia y sus reglas, y no lo tecnico'] = {
+  $codigo = @'
+$Datos = '{{DIR}}'
+$mapa = [pscustomobject]@{ jobs = @([pscustomobject]@{ job = 'cargaRecibosJob' }, [pscustomobject]@{ job = 'informeCobrosJob' }, [pscustomobject]@{ job = 'avisosJob' }) }
+function Item([string]$Texto, [string]$Tipo, [bool]$Tecnico = $false) {
+  $x = [ordered]@{ tipo = $Tipo; texto = $Texto; ref = 'clase-aaaaaaaa#0'; clase = 'CargaReader'; fichero = 'a.java'; linea = 1; cita = 'x'; probado = $true }
+  if ($Tecnico) { $x['tecnico'] = $true }
+  return $x
+}
+function Job([string]$Nombre, [bool]$Hecha, $L) {
+  $o = [ordered]@{ job = $Nombre }
+  if ($Hecha) { $o['titulo'] = "Titulo $Nombre"; $o['paraQue'] = "Sirve para $Nombre."; $o['pasos'] = @([ordered]@{ titulo = 'Leer el fichero'; texto = 'Lee.'; refs = @() }) }
+  foreach ($k in @('necesita', 'produce', 'conexiones', 'reglas', 'siFalla')) { $o[$k] = @(); if ($L.ContainsKey($k)) { $o[$k] = @($L[$k]) } }
+  $o['dudas'] = @()
+  if ($Hecha) { $o['redaccion'] = 'hecha' } else { $o['redaccion'] = 'atascada' }
+  Write-Json (Get-RutaJob $Nombre) $o
+}
+Job 'cargaRecibosJob' $true @{
+  necesita = @((Item 'Fichero de recibos del banco en la carpeta de entrada' 'entrada-fichero'), (Item 'Tabla de clientes' 'tabla-lee'), (Item 'Lee el parametro RUTA_ENTRADA con GestorRecibos' 'parametro' $true))
+  produce = @((Item 'Tabla de recibos pendientes de cobro' 'tabla-escribe'), (Item 'Fichero de recibos rechazados' 'salida-fichero'))
+  conexiones = @((Item 'Envia el fichero de rechazados al servidor del banco por SFTP' 'sftp'))
+  reglas = @((Item 'Rechaza el recibo cuyo importe es menor de 5 euros' 'regla'), (Item 'Un recibo duplicado se descarta' 'regla'))
+  siFalla = @((Item 'Si falla el envio avisa por correo al equipo de cobros' 'error'))
+}
+Job 'informeCobrosJob' $true @{}
+Job 'avisosJob' $false @{ reglas = @((Item 'Avisa solo a los clientes con deuda' 'regla')) }
+$t = @(Get-TareasResumen $mapa $false)
+'TAREAS=' + $t.Count
+[System.IO.File]::WriteAllText((Join-Path $Datos 'datos-resumen.txt'), [string]$t[0].entradas.datos)
+'FIN'
+'@
+  $d = Join-Path $Dir 'resumen-datos'
+  $r = En-Biblioteca 'resumen-datos' $codigo.Replace('{{DIR}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $txt = ''
+  if (Test-Path -LiteralPath (Join-Path $d 'datos-resumen.txt')) { $txt = [System.IO.File]::ReadAllText((Join-Path $d 'datos-resumen.txt')) }
+  Comprueba 'hay una tarea con los datos de los jobs' ($txt -match '(?m)^JOB: cargaRecibosJob\r?$' -and $txt -match '(?m)^JOB: informeCobrosJob\r?$') (Cola $r.Salida)
+  $b = [regex]::Match($txt, '(?s)^JOB: cargaRecibosJob.*?(?=\r?\nJOB: |\z)').Value
+  Comprueba 'lo que necesita, con sus tablas y ficheros' ($b -match '(?m)^NECESITA:\r?$' -and $b.Contains('Fichero de recibos del banco en la carpeta de entrada') -and $b.Contains('Tabla de clientes')) $b
+  Comprueba 'lo que deja' ($b -match '(?m)^DEJA:\r?$' -and $b.Contains('Tabla de recibos pendientes de cobro') -and $b.Contains('Fichero de recibos rechazados')) $b
+  Comprueba 'a quien lo envia' ($b -match '(?m)^SE ENVIA A:\r?$' -and $b.Contains('servidor del banco por SFTP')) $b
+  Comprueba 'sus reglas' ($b -match '(?m)^REGLAS:\r?$' -and $b.Contains('menor de 5 euros') -and $b.Contains('duplicado')) $b
+  Comprueba 'cada dato en su linea corta (con guion)' ($b -match '(?m)^- Tabla de clientes\r?$') $b
+  Comprueba 'un dato tecnico (que nombra una clase) no va' (-not $b.Contains('GestorRecibos') -and -not $b.Contains('RUTA_ENTRADA')) $b
+  Comprueba 'de lo que pasa si falla no se manda nada (no esta en lo que se pide)' (-not $b.Contains('avisa por correo')) $b
+  Comprueba 'lleva tambien el titulo, el para que y los pasos de antes' ($b.Contains('Titulo cargaRecibosJob') -and $b.Contains('Sirve para cargaRecibosJob') -and $b.Contains('Leer el fichero')) $b
+  $c = [regex]::Match($txt, '(?s)^JOB: informeCobrosJob.*?(?=\r?\nJOB: |\z)').Value
+  Comprueba 'lo que no hay se dice "no consta", no se deja en blanco' ($c -match '(?m)^NECESITA: no consta\r?$' -and $c -match '(?m)^DEJA: no consta\r?$' -and $c -match '(?m)^SE ENVIA A: no consta\r?$' -and $c -match '(?m)^REGLAS: no consta\r?$') $c
+  $e = [regex]::Match($txt, '(?s)^JOB: avisosJob.*?(?=\r?\nJOB: |\z)').Value
+  Comprueba 'un job sin redaccion lleva igual sus listas del script' ($e.Contains('Sin redaccion') -and $e.Contains('Avisa solo a los clientes con deuda')) $e
+}
+
+$Pruebas['m15 resumen: el tope de caracteres por job se cumple y ninguna lista se queda sin sitio'] = {
+  $codigo = @'
+$Datos = '{{DIR}}'
+$mapa = [pscustomobject]@{ jobs = @([pscustomobject]@{ job = 'cargaRecibosJob' }) }
+'CFG=' + $Cfg.ResumenCaracteresJob
+function Items([string]$Tipo, [string]$Que) {
+  return @(1..30 | ForEach-Object { [ordered]@{ tipo = $Tipo; texto = ($Que + ' numero ' + $_ + ' ' + ('x' * 90)); ref = 'clase-aaaaaaaa#0'; clase = 'A'; fichero = 'a.java'; linea = 1; cita = 'x'; probado = $true } })
+}
+$o = [ordered]@{ job = 'cargaRecibosJob'; titulo = 'Carga'; paraQue = 'Carga.'; pasos = @([ordered]@{ titulo = 'Uno'; texto = 'Uno.'; refs = @() })
+  necesita = (Items 'tabla-lee' 'Necesita'); produce = (Items 'tabla-escribe' 'Deja'); conexiones = (Items 'sftp' 'Envia'); reglas = (Items 'regla' 'Regla'); siFalla = @(); dudas = @(); redaccion = 'hecha' }
+Write-Json (Get-RutaJob 'cargaRecibosJob') $o
+foreach ($tope in @($Cfg.ResumenCaracteresJob, 500)) {
+  $Cfg.ResumenCaracteresJob = $tope
+  $t = @(Get-TareasResumen $mapa $false)
+  $txt = [string]$t[0].entradas.datos
+  $desde = $txt.IndexOf('NECESITA:')
+  'TOPE' + $tope + '=' + ($txt.Length - $desde)
+  'LISTAS' + $tope + '=' + (@('NECESITA:', 'DEJA:', 'SE ENVIA A:', 'REGLAS:' | Where-Object { $txt -match ('(?m)^' + $_ + '\r?$') }).Count)
+  'PRIMERAS' + $tope + '=' + (@('Necesita numero 1 ', 'Deja numero 1 ', 'Envia numero 1 ', 'Regla numero 1 ' | Where-Object { $txt.Contains($_) }).Count)
+}
+'FIN'
+'@
+  $r = En-Biblioteca 'resumen-tope' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'resumen-tope'))
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^(\w+)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  Comprueba 'hay un tope por defecto (ResumenCaracteresJob) de entre 800 y 4000 caracteres' ($v['CFG'] -match '^\d+$' -and [int]$v['CFG'] -ge 800 -and [int]$v['CFG'] -le 4000) $v['CFG']
+  $t0 = [int]$v['CFG']
+  Comprueba 'con el tope por defecto, las listas del job caben' ($v["TOPE$t0"] -match '^\d+$' -and [int]$v["TOPE$t0"] -le $t0 -and [int]$v["TOPE$t0"] -gt 0) $v["TOPE$t0"]
+  Comprueba 'con 500, las listas del job caben en 500 caracteres' ($v['TOPE500'] -match '^\d+$' -and [int]$v['TOPE500'] -gt 0 -and [int]$v['TOPE500'] -le 500) $v['TOPE500']
+  Igual 'y con 500 salen las cuatro listas' '4' $v['LISTAS500']
+  Igual 'y de cada una, su primer dato (ninguna se queda fuera por culpa de otra)' '4' $v['PRIMERAS500']
+}
+
+$Pruebas['m15 resumen: el resumen y la ficha de un job con una frase de relleno no valen y el motivo pide el dato concreto'] = {
+  $codigo = @'
+$Fuentes = @('CargaReader', 'GestorRecibos') | ForEach-Object { [pscustomobject]@{ BaseName = $_ } }
+$o = [char]0xF3
+$base = Join-Path '{{DIR}}' ([guid]::NewGuid().ToString('N').Substring(0, 6))
+function Resumen([string]$Texto, [string]$Motivo = 'Va primero.', [string]$Definicion = 'Un grupo de recibos.') {
+  $dir = Join-Path $base ('r' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  $x = [ordered]@{ resumen = $Texto; orden = @([ordered]@{ job = 'cargaRecibosJob'; motivo = $Motivo }); glosario = @([ordered]@{ termino = 'remesa'; definicion = $Definicion }) }
+  [System.IO.File]::WriteAllText((Join-Path $dir '.rescate/tareas/resumen.json'), (ConvertTo-Json -InputObject $x -Depth 5))
+  $t = [pscustomobject]@{ id = 'resumen'; entradas = [pscustomobject]@{ jobs = @('cargaRecibosJob') } }
+  $r = Test-Resumen $t $dir
+  if ($r.Ok) { return 'BIEN' }
+  return ('MAL ' + $r.Motivo)
+}
+function Ficha([string]$ParaQue, [string]$Texto = 'Se lee el fichero que deja el banco.') {
+  $dir = Join-Path $base ('f' + [guid]::NewGuid().ToString('N').Substring(0, 6))
+  [void](New-Item -ItemType Directory -Path (Join-Path $dir '.rescate/tareas') -Force)
+  $x = [ordered]@{ job = 'cargaRecibosJob'; titulo = 'Carga de recibos'; paraQue = $ParaQue; pasos = @([ordered]@{ titulo = 'Leer el fichero'; texto = $Texto; refs = @('clase-aaaaaaaa#0') }); dudas = @() }
+  [System.IO.File]::WriteAllText((Join-Path $dir '.rescate/tareas/job-cargaRecibosJob.json'), (ConvertTo-Json -InputObject $x -Depth 5))
+  $t = [pscustomobject]@{ id = 'job-cargaRecibosJob'; entradas = [pscustomobject]@{ job = 'cargaRecibosJob'; datos = 'clase-aaaaaaaa#0 [regla] Rechaza el recibo sin importe.' } }
+  $r = Test-FichaJob $t $dir
+  if ($r.Ok) { return 'BIEN' }
+  return ('MAL ' + $r.Motivo)
+}
+'R1=' + (Resumen 'Lee el fichero de recibos que deja el banco en la carpeta de entrada y rechaza los de menos de 5 euros. Deja la tabla de recibos pendientes y envia los rechazados al banco por SFTP.')
+'R2=' + (Resumen 'Reune los recibos y deja el resultado de forma clara y ordenada.')
+'R3=' + (Resumen "Deja TODA LA INFORMACI${o}N DISPONIBLE en una tabla.")
+'R4=' + (Resumen 'Lee el fichero de recibos del banco.' 'Optimiza el cobro.')
+'R5=' + (Resumen 'Lee el fichero de recibos del banco.' 'Va primero.' 'Un grupo de recibos que facilita el cobro.')
+'R6=' + (Resumen 'Reune diversos ficheros y los pasa por distintos procesos.')
+'R7=' + (Resumen 'Deja el resultado LISTO PARA REVISARSE por las personas responsables.')
+'R8=' + (Resumen 'Lee el fichero de recibos del banco; no se facilitara nada que no conste y nadie lo garantizado.')
+'F1=' + (Ficha 'Lee los recibos que deja el banco cada dia y los guarda como pendientes de cobro.')
+'F2=' + (Ficha 'Carga los recibos y garantiza que todo queda bien.')
+'F3=' + (Ficha 'Lee los recibos del banco.' 'Se hace de manera eficiente.')
+'F4=' + (Ficha 'Recoge los recibos de forma clara y ordenada.')
+'FIN'
+'@
+  $codigo = $codigo.Replace('{{DIR}}', (Join-Path $Dir 'relleno'))
+  $r = En-Biblioteca 'relleno' $codigo
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^([RF]\d)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'un resumen concreto vale' 'BIEN' $v['R1']
+  Comprueba 'con "de forma clara y ordenada" no vale y el motivo dice la frase' ($v['R2'] -match '^MAL' -and $v['R2'] -match 'de forma clara' -and $v['R2'] -match 'clara y ordenada') $v['R2']
+  Comprueba 'el motivo pide cambiarla por el dato concreto' ($v['R2'] -match 'concret' -and $v['R2'] -match 'no consta') $v['R2']
+  Comprueba 'sin distinguir mayusculas ni acentos: TODA LA INFORMACION DISPONIBLE' ($v['R3'] -match '^MAL' -and $v['R3'] -match 'toda la informacion disponible') $v['R3']
+  Comprueba 'tambien en el motivo de orden[]' ($v['R4'] -match '^MAL' -and $v['R4'] -match 'optimiza' -and $v['R4'] -match 'orden\[0\]\.motivo') $v['R4']
+  Comprueba 'y en la definicion del glosario' ($v['R5'] -match '^MAL' -and $v['R5'] -match 'facilita' -and $v['R5'] -match 'glosario\[0\]\.definicion') $v['R5']
+  Comprueba 'el motivo nombra todas las frases que hay: diversos y distintos procesos' ($v['R6'] -match '^MAL' -and $v['R6'] -match 'diversos' -and $v['R6'] -match 'distintos procesos') $v['R6']
+  Comprueba 'listo para revisarse y las personas responsables, con mayusculas' ($v['R7'] -match '^MAL' -and $v['R7'] -match 'listo para revisarse' -and $v['R7'] -match 'las personas responsables') $v['R7']
+  Igual 'una palabra que solo contiene la del relleno (facilitara, garantizado) no cuenta' 'BIEN' $v['R8']
+  Igual 'una ficha de job concreta vale' 'BIEN' $v['F1']
+  Comprueba 'una ficha con "garantiza" en el para que no vale y el motivo dice el campo' ($v['F2'] -match '^MAL' -and $v['F2'] -match 'paraQue' -and $v['F2'] -match 'garantiza') $v['F2']
+  Comprueba 'una ficha con relleno en el texto de un paso, igual' ($v['F3'] -match '^MAL' -and $v['F3'] -match 'pasos\[0\]\.texto' -and $v['F3'] -match 'de manera eficiente') $v['F3']
+  Comprueba 'y la frase de forma clara y ordenada, en el para que' ($v['F4'] -match '^MAL' -and $v['F4'] -match 'de forma clara' -and $v['F4'] -match 'concret') $v['F4']
+}
+
+$Pruebas['m15 resumen: los prompts piden los cinco datos, "no consta" si falta, traen un ejemplo nuevo y la lista de frases prohibidas'] = {
+  $c = Corrida-Dos $GuionBase
+  $e = $c.E
+  $t = @(Tareas $e 'resumen')
+  if ($t.Count -ne 1) { Comprueba 'hay una tarea de resumen' $false (Cola $c.R.Salida); return }
+  $p = Prompt-De $e $t[0]
+  $j = Job-De $e 'cargaJob'
+  $textos = @(@($j.necesita) + @($j.produce) + @($j.conexiones) + @($j.reglas) | Where-Object { -not $_.tecnico } | ForEach-Object { $_.texto })
+  $faltan = @($textos | Where-Object { -not $p.Contains($_) })
+  Comprueba 'con el escenario real: el prompt lleva cada dato de lista del job que no es tecnico' ($textos.Count -ge 4 -and $faltan.Count -eq 0) ("$($textos.Count) datos; faltan: " + ($faltan -join ' | '))
+  Comprueba 'el resumen que se pide: que datos lee y de donde, que hace, que deja y donde, a quien le llega y cuando se lanza' ($p -match '(?i)qu. datos lee' -and $p -match '(?i)de d.nde' -and $p -match '(?i)qu. hace' -and $p -match '(?i)qu. deja' -and $p -match '(?i)a qui.n' -and $p -match '(?i)cu.ndo') ($p.Substring(0, [Math]::Min(300, $p.Length)))
+  Comprueba 'dice que lo que no esta se escribe "no consta"' ($p -match 'no consta') ''
+  Comprueba 'el ejemplo de antes (recibos del banco, administracion) ya no esta' ($p -notmatch 'equipo de administraci.n' -and $p -notmatch 'prepara el cobro') ''
+  Comprueba 'lleva la lista de frases prohibidas (las del Cfg)' ($p.Contains('de forma clara') -and $p.Contains('toda la informacion disponible') -and $p.Contains('distintos procesos')) ''
+  $f = @(Tareas $e 'ficha-job')
+  Comprueba 'hay fichas de job' ($f.Count -ge 1) ''
+  if ($f.Count -ge 1) {
+    $q = Prompt-De $e $f[0]
+    Comprueba 'la ficha del job: el para que dice que lee, que hace, que deja y para quien, y "no consta"' ($q -match '(?i)qu. datos lee' -and $q -match '(?i)qu. deja' -and $q -match '(?i)a qui.n' -and $q -match 'no consta') ''
+    Comprueba 'y lleva las frases prohibidas' ($q.Contains('de forma clara') -and $q.Contains('garantiza')) ''
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
