@@ -11,7 +11,7 @@ DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
 PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, ListasJob, Papeles, TiposDato y JavaExe) y
-las funciones, entre ellas Get-RutaAjustes (donde esta ajustes.json; RESCATE_HOME lo cambia).
+las funciones. Get-Lanzador usa Get-Lanzable, de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $Cfg            el de comun.ps1 (este fichero le anade sus claves al cargarse)
@@ -82,12 +82,6 @@ function Get-Hash8([string]$Texto) {
   return ((@($b[0..3]) | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
-# Donde esta ajustes.json: RESCATE_HOME o la carpeta .rescate del usuario.
-function Get-RutaAjustes {
-  if ($env:RESCATE_HOME) { return (Join-Path $env:RESCATE_HOME 'ajustes.json') }
-  return (Join-Path (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.rescate') 'ajustes.json')
-}
-
 # ================================ LLAMADAS ================================
 # Comillas para la linea de comandos de Windows (valen tambien en Linux). Para cmd, ademas,
 # se entrecomilla lo que lleve & | < > ^ ( ), que cmd leeria como suyo.
@@ -110,7 +104,9 @@ function Get-PowerShellExe {
 
 # Que programa y que argumentos lanzar: un .ps1 va por PowerShell, un .cmd por cmd.
 function Get-Lanzador([string]$Exe, [string[]]$A) {
-  $ruta = @(Get-Command $Exe)[0].Source
+  $l = Get-Lanzable $Exe
+  if (-not $l.Ruta) { throw $l.Mensaje }
+  $ruta = $l.Ruta
   $ext = [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()
   if ($ext -eq '.ps1') {
     return [pscustomobject]@{ Exe = (Get-PowerShellExe); Args = (((@('-NoProfile', '-File', $ruta) + $A) | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }
