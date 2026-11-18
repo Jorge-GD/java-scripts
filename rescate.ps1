@@ -948,6 +948,15 @@ function Get-LineaHallazgo($x) {
   return "- $donde - $($x.Detalle)"
 }
 
+# La clave con la que se reconoce un hallazgo aunque el intento cambie el fichero de paquete: categoria, nombre del fichero
+# (sin su ruta) y detalle.
+function Get-ClaveHallazgo($x) { return ($x.Cat + '|' + $x.Fichero.Split('/')[-1] + '|' + $x.Detalle) }
+
+# Los errores de estas categorias que no estaban antes del intento ($Antes: las claves de los de antes).
+function Get-HallazgosNuevos($Hall, [string[]]$Cats, $Antes) {
+  return @($Hall | Where-Object { $_.Sev -eq 'error' -and $Cats -contains $_.Cat -and -not $Antes.ContainsKey((Get-ClaveHallazgo $_)) })
+}
+
 # La opcion que ha elegido el consejo en una duda.
 function Get-Elegida($Duda) { return "$(@($Duda.opciones)[[int]$Duda.elegida - 1])" }
 
@@ -1662,9 +1671,9 @@ function Invoke-Fix {
     $antes = @{}
     foreach ($c in $Cfg.Orden) { $antes[$c] = Get-Cuenta $hall $c }
     $antes['calidad'] = Get-Cuenta $hall 'calidad'
-    # faltas de calidad que ya habia (por clase, para reconocerlas si se mueve)
-    $calAntes = @{}
-    foreach ($x in @($hall | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' })) { $calAntes[($x.Fichero.Split('/')[-1] + '|' + $x.Detalle)] = $true }
+    # los errores que ya habia, para reconocerlos si el intento mueve su fichero
+    $hallAntes = @{}
+    foreach ($x in @($hall | Where-Object { $_.Sev -eq 'error' })) { $hallAntes[(Get-ClaveHallazgo $x)] = $true }
     $antesCompila = $script:Build.Compila
     $check = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
     Info ''
@@ -1722,29 +1731,31 @@ function Invoke-Fix {
       $d = Get-Cuenta $hall2 $paso
       if (-not $script:Build.Compila -and ($paso -ne 'build' -or $antesCompila)) { $problemas += 'El proyecto no compila.' }
       if ($d -ge $antes[$paso]) { $problemas += "Los hallazgos de '$paso' no han bajado ($($antes[$paso]) -> $d)." }
+      $empeorados = @()   # los pasos que el intento ha empeorado: sus hallazgos nuevos salen en el detalle
       foreach ($c in $Cfg.Orden) {
         if ($c -eq $paso) { break }
         $q = Get-Cuenta $hall2 $c
-        if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)." }
+        if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)."; $empeorados += $c }
       }
       $ft = Get-Cuenta $hall2 'tests'
       # sin 'tests' en Orden no hay cuenta de antes: no se compara
       if ($conTests -and $paso -ne 'tests' -and $antes.ContainsKey('tests') -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
       # el codigo nuevo sale ya con Javadoc y sin malas practicas: la cuenta de calidad no sube
-      $calNuevos = @()
       $qc = Get-Cuenta $hall2 'calidad'
       if ($paso -ne 'calidad' -and $qc -gt $antes['calidad']) {
         $problemas += "Tu codigo anade hallazgos de calidad ($($antes['calidad']) -> $qc). Lo que escribas lleva Javadoc y sigue las reglas de calidad."
-        $calNuevos = @($hall2 | Where-Object { $_.Cat -eq 'calidad' -and $_.Sev -eq 'error' -and -not $calAntes.ContainsKey(($_.Fichero.Split('/')[-1] + '|' + $_.Detalle)) } | Select-Object -First 20)
+        $empeorados += 'calidad'
       }
+      $nuevos = @(Get-HallazgosNuevos $hall2 $empeorados $hallAntes | Select-Object -First 20)
 
       if ($problemas.Count -eq 0) { $ok = $true; break }
       $problemas | ForEach-Object { Aviso "  NO PASA: $_" }
-      # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva)
+      # lo del paso en los ficheros del lote y en los que el intento ha tocado o creado (un fichero movido deja un hallazgo nuevo en la ruta nueva),
+      # y lo nuevo de los pasos que ha empeorado (y de calidad)
       $detalle = @((@($hall2 | Where-Object { $_.Sev -eq 'error' -and (
                 ($_.Cat -eq 'build' -and $_.Detalle -match '^(no compila|el build falla)') -or
                 ($_.Cat -eq 'tests' -and $conTests) -or
-                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $calNuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) }) + $catchMenos
+                ($_.Cat -eq $paso -and (($sel -contains $_.Fichero) -or ($tocados -contains $_.Fichero)))) } | Select-Object -First 20) + $nuevos) | ForEach-Object { '  ' + (Get-LineaHallazgo $_) } | Select-Object -Unique) + $catchMenos
       $correccion = ((@($problemas | ForEach-Object { "- $_" }) + @('Detalle:') + $detalle) -join "`n")
       if ($reflexionar) { $reflexiones += @(Invoke-Reflexion $paso $n $i $loteH $sel $check $correccion) }
     }

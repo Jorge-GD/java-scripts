@@ -1747,5 +1747,37 @@ $Pruebas['m7 orden sin tests: la puerta de tests solo compara si hay cuenta de a
   Comprueba 'no dice que hay mas tests fallando' ($r.Salida -notmatch 'Hay mas tests fallando') (Cola $r.Salida)
 }
 
+# ===== M8: EL MODELO VE LO QUE HA ROTO Y UN INTENTO CORTADO NO ENTRA EN LA FOTO =====
+# Con 'estructura' antes de 'ficheros', el lote de 'ficheros' del guion mueve-a-util lleva LeerFichero a un subpaquete que
+# la plantilla no tiene: estructura pasa de 2 hallazgos (Suelta y PolizaService, que ya estaban) a 3.
+$LeerMovidoM8 = 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java'
+
+# La CORRECCION de un prompt: desde su titulo hasta el final.
+function Correccion-De([string]$Prompt) { return ([regex]::Match($Prompt, '(?s)## CORRECCION.*$')).Value }
+
+$Pruebas['m8 detalle: lo que el intento ha roto en un paso anterior sale en la correccion; lo que ya estaba, no'] = {
+  $e = Escenario-M6 'm8-detalle' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'mueve-a-util'
+  Comprueba 'el primer intento no pasa por haber empeorado estructura' ($r.Salida -match "NO PASA: Has empeorado el paso anterior 'estructura' \(2 -> 3 hallazgos\)\.") (Cola $r.Salida)
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un segundo intento' ($lotes.Count -ge 2) (Cola $r.Salida)
+  if ($lotes.Count -lt 2) { return }
+  $c = Correccion-De (Prompt-M6 $e $lotes[1])
+  Comprueba 'la correccion cuenta lo que ha empeorado' ($c -match "Has empeorado el paso anterior 'estructura' \(2 -> 3 hallazgos\)") $c
+  Comprueba 'y lista el hallazgo nuevo de estructura con su fichero' ($c -match ('(?m)^  - ' + [regex]::Escape($LeerMovidoM8) + " - subpaquete 'infrastructure/util' no existe en la plantilla")) $c
+  Comprueba 'sin los de estructura que ya estaban antes del intento' ($c -notmatch 'Suelta\.java' -and $c -notmatch 'PolizaService\.java') $c
+}
+
+$Pruebas['m8 detalle: si ningun paso anterior empeora, el detalle no lleva hallazgos de otros pasos'] = {
+  $e = Escenario-M6 'm8-detalle-nada' @{ Orden = @('estructura', 'ficheros') }
+  $r = Fix-M6 $e 'ficheros' 2 @() 'nada-sin-correccion'
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un segundo intento' ($lotes.Count -ge 2) (Cola $r.Salida)
+  if ($lotes.Count -lt 2) { return }
+  $c = Correccion-De (Prompt-M6 $e $lotes[1])
+  Comprueba 'la correccion no dice que un paso anterior haya empeorado' ($c -notmatch 'Has empeorado') $c
+  Comprueba 'ni lista hallazgos de estructura' ($c -notmatch 'Suelta\.java|PolizaService\.java') $c
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

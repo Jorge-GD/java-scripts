@@ -20,6 +20,8 @@
 #                      con CORRECCION lo deja como estaba
 #   mueve-catch        un lote quita ese catch y lo lleva, igual, a una clase nueva (TamanoSeguro)
 #   catch-en-comentario  como quita-catch, y deja 'catch (' en un comentario y en un texto
+#   mueve-a-util       un lote sin CORRECCION mueve LeerFichero a infrastructure/util, un subpaquete que la plantilla
+#                      no tiene (el paso 'estructura' gana un hallazgo en la ruta nueva); con CORRECCION no cambia nada
 $todos = $args
 $guiones = @("$env:RESCATE_FALSO" -split ';' | Where-Object { $_ })
 $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' ')
@@ -120,6 +122,14 @@ if ($guiones -contains 'nada-sin-correccion' -and $prompt -notmatch '## CORRECCI
 if ($guiones -contains 'crea-fichero') { Escribir 'output/de-la-ia.csv' "id;nota`n1;de la IA`n" }
 & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
 $codigo = $LASTEXITCODE
+if ($guiones -contains 'mueve-a-util' -and $prompt -notmatch '## CORRECCION') {
+  $ruta = Join-Path $raiz 'src/main/java/com/acme/life/application/usecases/LeerFichero.java'
+  if (Test-Path -LiteralPath $ruta) {
+    $t = [System.IO.File]::ReadAllText($ruta) -replace '(?m)^package [^;]*;', 'package com.acme.life.infrastructure.util;'
+    Remove-Item -LiteralPath $ruta -Force
+    Escribir 'src/main/java/com/acme/life/infrastructure/util/LeerFichero.java' $t
+  }
+}
 $deCatch = @($guiones | Where-Object { @('quita-catch', 'mueve-catch', 'catch-en-comentario') -contains $_ })
 if ($deCatch.Count -gt 0) {
   $cm = 'src/main/java/com/acme/life/application/usecases/CalidadMuestra.java'
