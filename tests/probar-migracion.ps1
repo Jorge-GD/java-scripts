@@ -4141,7 +4141,9 @@ function Ficha([string]$ParaQue, [string]$Texto = 'Se lee el fichero que deja el
 'R6=' + (Resumen 'Reune diversos ficheros y los pasa por distintos procesos.')
 'R7=' + (Resumen 'Deja el resultado LISTO PARA REVISARSE por las personas responsables.')
 'R8=' + (Resumen 'Lee el fichero de recibos del banco; no se facilitara nada que no conste y nadie lo garantizado.')
+'R9=' + (Resumen 'Lee el fichero de recibos del banco y reoptimiza la carga de la tabla de pendientes.')
 'F1=' + (Ficha 'Lee los recibos que deja el banco cada dia y los guarda como pendientes de cobro.')
+'F5=' + (Ficha 'Lee los recibos del banco y reoptimiza el orden de la carga.')
 'F2=' + (Ficha 'Carga los recibos y garantiza que todo queda bien.')
 'F3=' + (Ficha 'Lee los recibos del banco.' 'Se hace de manera eficiente.')
 'F4=' + (Ficha 'Recoge los recibos de forma clara y ordenada.')
@@ -4161,7 +4163,9 @@ function Ficha([string]$ParaQue, [string]$Texto = 'Se lee el fichero que deja el
   Comprueba 'el motivo nombra todas las frases que hay: diversos y distintos procesos' ($v['R6'] -match '^MAL' -and $v['R6'] -match 'diversos' -and $v['R6'] -match 'distintos procesos') $v['R6']
   Comprueba 'listo para revisarse y las personas responsables, con mayusculas' ($v['R7'] -match '^MAL' -and $v['R7'] -match 'listo para revisarse' -and $v['R7'] -match 'las personas responsables') $v['R7']
   Igual 'una palabra que solo contiene la del relleno (facilitara, garantizado) no cuenta' 'BIEN' $v['R8']
+  Igual 'ni la que empieza por letras de mas (reoptimiza no es optimiza), en un resumen' 'BIEN' $v['R9']
   Igual 'una ficha de job concreta vale' 'BIEN' $v['F1']
+  Igual 'ni en el para que de una ficha (reoptimiza)' 'BIEN' $v['F5']
   Comprueba 'una ficha con "garantiza" en el para que no vale y el motivo dice el campo' ($v['F2'] -match '^MAL' -and $v['F2'] -match 'paraQue' -and $v['F2'] -match 'garantiza') $v['F2']
   Comprueba 'una ficha con relleno en el texto de un paso, igual' ($v['F3'] -match '^MAL' -and $v['F3'] -match 'pasos\[0\]\.texto' -and $v['F3'] -match 'de manera eficiente') $v['F3']
   Comprueba 'y la frase de forma clara y ordenada, en el para que' ($v['F4'] -match '^MAL' -and $v['F4'] -match 'de forma clara' -and $v['F4'] -match 'concret') $v['F4']
@@ -4417,6 +4421,58 @@ $Pruebas['m13 casos: prueba-local.ps1 sigue leyendo los casos de datos/pruebas/<
   Igual 'y son uno mas que los que dio prueba-pre' (@($x.casos).Count) $titulos.Count
   $src = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'prueba-local.ps1'))
   Comprueba 'prueba-local.ps1 lee la carpeta datos/pruebas y recorre $Prueba.casos (si cambia, esta prueba hay que mirarla)' ($src -match "datos/pruebas'\) -File -Filter '\*\.json'" -and $src -match '(?m)foreach \(\$c in @\(\$Prueba\.casos\)\)') ''
+}
+
+# Save-Casos, sin pasar por las llamadas: tareas caso-pre hechas a mano sobre datos/pruebas/<job>.json. Tres jobs (uno por situacion).
+$script:PreludioSave = @'
+$Datos = '{{DIR}}'
+$mapa = [pscustomobject]@{ jobs = @([pscustomobject]@{ job = 'cargaRecibosJob' }, [pscustomobject]@{ job = 'informeCobrosJob' }, [pscustomobject]@{ job = 'avisosJob' }) }
+function Pruebas([string]$Job, $Casos, $SinCaso) {
+  Write-Json (Join-Path $Datos ('pruebas/' + $Job + '.json')) ([ordered]@{ job = $Job; preparar = @(); casos = @($Casos); comprobar = @(); sinCaso = @($SinCaso); redaccion = 'hecha' })
+}
+function Caso([string]$Titulo, [string]$Ref) { return [ordered]@{ titulo = $Titulo; entrada = 'Un recibo.'; esperado = 'Se carga.'; refs = @($Ref) } }
+function Falta([string]$Ref) { return [ordered]@{ ref = $Ref; tipo = 'regla'; texto = 'Una regla.' } }
+function Hecha([string]$Job, $Caso) { return [pscustomobject]@{ estado = 'hecha'; entradas = [pscustomobject]@{ job = $Job }; resultado = [pscustomobject]@{ caso = [pscustomobject]$Caso } } }
+function Veo([string]$Job) {
+  $p = Read-Json (Join-Path $Datos ('pruebas/' + $Job + '.json'))
+  return ((@($p.casos | ForEach-Object { $_.titulo }) -join '|') + ' / ' + (@($p.sinCaso | ForEach-Object { $_.ref }) -join ','))
+}
+'@
+function Salida-Save([string]$Nombre, [string]$Cuerpo) {
+  $r = En-Biblioteca $Nombre ($script:PreludioSave.Replace('{{DIR}}', (Join-Path $Dir $Nombre)) + $Cuerpo)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`n")) { if ($l -match '^(\w+)=(.*?)\r?$') { $v[$Matches[1]] = $Matches[2] } }
+  return $v
+}
+
+$Pruebas['m13 casos: dos tareas hechas del mismo job con el mismo titulo (o uno que el guion ya tiene) meten un solo caso y la otra regla se queda en sinCaso'] = {
+  $v = Salida-Save 'save-titulos' @'
+Pruebas 'cargaRecibosJob' @((Caso 'Recibo correcto' 'clase-aaaaaaaa#0')) @((Falta 'clase-aaaaaaaa#1'), (Falta 'clase-aaaaaaaa#2'), (Falta 'clase-aaaaaaaa#3'))
+$t = @((Hecha 'cargaRecibosJob' (Caso 'Recibo pequeno' 'clase-aaaaaaaa#1')), (Hecha 'cargaRecibosJob' (Caso ' RECIBO PEQUENO ' 'clase-aaaaaaaa#2')), (Hecha 'cargaRecibosJob' (Caso 'recibo CORRECTO' 'clase-aaaaaaaa#3')))
+Save-Casos $mapa $t
+'A1=' + (Veo 'cargaRecibosJob')
+Save-Casos $mapa $t
+'A2=' + (Veo 'cargaRecibosJob')
+'FIN'
+'@
+  Igual 'el titulo repetido (sin mayusculas ni espacios de mas) y el que ya estaba en el guion no entran: queda un caso nuevo y las dos reglas siguen en sinCaso' 'Recibo correcto|Recibo pequeno / clase-aaaaaaaa#2,clase-aaaaaaaa#3' $v['A1']
+  Igual 'aplicarlo otra vez no cambia nada' $v['A1'] $v['A2']
+}
+
+$Pruebas['m13 casos: con el guion ya en CasosMax el caso nuevo no entra y su regla se queda en sinCaso; con sitio para uno, entra el primero y el otro no'] = {
+  $v = Salida-Save 'save-tope' @'
+$Cfg.CasosMax = 2
+Pruebas 'informeCobrosJob' @((Caso 'Uno' 'clase-bbbbbbbb#0'), (Caso 'Dos' 'clase-bbbbbbbb#1')) @((Falta 'clase-bbbbbbbb#2'))
+Save-Casos $mapa @((Hecha 'informeCobrosJob' (Caso 'Tres' 'clase-bbbbbbbb#2')))
+'B=' + (Veo 'informeCobrosJob')
+Pruebas 'avisosJob' @((Caso 'Uno' 'clase-cccccccc#0')) @((Falta 'clase-cccccccc#1'), (Falta 'clase-cccccccc#2'))
+Save-Casos $mapa @((Hecha 'avisosJob' (Caso 'Dos' 'clase-cccccccc#1')), (Hecha 'avisosJob' (Caso 'Tres' 'clase-cccccccc#2')))
+'C=' + (Veo 'avisosJob')
+'FIN'
+'@
+  Igual 'con 2 casos y CasosMax 2: no entra el nuevo y su regla sigue en sinCaso' 'Uno|Dos / clase-bbbbbbbb#2' $v['B']
+  Igual 'con 1 caso y CasosMax 2: entra el primero, el segundo no y su regla sigue en sinCaso' 'Uno|Dos / clase-cccccccc#2' $v['C']
 }
 
 # ================================ LANZADOR ================================
