@@ -427,5 +427,258 @@ $o = Get-Cobertura $Carpeta $Registro $true
   Comprueba-Tope $carpPids ([double]$v['SEGUNDOS']) 20 $reg
 }
 
+# ===================== CULPABLE: -Desde <commit> [-Deshacer] =====================
+# Con -Desde, cada caso distinto se busca, por biseccion en la rama que se prueba (la de rescate), hasta dar con el primer commit
+# donde deja de ser igual. Con -Deshacer, ese commit se revierte con git revert en la carpeta de rescate. Estas pruebas hacen
+# commits a mano en el worktree de rescate del escenario. El caso 1 de los escenarios es el del limite (importe=5.00): sale igual
+# con minimo=5.00 y distinto con minimo=5.01.
+
+# Hace un commit en $D con $Rel = $Texto y devuelve su hash.
+function Commit-En([string]$D, [string]$Rel, [string]$Texto, [string]$Asunto) {
+  Escribe $D $Rel $Texto
+  [void](GitEn $D @('add', '--', $Rel))
+  [void](GitEn $D @('commit', '-q', '-m', $Asunto))
+  return (GitEn $D @('rev-parse', 'HEAD'))
+}
+
+# $N commits en la rama de rescate del escenario, uno detras de otro: el numero $Rompe (si es > 0) pone minimo=5.01 en regla.txt
+# y los demas solo apuntan una nota. Devuelve Desde (el HEAD de antes) y Commits (los hashes, del mas viejo al mas nuevo).
+function Historia($E, [int]$Rompe, [int]$N = 5) {
+  $desde = GitEn $E.Wt @('rev-parse', 'HEAD')
+  $cs = @()
+  for ($i = 1; $i -le $N; $i++) {
+    if ($i -eq $Rompe) { $cs += (Commit-En $E.Wt 'regla.txt' "minimo=5.01`n" "cambia el limite del paso $i") }
+    else { $cs += (Commit-En $E.Wt "notas/paso-$i.txt" "nota $i`n" "nota del paso $i") }
+  }
+  return [pscustomobject]@{ Desde = $desde; Commits = $cs }
+}
+
+function Corto([string]$Hash) { return $Hash.Substring(0, 7) }
+
+# Cuantas veces se ha ejecutado en el migrado (su copia) el caso $Caso (las lineas 'test' de mvn.log del Maven falso).
+function Ejecuciones-Mig($E, [string]$Caso) {
+  $p = $E.CopiaMig + '|'
+  return @([System.IO.File]::ReadAllLines((Join-Path $E.Llamadas 'mvn.log')) | Where-Object { $_.StartsWith($p) -and $_ -match ' test -Dtest=PruebaLocalTest ' -and $_ -match ('-Dprueba\.local\.caso=' + $Caso + '( |$)') }).Count
+}
+
+function Culpables($E) { return @((Lee-Json $E.Json).culpables | Where-Object { $_ }) }
+
+# El HEAD y los cambios sin commit de una carpeta (sin las ramas: la de rescate cambia con un revert).
+function Estado-Git([string]$D) { return ((GitEn $D @('rev-parse', 'HEAD')) + '|' + (GitEn $D @('status', '--porcelain'))) }
+
+# Hay un git revert a medias en $D?
+function Revert-A-Medias([string]$D) {
+  $p = GitEn $D @('rev-parse', '--git-path', 'REVERT_HEAD')
+  if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $D $p }
+  return (Test-Path -LiteralPath $p)
+}
+
+$Pruebas['18 culpable (a): cinco commits despues de -Desde y el caso se rompe en el 3.o: lo encuentra, con pocas ejecuciones del migrado, y lo dice'] = {
+  $e = Nuevo-Escenario 'culpable-a' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Desde', $h.Desde)
+  Igual 'sale con 2 (sin -Deshacer el caso sigue distinto)' 2 $r.Codigo
+  $msg = "El caso cargaJob/caso-01 era igual en $(Corto $h.Desde) y se rompe en $(Corto $h.Commits[2]) (cambia el limite del paso 3)."
+  Comprueba 'la consola dice cual era igual y cual lo rompe, con su asunto' ($r.Salida.Contains($msg)) $msg
+  Igual 'el otro caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
+  $c = @(Culpables $e)
+  Igual 'culpables lleva una entrada' 1 $c.Count
+  Igual 'con el job' 'cargaJob' $c[0].job
+  Igual 'el caso' 'caso-01' $c[0].caso
+  Igual 'el commit entero' $h.Commits[2] $c[0].commit
+  Igual 'el asunto' 'cambia el limite del paso 3' $c[0].asunto
+  Igual 'sin deshacer' 'False' "$($c[0].deshecho)"
+  $n = Ejecuciones-Mig $e 'caso-01'
+  Comprueba 'como mucho 4 ejecuciones del migrado en la busqueda (sin la de la comparacion normal)' (($n - 1) -le 4) "ejecuciones en total: $n"
+  Igual 'sin -Deshacer la rama de rescate queda como estaba' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['19 culpable (a2): ocho commits y el caso se rompe en el 6.o: biseccion, no uno a uno'] = {
+  $e = Nuevo-Escenario 'culpable-a2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 6 8
+  $r = Prueba $e @('-Desde', $h.Desde)
+  Igual 'sale con 2' 2 $r.Codigo
+  $c = @(Culpables $e)
+  Igual 'encuentra el 6.o' $h.Commits[5] "$($c[0].commit)"
+  $n = Ejecuciones-Mig $e 'caso-01'
+  Comprueba 'con 4 ejecuciones o menos en la busqueda (uno a uno serian 7)' (($n - 1) -le 4) "ejecuciones en total: $n"
+}
+
+$Pruebas['20 culpable (b): un caso que ya era distinto en -Desde: lo dice y no busca'] = {
+  $e = Nuevo-Escenario 'culpable-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) 'minimo=5.00' 'minimo=5.01'
+  $h = Historia $e 0 2
+  $r = Prueba $e @('-Desde', $h.Desde)
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'dice que el caso ya era distinto en -Desde' ($r.Salida.Contains("El caso cargaJob/caso-01 ya era distinto en $(Corto $h.Desde)")) (Cola $r.Salida)
+  Comprueba 'y no dice que se rompe en ningun commit' ($r.Salida -notmatch 'se rompe en') (Cola $r.Salida)
+  Igual 'culpables vacio' 0 @(Culpables $e).Count
+  Igual 'dos ejecuciones del migrado: la normal y la de -Desde, ninguna mas' 2 (Ejecuciones-Mig $e 'caso-01')
+}
+
+$Pruebas['21 culpable (c): -Deshacer revierte el commit, el caso vuelve a igual y no se toca nada mas'] = {
+  $e = Nuevo-Escenario 'culpable-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $legacy = Foto $e.Legacy
+  $migrado = Estado-Git $e.Migrado
+  $r = Prueba $e @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'sale con 0 (el estado final es todo igual)' 0 $r.Codigo
+  Comprueba 'la consola dice que ahora es igual' ($r.Salida -match 'cargaJob/caso-01.*ahora igual') (Cola $r.Salida)
+  Igual 'el caso queda igual' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'el HEAD de rescate tiene un solo commit nuevo, encima del ultimo' $h.Commits[4] (GitEn $e.Wt @('rev-parse', 'HEAD~1'))
+  Comprueba 'que es un Revert del 3.o' ((GitEn $e.Wt @('log', '-1', '--format=%s')) -like 'Revert "cambia el limite del paso 3"*') (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Igual 'sus cinco commits siguen igual (en su sitio)' ($h.Commits -join ',') ((GitEn $e.Wt @('rev-list', '--reverse', "$($h.Desde)..HEAD~1")) -split "`n" -join ',')
+  Igual 'regla.txt vuelve a lo de antes' "minimo=5.00`n" (Lee $e.Wt 'regla.txt')
+  Igual 'sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'la carpeta del migrado queda como estaba' $migrado (Estado-Git $e.Migrado)
+  Igual 'la del original, tambien' $legacy (Foto $e.Legacy)
+  $c = @(Culpables $e)
+  Igual 'culpables: el 3.o, deshecho' "$($h.Commits[2]) True" "$($c[0].commit) $($c[0].deshecho)"
+  Igual 'el json lleva el commit migrado de ahora (el del revert)' (GitEn $e.Wt @('rev-parse', 'HEAD')) (Lee-Json $e.Json).commitMigrado
+  Comprueba 'y la prueba no dice que han cambiado las carpetas' ($r.Salida -notmatch 'Ha cambiado durante la prueba') (Cola $r.Salida)
+}
+
+$Pruebas['22 culpable (d): conflicto al revertir (el 4.o toca las mismas lineas): se aborta, el HEAD queda igual y lo dice'] = {
+  $e = Nuevo-Escenario 'culpable-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  $c3 = Commit-En $e.Wt 'regla.txt' "minimo=5.01`n" 'cambia el limite del paso 3'
+  $c4 = Commit-En $e.Wt 'regla.txt' "minimo=5.02`n" 'cambia otra vez el limite'
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 2 (sigue distinto)' 2 $r.Codigo
+  Comprueba 'encuentra el 3.o' ($r.Salida.Contains("se rompe en $(Corto $c3) (cambia el limite del paso 3)")) (Cola $r.Salida)
+  Comprueba 'dice que no lo deshace por el conflicto' ($r.Salida -match 'No deshago' -and $r.Salida -match 'conflicto') (Cola $r.Salida)
+  Igual 'el HEAD de rescate queda en el ultimo commit' $c5 (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Igual 'sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'y sin un revert a medias' (-not (Revert-A-Medias $e.Wt))
+  Igual 'culpables: el 3.o, sin deshacer' "$c3 False" "$(@(Culpables $e)[0].commit) $(@(Culpables $e)[0].deshecho)"
+  Igual 'el caso sigue distinto' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+$Pruebas['23 culpable (e): cambios sin commit en la carpeta de rescate: no deshace y lo dice'] = {
+  $e = Nuevo-Escenario 'culpable-e' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  Escribe $e.Wt 'notas/paso-1.txt' "a medias`n"
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'sale con 2 (sigue distinto)' 2 $r.Codigo
+  Comprueba 'dice que no deshace por los cambios sin commit' ($r.Salida -match 'No deshago' -and $r.Salida -match 'cambios sin commit') (Cola $r.Salida)
+  Igual 'el HEAD y los cambios quedan como estaban' $antes (Estado-Git $e.Wt)
+  Igual 'y el fichero a medias sigue como lo dejo quien lo toco' "a medias`n" (Lee $e.Wt 'notas/paso-1.txt')
+  Igual 'culpables: el 3.o, sin deshacer' "$($h.Commits[2]) False" "$(@(Culpables $e)[0].commit) $(@(Culpables $e)[0].deshecho)"
+}
+
+$Pruebas['24 culpable (f): dos casos rotos por el mismo commit: un solo revert'] = {
+  $e = Nuevo-Escenario 'culpable-f' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $r = Prueba $e @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'un solo commit nuevo en rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$($h.Commits[4])..HEAD"))
+  $c = @(Culpables $e)
+  Igual 'culpables lleva los dos casos' 'caso-01,caso-02' ((@($c | ForEach-Object { $_.caso })) -join ',')
+  Igual 'los dos con el mismo commit, el 3.o' "$($h.Commits[2]),$($h.Commits[2])" ((@($c | ForEach-Object { $_.commit })) -join ',')
+  Igual 'los dos deshechos' 'True,True' ((@($c | ForEach-Object { "$($_.deshecho)" })) -join ',')
+  Igual 'los tres casos quedan iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['25 culpable (g): sin -Desde todo sigue igual; -Deshacer sin -Desde y un -Desde que no vale paran antes de gastar nada'] = {
+  $e = Nuevo-Escenario 'culpable-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $h = Historia $e 0 1
+  $r = Prueba $e @('-Deshacer')
+  Igual '-Deshacer sin -Desde sale con 1' 1 $r.Codigo
+  Comprueba 'y dice que solo vale con -Desde' ($r.Salida -match '-Deshacer solo vale con -Desde') (Cola $r.Salida)
+  $r = Prueba $e @('-Desde', 'este-commit-no-existe')
+  Igual 'un -Desde que no es un commit sale con 1' 1 $r.Codigo
+  Comprueba 'y lo nombra' ($r.Salida -match 'este-commit-no-existe') (Cola $r.Salida)
+  $ajeno = Commit-En $e.Migrado 'otro.txt' "otro`n" 'commit de main, que no esta en la rama de rescate'
+  $r = Prueba $e @('-Desde', $ajeno)
+  Igual 'un -Desde que no esta en la rama que se prueba sale con 1' 1 $r.Codigo
+  Comprueba 'y dice que no esta en su historia' ($r.Salida -match 'no esta en la historia') (Cola $r.Salida)
+  Igual 'sin llamar a Copilot' 0 @(Llamadas $e).Count
+  Comprueba 'sin crear las copias' (-not (Test-Path -LiteralPath $e.CopiaOrig) -and -not (Test-Path -LiteralPath $e.CopiaMig))
+  $r = Prueba $e
+  Igual 'sin -Desde sale con 0' 0 $r.Codigo
+  Comprueba 'y el resultado no lleva la clave culpables' (@((Lee-Json $e.Json).PSObject.Properties.Name) -notcontains 'culpables')
+  Igual 'ni se ejecuta el migrado una vez de mas' 1 (Ejecuciones-Mig $e 'caso-01')
+  $r = Prueba $e @('-Desde', $h.Desde)
+  Igual 'con -Desde y nada distinto sale con 0' 0 $r.Codigo
+  Comprueba 'dice que no hay casos distintos que buscar' ($r.Salida -match 'no hay casos distintos') (Cola $r.Salida)
+  Igual 'culpables vacio' 0 @(Culpables $e).Count
+  Comprueba 'pero la clave esta' (@((Lee-Json $e.Json).PSObject.Properties.Name) -contains 'culpables')
+}
+
+$Pruebas['26 culpable (h): la busqueda y el revert no llaman nunca a Copilot (arnes y casos ya guardados)'] = {
+  $e = Nuevo-Escenario 'culpable-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $r = Prueba $e
+  Igual 'la primera vez, sin -Desde, sale con 2' 2 $r.Codigo
+  $n = @(Llamadas $e).Count
+  Igual 'cuatro llamadas: dos arneses y dos casos' 4 $n
+  $r = Prueba $e @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'con -Desde y -Deshacer sale con 0' 0 $r.Codigo
+  Igual 'sin ninguna llamada nueva a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'y deshizo el commit' ((GitEn $e.Wt @('log', '-1', '--format=%s')) -like 'Revert *') (GitEn $e.Wt @('log', '-1', '--format=%s'))
+}
+
+$Pruebas['27 culpable (i): un commit en el que no se puede ejecutar el caso cuenta como malo, y el mensaje lo dice'] = {
+  $e = Nuevo-Escenario 'culpable-i' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $c1 = Commit-En $e.Wt 'notas/paso-1.txt' "nota 1`n" 'nota del paso 1'
+  $c2 = Commit-En $e.Wt 'notas/paso-2.txt' "nota 2`n" 'nota del paso 2'
+  $c3 = Commit-En $e.Wt 'src/main/java/com/acme/nuevo/Roto.java' "package com.acme.nuevo;`n// NO_COMPILA`n" 'mete una clase que no compila'
+  [void](GitEn $e.Wt @('rm', '-q', 'src/main/java/com/acme/nuevo/Roto.java'))
+  Escribe $e.Wt 'regla.txt' "minimo=5.01`n"
+  [void](GitEn $e.Wt @('add', '--', 'regla.txt'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'quita la clase y cambia el limite'))
+  $c5 = Commit-En $e.Wt 'notas/paso-5.txt' "nota 5`n" 'nota del paso 5'
+  $r = Prueba $e @('-Desde', $desde)
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el culpable es el primero que no compila' ($r.Salida.Contains("se rompe en $(Corto $c3) (mete una clase que no compila)")) (Cola $r.Salida)
+  Comprueba 'y el mensaje dice que ahi no se pudo ejecutar el caso, con lo que dijo Maven' ($r.Salida -match 'no se pudo ejecutar' -and $r.Salida -match 'simbolo de mentira') (Cola $r.Salida)
+  Igual 'culpables: el que no compila' $c3 "$(@(Culpables $e)[0].commit)"
+}
+
+$Pruebas['28 culpable (j): el culpable es un merge: no se deshace y se dice'] = {
+  $e = Nuevo-Escenario 'culpable-j' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  [void](GitEn $e.Wt @('checkout', '-q', '-b', 'lado'))
+  [void](Commit-En $e.Wt 'regla.txt' "minimo=5.01`n" 'limite en la rama lado')
+  [void](GitEn $e.Wt @('checkout', '-q', 'rescate/main-1'))
+  [void](Commit-En $e.Wt 'notas/uno.txt' "uno`n" 'nota')
+  [void](GitEn $e.Wt @('merge', '-q', '--no-ff', '-m', 'une la rama lado', 'lado'))
+  $merge = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Desde', $desde, '-Deshacer')
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el culpable es el merge' ($r.Salida.Contains("se rompe en $(Corto $merge) (une la rama lado)")) (Cola $r.Salida)
+  Comprueba 'dice que no lo deshace por ser un merge' ($r.Salida -match 'No deshago' -and $r.Salida -match 'merge') (Cola $r.Salida)
+  Igual 'el HEAD queda en el merge' $merge (GitEn $e.Wt @('rev-parse', 'HEAD'))
+}
+
+# Prueba con el Maven falso de culpable-mvn.ps1, que toca la carpeta de rescate ($Modo: ver ese fichero) en medio de la prueba.
+function Prueba-Con-Toque($E, [string]$Modo, [string[]]$A) {
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'culpable-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $E.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $env:RESCATE_TOCA = $E.Wt + '|' + $Modo
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_TOCA = '' }
+}
+
+$Pruebas['29 culpable (k): -Deshacer no tapa otros cambios en la carpeta de rescate (un commit ajeno, o un fichero ajeno despues del revert): la huella los ve'] = {
+  $e = Nuevo-Escenario 'culpable-k1' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $r = Prueba-Con-Toque $e 'commit' @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'con un commit ajeno en medio sale con 1' 1 $r.Codigo
+  Comprueba 'y dice que ha cambiado una carpeta' ($r.Salida -match 'Ha cambiado durante la prueba') (Cola $r.Salida)
+  Comprueba 'el revert si se hizo (esta encima del commit ajeno)' ((GitEn $e.Wt @('log', '-1', '--format=%s')) -like 'Revert *') (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  $e = Nuevo-Escenario 'culpable-k2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $h = Historia $e 3
+  $r = Prueba-Con-Toque $e 'fichero-tras-revert' @('-Desde', $h.Desde, '-Deshacer')
+  Igual 'con un fichero ajeno aparecido despues del revert sale con 1' 1 $r.Codigo
+  Comprueba 'y dice que ha cambiado una carpeta' ($r.Salida -match 'Ha cambiado durante la prueba') (Cola $r.Salida)
+  Comprueba 'el fichero ajeno esta (lo dejo el falso, no el script)' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'ajeno.txt'))
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
