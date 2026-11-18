@@ -2511,5 +2511,166 @@ $Pruebas['m9 plan: si la repeticion vuelve a nombrar un paquete que no esta, sig
   Igual 'sale con 0' 0 $x.R.Codigo
 }
 
+# ===== M9.2: EL MOTIVO DEL TEST QUE FALLA Y EL TEXTO DE 'estructura' =====
+# Informes de surefire como los que escribe Maven (el fallo de ArchUnit y el de una excepcion), con sus lineas 'at' con tabulador.
+$ClaseM92 = 'com.acme.life.ArquitecturaTest'
+$TestM92 = 'src/test/java/com/acme/life/ArquitecturaTest.java'
+$RayaM92 = '-------------------------------------------------------------------------------'
+$ReglaM92 = "Architecture Violation [Priority: MEDIUM] - Rule 'domain must not depend on application' was violated (2 times):"
+$ClaseUnoM92 = 'Class <com.acme.life.domain.model.Poliza> depends on class <com.acme.life.application.usecases.Suelta> in (Poliza.java:12)'
+$ClaseDosM92 = 'Class <com.acme.life.domain.model.Poliza> depends on class <com.acme.life.application.usecases.LeerFichero> in (Poliza.java:15)'
+$MotivoArchM92 = 'java.lang.AssertionError: | ' + $ReglaM92 + ' | ' + $ClaseUnoM92
+
+function Pila-M92([string[]]$Lineas) { return @($Lineas | ForEach-Object { "`tat " + $_ }) }
+
+# El informe de surefire de $ClaseM92: la cabecera, la linea de resumen y las lineas de sus metodos que fallan.
+function Informe-M92([string]$Resumen, [string[]]$Metodos) {
+  return ((@($RayaM92, "Test set: $ClaseM92", $RayaM92, $Resumen) + @($Metodos)) -join "`n") + "`n"
+}
+
+$ResumenFalloM92 = "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.8 s <<< FAILURE! - in $ClaseM92"
+
+function Informe-Arch {
+  return (Informe-M92 $ResumenFalloM92 (@('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!', 'java.lang.AssertionError: ', $ReglaM92, $ClaseUnoM92, $ClaseDosM92, '') +
+      (Pila-M92 @('com.tngtech.archunit.lang.ArchRule$Assertions.assertNoViolation(ArchRule.java:94)', 'com.acme.life.ArquitecturaTest.capasRespetadas(ArquitecturaTest.java:20)'))))
+}
+
+# El motivo de un metodo con <<< ERROR!: la excepcion, su pila, y la causa con la suya y con otra pila.
+$ExcepcionM92 = 'java.lang.IllegalStateException: Failed to load ApplicationContext'
+$CausaM92 = "Caused by: org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'pagoPort'"
+function Informe-Error {
+  $r = "Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 0.3 s <<< FAILURE! - in $ClaseM92"
+  return (Informe-M92 $r (@('cargaElContexto  Time elapsed: 0.2 s  <<< ERROR!', $ExcepcionM92) +
+      (Pila-M92 @('org.springframework.test.context.cache.DefaultCacheAwareContextLoaderDelegate.loadContext(DefaultCacheAwareContextLoaderDelegate.java:132)', 'org.springframework.test.context.support.DefaultTestContext.getApplicationContext(DefaultTestContext.java:124)')) +
+      @($CausaM92) + (Pila-M92 @('org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:597)'))))
+}
+
+# Repo de juguete con un test que falla (ArquitecturaTest, con paquete) ya en un commit.
+function Escenario-Test-Roto([string]$Nombre, [hashtable]$Mas = @{}) {
+  $e = Escenario-M6 $Nombre $Mas
+  Escribe $e.Repo $TestM92 "package com.acme.life;`n`nclass ArquitecturaTest { /* TEST_FALLA */ }`n"
+  [void](GitEn $e.Repo @('add', '--', $TestM92))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'test de arquitectura'))
+  return $e
+}
+
+# Pone el informe de surefire que dejara el Maven de mentira (RESCATE_SUREFIRE_TXT) y devuelve la ruta de su fichero.
+function Pon-Informe([string]$Texto) {
+  $f = Join-Path $Dir ('informe-surefire-' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
+  [System.IO.File]::WriteAllText($f, $Texto)
+  $env:RESCATE_SUREFIRE_TXT = $f
+}
+
+# El diagnostico con Maven del repo con ese informe de surefire: lo que sale y los hallazgos de 'tests'.
+function Diagnostica-Con-Informe($E, [string]$Texto) {
+  Pon-Informe $Texto
+  try { $r = Rescate @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla) }
+  finally { $env:RESCATE_SUREFIRE_TXT = '' }
+  return [pscustomobject]@{ R = $r; H = @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'tests' }) }
+}
+
+# El texto de esas funciones de rescate.ps1, para cargarlas sin ejecutarlo: . ([scriptblock]::Create(...)).
+function Texto-De-Funciones([string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
+  $fs = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $Nombres -contains $_.Name })
+  return (@($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+# El hallazgo tal como era antes del motivo: sin esa propiedad.
+function Sin-Motivo($H) { return [pscustomobject]@{ Cat = $H.Cat; Sev = $H.Sev; Fichero = $H.Fichero; Linea = $H.Linea; Detalle = $H.Detalle } }
+
+$Pruebas['m92 motivo: un fallo de ArchUnit con su pila deja las 3 primeras lineas sin at como motivo, aparte del detalle'] = {
+  $e = Escenario-Test-Roto 'm92-arch'
+  $d = Diagnostica-Con-Informe $e (Informe-Arch)
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  $h = $d.H[0]
+  Igual 'el fichero es el del test' $TestM92 $h.Fichero
+  Igual 'el detalle es el de siempre, sin el motivo' "1 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $h.Detalle
+  Igual 'el motivo son las 3 primeras lineas, unidas con " | " y sin la linea Class de mas' $MotivoArchM92 $h.Motivo
+  Comprueba 'sin lineas at ni Time elapsed' ($h.Motivo -and $h.Motivo -notmatch '(^| \| )at ' -and $h.Motivo -notmatch 'Time elapsed' -and $h.Motivo -notmatch 'LeerFichero') $h.Motivo
+  . ([scriptblock]::Create((Texto-De-Funciones @('Get-ClaveHallazgo'))))
+  Igual 'la clave del hallazgo es la misma que sin motivo' (Get-ClaveHallazgo (Sin-Motivo $h)) (Get-ClaveHallazgo $h)
+}
+
+$Pruebas['m92 motivo: con <<< ERROR! (una excepcion) tambien sale el motivo, con su causa y sin la pila'] = {
+  $e = Escenario-Test-Roto 'm92-error'
+  $d = Diagnostica-Con-Informe $e (Informe-Error)
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el motivo es la excepcion y su causa' ($ExcepcionM92 + ' | ' + $CausaM92) $d.H[0].Motivo
+}
+
+$Pruebas['m92 motivo: sin motivo legible el hallazgo es el de siempre, sin propiedad nueva'] = {
+  $e = Escenario-Test-Roto 'm92-sin-motivo'
+  # solo la linea de resumen (lleva <<< FAILURE!, pero es la de la clase: no es un metodo)
+  $d = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 @())
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el hallazgo solo tiene las 5 propiedades de siempre' 'Cat Detalle Fichero Linea Sev' ((@($d.H[0].PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)) -join ' ')
+  Igual 'el detalle es el de siempre' "1 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $d.H[0].Detalle
+  # un metodo que falla pero solo trae la pila
+  $d2 = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 (@('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!') + (Pila-M92 @('com.acme.life.ArquitecturaTest.capasRespetadas(ArquitecturaTest.java:20)'))))
+  Igual 'con solo la pila, un hallazgo de tests' 1 $d2.H.Count
+  if ($d2.H.Count -eq 1) { Comprueba 'con solo la pila tampoco hay motivo' ($null -eq $d2.H[0].PSObject.Properties['Motivo']) ($d2.H[0] | ConvertTo-Json -Compress) }
+}
+
+$Pruebas['m92 motivo: un motivo de 2000 caracteres se corta a 400'] = {
+  $e = Escenario-Test-Roto 'm92-tope'
+  $largo = 'java.lang.AssertionError: ' + ('x' * 2000)
+  $d = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 @('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!', $largo, $ClaseUnoM92))
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el motivo mide 400' 400 ([string]$d.H[0].Motivo).Length
+  Comprueba 'y es el principio de la linea larga' ([bool]$d.H[0].Motivo -and $largo.StartsWith(([string]$d.H[0].Motivo))) ('motivo: ' + [string]$d.H[0].Motivo)
+}
+
+$Pruebas['m92 motivo: la linea del prompt del lote y el detalle de la consola tras un NO PASA llevan motivo:'] = {
+  $e = Escenario-Test-Roto 'm92-linea' @{ Orden = @('tests') }
+  Pon-Informe (Informe-Arch)
+  try { $r = Fix-M6 $e 'tests' 1 @() 'crea-fichero' }
+  finally { $env:RESCATE_SUREFIRE_TXT = '' }
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un lote de tests' ($lotes.Count -ge 1) (Cola $r.Salida)
+  if ($lotes.Count -eq 0) { return }
+  $linea = '- ' + $TestM92 + " - 1 test(s) fallan en $ClaseM92 (ver target/surefire-reports) - motivo: " + $MotivoArchM92
+  $p = Prompt-M6 $e $lotes[0]
+  Comprueba 'la linea del hallazgo del prompt lleva el motivo' (@($p -split "`r?`n") -contains $linea) (([regex]::Match($p, '(?s)## Hallazgos de este lote.*?(?=## Reglas)')).Value)
+  $c1 = Consola-Del-Intento $r.Salida 1
+  Comprueba 'el intento no pasa' ($c1 -match 'NO PASA') $c1
+  $det = @(Detalle-De-Consola $c1 | Where-Object { $_ -match 'ArquitecturaTest' })
+  Comprueba 'el detalle de la consola lleva la linea con el motivo' ($det.Count -ge 1 -and $det[0] -ceq ('    ' + $linea)) ($det -join ' / ')
+}
+
+$Pruebas['m92 motivo: la misma clase que falla antes y despues con otro motivo no es un hallazgo nuevo ni otro fallo'] = {
+  $e = Escenario-Test-Roto 'm92-mismo'
+  $antes = Diagnostica-Con-Informe $e (Informe-Arch)
+  $despues = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 @('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!', 'java.lang.AssertionError: ', "Architecture Violation [Priority: MEDIUM] - Rule 'application must not depend on infrastructure' was violated (1 times):", 'Class <com.acme.life.application.usecases.CargarPolizasUseCase> depends on class <com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter> in (CargarPolizasUseCase.java:7)'))
+  Comprueba 'antes y despues hay un hallazgo de tests' ($antes.H.Count -eq 1 -and $despues.H.Count -eq 1) "$($antes.H.Count) y $($despues.H.Count)"
+  if ($antes.H.Count -ne 1 -or $despues.H.Count -ne 1) { return }
+  Comprueba 'los motivos son distintos' ($antes.H[0].Motivo -and $despues.H[0].Motivo -and $antes.H[0].Motivo -cne $despues.H[0].Motivo) "$($antes.H[0].Motivo) / $($despues.H[0].Motivo)"
+  . ([scriptblock]::Create((Texto-De-Funciones @('Get-ClaveHallazgo', 'Get-HallazgosNuevos', 'Get-ClaveFallo', 'Test-FalloRepetido'))))
+  $hallAntes = @{}
+  foreach ($x in $antes.H) { $hallAntes[(Get-ClaveHallazgo $x)] = $true }
+  Igual 'Get-HallazgosNuevos no lo cuenta como nuevo' 0 @(Get-HallazgosNuevos $despues.H @('tests') $hallAntes).Count
+  # como si fuera un hallazgo nuevo en los dos intentos, con otro NO PASA: solo la clave dice si es el mismo fallo
+  $a = Get-ClaveFallo @('Los hallazgos de tests no han bajado (1 -> 1).') $antes.H
+  $b = Get-ClaveFallo @('El proyecto no compila.') $despues.H
+  Comprueba 'Test-FalloRepetido lo ve como el mismo fallo' (Test-FalloRepetido $a $b) "$($a.Nuevos) / $($b.Nuevos)"
+}
+
+$Pruebas['m92 estructura: el texto del paso manda actualizar los imports de todos los ficheros y, ante ArchUnit, cambiar el destino y no el test'] = {
+  $e = Nuevo-Escenario 'm92-estructura'
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '1'))
+  $p = Lee $e.Wt '.rescate/prompt.md'
+  $texto = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover: no cambies logica. Actualiza el package de cada clase movida y los imports de TODOS los ficheros que la usan, tambien los que no estan en la lista: las clases que estaban en su mismo paquete no tenian import y ahora lo necesitan. Mueve tambien sus tests al paquete equivalente. Si falla un test de arquitectura del repo (ArchUnit), su motivo dice que regla rompes: cambia el destino de la clase, no el test.'
+  $que = ([regex]::Match($p, '(?s)## Que hay que hacer.*?(?=## Hallazgos)')).Value
+  Comprueba 'el prompt lleva el texto del paso entero' ($p.Contains($texto)) $que
+  Comprueba 'lleva "tambien los que no estan en la lista"' ($p.Contains('tambien los que no estan en la lista')) $que
+  Comprueba 'lleva "no el test"' ($p.Contains('no el test')) $que
+  Comprueba 'ya no dice "Solo mover y actualizar package e imports"' (-not $p.Contains('Solo mover y actualizar package e imports')) $que
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

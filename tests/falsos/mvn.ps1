@@ -1,6 +1,6 @@
 # mvn.ps1 - Maven de mentira para tests/probar.ps1 y tests/probar-preflight.ps1.
 # "Compila" si ningun .java contiene NO_COMPILA.
-# Con el argumento 'test', los "tests" fallan si algun test contiene TEST_FALLA.
+# Con el argumento 'test', los "tests" fallan si algun test contiene TEST_FALLA (con RESCATE_SUREFIRE_TXT, su informe de surefire es ese fichero).
 # Para el preflight: '--version' dice una version; el paso de JaCoCo deja
 # target/site/jacoco/jacoco.csv (y falla con '[ERROR] <texto>' si existe RESCATE_MVN_ERROR);
 # el de OpenRewrite mueve com.ejemplo.service.Saludo a com.ejemplo.application.usecase.
@@ -31,7 +31,15 @@ if ($args -contains 'test') {
   [void](New-Item -ItemType Directory -Path $rep -Force)
   $fallan = @($javas | Where-Object { ($_.FullName -match '[\\/]src[\\/]test[\\/]') -and ([System.IO.File]::ReadAllText($_.FullName) -match 'TEST_FALLA') })
   foreach ($t in $fallan) {
-    [System.IO.File]::WriteAllText((Join-Path $rep ($t.BaseName + '.txt')), 'Tests run: 1, Failures: 1, Errors: 0, Skipped: 0')
+    $nombre = $t.BaseName
+    $cuerpo = 'Tests run: 1, Failures: 1, Errors: 0, Skipped: 0'
+    # Con RESCATE_SUREFIRE_TXT (ruta de un fichero) el informe es ese fichero, y se llama como la clase con su paquete (como el de surefire).
+    if ($env:RESCATE_SUREFIRE_TXT) {
+      $cuerpo = [System.IO.File]::ReadAllText($env:RESCATE_SUREFIRE_TXT)
+      $m = [regex]::Match([System.IO.File]::ReadAllText($t.FullName), '(?m)^package\s+([\w.]+);')
+      if ($m.Success) { $nombre = $m.Groups[1].Value + '.' + $nombre }
+    }
+    [System.IO.File]::WriteAllText((Join-Path $rep ($nombre + '.txt')), $cuerpo)
   }
   if ($fallan.Count -gt 0) {
     '[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0'
