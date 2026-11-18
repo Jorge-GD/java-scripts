@@ -35,7 +35,9 @@ En los ejemplos:
 .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
 ```
 
-Comprueba que PowerShell, Copilot, Maven, SpotBugs y PMD funcionan en tu equipo. Si algo falla, pega `preflight-resultado.txt` en el chat: no lleva rutas, usuario ni secretos.
+Comprueba que PowerShell, Copilot, Maven, SpotBugs y PMD funcionan en tu equipo. Si algo falla, pega `preflight-resultado.txt` en el chat. Quita rutas, usuario, equipo y correos, pero léelo antes de pegarlo.
+
+Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primera vez `migracion.ps1` te pregunta con un menú.
 
 ## Paso 1. La foto de cómo está
 
@@ -45,7 +47,8 @@ Comprueba que PowerShell, Copilot, Maven, SpotBugs y PMD funcionan en tu equipo.
 
 - Lee el original, mide el migrado, compara los dos leyendo el código y los ejecuta con las mismas entradas (la prueba en local).
 - No cambia código.
-- Abre `C:\ruta\migrado\migracion-<batch>\index.html`. La portada dice cómo ha ido y qué te toca. Desde ahí llegas a las otras cuatro páginas.
+- Si el original no compila con el JDK de Maven, añade `-JavaLegacy C:\ruta\jdk-del-original`. Sin eso, la prueba en local se queda sin hacer.
+- Abre `C:\ruta\migrado\migracion-<batch>\index.html`. `<batch>` es el `artifactId` del `pom.xml` del migrado. La portada dice cómo ha ido y qué te toca. Desde ahí llegas a las otras cuatro páginas.
 
 | Página | Qué cuenta | Para quién |
 |---|---|---|
@@ -54,12 +57,13 @@ Comprueba que PowerShell, Copilot, Maven, SpotBugs y PMD funcionan en tu equipo.
 | `3-original-vs-migrado.html` | Caso a caso, si el migrado da lo mismo que el original | Tú |
 | `4-correcciones.html` | Qué se ha corregido y qué queda | Tú |
 
-Dos carpetas que verás aparecer:
+Carpetas que verás aparecer:
 
 | Carpeta | Qué es | ¿Se puede borrar? |
 |---|---|---|
 | `C:\ruta\migrado\migracion-<batch>\` | El informe y sus datos | No, si quieres relanzar sin repetir el trabajo |
 | `C:\ruta\migrado-rescate\` | La copia donde trabaja el script, con su rama | Sí, cuando ya hayas traído los cambios (paso 4) |
+| `C:\ruta\original-prueba-local\` y `C:\ruta\migrado-prueba-local\` | Copias desechables de la prueba en local | Sí: se rehacen solas en cada lanzamiento |
 
 **Antes de lanzar, haz commit de lo tuyo.** Lo que tengas sin commit se copia a la rama de rescate en un commit «foto». Si es la salida de una ejecución local (por ejemplo `output/`), añádela a `.gitignore`.
 
@@ -70,7 +74,7 @@ Dos carpetas que verás aparecer:
 ```
 
 - No repite la lectura del paso 1.
-- Arregla fichero a fichero en `C:\ruta\migrado-rescate`, con un commit por arreglo. Un arreglo solo se queda si compila, pasan los tests, bajan los problemas y no empeora nada.
+- Arregla fichero a fichero en `C:\ruta\migrado-rescate`, con un commit por arreglo. Un arreglo solo se queda si compila, no fallan más tests que antes, bajan los problemas y no empeora nada.
 - Después vuelve a medir, a comparar y a ejecutar los dos. La página 4 dice qué ha quitado y qué queda.
 - Si una pasada anterior ya terminó la corrección, se la salta. Para volver a corregir, lanza el motor directamente:
 
@@ -100,7 +104,7 @@ Para encontrar el commit que rompe un caso:
 - `-Desde <tu-rama>` busca entre los commits que la rama de rescate tiene encima de la tuya.
 - Dice «el caso X era igual en <commit> y se rompe en <commit> (<asunto>)».
 - Con `-Deshacer`, hace `git revert` de ese commit (nunca un reset) y vuelve a ejecutar el caso. Si no existe `C:\ruta\migrado-rescate`, el revert va a tu rama.
-- `prueba-local.ps1` lanzado así no rehace las páginas. Para verlas al día, relanza `migracion.ps1` con las mismas opciones: solo repite la prueba en local.
+- `prueba-local.ps1` lanzado así no rehace las páginas. Para ver la página 3 al día, relanza `migracion.ps1` con las mismas opciones. Con un commit nuevo en la rama de rescate, repite la comparación leyendo código (tarda y gasta Copilot) y la prueba en local. Las páginas 2 y 4 no cambian.
 
 ## Paso 4. Revisar y traer los cambios
 
@@ -111,7 +115,7 @@ git -C C:\ruta\migrado merge <rama-rescate>
 git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate
 ```
 
-El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'rescate/...'`). Si un commit no te convence, quítalo antes del merge con `git -C C:\ruta\migrado-rescate revert <commit>`.
+El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'rescate/...'`). Si lo has perdido: `git -C C:\ruta\migrado worktree list`, o `rama` en `migracion-<batch>\datos\estado.json`. Si un commit no te convence, quítalo antes del merge con `git -C C:\ruta\migrado-rescate revert <commit>`.
 
 ## Paso 5. Sonar
 
@@ -120,10 +124,10 @@ El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'resca
 ```
 
 - Funciona con cualquier proyecto Maven de Java. No necesita la referencia ni el original.
-- Solo arregla `BUG` y `VULNERABILITY` de gravedad `BLOCKER`, `CRITICAL` o `MAJOR`.
+- Solo arregla Java: cualquier incidencia `BLOCKER`, `CRITICAL` o `MAJOR`, y los `BUG` y `VULNERABILITY` que no sean `MINOR` ni `INFO`.
 - Lo sagrado es no cambiar la lógica de negocio. Lo que no se puede arreglar sin cambiarla no se toca.
 - No se para por una incidencia difícil: termina todo y al final dice «Faltan N de Sonar», con el motivo de cada una. La lista queda en `C:\ruta\migrado-rescate\.rescate\sonar-faltan.md`.
-- Los arreglos van a la rama de rescate, como en el paso 2. Después repite los pasos 3 y 4: relanza `migracion.ps1 -SoloInforme` para que la prueba en local mire el código nuevo.
+- Los arreglos van a la rama de rescate, como en el paso 2. Después repite los pasos 3 y 4: relanza `migracion.ps1 -SoloInforme` para que la prueba en local mire el código nuevo, y `prueba-local.ps1 -Desde <tu-rama>` si algún caso pasa a `distinto`.
 - Las reglas del paso están en `sonar-reglas.ps1`.
 
 ## Paso 6. Pre
@@ -134,7 +138,7 @@ En `1-batch-original.html`, cada job tiene «Cómo probarlo en pre»: qué lanza
 
 1. `git push` de tu rama.
 2. Sonar pasa en tu CI. Si dice que la rama es `main` cuando no lo es, no pasa nada: el script no mira la rama.
-3. Descarga el xlsx nuevo y vuelve al paso 5 con él. La pasada anterior queda guardada en `.rescate\sonar-base-anterior.json`.
+3. Descarga el xlsx nuevo y vuelve al paso 5 con él.
 
 ## Si te pierdes
 
@@ -151,14 +155,14 @@ En `1-batch-original.html`, cada job tiene «Cómo probarlo en pre»: qué lanza
 
 ### Cuando `migracion.ps1` se para
 
-Sale en rojo, con el motivo, y la portada trae un texto listo para pegar en Copilot en otra ventana. Arregla la causa y relanza el mismo comando.
+Sale en rojo (en amarillo si es el tope de tiempo), con el motivo, y la portada trae un texto listo para pegar en Copilot en otra ventana. Arregla la causa y relanza el mismo comando.
 
 | Motivo | Qué ha pasado | Qué haces |
 |---|---|---|
 | `copilot-no-responde` | Varias llamadas seguidas han fallado: sesión, cuota o red | Comprueba que Copilot responde en otra ventana y relanza |
 | `tope-de-tiempo` | Se ha llegado a `-MaxHoras` | Relanza |
 | `no-compila` | Después de corregir, el migrado no compila | Mira `registros\correccion.log`. Arregla en `C:\ruta\migrado-rescate`, haz commit ahí y relanza |
-| `lotes-deshechos` | 6 lotes seguidos deshechos | Casi siempre es Copilot, Maven o un parámetro, no el código. Mira el último `lote-*.log` |
+| `lotes-deshechos` | 6 ficheros atascados seguidos, sin ningún arreglo bueno entre medias | Casi siempre es Copilot, Maven o un parámetro, no el código. Mira el último `lote-*.log`. Al relanzar no se reintentan esos ficheros: ver «Ficheros atascados» abajo |
 | `guardas` | Alguien ha cambiado el original o la referencia | `git status` y `git diff` en esa carpeta, déjala como estaba y relanza |
 | `git` | No se ha podido hacer un commit | Mira el mensaje de git en el registro |
 | `motor` o `error-interno` | Fallo del script | Pega el mensaje y las últimas líneas del registro en el chat |
@@ -169,17 +173,24 @@ Sale en rojo, con el motivo, y la portada trae un texto listo para pegar en Copi
 |---|---|---|
 | `NO PASA:` | El lote no cumple una comprobación | No: reintenta con el motivo |
 | `Lote ... DESHECHO` | Ha agotado los intentos | No: lo deshace entero y sigue |
-| `ATASCADO` | Un fichero no sale ni solo | No: lo apunta en `.rescate\atascados.md` y sigue |
-| `PARO:` | Varios lotes deshechos seguidos | Sí: ver `lotes-deshechos` arriba |
+| `ATASCADO` | Un fichero no sale ni solo | Al final: lo apunta en `.rescate\atascados.md` y sigue con los demás. Ver «Ficheros atascados» abajo |
+| `PARO:` | 6 ficheros atascados seguidos | Sí: ver `lotes-deshechos` arriba |
+
+### Ficheros atascados
+
+Al acabar, el motor los lista como «lo único que te toca mirar» y sale con 2. Al relanzar no los reintenta, salvo que el fichero haya cambiado. Dos salidas:
+
+- Arréglalo a mano en `C:\ruta\migrado-rescate` y haz commit allí.
+- O reinténtalo: el comando de `rescate.ps1` del paso 2 con `-Reintentar`, y `-ModeloB <id>` si quieres un modelo de reserva.
 | `ALTO:` | Ha cambiado la referencia o el original | Sí: ver `guardas` arriba |
 
 ### Volver atrás
 
 | Quiero | Cómo |
 |---|---|
-| Deshacer el último lote | `.\rescate.ps1 -Modo deshacer -Repo C:\ruta\migrado` |
+| Deshacer el último lote | `.\rescate.ps1 -Modo deshacer -Repo C:\ruta\migrado`. Solo mientras exista `C:\ruta\migrado-rescate`: después del paso 4 no lo uses, porque actuaría sobre tu rama |
 | Quitar un commit concreto | `git -C C:\ruta\migrado-rescate revert <commit>` |
-| Empezar de cero los arreglos | `git -C C:\ruta\migrado worktree remove --force C:\ruta\migrado-rescate` y `git -C C:\ruta\migrado branch -D <rama-rescate>`. Tu rama queda como estaba |
+| Empezar de cero los arreglos | `git -C C:\ruta\migrado worktree remove --force C:\ruta\migrado-rescate`, `git -C C:\ruta\migrado branch -D <rama-rescate>` y borra `migracion-<batch>\datos\correcciones.json` (si no, `-Si` se salta la corrección). Tu rama queda como estaba |
 | Rehacer el informe desde cero | Borra `C:\ruta\migrado\migracion-<batch>\`. Se vuelve a pagar toda la lectura |
 | Rehacer un caso de la prueba en local | Borra su carpeta en `migracion-<batch>\prueba-local\casos\` |
 
@@ -191,6 +202,6 @@ Pon en `%USERPROFILE%\.rescate\ajustes.json` la lista `CopilotArgs` sin ese par�
 
 | Script | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
-| `migracion.ps1` | Bien, o tope de tiempo | No pudo arrancar | Se ha parado (ver la portada) | | |
+| `migracion.ps1` | Bien, o tope de tiempo | No pudo arrancar | Se ha parado (ver la portada) | No pudo copiar tus cambios sin commit: haz commit y relanza | |
 | `rescate.ps1` | Bien | Falta algo o un parámetro está mal | Atascados, no compila o demasiados lotes deshechos | Git no pudo hacer el commit | Ha cambiado la referencia o el original |
 | `prueba-local.ps1` | Todo lo comparado es igual | No ha podido | Hay casos distintos | | |
