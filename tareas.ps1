@@ -1092,6 +1092,64 @@ function Get-PalabrasClase([string]$Nombre) {
   return @([regex]::Matches($Nombre, '\p{Lu}\p{Ll}{3,}') | ForEach-Object { $_.Value } | Select-Object -Unique)
 }
 
+# Que fue de cada .java que la correccion renombro o borro, entre <Base> y HEAD de $Dir: la ruta de partida (relativa, con /) -> las
+# rutas de ahora. Un renombrado (git diff -M) va a su nueva ruta. De un borrado se sigue lo que tenia: va a los ficheros donde aparecen
+# anadidas 2 o mas de sus lineas (de 10 caracteres o mas, sin repetir), las que mas comparten primero y luego por ruta; sin ninguno,
+# la lista sale vacia. Con orden ordinal. Sin cambios o si git falla, el mapa sale vacio: nunca para la pasada.
+function Get-MapaMovidos([string]$Dir, [string]$Base) {
+  $mapa = New-Object 'System.Collections.Generic.SortedDictionary[string,string[]]' ([System.StringComparer]::Ordinal)
+  $rango = "$Base...HEAD"
+  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'diff', '--name-status', '-M', '--no-color', '--no-ext-diff', $rango, '--', '*.java')
+  if ($r.Codigo -ne 0) { return , $mapa }
+  $borrados = @()
+  foreach ($l in $r.Salida) {
+    $c = $l.Split("`t")
+    if ($c[0] -clike 'R*' -and $c.Count -ge 3) { $mapa[$c[1]] = @($c[2]) }
+    elseif ($c[0] -ceq 'D' -and $c.Count -ge 2) { $borrados += $c[1] }
+  }
+  if ($borrados.Count -eq 0) { return , $mapa }
+  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'diff', '-U0', '--no-renames', '--no-color', '--no-ext-diff', '--src-prefix=a/', '--dst-prefix=b/', $rango, '--', '*.java')
+  if ($r.Codigo -ne 0) { return , $mapa }
+  # las lineas quitadas de cada fichero de partida y las puestas en cada fichero de ahora; despues del primer @@ de un fichero
+  # todo lo que empieza por - o + es una linea (una quitada que empiece por -- no es una cabecera)
+  $quitadas = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]'
+  $puestas = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.HashSet[string]]'
+  $a = ''
+  $b = ''
+  $dentro = $false
+  foreach ($l in $r.Salida) {
+    if ($l.StartsWith('diff --git ')) { $a = ''; $b = ''; $dentro = $false }
+    elseif (-not $dentro) {
+      if ($l.StartsWith('--- a/')) { $a = $l.Substring(6).TrimEnd("`t") }
+      elseif ($l.StartsWith('+++ b/')) { $b = $l.Substring(6).TrimEnd("`t") }
+      elseif ($l.StartsWith('@@')) { $dentro = $true }
+    }
+    elseif (($l.StartsWith('-') -and $a) -or ($l.StartsWith('+') -and $b)) {
+      $t = $l.Substring(1).Trim()
+      if ($t.Length -lt 10) { continue }
+      $lado = $puestas
+      $ruta = $b
+      if ($l.StartsWith('-')) { $lado = $quitadas; $ruta = $a }
+      if (-not $lado.ContainsKey($ruta)) { $lado[$ruta] = New-Object 'System.Collections.Generic.HashSet[string]' }
+      [void]$lado[$ruta].Add($t)
+    }
+  }
+  foreach ($d in $borrados) {
+    $claves = @()
+    if ($quitadas.ContainsKey($d)) {
+      foreach ($p in $puestas.Keys) {
+        $n = 0
+        foreach ($t in $quitadas[$d]) { if ($puestas[$p].Contains($t)) { $n++ } }
+        if ($n -ge 2) { $claves += ((999999 - $n).ToString('D6') + $p) }
+      }
+    }
+    $claves = [string[]]$claves
+    [System.Array]::Sort($claves, [System.StringComparer]::Ordinal)
+    $mapa[$d] = @($claves | ForEach-Object { $_.Substring(6) })
+  }
+  return , $mapa
+}
+
 # Los ficheros del migrado (de $Java, los .java del worktree) que lee la comparacion de una clase del original: los que se
 # llaman como ella; si no hay ninguno, los que comparten alguna palabra de su nombre, los que mas primero y luego por ruta.
 # FicherosComparar como mucho. Sin ninguno, la clase no se compara con IA.

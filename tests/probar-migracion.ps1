@@ -3089,5 +3089,65 @@ $Pruebas['101 paginas: al acabar la lectura la portada dice que ha terminado, au
   Comprueba 'y no que la pasada va por una fase' ($i -notmatch 'La pasada no ha terminado')
 }
 
+# ======================= E2: COMPARAR DESPUES DE CORREGIR Y LA PRUEBA EN LOCAL =======================
+# N lineas de 10 o mas caracteres, todas distintas por el prefijo: 'String campoP1 = 1;' ...
+function Campos([string]$P, [int]$N) { return ((1..$N | ForEach-Object { "String campo$P$_ = 1;" }) -join "`n") }
+
+$Pruebas['102 (E2) mapa de movidos: renombrados de git, borrados con las lineas que fueron a otros ficheros (minimo 2, mas primero, orden ordinal), cabeceras falsas, sin cambios y git que falla'] = {
+  $d = Join-Path $Dir 'mapa-git'
+  if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  $j = 'src/main/java/a'
+  $b1 = 'String compartidaUno = 1;'
+  $b2 = 'String compartidaDos = 2;'
+  $menos = '-- marca uno aqui'
+  $mas = '++ marca dos aqui'
+  $e = @('String empateUno = 1;', 'String empateDos = 2;', 'String empateTres = 3;', 'String empateCuatro = 4;')
+  Escribe $d "$j/Renombrada.java" (Campos 'R' 6)
+  Escribe $d "$j/Borrada.java" ((@($b1, $b2, $menos, $mas, $b1) -join "`n") + "`n")
+  Escribe $d "$j/Poca.java" (Campos 'P' 4)
+  Escribe $d "$j/Corta.java" "int a;`nint b;`nint c;`n"
+  Escribe $d "$j/Empate.java" (($e -join "`n") + "`n")
+  Escribe $d "$j/Modificado.java" (Campos 'M' 4)
+  Escribe $d "$j/Fuera.txt" "String compartidaUno = 1;`nString compartidaDos = 2;`n"
+  Inicia-Repo $d
+  # HEAD: Renombrada pasa a Nueva (con un cambio), se borran Borrada, Poca, Corta y Empate, y sus lineas van a otros ficheros
+  [void](GitEn $d @('checkout', '-q', '-b', 'rescate'))
+  [void](GitEn $d @('mv', "$j/Renombrada.java", "$j/Nueva.java"))
+  Escribe $d "$j/Nueva.java" ((Campos 'R' 6).Replace('campoR1', 'campoRX'))
+  foreach ($x in @('Borrada', 'Poca', 'Corta', 'Empate')) { [void](GitEn $d @('rm', '-q', "$j/$x.java")) }
+  Escribe $d "$j/Modificado.java" ((Campos 'M' 4) + "`n$b1`n$menos`n$mas`n")
+  Escribe $d "$j/Aaa.java" ((@($b1, $b2) -join "`n") + "`n" + (Campos 'P' 1) + "`n" + (Campos 'A' 10) + "`n")
+  Escribe $d "$j/Mas.java" ((@($e[0], $e[1], $e[2]) -join "`n") + "`n" + (Campos 'N' 10) + "`n")
+  Escribe $d "$j/Zeta.java" ((@($e[0], $e[1]) -join "`n") + "`n" + (Campos 'Z' 10) + "`n")
+  Escribe $d "$j/alfa.java" ((@($e[2], $e[3]) -join "`n") + "`n" + (Campos 'L' 10) + "`n")
+  Escribe $d "$j/Otra.java" ((Campos 'P' 1) + "`n" + (Campos 'O' 10) + "`n")
+  Escribe $d "$j/Nuevo.txt" "String compartidaUno = 1;`nString compartidaDos = 2;`n"
+  [void](GitEn $d @('add', '-A'))
+  [void](GitEn $d @('commit', '-q', '-m', 'rescate(estructura): cambios'))
+  $codigo = @'
+$m = Get-MapaMovidos '{{DIR}}' 'main'
+foreach ($k in $m.Keys) { 'MAPA|' + $k + '|' + (@($m[$k]) -join ',') }
+'CLAVES=' + $m.Count
+'TIPO=' + $m.GetType().Name
+'SIN-CAMBIOS=' + (Get-MapaMovidos '{{DIR}}' 'HEAD').Count
+'GIT-FALLA=' + (Get-MapaMovidos '{{DIR}}' 'rama-que-no-existe').Count
+'FIN'
+'@
+  $r = En-Biblioteca 'mapa-movidos' $codigo.Replace('{{DIR}}', $d)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $l = @($r.Salida -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ -like 'MAPA|*' })
+  $esperado = @(
+    "MAPA|$j/Borrada.java|$j/Modificado.java,$j/Aaa.java",
+    "MAPA|$j/Corta.java|",
+    "MAPA|$j/Empate.java|$j/Mas.java,$j/Zeta.java,$j/alfa.java",
+    "MAPA|$j/Poca.java|",
+    "MAPA|$j/Renombrada.java|$j/Nueva.java")
+  Igual 'el mapa: renombrado a su nueva ruta; borrados a los ficheros con 2 o mas lineas suyas (mas primero, empates por ruta ordinal); sin los .txt' ($esperado -join ' ; ') ($l -join ' ; ')
+  Comprueba 'es un diccionario con orden ordinal (Zeta antes que alfa)' ($r.Salida -match 'TIPO=SortedDictionary') (Cola $r.Salida)
+  Comprueba 'sin commits entre la base y HEAD el mapa sale vacio' ($r.Salida -match '(?m)^SIN-CAMBIOS=0\r?$') (Cola $r.Salida)
+  Comprueba 'con una base que no existe, vacio y sin romper' ($r.Salida -match '(?m)^GIT-FALLA=0\r?$' -and $r.Salida -match '(?m)^FIN\r?$') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
