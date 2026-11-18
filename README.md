@@ -83,6 +83,9 @@ Mientras espera a Copilot o a Maven escribe una línea cada minuto (`... sigue: 
 # 3 bis) Forma corta con un informe de Sonar: arregla sus incidencias, sin plantilla ni parar entre lotes
 .\rescate.ps1 -Repo C:\ruta\batch -Sonar C:\ruta\informe.xlsx
 
+# 3 ter) Forma corta para subir la cobertura: escribe tests, una clase por lote, hasta el objetivo (80 %)
+.\rescate.ps1 -Repo C:\ruta\batch -Cobertura
+
 # 4) Al acabar: revisar y traer los cambios a tu rama
 git -C C:\ruta\batch-life diff --stat <tu-rama>...<rama-rescate>
 git -C C:\ruta\batch-life merge <rama-rescate>
@@ -159,6 +162,33 @@ Opcional y para cualquier proyecto Maven de Java: no necesita `-Plantilla` ni `-
 - `.rescate/sonar-base.json` guarda el hash del xlsx y, por incidencia, su unidad de código y si esta pasada la resolvió (regla y commit del lote). Con otro xlsx la base se rehace y la anterior queda en `.rescate/sonar-base-anterior.json`.
 
 El ciclo: pasada con `-Sonar`, push, Sonar en tu CI, xlsx nuevo, otra pasada.
+
+### El paso `cobertura`
+
+Opcional y para cualquier proyecto Maven de Java con tests que pasan: no necesita `-Plantilla` ni `-Legacy`. Sin `-Cobertura` el paso no existe. Sonar pide un 80 % de cobertura en el código nuevo y una migración cambia casi todo: este paso escribe **solo tests**, una clase por lote, hasta llegar a `CoberturaObjetivo` (80). La lógica de negocio no se toca.
+
+| Parámetro | Para qué |
+|---|---|
+| `-Cobertura` | Añade el paso `cobertura` el último. Solo con `-Repo` y `-Cobertura`, hace el arreglo entero del paso (`-Modo fix`, `-Paso cobertura` y `-Auto` quedan puestos). Con `-Todo`, va detrás de los demás pasos y de `sonar`. Con `-Sonar` y `-Cobertura` a la vez y sin `-Paso` ni `-Todo`, solo hace `sonar`: lanza después `-Cobertura` sola. |
+
+- Mide con JaCoCo por coordenadas (sin tocar el pom), con los tests. Si no compila o los tests fallan, para: primero `-Paso build` o `-Paso tests`.
+- Un hallazgo por clase con líneas sin cubrir (sumando sus clases internas), de las que más faltan a las que menos: «`<cubiertas>/<total> lineas (<pct> %)`». Si el total ya llega al objetivo, ninguno.
+- No propone lo de `CoberturaExcluir` (por defecto `config/`, `dto/`, `model/`, la clase `@SpringBootApplication` y los records sin métodos); lo dice al final.
+- El lote es una clase. El prompt (`CoberturaPrompt`) lleva la clase entera, su test si existe y las líneas que JaCoCo da como no cubiertas. Pide ampliar `src/test/java/<paquete>/<Clase>Test.java`, solo con lo que ya hay en el pom.
+- Puertas del lote, además de las de siempre (compila, no se borran ni se desactivan tests, plantilla y original intactos). Las adoptamos de los filtros de TestGen-LLM de Meta (compila, pasa de forma fiable, sube la cobertura):
+
+| Puerta | Qué exige | Cuándo se mira |
+|---|---|---|
+| P1 | Solo se crean o cambian ficheros bajo `src/test/`: nada en `src/main/`, ni el `pom.xml`. Y el lote escribe `<Clase>Test.java`. | Antes de Maven |
+| P4 | Cada `@Test` nuevo o cambiado tiene una aserción de verdad (`assert*`, `verify`, `assertThrows`, `assertThat`...). No valen `assertTrue(true)`, `@Disabled`, `Thread.sleep` ni un `catch` vacío añadidos. | Antes de Maven |
+| P5 | No pasan más tests a fallar que antes. | Con Maven |
+| P2 | Los tests de la clase pasan 3 veces seguidas (`mvn test -Dtest=<Clase>Test`, `CoberturaRepeticiones`). Si una falla, son inestables. | Si lo anterior pasa |
+| P3 | La cobertura de líneas de la clase sube y el total no baja. | Si lo anterior pasa |
+
+- Una clase se intenta una vez por pasada. Como mucho `CoberturaClasesMax` (40) clases por pasada; se para antes si llega al objetivo.
+- Si el modelo cree que el código tiene un error, no lo arregla ni lo esconde: deja el test fijado tal cual y escribe `// OJO: parece un error: <motivo>`.
+- Al acabar: «Cobertura: X % -> Y % (objetivo Z %)». Si no llega, «Faltan estas clases» con su motivo (atascada, sin intentar por el tope, mejorada pero incompleta), las excluidas y los `// OJO:` con su fichero y línea. Todo también en `.rescate/cobertura-faltan.md`.
+- Cada lote cuesta un Maven más (JaCoCo) y las repeticiones de P2.
 
 ### Quién ya lo hizo
 
