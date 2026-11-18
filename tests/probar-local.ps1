@@ -785,5 +785,146 @@ $Pruebas['34 culpable (p): la busqueda recorre solo la primera linea de la rama 
   Igual 'sin sumar a la busqueda mas ejecuciones que Desde y dos del medio' 3 ((Ejecuciones-Mig $e 'caso-01') - 1)
 }
 
+# ===================== M18: el arnes que vale aunque la llamada falle, y lo que se le pide a la IA =====================
+# Ajustes del escenario con el Copilot y el Maven de mentira de este grupo (arnes-copilot.ps1 y arnes-mvn.ps1). Las llamadas de arnes
+# pasan del tope a los 10 s (SegundosArnes). $Mas: otras claves de ajustes.json (por ejemplo SegundosTestArnes).
+function Ajustes-Arnes($E, [hashtable]$Mas = @{}) {
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'arnes-copilot.ps1'); MvnExe = (Join-Path $falsos 'arnes-mvn.ps1'); SegundosPorLlamada = 60; SegundosArnes = 10 }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  Escribe $E.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+}
+
+# El registro de la llamada $N de la tarea del arnes del $Repo ('original' o 'migrado'): su prompt, y lo que dijo Copilot.
+function Registro-Arnes($E, [string]$Repo, [int]$N) {
+  $f = Get-Ruta $E.Local "registros/arnes-$Repo-$N.log"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return [System.IO.File]::ReadAllText($f)
+}
+
+function Tarea-Arnes($E, [string]$Repo) { return (Lee-Json (Get-Ruta $E.Local "tareas/arnes-$Repo.json")) }
+
+# Las lineas de mvn.log (las que apunta mvn-local.ps1) que casan con $Patron.
+function Mavens-Con($E, [string]$Patron) {
+  $f = Join-Path $E.Llamadas 'mvn.log'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ -match $Patron })
+}
+
+$Pruebas['41 m18 arnes (a): la llamada se pasa del tope pero deja un test que vale: el arnes vale, sin reintento, y avisa'] = {
+  $e = Nuevo-Escenario 'm18-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-bueno:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea del arnes del original queda hecha' 'hecha' $t.estado
+  Igual 'con una sola llamada (sin reintento)' 1 $t.intentos
+  Comprueba 'no hay registro de una segunda llamada' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'registros/arnes-original-2.log')))
+  Comprueba 'el registro de la primera dice que se agoto el tiempo' ((Registro-Arnes $e 'original' 1) -match 'tiempo agotado')
+  Comprueba 'el arnes del original queda guardado' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'))
+  Comprueba 'la consola avisa de que usa el test que dejo' ($r.Salida.Contains('La IA se ha pasado del tiempo, pero el test que ha dejado vale: lo uso.')) (Cola $r.Salida)
+  Comprueba 'y no dice que lo rechaza' ($r.Salida -notmatch 'Arnes del original rechazado') (Cola $r.Salida)
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['42 m18 arnes (a2): la llamada sale con codigo distinto de 0 pero deja un test que vale: el arnes vale y el aviso dice que ha fallado'] = {
+  $e = Nuevo-Escenario 'm18-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'sale-mal-bueno:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea del arnes del original queda hecha, con una llamada' 'hecha/1' "$($t.estado)/$($t.intentos)"
+  Comprueba 'la consola avisa de que ha fallado y usa el test' ($r.Salida.Contains('La IA ha fallado (codigo 3), pero el test que ha dejado vale: lo uso.')) (Cola $r.Salida)
+}
+
+$Pruebas['43 m18 arnes (b): la llamada se pasa del tope y el test que deja no compila: el motivo lleva el tiempo agotado y el error de Maven, y el segundo prompt lo recibe'] = {
+  $e = Nuevo-Escenario 'm18-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-malo:arnes-original'
+  Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer arnes con el tiempo agotado' ($r.Salida.Contains('Arnes del original rechazado: Tiempo agotado: la llamada se paso del tope y se mato. Ademas, lo que dejo escrito no vale: El test no compila')) (Cola $r.Salida)
+  $p2 = Registro-Arnes $e 'original' 2
+  Comprueba 'el segundo prompt lleva el tiempo agotado' ($p2.Contains('Tiempo agotado: la llamada se paso del tope y se mato. Ademas, lo que dejo escrito no vale:')) $p2
+  Comprueba 'y el error concreto de Maven' ($p2 -match 'simbolo de mentira no encontrado') $p2
+  Igual 'la tarea queda hecha en el segundo intento' 'hecha/2' "$((Tarea-Arnes $e 'original').estado)/$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['44 m18 arnes (c): la llamada se pasa del tope y no escribe nada: el motivo es solo el tiempo agotado, como hoy'] = {
+  $e = Nuevo-Escenario 'm18-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-nada:arnes-original'
+  Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer arnes solo con el tiempo agotado' ($r.Salida -match '(?m)Arnes del original rechazado: Tiempo agotado: la llamada se paso del tope y se mato\.\r?$') (Cola $r.Salida)
+  $p2 = Registro-Arnes $e 'original' 2
+  Comprueba 'el segundo prompt lleva el tiempo agotado' ($p2.Contains('Tiempo agotado: la llamada se paso del tope y se mato.')) $p2
+  Comprueba 'sin el Ademas de un test que no vale' ($p2 -notmatch 'Ademas, lo que dejo escrito') $p2
+  Igual 'la tarea queda hecha en el segundo intento' 'hecha/2' "$((Tarea-Arnes $e 'original').estado)/$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['45 m18 arnes (d): el prompt lleva la lista cerrada de comandos de Maven y los segundos de SegundosTestArnes'] = {
+  $e = Nuevo-Escenario 'm18-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e @{ SegundosTestArnes = 77 }
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  foreach ($repo in @('original', 'migrado')) {
+    $p = Registro-Arnes $e $repo 1
+    Comprueba "el prompt del $repo lleva mvn -q test-compile" ($p.Contains('`mvn -q test-compile`')) $p
+    Comprueba "y el mvn test del caso con el tope de 77 s" ($p.Contains('`mvn test -Dtest=PruebaLocalTest -Dprueba.local.caso=<caso> -Dsurefire.timeout=77`')) $p
+    Comprueba 'y dice que, si se pasa de 77 s, el job intenta conectar con algo de verdad' ($p -match 'se pasa de 77 s' -and $p -match 'conectar con algo de verdad') $p
+    foreach ($x in @('mvn test` sin `-Dtest', 'mvn verify', 'mvn package', 'mvn install', 'mvn spring-boot:run', 'java -jar')) {
+      Comprueba "y prohibe $x" ($p.Contains($x)) $p
+    }
+    Comprueba 'y no deja ninguna clave sin sustituir' ($p -notmatch '\{\{\w+\}\}') $p
+    Comprueba 'ni la frase de lanzar mvn sin limite' (-not $p.Contains('Puedes lanzar `mvn` para probarlo')) $p
+  }
+}
+
+$Pruebas['46 m18 arnes (e): el mvn test del caso vacio lleva -Dsurefire.timeout; los casos de verdad, no'] = {
+  $e = Nuevo-Escenario 'm18-e1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $vacios = @(Mavens-Con $e 'Dprueba\.local\.caso=vacio')
+  Comprueba 'hay un mvn test del caso vacio por arnes' ($vacios.Count -ge 2) ($vacios -join ' // ')
+  Comprueba 'todos con -Dsurefire.timeout=300 (el valor por defecto)' (@($vacios | Where-Object { $_ -notmatch '-Dsurefire\.timeout=300( |$)' }).Count -eq 0) ($vacios -join ' // ')
+  $reales = @(Mavens-Con $e 'Dprueba\.local\.job=')
+  Comprueba 'hay ejecuciones de casos de verdad' ($reales.Count -ge 3) ($reales -join ' // ')
+  Comprueba 'y ninguna lleva -Dsurefire.timeout' (@($reales | Where-Object { $_ -match 'surefire\.timeout' }).Count -eq 0) ($reales -join ' // ')
+}
+
+$Pruebas['47 m18 arnes (e2): si Maven dice que el fork se paso de tiempo, el motivo dice que el job intenta conectar con algo de verdad'] = {
+  $e = Nuevo-Escenario 'm18-e2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $env:RESCATE_ARNES_SUREFIRE = 'si'
+  try { $r = Prueba $e }
+  finally { $env:RESCATE_ARNES_SUREFIRE = '' }
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  $motivo = 'Con un caso vacio, el test no termina en 300 s: el job intenta conectar con algo de verdad (base de datos, SFTP, correo, HTTP). Simulalo en el test.'
+  Comprueba 'el motivo del atasco es el concreto' ($r.Salida.Contains($motivo)) (Cola $r.Salida)
+  Comprueba 'y el segundo prompt lo lleva' ((Registro-Arnes $e 'original' 2).Contains($motivo))
+  Comprueba 'sin el texto de que no ha dejado estado.txt' ($r.Salida -notmatch 'no ha dejado estado\.txt') (Cola $r.Salida)
+}
+
+$Pruebas['48 m18 arnes (f): el arnes atascado dice donde esta el registro de la ultima llamada'] = {
+  $e = Nuevo-Escenario 'm18-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'arnes-no-compila:arnes-original'
+  Igual 'sale con 1' 1 $r.Codigo
+  $reg = Get-Ruta $e.Local 'registros/arnes-original-2.log'
+  Comprueba 'el registro de la ultima llamada existe' (Test-Path -LiteralPath $reg) $reg
+  Comprueba 'el mensaje de atascado lleva su ruta' ($r.Salida.Contains($reg)) (Cola $r.Salida)
+  $linea = @($r.Salida -split "`n" | Where-Object { $_.Contains('ha quedado atascado') -or $_.Contains('Estoy ejecutando prueba-local.ps1') })
+  Comprueba 'tambien el texto para pegar en Copilot' (@($linea | Where-Object { $_.Contains('Estoy ejecutando prueba-local.ps1') -and $_.Contains($reg) }).Count -eq 1) (Cola $r.Salida)
+}
+
+$Pruebas['49 m18 arnes (g): el registro de una llamada matada por el tope guarda lo que Copilot escribio hasta entonces'] = {
+  $e = Nuevo-Escenario 'm18-g' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Ajustes-Arnes $e
+  $r = Prueba $e @() 'colgado-parcial:arnes-original'
+  Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
+  $l = Registro-Arnes $e 'original' 1
+  Comprueba 'el registro dice que la llamada se paso del tope' ($l -match '# salida \(codigo -?\d+, \d+ s, tiempo agotado\)') $l
+  Comprueba 'y lleva su salida parcial' ($l.Contains('salida parcial: leyendo el job cargaRecibosJob')) $l
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

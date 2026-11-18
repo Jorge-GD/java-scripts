@@ -69,6 +69,7 @@ $Cfg += @{
   EsfuerzoArnes  = 'high'
   EsfuerzoCaso   = 'medium'
   SegundosArnes  = 1800   # tope de una llamada que escribe un arnes (las de los casos usan SegundosPorLlamada)
+  SegundosTestArnes = 300 # tope del mvn test que prueba el arnes (-Dsurefire.timeout): el de la comprobacion y el que se le pide a la IA
   LeerPorCaso    = 3      # ficheros del original que lee la tarea de un caso
   Ejemplos       = 3      # tests de ejemplo que recibe la tarea de un arnes
   LineasError    = 15     # lineas del error de Maven que van al motivo
@@ -282,7 +283,7 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   if ($PlantillaRoot -and @($ejemplos | Where-Object { $_.StartsWith($PlantillaRoot) }).Count -gt 0) { $dirs = @($PlantillaRoot) }
   $pom = 'no'
   if ($Repo -eq 'original') { $pom = 'si' }
-  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom }
+  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)" }
   $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
   $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
@@ -340,8 +341,12 @@ function Test-Arnes($T, [string[]]$Jobs) {
   if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r)) }
   foreach ($j in $Jobs) { foreach ($c in @('vacio', 'otro')) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/$c") -Force) } }
   Remove-Carpeta (Join-Ruta $dir 'target/prueba-local')
-  $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio') "arnes $($T.entradas.repo), caso vacio"
+  $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio', "-Dsurefire.timeout=$($Cfg.SegundosTestArnes)") "arnes $($T.entradas.repo), caso vacio"
   Remove-Carpeta (Join-Ruta $dir $Casos)
+  # Surefire mata el fork pasado el tiempo y Maven acaba con 'There was a timeout in the fork' (en Surefire 2.x, '... timeout or other error in the fork'): SurefireHelper.createErrorMessage
+  if ($r.Codigo -ne 0 -and (@($r.Salida) -join "`n") -match 'There was a timeout( or other error)? in the fork') {
+    return "Con un caso vacio, el test no termina en $($Cfg.SegundosTestArnes) s: el job intenta conectar con algo de verdad (base de datos, SFTP, correo, HTTP). Simulalo en el test."
+  }
   foreach ($j in $Jobs) {
     $sal = Join-Ruta $dir "target/prueba-local/$j/vacio"
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
@@ -376,6 +381,23 @@ function Use-ArnesGuardado($T, [string[]]$Jobs) {
   Save-Tarea $T
 }
 
+# '' si lo que dejo la IA en la copia del arnes $T tras la llamada $C vale; si no, el motivo. Una llamada que se paso del tope o
+# salio con un codigo distinto de 0 puede haber dejado ya un test que vale: si hay test, se comprueba igual (y se avisa de que se usa).
+# Si no vale, el motivo junta el de la llamada y el de la comprobacion, para que el reintento sepa que fallo.
+function Get-MotivoArnes($T, $C, [string[]]$Jobs) {
+  $fallo = Get-MotivoLlamada $C
+  if (-not $fallo) { return (Test-Arnes $T $Jobs) }
+  if (-not (Test-Path -LiteralPath (Join-Ruta $T.entradas.copia $T.entradas.test))) { return $fallo }
+  $m = Test-Arnes $T $Jobs
+  if (-not $m) {
+    $que = "ha fallado (codigo $($C.Codigo))"
+    if ($C.Agotado) { $que = 'se ha pasado del tiempo' }
+    Aviso "La IA $que, pero el test que ha dejado vale: lo uso."
+    return ''
+  }
+  return "$fallo Ademas, lo que dejo escrito no vale: $m"
+}
+
 # Las tareas de arnes pendientes, a la vez; cada una con su comprobacion y, si falla, su reintento con el motivo.
 function Invoke-Arneses($Tareas, [string[]]$Jobs) {
   while ($true) {
@@ -389,8 +411,7 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
     for ($i = 0; $i -lt $pend.Count; $i++) {
       $t = $pend[$i]
       Restore-Base $t.entradas.copia
-      $m = Get-MotivoLlamada $ll[$i]
-      if (-not $m) { $m = Test-Arnes $t $Jobs }
+      $m = Get-MotivoArnes $t $ll[$i] $Jobs
       if ($m) { Undo-Copia $t.entradas.copia } else { Save-Arnes $t }
       Set-Intento $t $m
       if ($m) { Aviso "Arnes del $($t.entradas.repo) rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del $($t.entradas.repo): bien." }
@@ -400,9 +421,11 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
 
 # El arnes atascado: que ha pasado y el texto para pegar en Copilot en otra ventana.
 function Show-Atascado($T) {
+  $reg = Join-Path $Registros ($T.id + '-' + $T.intentos + '.log')   # la ultima llamada: su prompt y lo que dijo Copilot
   Fallo "El test PruebaLocalTest del $($T.entradas.repo) ha quedado atascado: $($T.motivo)"
+  Info "Lo que dijo Copilot en la ultima llamada esta en ${reg}: abrelo o mandalo."
   Aviso 'Para que te ayude Copilot, pega esto en otra ventana:'
-  Info ("Estoy ejecutando prueba-local.ps1 (la prueba en local de un batch Java: el original frente al migrado) y la IA no ha conseguido escribir el test PruebaLocalTest en la copia $($T.entradas.copia). Motivo: $($T.motivo -replace '\s+', ' ') Los registros estan en $Registros. Dime que falla (por ejemplo, que Maven no descarga las dependencias o que el contexto de Spring no arranca) y como lo arreglo. Despues vuelvo a lanzar el mismo comando.")
+  Info ("Estoy ejecutando prueba-local.ps1 (la prueba en local de un batch Java: el original frente al migrado) y la IA no ha conseguido escribir el test PruebaLocalTest en la copia $($T.entradas.copia). Motivo: $($T.motivo -replace '\s+', ' ') Lo que dijo en la ultima llamada esta en $reg; los demas registros, en $Registros. Dime que falla (por ejemplo, que Maven no descarga las dependencias o que el contexto de Spring no arranca) y como lo arreglo. Despues vuelvo a lanzar el mismo comando.")
 }
 
 # ================================ CASOS ================================
