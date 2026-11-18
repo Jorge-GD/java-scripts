@@ -103,6 +103,7 @@ Cada llamada a la IA es `copilot -p` con `--model` y `--effort`
 | `-EsfuerzoPlan <nivel>` | Esfuerzo de la revisión previa (pensar). | El de `-Esfuerzo`. |
 | `-Esfuerzo <nivel>` | Esfuerzo de los lotes de arreglo (escribir). | El que tenga Copilot. |
 | `EsfuerzoReintento` (solo en `.rescate/config.json`) | Esfuerzo de los intentos 2 y siguientes de un lote y de los reintentos de uno en uno, con el modelo de reserva y con el consejo, si es mayor que el de `-Esfuerzo`. Vacío = como antes. | `high`; si Copilot no lo acepta, baja con la misma regla que el modelo de las dudas. |
+| `MinutosMaven` (en `ajustes.json` o `.rescate/config.json`) | Tope de cada llamada a Maven (build y tests de cada lote, cobertura y cada caso de la prueba en local). Pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida: «Maven se ha pasado del tope de N min y se ha parado». Así un test colgado no se come la noche. | `30` |
 | `-ModeloB <id>` | Modelo de reserva cuando el principal se atasca con un fichero. También `ModeloB` en `ajustes.json` o `.rescate/config.json`; así lo usa también `migracion.ps1`, que lanza el fix sin `-ModeloB`. El parámetro manda. | No hay reserva. |
 | `-ModeloDudas <id>` | Modelo fuerte de las dudas: el consejo y la reflexión (abajo). También `ModeloDudas` en `ajustes.json` o `.rescate/config.json`. | El de `-Modelo`. |
 | `-EsfuerzoDudas <nivel>` | Esfuerzo del modelo de las dudas. También `EsfuerzoDudas` en los ajustes. | `max`; si Copilot no lo acepta, `xhigh` y luego `high`. |
