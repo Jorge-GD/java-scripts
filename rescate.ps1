@@ -208,6 +208,7 @@ $Cfg += @{
   # Como se reconoce un test que lanza un job de verdad
   LanzaJob              = 'launchJob\s*\(|JobLauncherTestUtils|[jJ]obLauncher\s*\.\s*run\s*\(|[jJ]obOperator\s*\.\s*start\s*\(|SpringApplication\s*\.\s*run\s*\('
   PasosDeUnoEnUno       = @('paridad', 'e2e', 'cobertura')   # un job (o una clase) por llamada a Copilot
+  PasosSoloCompila      = @('sonar')   # pasos en los que el modelo solo compila (MvnCompilar) y los tests los pasa el script en sus puertas
   # Pasos en los que la IA revisa antes todos los ficheros y escribe un plan
   PasosConPlan          = @('estructura', 'hexagonal', 'ficheros', 'config')
   # Calidad. Reglas que cuentan como error (el fix las arregla y las exige en
@@ -2382,7 +2383,11 @@ $TextoReglas = @(
 # Lo que el prompt de un lote pide hacer al terminar.
 function Get-TextoAlTerminar([string]$Mvn, [string]$PasoId) {
   $a = $Cfg.MvnCompilar; $fin = 'y corrige hasta que compile.'
-  if (Get-ConTests $PasoId) { $a = $Cfg.MvnTests; $fin = 'y corrige los tests que fallen.' }
+  if (Get-ConTests $PasoId) {
+    # en PasosSoloCompila el modelo solo compila: la suite la pasa el script en sus puertas (una vez por intento, no dos)
+    if ($Cfg.PasosSoloCompila -contains $PasoId) { $fin += ' Los tests los pasa el script despues.' }
+    else { $a = $Cfg.MvnTests; $fin = 'y corrige los tests que fallen.' }
+  }
   $l1 = "- Ejecuta: $(Get-OrdenComprobar)  y corrige lo que liste (como mucho 3 veces)."
   # PowerShell parte -Dmaven.test.skip=false en dos argumentos si no va entre comillas
   $a = @($a | ForEach-Object { if ($_ -match '^-D.*\.') { '"' + $_ + '"' } else { $_ } })
