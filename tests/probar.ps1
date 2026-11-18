@@ -968,8 +968,8 @@ $PlantillaIncumple = [ordered]@{
   ($Base + 'infrastructure/config/BatchProperties.java') = "package com.acme.plantilla.infrastructure.config;`n`n/** Propiedades. */`npublic record BatchProperties(String carpeta) {`n}`n"
   ($Base + 'domain/model/Poliza.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Poliza. */`npublic record Poliza(String numero) {`n}`n"
   ($Base + 'domain/model/Cliente.java') = "package com.acme.plantilla.domain.model;`n`nimport com.acme.plantilla.infrastructure.config.BatchProperties;`n`n/** Cliente. */`npublic record Cliente(String nombre) {`n}`n"
-  ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
-  ($Base + 'infrastructure/adapters/output/sftp/EscritorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.FileWriter;`n`n/** Escribe ficheros locales a pelo. */`npublic class EscritorLocal {`n    private FileWriter salida;`n}`n"
+  ($Base + 'infrastructure/adapters/output/ftp/LectorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.ftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+  ($Base + 'infrastructure/adapters/output/ftp/EscritorLocal.java') = "package com.acme.plantilla.infrastructure.adapters.output.ftp;`n`nimport java.io.FileWriter;`n`n/** Escribe ficheros locales a pelo. */`npublic class EscritorLocal {`n    private FileWriter salida;`n}`n"
   ($Base + 'application/usecases/SinDocUno.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocUno {`n    void saluda() {`n        System.out.println(`"hola`");`n    }`n}`n"
   ($Base + 'application/usecases/SinDocDos.java') = "package com.acme.plantilla.application.usecases;`n`npublic class SinDocDos {`n}`n"
   'src/main/resources/application.yml' = "sftp:`n  password: valor-secreto-9z`n"
@@ -1025,7 +1025,7 @@ $Pruebas['plantilla incumple: sin -Plantilla no hay linea; con ella, la hay tamb
 
 # Un adaptador que abre ficheros donde se puede (infrastructure/adapters/output/file) no es un incumplimiento de la referencia.
 $AdaptadorFichero = "package com.acme.plantilla.infrastructure.adapters.output.file;`n`nimport java.nio.file.Files;`n`n/** Lee ficheros del disco. */`npublic class FicheroLocalAdapter {`n    private Files ayuda;`n}`n"
-$LectorFuera = "package com.acme.plantilla.infrastructure.adapters.output.sftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
+$LectorFuera = "package com.acme.plantilla.infrastructure.adapters.output.ftp;`n`nimport java.io.File;`n`n/** Lee ficheros locales a pelo. */`npublic class LectorLocal {`n    private final File carpeta = new File(`".`");`n}`n"
 
 # La plantilla que cumple todo, con estos ficheros mas (ruta -> texto).
 function Limpia-Mas([hashtable]$Mas) {
@@ -1054,13 +1054,13 @@ $Pruebas['plantilla incumple: el adaptador de ficheros de su carpeta permitida n
 $Pruebas['plantilla incumple: con el adaptador permitido y un uso de ficheros en otra carpeta, ficheros 1'] = {
   $e = Escenario-Con-Plantilla 'adaptador-y-fuera' (Limpia-Mas @{
       ($Base + 'infrastructure/adapters/output/file/FicheroLocalAdapter.java') = $AdaptadorFichero
-      ($Base + 'infrastructure/adapters/output/sftp/LectorLocal.java')         = $LectorFuera
+      ($Base + 'infrastructure/adapters/output/ftp/LectorLocal.java')          = $LectorFuera
     })
   $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'la consola dice ficheros 1' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 1 | calidad 0 | secretos 0') (Cola $r.Salida)
   $p = Permitido-Del-Informe $e
-  Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/sftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
+  Comprueba 'lo permitido lista solo el uso de fuera' ($p -match '- infrastructure/adapters/output/ftp -> java\.io' -and $p -notmatch 'output/file' -and $p -notmatch 'java\.nio') $p
 }
 
 # ======================= LATIDO MIENTRAS ESPERA ========================
@@ -2079,7 +2079,7 @@ $Pruebas['m8 consola: tras los NO PASA salen las lineas del detalle (lo roto pri
   $nuevoL = '    - ' + $LeerMovidoM8 + " - subpaquete 'infrastructure/util' no existe en la plantilla"
   Comprueba 'tras los NO PASA sale el detalle del intento' ($det.Count -gt 0 -and $c1.IndexOf('NO PASA') -ge 0 -and $c1.IndexOf('NO PASA') -lt $c1.IndexOf($det[0])) $c1
   Comprueba 'su primera linea es lo nuevo de estructura, con fichero y regla' ($det.Count -gt 0 -and $det[0].StartsWith($nuevoL)) (($det | Select-Object -First 2) -join ' / ')
-  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales' }).Count -eq 1) $c1
+  Comprueba 'y salen tambien los hallazgos del paso' (@($det | Where-Object { $_ -match 'acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte\[\] o InputStream, nunca File ni Path$' }).Count -eq 1) $c1
   Comprueba 'con tan pocas lineas no dice que falten' ($c1 -notmatch ' mas en ') $c1
   $ruta = Get-Ruta $e.Wt '.rescate/intento-ficheros-1-1.md'
   if (-not (Test-Path -LiteralPath $ruta)) { Comprueba 'existe .rescate/intento-ficheros-1-1.md' $false (Cola $r.Salida); return }
@@ -2115,7 +2115,7 @@ $Pruebas['m8 consola: con mas de 8 lineas salen 8 y dice cuantas faltan; el lote
   Comprueba 'y la ruta de la correccion completa del ultimo intento' ($des -match 'Correccion completa del ultimo intento: \.rescate/intento-ficheros-1-2\.md') $des
   # el atascado: su nota lleva las lineas del detalle del ultimo intento
   $at = Lee $e.Wt '.rescate/atascados.md'
-  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
+  Comprueba 'la nota del atascado lleva las lineas de detalle del ultimo intento' ($at -match '(?m)^    - src/main/java/com/acme/life/application/usecases/LeerOtro\d+\.java:\d+ - acceso directo a ficheros locales \(.+\): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte\[\] o InputStream, nunca File ni Path' -and $at -match '(?m)^    \(\d+ mas en \.rescate/intento-ficheros-\d+-\d+\.md\)') $at
 }
 
 $Pruebas['m8 consola: si Copilot sale con un codigo distinto de 0 salen las ultimas 5 lineas no vacias de su salida'] = {
@@ -2509,6 +2509,219 @@ $Pruebas['m9 plan: si la repeticion vuelve a nombrar un paquete que no esta, sig
   Comprueba 'el plan queda escrito' (Test-Path -LiteralPath (Get-Ruta $x.E.Wt '.rescate/plan-estructura.md')) (Cola $x.R.Salida)
   Comprueba 'dice el plan escrito y no para' ($x.R.Salida -match 'Plan escrito') (Cola $x.R.Salida)
   Igual 'sale con 0' 0 $x.R.Codigo
+}
+
+# ===== M9.2: EL MOTIVO DEL TEST QUE FALLA Y EL TEXTO DE 'estructura' =====
+# Informes de surefire como los que escribe Maven (el fallo de ArchUnit y el de una excepcion), con sus lineas 'at' con tabulador.
+$ClaseM92 = 'com.acme.life.ArquitecturaTest'
+$TestM92 = 'src/test/java/com/acme/life/ArquitecturaTest.java'
+$RayaM92 = '-------------------------------------------------------------------------------'
+$ReglaM92 = "Architecture Violation [Priority: MEDIUM] - Rule 'domain must not depend on application' was violated (2 times):"
+$ClaseUnoM92 = 'Class <com.acme.life.domain.model.Poliza> depends on class <com.acme.life.application.usecases.Suelta> in (Poliza.java:12)'
+$ClaseDosM92 = 'Class <com.acme.life.domain.model.Poliza> depends on class <com.acme.life.application.usecases.LeerFichero> in (Poliza.java:15)'
+$MotivoArchM92 = 'java.lang.AssertionError: | ' + $ReglaM92 + ' | ' + $ClaseUnoM92
+
+function Pila-M92([string[]]$Lineas) { return @($Lineas | ForEach-Object { "`tat " + $_ }) }
+
+# El informe de surefire de $ClaseM92: la cabecera, la linea de resumen y las lineas de sus metodos que fallan.
+function Informe-M92([string]$Resumen, [string[]]$Metodos) {
+  return ((@($RayaM92, "Test set: $ClaseM92", $RayaM92, $Resumen) + @($Metodos)) -join "`n") + "`n"
+}
+
+$ResumenFalloM92 = "Tests run: 2, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.8 s <<< FAILURE! - in $ClaseM92"
+
+function Informe-Arch {
+  return (Informe-M92 $ResumenFalloM92 (@('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!', 'java.lang.AssertionError: ', $ReglaM92, $ClaseUnoM92, $ClaseDosM92, '') +
+      (Pila-M92 @('com.tngtech.archunit.lang.ArchRule$Assertions.assertNoViolation(ArchRule.java:94)', 'com.acme.life.ArquitecturaTest.capasRespetadas(ArquitecturaTest.java:20)'))))
+}
+
+# El motivo de un metodo con <<< ERROR!: la excepcion, su pila, y la causa con la suya y con otra pila.
+$ExcepcionM92 = 'java.lang.IllegalStateException: Failed to load ApplicationContext'
+$CausaM92 = "Caused by: org.springframework.beans.factory.BeanCreationException: Error creating bean with name 'pagoPort'"
+function Informe-Error {
+  $r = "Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 0.3 s <<< FAILURE! - in $ClaseM92"
+  return (Informe-M92 $r (@('cargaElContexto  Time elapsed: 0.2 s  <<< ERROR!', $ExcepcionM92) +
+      (Pila-M92 @('org.springframework.test.context.cache.DefaultCacheAwareContextLoaderDelegate.loadContext(DefaultCacheAwareContextLoaderDelegate.java:132)', 'org.springframework.test.context.support.DefaultTestContext.getApplicationContext(DefaultTestContext.java:124)')) +
+      @($CausaM92) + (Pila-M92 @('org.springframework.beans.factory.support.AbstractAutowireCapableBeanFactory.createBean(AbstractAutowireCapableBeanFactory.java:597)'))))
+}
+
+# Repo de juguete con un test que falla (ArquitecturaTest, con paquete) ya en un commit.
+function Escenario-Test-Roto([string]$Nombre, [hashtable]$Mas = @{}) {
+  $e = Escenario-M6 $Nombre $Mas
+  Escribe $e.Repo $TestM92 "package com.acme.life;`n`nclass ArquitecturaTest { /* TEST_FALLA */ }`n"
+  [void](GitEn $e.Repo @('add', '--', $TestM92))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'test de arquitectura'))
+  return $e
+}
+
+# Pone el informe de surefire que dejara el Maven de mentira (RESCATE_SUREFIRE_TXT) y devuelve la ruta de su fichero.
+function Pon-Informe([string]$Texto) {
+  $f = Join-Path $Dir ('informe-surefire-' + [System.Guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
+  [System.IO.File]::WriteAllText($f, $Texto)
+  $env:RESCATE_SUREFIRE_TXT = $f
+}
+
+# El diagnostico con Maven del repo con ese informe de surefire: lo que sale y los hallazgos de 'tests'.
+function Diagnostica-Con-Informe($E, [string]$Texto) {
+  Pon-Informe $Texto
+  try { $r = Rescate @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla) }
+  finally { $env:RESCATE_SUREFIRE_TXT = '' }
+  return [pscustomobject]@{ R = $r; H = @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'tests' }) }
+}
+
+# El texto de esas funciones de rescate.ps1, para cargarlas sin ejecutarlo: . ([scriptblock]::Create(...)).
+function Texto-De-Funciones([string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
+  $fs = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | Where-Object { $Nombres -contains $_.Name })
+  return (@($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+# El hallazgo tal como era antes del motivo: sin esa propiedad.
+function Sin-Motivo($H) { return [pscustomobject]@{ Cat = $H.Cat; Sev = $H.Sev; Fichero = $H.Fichero; Linea = $H.Linea; Detalle = $H.Detalle } }
+
+$Pruebas['m92 motivo: un fallo de ArchUnit con su pila deja las 3 primeras lineas sin at como motivo, aparte del detalle'] = {
+  $e = Escenario-Test-Roto 'm92-arch'
+  $d = Diagnostica-Con-Informe $e (Informe-Arch)
+  Igual 'sale con 0' 0 $d.R.Codigo
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  $h = $d.H[0]
+  Igual 'el fichero es el del test' $TestM92 $h.Fichero
+  Igual 'el detalle es el de siempre, sin el motivo' "1 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $h.Detalle
+  Igual 'el motivo son las 3 primeras lineas, unidas con " | " y sin la linea Class de mas' $MotivoArchM92 $h.Motivo
+  Comprueba 'sin lineas at ni Time elapsed' ($h.Motivo -and $h.Motivo -notmatch '(^| \| )at ' -and $h.Motivo -notmatch 'Time elapsed' -and $h.Motivo -notmatch 'LeerFichero') $h.Motivo
+  . ([scriptblock]::Create((Texto-De-Funciones @('Get-ClaveHallazgo'))))
+  Igual 'la clave del hallazgo es la misma que sin motivo' (Get-ClaveHallazgo (Sin-Motivo $h)) (Get-ClaveHallazgo $h)
+}
+
+$Pruebas['m92 motivo: con <<< ERROR! (una excepcion) tambien sale el motivo, con su causa y sin la pila'] = {
+  $e = Escenario-Test-Roto 'm92-error'
+  $d = Diagnostica-Con-Informe $e (Informe-Error)
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el motivo es la excepcion y su causa' ($ExcepcionM92 + ' | ' + $CausaM92) $d.H[0].Motivo
+}
+
+$Pruebas['m92 motivo: sin motivo legible el hallazgo es el de siempre, sin propiedad nueva'] = {
+  $e = Escenario-Test-Roto 'm92-sin-motivo'
+  # solo la linea de resumen (lleva <<< FAILURE!, pero es la de la clase: no es un metodo)
+  $d = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 @())
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el hallazgo solo tiene las 5 propiedades de siempre' 'Cat Detalle Fichero Linea Sev' ((@($d.H[0].PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)) -join ' ')
+  Igual 'el detalle es el de siempre' "1 test(s) fallan en $ClaseM92 (ver target/surefire-reports)" $d.H[0].Detalle
+  # un metodo que falla pero solo trae la pila
+  $d2 = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 (@('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!') + (Pila-M92 @('com.acme.life.ArquitecturaTest.capasRespetadas(ArquitecturaTest.java:20)'))))
+  Igual 'con solo la pila, un hallazgo de tests' 1 $d2.H.Count
+  if ($d2.H.Count -eq 1) { Comprueba 'con solo la pila tampoco hay motivo' ($null -eq $d2.H[0].PSObject.Properties['Motivo']) ($d2.H[0] | ConvertTo-Json -Compress) }
+}
+
+$Pruebas['m92 motivo: un motivo de 2000 caracteres se corta a 400'] = {
+  $e = Escenario-Test-Roto 'm92-tope'
+  $largo = 'java.lang.AssertionError: ' + ('x' * 2000)
+  $d = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 @('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!', $largo, $ClaseUnoM92))
+  Igual 'un hallazgo de tests' 1 $d.H.Count
+  if ($d.H.Count -ne 1) { return }
+  Igual 'el motivo mide 400' 400 ([string]$d.H[0].Motivo).Length
+  Comprueba 'y es el principio de la linea larga' ([bool]$d.H[0].Motivo -and $largo.StartsWith(([string]$d.H[0].Motivo))) ('motivo: ' + [string]$d.H[0].Motivo)
+}
+
+$Pruebas['m92 motivo: la linea del prompt del lote y el detalle de la consola tras un NO PASA llevan motivo:'] = {
+  $e = Escenario-Test-Roto 'm92-linea' @{ Orden = @('tests') }
+  Pon-Informe (Informe-Arch)
+  try { $r = Fix-M6 $e 'tests' 1 @() 'crea-fichero' }
+  finally { $env:RESCATE_SUREFIRE_TXT = '' }
+  $lotes = @(Llamadas-M6 $e 'lote')
+  Comprueba 'hay un lote de tests' ($lotes.Count -ge 1) (Cola $r.Salida)
+  if ($lotes.Count -eq 0) { return }
+  $linea = '- ' + $TestM92 + " - 1 test(s) fallan en $ClaseM92 (ver target/surefire-reports) - motivo: " + $MotivoArchM92
+  $p = Prompt-M6 $e $lotes[0]
+  Comprueba 'la linea del hallazgo del prompt lleva el motivo' (@($p -split "`r?`n") -contains $linea) (([regex]::Match($p, '(?s)## Hallazgos de este lote.*?(?=## Reglas)')).Value)
+  $c1 = Consola-Del-Intento $r.Salida 1
+  Comprueba 'el intento no pasa' ($c1 -match 'NO PASA') $c1
+  $det = @(Detalle-De-Consola $c1 | Where-Object { $_ -match 'ArquitecturaTest' })
+  Comprueba 'el detalle de la consola lleva la linea con el motivo' ($det.Count -ge 1 -and $det[0] -ceq ('    ' + $linea)) ($det -join ' / ')
+}
+
+$Pruebas['m92 motivo: la misma clase que falla antes y despues con otro motivo no es un hallazgo nuevo ni otro fallo'] = {
+  $e = Escenario-Test-Roto 'm92-mismo'
+  $antes = Diagnostica-Con-Informe $e (Informe-Arch)
+  $despues = Diagnostica-Con-Informe $e (Informe-M92 $ResumenFalloM92 @('capasRespetadas  Time elapsed: 0.4 s  <<< FAILURE!', 'java.lang.AssertionError: ', "Architecture Violation [Priority: MEDIUM] - Rule 'application must not depend on infrastructure' was violated (1 times):", 'Class <com.acme.life.application.usecases.CargarPolizasUseCase> depends on class <com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter> in (CargarPolizasUseCase.java:7)'))
+  Comprueba 'antes y despues hay un hallazgo de tests' ($antes.H.Count -eq 1 -and $despues.H.Count -eq 1) "$($antes.H.Count) y $($despues.H.Count)"
+  if ($antes.H.Count -ne 1 -or $despues.H.Count -ne 1) { return }
+  Comprueba 'los motivos son distintos' ($antes.H[0].Motivo -and $despues.H[0].Motivo -and $antes.H[0].Motivo -cne $despues.H[0].Motivo) "$($antes.H[0].Motivo) / $($despues.H[0].Motivo)"
+  . ([scriptblock]::Create((Texto-De-Funciones @('Get-ClaveHallazgo', 'Get-HallazgosNuevos', 'Get-ClaveFallo', 'Test-FalloRepetido'))))
+  $hallAntes = @{}
+  foreach ($x in $antes.H) { $hallAntes[(Get-ClaveHallazgo $x)] = $true }
+  Igual 'Get-HallazgosNuevos no lo cuenta como nuevo' 0 @(Get-HallazgosNuevos $despues.H @('tests') $hallAntes).Count
+  # como si fuera un hallazgo nuevo en los dos intentos, con otro NO PASA: solo la clave dice si es el mismo fallo
+  $a = Get-ClaveFallo @('Los hallazgos de tests no han bajado (1 -> 1).') $antes.H
+  $b = Get-ClaveFallo @('El proyecto no compila.') $despues.H
+  Comprueba 'Test-FalloRepetido lo ve como el mismo fallo' (Test-FalloRepetido $a $b) "$($a.Nuevos) / $($b.Nuevos)"
+}
+
+$Pruebas['m92 estructura: el texto del paso manda actualizar los imports de todos los ficheros y, ante ArchUnit, cambiar el destino y no el test'] = {
+  $e = Nuevo-Escenario 'm92-estructura'
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Lote', '1', '-Saltar', '1', '-Auto', '-Si', '-MaxIntentos', '1'))
+  $p = Lee $e.Wt '.rescate/prompt.md'
+  $texto = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover: no cambies logica. Actualiza el package de cada clase movida y los imports de TODOS los ficheros que la usan, tambien los que no estan en la lista: las clases que estaban en su mismo paquete no tenian import y ahora lo necesitan. Mueve tambien sus tests al paquete equivalente. Si falla un test de arquitectura del repo (ArchUnit), su motivo dice que regla rompes: cambia el destino de la clase, no el test.'
+  $que = ([regex]::Match($p, '(?s)## Que hay que hacer.*?(?=## Hallazgos)')).Value
+  Comprueba 'el prompt lleva el texto del paso entero' ($p.Contains($texto)) $que
+  Comprueba 'lleva "tambien los que no estan en la lista"' ($p.Contains('tambien los que no estan en la lista')) $que
+  Comprueba 'lleva "no el test"' ($p.Contains('no el test')) $que
+  Comprueba 'ya no dice "Solo mover y actualizar package e imports"' (-not $p.Contains('Solo mover y actualizar package e imports')) $que
+}
+
+# ===== M9.3: LA CARPETA SFTP ES DE ADAPTADORES, Y LOS TEXTOS DE FICHEROS Y DE ENTRADA/SALIDA =====
+$PkM93 = 'src/main/java/com/acme/life/'
+$PorEntradaM93 = 'un adaptador de entrada no importa uno de salida: usa la interfaz de su puerto (application/ports/output) o un caso de uso, como en la PLANTILLA'
+$FicherosM93 = 'acceso directo a ficheros locales (java.nio.file.Path): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte[] o InputStream, nunca File ni Path'
+$AdaptadorRecursoM93 = "package com.acme.life.infrastructure.adapters.output.{0};`n`nimport org.springframework.core.io.FileSystemResource;`n`n/** Adaptador de salida que abre un recurso. */`npublic class Recurso {{`n    private FileSystemResource recurso;`n}}`n"
+
+# Repo de juguete con: un adaptador de salida sftp y otro ftp que importan FileSystemResource, un tasklet de entrada que importa el adaptador de
+# salida de ficheros y un caso de uso con java.nio.file.Path. Diagnostico sin Maven: lo que sale y los hallazgos.
+function Escenario-M93([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre
+  Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/output/sftp/RecursoSftp.java') ($AdaptadorRecursoM93 -f 'sftp')
+  Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/output/ftp/RecursoFtp.java') ($AdaptadorRecursoM93 -f 'ftp')
+  Escribe $e.Repo ($PkM93 + 'infrastructure/adapters/input/job/CargaTasklet.java') "package com.acme.life.infrastructure.adapters.input.job;`n`nimport com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter;`n`n/** Tasklet de entrada. */`npublic class CargaTasklet {`n    private FicheroLocalAdapter ficheros;`n}`n"
+  Escribe $e.Repo ($PkM93 + 'application/usecases/RutaUseCase.java') "package com.acme.life.application.usecases;`n`nimport java.nio.file.Path;`n`n/** Caso de uso con una ruta. */`npublic class RutaUseCase {`n    private Path ruta;`n}`n"
+  [void](GitEn $e.Repo @('add', '--', 'src/main/java'))
+  [void](GitEn $e.Repo @('commit', '-q', '-m', 'm93'))
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  return [pscustomobject]@{ E = $e; R = $r; H = @(Hallazgos $e.Repo) }
+}
+
+$Pruebas['m93 sftp: un fichero de output/sftp que importa FileSystemResource no da hallazgo de ficheros; el mismo codigo en output/ftp, si'] = {
+  $x = Escenario-M93 'm93-sftp'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $f = @($x.H | Where-Object { $_.Cat -eq 'ficheros' })
+  Igual 'el adaptador de output/sftp no tiene hallazgo de ficheros' 0 @($f | Where-Object { $_.Fichero -like '*output/sftp/*' }).Count
+  Igual 'el de output/ftp, que no es de adaptadores permitidos, si' 1 @($f | Where-Object { $_.Fichero -like '*output/ftp/*' }).Count
+}
+
+$Pruebas['m93 sftp: una plantilla con un adaptador SFTP que abre FileSystemResource no incumple en ficheros'] = {
+  $adaptador = ($AdaptadorRecursoM93 -f 'sftp').Replace('com.acme.life.', 'com.acme.plantilla.')
+  $e = Escenario-Con-Plantilla 'm93-plantilla-sftp' (Limpia-Mas @{ ($Base + 'infrastructure/adapters/output/sftp/Recurso.java') = $adaptador })
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola dice ficheros 0' (@($r.Salida -split "`r?`n") -contains 'Plantilla incumple: capas 0 | ficheros 0 | calidad 0 | secretos 0') (Cola $r.Salida)
+}
+
+$Pruebas['m93 textos: el hallazgo de un adaptador de entrada y el de ficheros salen con el texto nuevo, tal cual y en ASCII'] = {
+  $x = Escenario-M93 'm93-textos'
+  $hex = @($x.H | Where-Object { $_.Cat -eq 'hexagonal' -and $_.Fichero -like '*CargaTasklet.java' })
+  Igual 'un hallazgo de hexagonal en el tasklet' 1 $hex.Count
+  if ($hex.Count -eq 1) {
+    Igual 'su texto es el nuevo, entero' ('importa com.acme.life.infrastructure.adapters.output.file.FicheroLocalAdapter (' + $PorEntradaM93 + ')') $hex[0].Detalle
+    Comprueba 'y es ASCII' ([string]$hex[0].Detalle -cmatch '^[\x20-\x7E]+$') $hex[0].Detalle
+  }
+  $fic = @($x.H | Where-Object { $_.Cat -eq 'ficheros' -and $_.Fichero -like '*RutaUseCase.java' })
+  Igual 'un hallazgo de ficheros en el caso de uso' 1 $fic.Count
+  if ($fic.Count -eq 1) {
+    Igual 'su texto es el nuevo, entero' $FicherosM93 $fic[0].Detalle
+    Comprueba 'y es ASCII' ([string]$fic[0].Detalle -cmatch '^[\x20-\x7E]+$') $fic[0].Detalle
+  }
 }
 
 # ================================ LANZADOR ================================

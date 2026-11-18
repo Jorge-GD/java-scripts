@@ -165,13 +165,13 @@ $Cfg += @{
     @{ En = 'application/'; No = '^(org\.springframework\.(batch|integration|jdbc|web|http)|java\.sql|javax\.sql|java\.net\.http|org\.apache\.sshd|com\.jcraft|org\.apache\.http|okhttp3)\.'
        Por = 'application no usa tecnologia concreta: va detras de un puerto' },
     @{ En = 'infrastructure/adapters/input/'; No = '^\{base\}\.infrastructure\.adapters\.output\.'
-       Por = 'un adaptador de entrada no llama a uno de salida: pasa por un caso de uso' }
+       Por = 'un adaptador de entrada no importa uno de salida: usa la interfaz de su puerto (application/ports/output) o un caso de uso, como en la PLANTILLA' }
   )
   SubpaquetesEstrictos  = $true   # domain/x, application/x... deben existir en la plantilla
   # Acceso a ficheros locales (lo que debe ir por el puerto de ficheros / SFTP)
   FicheroImport         = '^(java\.io\.(File|FileReader|FileWriter|FileInputStream|FileOutputStream|RandomAccessFile)|java\.nio\.file\..+|org\.springframework\.core\.io\.(FileSystemResource|PathResource|FileUrlResource))$'
   FicheroToken          = '\b(File|FileReader|FileWriter|FileInputStream|FileOutputStream|RandomAccessFile)\b'
-  FicheroPermitidoEn    = @('infrastructure/adapters/output/file')
+  FicheroPermitidoEn    = @('infrastructure/adapters/output/file', 'infrastructure/adapters/output/sftp')
   # Un batch que maneja ficheros tiene que traer el adaptador SFTP y su configuracion, tenga lo que tenga la plantilla.
   # En false solo se exige lo que la plantilla tiene.
   ExigirSftp            = $true
@@ -635,8 +635,31 @@ function Get-TextoIncumple($Cal) {
 }
 
 # ============================== DIAGNOSTICO ==============================
-function Add-Hallazgo([string]$Cat, [string]$Sev, [string]$Fichero, [int]$Linea, [string]$Detalle) {
-  [void]$script:H.Add([pscustomobject]@{ Cat = $Cat; Sev = $Sev; Fichero = $Fichero; Linea = $Linea; Detalle = $Detalle })
+# $Motivo (opcional) va en una propiedad aparte, solo si lo hay: no entra en el detalle ni en la clave del hallazgo (Get-ClaveHallazgo), y un
+# hallazgo sin motivo es igual que siempre en hallazgos.json.
+function Add-Hallazgo([string]$Cat, [string]$Sev, [string]$Fichero, [int]$Linea, [string]$Detalle, [string]$Motivo = '') {
+  $x = [pscustomobject]@{ Cat = $Cat; Sev = $Sev; Fichero = $Fichero; Linea = $Linea; Detalle = $Detalle }
+  if ($Motivo) { Add-Member -InputObject $x -NotePropertyName Motivo -NotePropertyValue $Motivo }
+  [void]$script:H.Add($x)
+}
+
+# El motivo del primer fallo de un informe de surefire: las primeras lineas despues de la '<<< FAILURE!' o '<<< ERROR!' de un metodo (no la de
+# resumen de la clase, que empieza por 'Tests run:'), sin las lineas 'at ...' de la pila ni 'Time elapsed'. Hasta 3 lineas y 400 caracteres,
+# unidas con ' | '. Vacio si el informe no trae motivo.
+function Get-MotivoFallo([string]$Texto) {
+  $lineas = @($Texto -split "`r?`n")
+  $i = 0
+  while ($i -lt $lineas.Count -and -not ($lineas[$i] -match '<<< (FAILURE|ERROR)!' -and $lineas[$i] -notmatch '^\s*Tests run:')) { $i++ }
+  $motivo = @()
+  for ($j = $i + 1; $j -lt $lineas.Count -and $motivo.Count -lt 3; $j++) {
+    $l = $lineas[$j].Trim()
+    if ($l -match '<<< (FAILURE|ERROR)!' -or $l -match '^Tests run:') { break }   # el siguiente metodo u otra clase: ya no es el primer fallo
+    if (-not $l -or $l -match '^at\s+\S+\(.*\)$' -or $l -match '^\.\.\. \d+ (more|common frames omitted)$' -or $l -match 'Time elapsed') { continue }
+    $motivo += $l
+  }
+  $t = ($motivo -join ' | ')
+  if ($t.Length -gt 400) { $t = $t.Substring(0, 400) }
+  return $t
 }
 
 function Invoke-Build([bool]$ConTests) {
@@ -689,7 +712,7 @@ function Invoke-Build([bool]$ConTests) {
           $clase = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
           $rel = 'src/test/java/' + ($clase -replace '\.', '/') + '.java'
           if (-not (Test-Path -LiteralPath (Join-Ruta $RepoRoot $rel))) { $rel = $clase }
-          Add-Hallazgo 'tests' 'error' $rel 0 "$nf test(s) fallan en $clase (ver target/surefire-reports)"
+          Add-Hallazgo 'tests' 'error' $rel 0 "$nf test(s) fallan en $clase (ver target/surefire-reports)" (Get-MotivoFallo $t)
           $fallan++
         }
       }
@@ -784,7 +807,7 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   $uso = @($uso | Where-Object { -not ((Test-FicheroPermitido $_.Dir) -or ($cal -and $cal.ExcFicheros.ContainsKey($_.Clave))) })
   foreach ($g in @($uso | Group-Object RelRaiz)) {
     $imps = (@($g.Group | ForEach-Object { $_.Fqn }) | Select-Object -Unique | Select-Object -First 5) -join ', '
-    Add-Hallazgo 'ficheros' 'error' $g.Name $g.Group[0].Linea "acceso directo a ficheros locales ($imps): debe ir por el puerto de ficheros"
+    Add-Hallazgo 'ficheros' 'error' $g.Name $g.Group[0].Linea "acceso directo a ficheros locales ($imps): debe ir por el puerto de ficheros, una interfaz de application/ports/output que implementa un adaptador de infrastructure/adapters/output/file o sftp; en la firma del puerto usa String, byte[] o InputStream, nunca File ni Path"
   }
   if ($usaFicheros -and (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -eq 0) -and ($Cfg.ExigirSftp -or ($cal -and $cal.TieneSftp))) {
     if ($cal -and $cal.TieneSftp) { $donde = 'la plantilla lo tiene en infrastructure/adapters/output/sftp' } else { $donde = 'va en infrastructure/adapters/output/sftp' }
@@ -962,7 +985,7 @@ $TextoAdaptadores = 'El adaptador de entrada depende del puerto, nunca de un ada
 
 $TextoPaso = @{
   build      = 'Haz que el proyecto compile con Java 21 usando las mismas propiedades y plugins que el pom.xml de la PLANTILLA, sin cambiar el parent: si hace falta otro, apuntalo como duda. No copies dependencias de negocio que este repo no necesite. Corrige los errores de compilacion listados. No reestructures paquetes en este paso.'
-  estructura = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover y actualizar package e imports: no cambies logica. Mueve tambien sus tests al paquete equivalente.'
+  estructura = 'Mueve las clases listadas a la capa y paquete que les corresponde, copiando exactamente la estructura de paquetes y la convencion de nombres de la PLANTILLA. Solo mover: no cambies logica. Actualiza el package de cada clase movida y los imports de TODOS los ficheros que la usan, tambien los que no estan en la lista: las clases que estaban en su mismo paquete no tenian import y ahora lo necesitan. Mueve tambien sus tests al paquete equivalente. Si falla un test de arquitectura del repo (ArchUnit), su motivo dice que regla rompes: cambia el destino de la clase, no el test.'
   hexagonal  = 'Elimina las dependencias prohibidas listadas. ' + $TextoCapas + ' Si una clase de dominio o aplicacion necesita infraestructura, crea un puerto y lleva la implementacion a un adaptador en infrastructure/adapters/output/<tecnologia>, con los nombres al estilo de la PLANTILLA.'
   ficheros   = 'Sustituye el acceso directo a ficheros locales por puertos de ficheros, igual que la PLANTILLA: puerto para listar y leer, puerto para el ciclo de vida del fichero, un adaptador SFTP y otro local, y seleccion por propiedad de configuracion. Usa la misma libreria SFTP que la PLANTILLA; si la PLANTILLA no tiene SFTP, crea igualmente el adaptador SFTP en infrastructure/adapters/output/sftp (con la libreria SFTP que ya use este repo) y su bloque sftp en application.yml. No dejes rutas fijas en el codigo.'
   config     = 'Elimina las referencias a la configuracion antigua (inventory). Toda la configuracion debe entrar por una clase @ConfigurationProperties validada al arranque y por application.yml leyendo variables de entorno, igual que la PLANTILLA. Ningun secreto (contrasena, token, clave) puede quedar escrito en application.yml o application.properties, ni como valor por defecto: se leen de una variable de entorno (`${NOMBRE}`). No escribas el valor en ningun otro fichero del repo; si un test lo necesita, usa un valor inventado en src/test/resources.'
@@ -985,12 +1008,14 @@ $TextoCalidad = @(
   'Despues del lote el script vuelve a contar los hallazgos de calidad (Javadoc, inyeccion en campos, System.out, catch vacios). Si tu codigo anade alguno, el lote no pasa.'
 )
 
-# Un hallazgo en una linea de prompt: '- fichero:linea - detalle' ('(repo)' si no es de un fichero).
+# Un hallazgo en una linea de prompt: '- fichero:linea - detalle' ('(repo)' si no es de un fichero), y ' - motivo: <motivo>' si lo tiene.
 function Get-LineaHallazgo($x) {
   $donde = $x.Fichero
   if ($x.Linea -gt 0) { $donde += ':' + $x.Linea }
   if (-not $donde) { $donde = '(repo)' }
-  return "- $donde - $($x.Detalle)"
+  $t = "- $donde - $($x.Detalle)"
+  if ($x.Motivo) { $t += " - motivo: $($x.Motivo)" }
+  return $t
 }
 
 # La clave con la que se reconoce un hallazgo aunque el intento cambie el fichero de paquete: categoria, nombre del fichero
