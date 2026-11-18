@@ -4,6 +4,8 @@ Scripts sueltos para trabajar con proyectos Java.
 
 **¿Por dónde empiezo?** [FLUJO.md](FLUJO.md): qué lanzar, en qué orden y qué hacer si te pierdes.
 
+**¿En qué punto va cada batch?** `.\donde-estoy.ps1`. Solo lee y te da el siguiente comando de cada batch. Copilot, abierto en esta carpeta, lo lanza por ti: sigue `AGENTS.md`.
+
 ## Antes de la primera vez: preflight
 
 `preflight.ps1` se lanza **una vez**, antes de `migracion.ps1`, en el equipo donde se va a trabajar. Mide si ese equipo, Copilot y Maven sirven: versiones y modo de PowerShell, qué banderas conoce tu Copilot, si el modelo sabe rellenar una ficha de clase (un fichero de juguete y cinco clases tuyas), cuántas llamadas aguanta a la vez y si Maven compila, mide cobertura y refactoriza un proyecto de juguete. Con `-Modelos` hace además un examen de modelos (bloque 9, más abajo). No cambia ningún repo tuyo.

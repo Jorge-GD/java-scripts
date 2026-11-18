@@ -184,9 +184,16 @@ En `1-batch-original.html`, cada job tiene «Cómo probarlo en pre»: qué lanza
 
 ### ¿En qué punto estoy?
 
+Lanza `.\donde-estoy.ps1` en la carpeta de los scripts. Solo lee, no cambia nada. Saca un bloque por cada batch que tengas al lado de esa carpeta:
+- en qué punto está;
+- el siguiente paso, con su comando, que es el mismo que el de la portada;
+- el comando de la cobertura, si no llega al mínimo.
+
+Para un solo batch: `.\donde-estoy.ps1 -Migrado C:\ruta\migrado`. También puedes preguntárselo a Copilot en esa carpeta, porque lee `AGENTS.md`: lanza el script y te repite el comando.
+
 | Pregunta | Dónde mirar |
 |---|---|
-| ¿Qué ha hecho `migracion.ps1` y qué me toca? | `migracion-<batch>\index.html`, o `datos\estado.json` (`fase` y `parada`) |
+| ¿Qué ha hecho `migracion.ps1` y qué me toca? | `.\donde-estoy.ps1`, `migracion-<batch>\index.html`, o `datos\estado.json` (`fase` y `parada`) |
 | ¿Qué commits ha hecho el script? | `git -C C:\ruta\migrado-rescate log --oneline <tu-rama>..` |
 | ¿Cuántos problemas quedan? | `.\rescate.ps1 -Repo C:\ruta\migrado -Plantilla C:\ruta\referencia`: solo diagnostica, no cambia nada |
 | ¿Qué le pidió a Copilot y qué contestó? | `migracion-<batch>\registros\` y `C:\ruta\migrado-rescate\.rescate\lote-*.log` |
