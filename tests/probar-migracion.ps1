@@ -5002,5 +5002,130 @@ Save-FichasSh $t
   Igual 'y es la de ese script' 'bin/cargas.ksh' $v['F0']
 }
 
+# ---- (d) comparar-sh: lo que hacia el .sh frente al codigo del migrado ----
+# Un migrado con tres Java del mismo paquete (para que 'acme' sea una palabra comun) y un yml, y fichas de dos scripts ya hechas en datos/fichas-sh.
+function Migrado-Sh([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre @('Clase1')
+  Escribe $e.Migrado 'src/main/resources/application.yml' "acme:`n  limpieza:`n    carpeta-logs: logs`n    dias: 30`n"
+  Escribe $e.Migrado 'src/main/java/com/acme/life/ArchivadorSalidas.java' "package com.acme.life;`n`n/** Aparta las salidas de la carga anterior. */`npublic class ArchivadorSalidas {`n    static final String PATRON_ALTA = `"SALIDA_ALTA_`";`n}`n"
+  foreach ($n in @('Otra1', 'Otra2')) { Escribe $e.Migrado "src/main/java/com/acme/life/$n.java" "package com.acme.life;`n`n/** Otra clase. */`npublic class $n {`n}`n" }
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'migrado con configuracion'))
+  return $e
+}
+$script:PreludioComparaSh = @'
+$RepoRoot = '{{MIG}}'
+$Datos = '{{DIR}}/datos'
+$Base = Get-Rama $RepoRoot
+function Accion([string]$Que, [int]$Linea, [string]$Cita, [string]$Detalle, [bool]$Probado = $true) {
+  return [ordered]@{ cuando = 'antes'; condicion = ''; que = $Que; detalle = $Detalle; linea = $Linea; cita = $Cita; probado = $Probado }
+}
+$a0 = Accion 'mueve' 31 'ALTA ) for j in `ls -rt SALIDA_ALTA_*.TXT 2>/dev/null`; do mv -f ${j} /opt/acme/cargas/outbox/backup/${j}.${RUN_DAY}; done ;;' 'Aparta a la carpeta backup los ficheros de salida de alta.'
+$a1 = Accion 'borra' 41 'find /opt/acme/cargas/logs -type f -mtime +30 -print0 | xargs -0 rm' 'Borra los registros de mas de 30 dias.'
+$a2 = Accion 'mueve' 44 'mv -f ${f} /opt/acme/cargas/inbox/backup/`basename ${f}`.${RUN_DAY}' 'Aparta los ficheros de entrada ya cargados.'
+$a3 = Accion 'otro' 46 'esta cita no sale en el script' 'Algo que no se pudo comprobar.' $false
+Write-Json (Join-Path $Datos 'fichas-sh/sh-aaaaaaaa.json') ([ordered]@{ id = 'sh-aaaaaaaa'; script = 'bin/cargas.ksh'; paraQue = 'Lanza la carga.'; parametros = @(); acciones = @($a0, $a1, $a2, $a3); salidas = @(); sinExplicar = @() })
+$b0 = Accion 'elige-job' 3 'export spring_profiles_active=exportar_recibos' 'Elige el perfil de exportar recibos.'
+Write-Json (Join-Path $Datos 'fichas-sh/sh-bbbbbbbb.json') ([ordered]@{ id = 'sh-bbbbbbbb'; script = 'bin/recibos.sh'; paraQue = 'Lanza la exportacion.'; parametros = @(); acciones = @($b0); salidas = @(); sinExplicar = @() })
+Write-Json (Join-Path $Datos 'fichas-sh/sh-cccccccc.json') ([ordered]@{ id = 'sh-cccccccc'; script = 'bin/vacio.sh'; paraQue = 'No hace nada mas.'; parametros = @(); acciones = @(); salidas = @(); sinExplicar = @() })
+'@
+
+$Pruebas['m17 lanzadores: Get-TareasCompararSh - elige sin IA de uno a tres ficheros del migrado por accion; sin candidatos es falta sin llamada; las acciones sin comprobar no se comparan'] = {
+  $e = Migrado-Sh 'comparar-sh-tareas'
+  $codigo = $script:PreludioComparaSh + "`n" + @'
+$t = @(Get-TareasCompararSh $false $Base)
+'N=' + $t.Count
+$a = @($t | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0]
+$b = @($t | Where-Object { $_.entradas.script -eq 'bin/recibos.sh' })[0]
+'A=' + $a.id + '|' + $a.tipo + '|' + $a.estado + '|' + $a.ficha + '|' + $a.salida + '|' + $a.entradas.ndatos
+'IND=' + (@($a.entradas.indices) -join ',') + '|' + (@($a.entradas.sinCandidatos) -join ',')
+'MIG=' + (@($a.entradas.migrado) -join ',')
+'B=' + $b.id + '|' + $b.estado + '|' + @($b.resultado.comparacion).Count + '|' + $b.resultado.comparacion[0].estado + '|' + $b.resultado.comparacion[0].accion + '|' + $b.resultado.comparacion[0].busqueda + '|' + $b.resultado.comparacion[0].nota
+'MOMENTO=' + $a.entradas.momento + '|' + ($a.entradas.commit -eq (Get-Head $RepoRoot).Substring(0, 7))
+[System.IO.File]::WriteAllText('{{DIR}}/prompt.txt', (Get-Prompt $a '' ''))
+$h0 = $a.entradas.huella
+$a.estado = 'hecha'; $a.resultado = [pscustomobject]@{ x = 1 }; Save-Tarea $a
+'REUSA=' + @(Get-TareasCompararSh $false $Base | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0].estado
+[System.IO.File]::AppendAllText((Join-Path $RepoRoot 'src/main/resources/application.yml'), "  otro: 1`n")
+[void](& git -C $RepoRoot add -A)
+[void](& git -C $RepoRoot commit -q -m 'cambia el migrado')
+$a2 = @(Get-TareasCompararSh $false $Base | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0]
+'CAMBIA=' + ($a2.entradas.huella -ne $h0) + '|' + $a2.estado
+'FIN'
+'@
+  $r = En-Biblioteca 'comparar-sh-tareas' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'comparar-sh-tareas-datos')).Replace('{{MIG}}', $e.Migrado)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  Igual 'dos tareas: la del script con acciones que buscar y la del que no tiene candidatos; el tercero no tiene acciones y no da tarea' '2' $v['N']
+  $ha = ($v['A'] -split '\|')
+  Comprueba 'la de cargas.ksh: id comparash-<hash>, tipo comparar-sh, pendiente, ficha sh-aaaaaaaa, su salida en datos/comparacion-sh y dos acciones por buscar' ($ha[0] -match '^comparash-[0-9a-f]{8}$' -and $ha[1] -eq 'comparar-sh' -and $ha[2] -eq 'pendiente' -and $ha[3] -eq 'sh-aaaaaaaa' -and $ha[4] -eq 'datos/comparacion-sh/sh-aaaaaaaa.json' -and $ha[5] -eq '2') $v['A']
+  Igual 'se buscan las acciones 0 y 1; la 2 no tiene candidatos (acme sale en todos los ficheros y no cuenta) y la 3 no se compara por no estar comprobada' '0,1|2' $v['IND']
+  Igual 'los ficheros del migrado: el Java con el patron de la 0 y el yml de la 1 (logs y el 30)' 'src/main/java/com/acme/life/ArchivadorSalidas.java,src/main/resources/application.yml' $v['MIG']
+  $hb = ($v['B'] -split '\|')
+  Comprueba 'la de recibos.sh nace hecha con la accion en falta, marcada sin candidatos y sin nota' ($hb[0] -match '^comparash-[0-9a-f]{8}$' -and $hb[1] -eq 'hecha' -and $hb[2] -eq '1' -and $hb[3] -eq 'falta' -and $hb[4] -eq '0' -and $hb[5] -eq 'sin-candidatos' -and $hb[6] -eq '') $v['B']
+  Igual 'momento y commit con que se eligieron' 'antes-de-corregir|True' $v['MOMENTO']
+  $p = ''
+  $fp = Join-Path (Join-Path $Dir 'comparar-sh-tareas-datos') 'prompt.txt'
+  if (Test-Path -LiteralPath $fp) { $p = [System.IO.File]::ReadAllText($fp) }
+  Comprueba 'el prompt: TIPO, SCRIPT, ESCRIBIR, los dos ficheros del migrado, un dato numerado por accion buscada y el sitio del original de cada una' ($p -match '(?m)^TIPO: comparar-sh\r?$' -and $p -match '(?m)^SCRIPT: bin/cargas\.ksh\r?$' -and $p -match '(?m)^ESCRIBIR: \.rescate/tareas/comparash-[0-9a-f]{8}\.json\r?$' -and $p -match '(?m)^MIGRADO: src/main/resources/application\.yml\r?$' -and $p -match '(?m)^MIGRADO: src/main/java/com/acme/life/ArchivadorSalidas\.java\r?$' -and [regex]::Matches($p, '(?m)^\d+\. \[').Count -eq 2 -and $p -match '(?m)^0\. \[mueve\]' -and $p -match '(?m)^1\. \[borra\]' -and $p -match '(?m)^\s+Original: bin/cargas\.ksh:31 \| cita: ALTA \)' -and $p -notmatch '(?m)^LEER:') $p
+  Igual 'una tarea hecha con la misma huella se reutiliza' 'hecha' $v['REUSA']
+  Igual 'con otro commit del migrado la huella cambia y la tarea vuelve a pendiente' 'True|pendiente' $v['CAMBIA']
+}
+
+$Pruebas['m17 lanzadores: Test-CompararSh - una accion con cita en los dos lados vale; una cita inventada en el migrado no; las que no se buscaron salen en falta'] = {
+  $e = Migrado-Sh 'comparar-sh-valida'
+  $codigo = $script:PreludioComparaSh + "`n" + @'
+$t = @(Get-TareasCompararSh $false $Base | Where-Object { $_.entradas.script -eq 'bin/cargas.ksh' })[0]
+$arch = 'src/main/java/com/acme/life/ArchivadorSalidas.java'
+$yml = 'src/main/resources/application.yml'
+function El([int]$Dato, [string]$Estado, [string]$Fichero, [int]$Linea, [string]$Cita, [string]$Nota = '') {
+  $x = [ordered]@{ dato = $Dato; estado = $Estado }
+  if ($Fichero) { $x.fichero = $Fichero; $x.linea = $Linea; $x.cita = $Cita }
+  if ($Nota) { $x.nota = $Nota }
+  return $x
+}
+function Prueba([string]$Nombre, $Lista) {
+  [void](New-Item -ItemType Directory -Path (Join-Path $RepoRoot '.rescate/tareas') -Force)
+  [System.IO.File]::WriteAllText((Join-Path $RepoRoot ('.rescate/tareas/' + $t.id + '.json')), (ConvertTo-Json -InputObject ([ordered]@{ comparacion = $Lista }) -Depth 6))
+  $r = Test-CompararSh $t $RepoRoot
+  if ($r.Ok) { return ('BIEN ' + ((@($r.Ficha.comparacion) | ForEach-Object { '' + $_.accion + ':' + $_.estado + ':' + $_.busqueda + ':' + $_.probado }) -join ',')) }
+  return ('MAL ' + $r.Motivo)
+}
+$buena = @((El 0 'igual' $arch 5 'static final String PATRON_ALTA = "SALIDA_ALTA_";'), (El 1 'distinto' $yml 4 'dias: 30' 'El migrado lo lee de la configuracion.'))
+'V1=' + (Prueba 'v1' $buena)
+'V2=' + (Prueba 'v2' @((El 0 'igual' $arch 5 'esta cita no sale en el migrado'), (El 1 'igual' $yml 4 'tampoco esta')))
+'V3=' + (Prueba 'v3' @((El 0 'igual' 'src/main/java/com/acme/life/App.java' 3 'public class App {'), (El 1 'falta' '' 0 '' 'No lo encuentro.')))
+'V4=' + (Prueba 'v4' @((El 0 'igual' $arch 5 'static final String PATRON_ALTA = "SALIDA_ALTA_";')))
+'V5=' + (Prueba 'v5' @((El 0 'falta' '' 0 '' 'No esta.'), (El 1 'falta' '' 0 '' '')))
+$t.resultado = (Test-CompararSh $t $RepoRoot).Ficha
+'FIN'
+'@
+  $r = En-Biblioteca 'comparar-sh-valida' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'comparar-sh-valida-datos')).Replace('{{MIG}}', $e.Migrado)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  Igual 'una accion igual (cita en el Java) y otra distinta (cita en el yml, con nota) valen; la tercera, que no se busco, sale en falta sin busqueda, y todas con la cita probada' 'BIEN 0:igual:modelo:True,1:distinto:modelo:True,2:falta:sin-candidatos:False' $v['V1']
+  Comprueba 'con las citas del migrado inventadas se rechaza y el motivo lo dice' ($v['V2'] -match '^MAL ' -and $v['V2'] -match 'Mas de la mitad' -and $v['V2'] -match 'migrado') $v['V2']
+  Comprueba 'un fichero que no se le dio se rechaza y el motivo nombra los que si' ($v['V3'] -match '^MAL ' -and $v['V3'] -match 'ArchivadorSalidas\.java' -and $v['V3'] -match 'application\.yml') $v['V3']
+  Comprueba 'una accion sin elemento se rechaza' ($v['V4'] -match '^MAL ' -and $v['V4'] -match 'faltan 1') $v['V4']
+  Igual 'dos acciones en falta valen, y la que se busco y no se encontro se distingue de la que no se busco' 'BIEN 0:falta:modelo:False,1:falta:modelo:False,2:falta:sin-candidatos:False' $v['V5']
+}
+
+$Pruebas['m17 lanzadores: Save-ComparacionesSh escribe datos/comparacion-sh/<ficha>.json de cada tarea hecha, con el script, los ficheros, el momento y el commit'] = {
+  $e = Migrado-Sh 'comparar-sh-guardar'
+  $codigo = $script:PreludioComparaSh + "`n" + @'
+$t = @(Get-TareasCompararSh $false $Base)
+Save-ComparacionesSh $t
+'FICHEROS=' + (@(Get-ChildItem (Join-Path $Datos 'comparacion-sh') -Filter '*.json' | ForEach-Object { $_.Name }) -join ',')
+$j = Read-Json (Join-Path $Datos 'comparacion-sh/sh-bbbbbbbb.json')
+'B=' + $j.ficha + '|' + $j.script + '|' + $j.momento + '|' + $j.commit.Length + '|' + @($j.acciones).Count + '|' + $j.acciones[0].estado + '|' + $j.acciones[0].accion
+'FIN'
+'@
+  $r = En-Biblioteca 'comparar-sh-guardar' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'comparar-sh-guardar-datos')).Replace('{{MIG}}', $e.Migrado)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  Igual 'solo la de la tarea hecha (la otra sigue pendiente)' 'sh-bbbbbbbb.json' $v['FICHEROS']
+  Igual 'ficha, script, momento, commit corto y la accion en falta' 'sh-bbbbbbbb|bin/recibos.sh|antes-de-corregir|7|1|falta|0' $v['B']
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
