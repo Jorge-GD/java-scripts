@@ -25,9 +25,23 @@ En los ejemplos:
 | 2 | `migracion.ps1 -Si` | Para arreglar lo que dice el informe | Commits en la rama `rescate/...` y la página 4 |
 | 3 | Va dentro del paso 2; `prueba-local.ps1 -Desde` si sale «distinto» | Después de cada corrección | La página 3: original y migrado ejecutados con las mismas entradas |
 | 4 | `git merge` | Cuando estás conforme | Los arreglos en tu rama |
-| 5 | `rescate.ps1 -Sonar` | Cuando tienes el xlsx de Sonar | Commits en `rescate/...` y `.rescate\sonar-faltan.md` |
+| 5 | `rescate.ps1 -Sonar` y `rescate.ps1 -Cobertura` | Cuando tienes el xlsx de Sonar, o la cobertura no llega al 80 % | Commits en `rescate/...`, `.rescate\sonar-faltan.md` y `.rescate\cobertura-faltan.md` |
 | 6 | Tú, en pre | Antes de dar el batch por bueno | El guion de cada job, en la página 1 |
 | 7 | `git push` y Sonar en tu CI | Al final | Un xlsx nuevo: vuelves al paso 5 |
+
+## Si todavía no hay migrado: empezar desde cero
+
+Si el batch aún no se ha migrado, el migrado empieza siendo una copia del original en una rama nueva:
+
+```powershell
+git clone C:\ruta\original C:\ruta\migrado
+git -C C:\ruta\migrado switch -c migracion-java21
+```
+
+Después, los pasos de siempre. El paso 2 lo acerca a la referencia: Java 21, Spring Boot 3, `jakarta`, la API nueva de Spring Batch, la estructura de carpetas, el SFTP y la configuración. El paso 3 comprueba que sigue haciendo lo mismo que el original.
+
+- Ojo: así solo se ha probado con un batch inventado. Con uno real, espera más ficheros atascados que en un batch ya migrado.
+- Si tu equipo crea los repos de otra forma (un repo nuevo, otro `artifactId`), créalo así y copia dentro el código del original antes del paso 1.
 
 ## Paso 0. Preflight, una vez por equipo
 
@@ -106,6 +120,19 @@ Para encontrar el commit que rompe un caso:
 - Con `-Deshacer`, hace `git revert` de ese commit (nunca un reset) y vuelve a ejecutar el caso. Si no existe `C:\ruta\migrado-rescate`, el revert va a tu rama.
 - `prueba-local.ps1` lanzado así no rehace las páginas. Para ver la página 3 al día, relanza `migracion.ps1` con las mismas opciones. Con un commit nuevo en la rama de rescate, repite la comparación leyendo código (tarda y gasta Copilot) y la prueba en local. Las páginas 2 y 4 no cambian.
 
+### Volver a comprobar, cuando quieras
+
+Después de cualquier cambio (tuyo, de Sonar, de la cobertura o de un merge), lanza otra vez la prueba en local:
+
+```powershell
+.\prueba-local.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado
+```
+
+- Ejecuta los mismos casos en el original y en el migrado, y los compara. No vuelve a pedir a Copilot lo que ya hizo (los casos y sus entradas); solo ejecuta y compara.
+- **Prueba el último commit, no lo que tengas sin commit.** Haz commit antes.
+- **Si existe `C:\ruta\migrado-rescate`, prueba esa copia y no tu rama.** Si ya trajiste sus cambios (paso 4), bórrala antes con `git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate`.
+- La respuesta sale en la consola y en `migracion-<batch>\datos\prueba-local.json`. Para ver también la página 3 al día, relanza `migracion.ps1 -SoloInforme` con las mismas opciones del paso 1.
+
 ## Paso 4. Revisar y traer los cambios
 
 ```powershell
@@ -129,6 +156,19 @@ El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'resca
 - No se para por una incidencia difícil: termina todo y al final dice «Faltan N de Sonar», con el motivo de cada una. La lista queda en `C:\ruta\migrado-rescate\.rescate\sonar-faltan.md`.
 - Los arreglos van a la rama de rescate, como en el paso 2. Después repite los pasos 3 y 4: relanza `migracion.ps1 -SoloInforme` para que la prueba en local mire el código nuevo, y `prueba-local.ps1 -Desde <tu-rama>` si algún caso pasa a `distinto`.
 - Las reglas del paso están en `sonar-reglas.ps1`.
+
+### La cobertura
+
+```powershell
+.\rescate.ps1 -Repo C:\ruta\migrado -Cobertura
+```
+
+- Escribe tests, clase a clase, hasta llegar al 80 % de líneas cubiertas (`CoberturaMinima`). Empieza por las clases a las que más líneas les faltan.
+- Solo escribe en `src\test`. Si toca cualquier otra cosa, el intento no vale: así la lógica de negocio no puede cambiar.
+- Un test solo se queda si pasa 3 veces seguidas, sube la cobertura de su clase y comprueba un valor de verdad.
+- Si un test descubre algo que parece un error del código, no lo arregla: lo deja marcado con `// OJO: parece un error` para que lo mires tú.
+- Al final dice «Cobertura: X % -> Y %» y lo que falta, también en `C:\ruta\migrado-rescate\.rescate\cobertura-faltan.md`.
+- Como mucho 40 clases por pasada (`CoberturaClasesMax`). Si no llega, relánzalo.
 
 ## Paso 6. Pre
 

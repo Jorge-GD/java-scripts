@@ -45,7 +45,7 @@ Compara tu repo con una **plantilla** (un repo ya migrado y aprobado) y trabaja 
 
 | Fase | Usa IA | Qué hace |
 |---|---|---|
-| Diagnóstico | no | Cuenta los hallazgos por paso: `build`, `estructura`, `hexagonal`, `ficheros`, `config`, `paridad`, `e2e`, `tests`, `calidad` (y `sonar`, si pasas `-Sonar`). No toca código. |
+| Diagnóstico | no | Cuenta los hallazgos por paso: `build`, `estructura`, `hexagonal`, `ficheros`, `config`, `paridad`, `e2e`, `tests`, `calidad` (y `sonar` con `-Sonar`, `cobertura` con `-Cobertura`). No toca código. |
 | Worktree | no | Crea al lado una carpeta `<repo>-rescate` con una rama `rescate/...`. Tu carpeta y tu rama no se tocan. |
 | Plan | sí, solo lectura | Antes de arreglar un paso, Copilot lee **todos** los ficheros con hallazgos y la plantilla, y escribe `.rescate/plan-<paso>.md`. Tú lo lees y lo corriges. |
 | Arreglo | sí | Arregla un paso en lotes pequeños siguiendo el plan. Tras cada lote se repite el diagnóstico entero y el script decide si el lote vale. |
