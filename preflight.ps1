@@ -239,42 +239,6 @@ function Get-ArgsPowerShell([string[]]$Mas) {
   return (@('-NoProfile', '-File') + $Mas)
 }
 
-# Un programa con tope de tiempo. Lo lanza como la biblioteca lanza a Copilot (Get-Lanzador: un .ps1 va por
-# PowerShell, un .cmd por cmd) y devuelve Codigo, Texto (salida y errores), Agotado y Segundos.
-function Invoke-Proceso([string]$Exe, [string[]]$A, [string]$Dir, [int]$Segundos) {
-  $v = [pscustomobject]@{ Codigo = -1; Texto = ''; Agotado = $false; Segundos = 0 }
-  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-  $l = Get-Lanzador $Exe $A
-  $pi = New-Object System.Diagnostics.ProcessStartInfo
-  $pi.FileName = $l.Exe
-  $pi.Arguments = $l.Args
-  if ($Dir) { $pi.WorkingDirectory = $Dir }
-  $pi.UseShellExecute = $false
-  $pi.CreateNoWindow = $true
-  $pi.RedirectStandardInput = $true
-  $pi.RedirectStandardOutput = $true
-  $pi.RedirectStandardError = $true
-  $pi.StandardOutputEncoding = $Utf8
-  $pi.StandardErrorEncoding = $Utf8
-  $p = [System.Diagnostics.Process]::Start($pi)
-  $p.StandardInput.Close()
-  $o = $p.StandardOutput.ReadToEndAsync()
-  $e = $p.StandardError.ReadToEndAsync()
-  while (-not $p.HasExited) {
-    if ($reloj.Elapsed.TotalSeconds -gt $Segundos) {
-      Stop-Proceso $p
-      [void]$p.WaitForExit(5000)
-      $v.Agotado = $true
-      break
-    }
-    Start-Sleep -Milliseconds 100
-  }
-  if (-not $v.Agotado) { $p.WaitForExit(); $v.Codigo = $p.ExitCode }
-  $v.Texto = (Get-TextoPipe $o) + (Get-TextoPipe $e)
-  $v.Segundos = [int]$reloj.Elapsed.TotalSeconds
-  return $v
-}
-
 # El numero de version que sale en la salida de '<exe> <args>'.
 function Get-Version([string]$Exe, [string[]]$A, [string]$Patron, [string]$Dir = $PSScriptRoot) {
   try {

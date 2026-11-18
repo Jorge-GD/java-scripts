@@ -5,6 +5,7 @@ Las funciones usan variables del script que las carga: $Cfg, $Si, $Worktree,
 $OrigenRoot (la carpeta del usuario) y $RepoRoot (la carpeta donde se trabaja:
 el worktree de rescate). Cada script las define antes de llamarlas.
 Los flags de Copilot y la ruta de Maven se ajustan aqui o en .rescate/config.json.
+Tambien lanza programas con tope de tiempo (Invoke-Proceso, con el lanzador de Copilot).
 #>
 
 # ============================ CONFIGURACION ============================
@@ -17,9 +18,12 @@ $Cfg = @{
   MvnExe        = ''      # vacio = mvnw del repo o, si no hay, mvn del PATH
   DirsIgnorados = @('.git', 'target', '.rescate', 'node_modules', '.idea', '.vscode', '.github', '.mvn')
   SegundosLatido = 60     # cada cuantos segundos escribe '... sigue' mientras espera a Copilot o a Maven (0 = nunca)
+  MinutosMaven   = 30     # tope de cada llamada a Maven, en minutos (admite decimales); pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida
 }
 
 # ============================== UTILIDADES ==============================
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+
 function Info([string]$m) { Write-Host $m }
 function Bien([string]$m) { Write-Host $m -ForegroundColor Green }
 function Aviso([string]$m) { Write-Host $m -ForegroundColor Yellow }
@@ -58,7 +62,7 @@ function Select-Lanzable($Candidatos, [bool]$EsWindows) {
 }
 
 # El fichero que se lanza con un nombre o una ruta (Select-Lanzable sobre lo que da Get-Command): su Ruta, o $null y un
-# Mensaje que dice que es lo que hay. Lo usan Get-Lanzador (tareas.ps1), el preflight y rescate.ps1: una sola regla.
+# Mensaje que dice que es lo que hay. Lo usan Get-Lanzador, el preflight y rescate.ps1: una sola regla.
 function Get-Lanzable([string]$Exe) {
   $encontrados = @()
   if ($Exe) { $encontrados = @(Get-Command $Exe -All -ErrorAction SilentlyContinue) }
@@ -77,6 +81,90 @@ function Get-Lanzable([string]$Exe) {
     $mensaje = "No puedo lanzar '" + (($Exe -replace '\\', '/') -split '/')[-1] + "': aqui es $hay. Pon la ruta entera del .cmd o del .exe en CopilotExe de ajustes.json."
   }
   return [pscustomobject]@{ Ruta = $ruta; Mensaje = $mensaje }
+}
+
+# Comillas para la linea de comandos de Windows (valen tambien en Linux). Para cmd, ademas,
+# se entrecomilla lo que lleve & | < > ^ ( ), que cmd leeria como suyo.
+function ConvertTo-ArgWin([string]$A, [bool]$ParaCmd = $false) {
+  $raro = '[\s"]'
+  if ($ParaCmd) { $raro = '[\s"&|<>^()]' }
+  if ($A -ne '' -and $A -notmatch $raro) { return $A }
+  $s = $A -replace '(\\*)"', '$1$1\"'
+  $s = $s -replace '(\\+)$', '$1$1'
+  return '"' + $s + '"'
+}
+
+function Get-PowerShellExe {
+  $e = (Get-Process -Id $PID).Path
+  if ([System.IO.Path]::GetFileNameWithoutExtension($e) -notmatch '^(pwsh|powershell)') {
+    $e = (@(Get-Command pwsh, powershell -ErrorAction SilentlyContinue)[0]).Source
+  }
+  return $e
+}
+
+# Que programa y que argumentos lanzar: un .ps1 va por PowerShell, un .cmd por cmd.
+function Get-Lanzador([string]$Exe, [string[]]$A) {
+  $l = Get-Lanzable $Exe
+  if (-not $l.Ruta) { throw $l.Mensaje }
+  $ruta = $l.Ruta
+  $ext = [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()
+  if ($ext -eq '.ps1') {
+    return [pscustomobject]@{ Exe = (Get-PowerShellExe); Args = (((@('-NoProfile', '-File', $ruta) + $A) | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }
+  }
+  if ($ext -eq '.cmd' -or $ext -eq '.bat') {
+    return [pscustomobject]@{ Exe = $env:ComSpec; Args = ('/d /s /c "' + ((@($ruta) + $A | ForEach-Object { ConvertTo-ArgWin $_ $true }) -join ' ') + '"') }
+  }
+  return [pscustomobject]@{ Exe = $ruta; Args = (($A | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }
+}
+
+function Stop-Proceso($P) {
+  try {
+    if ($env:OS -eq 'Windows_NT') { [void](Invoke-Nativo 'taskkill' @('/F', '/T', '/PID', "$($P.Id)")) }
+    else { $P.Kill($true) }   # fuera de Windows, el arbol entero, como taskkill /T
+  }
+  catch { }
+}
+
+# Lo que ha escrito una tuberia; si un nieto la mantiene abierta no espera para siempre.
+function Get-TextoPipe($Tarea) {
+  if ($Tarea.Wait(3000)) { return $Tarea.Result }
+  return ''
+}
+
+# Un programa con tope de tiempo. Lo lanza con Get-Lanzador (un .ps1 va por PowerShell, un .cmd por cmd), como a Copilot, y
+# devuelve Codigo, Texto (salida y errores), Agotado y Segundos.
+function Invoke-Proceso([string]$Exe, [string[]]$A, [string]$Dir, [int]$Segundos) {
+  $v = [pscustomobject]@{ Codigo = -1; Texto = ''; Agotado = $false; Segundos = 0 }
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  $l = Get-Lanzador $Exe $A
+  $pi = New-Object System.Diagnostics.ProcessStartInfo
+  $pi.FileName = $l.Exe
+  $pi.Arguments = $l.Args
+  if ($Dir) { $pi.WorkingDirectory = $Dir }
+  $pi.UseShellExecute = $false
+  $pi.CreateNoWindow = $true
+  $pi.RedirectStandardInput = $true
+  $pi.RedirectStandardOutput = $true
+  $pi.RedirectStandardError = $true
+  $pi.StandardOutputEncoding = $Utf8
+  $pi.StandardErrorEncoding = $Utf8
+  $p = [System.Diagnostics.Process]::Start($pi)
+  $p.StandardInput.Close()
+  $o = $p.StandardOutput.ReadToEndAsync()
+  $e = $p.StandardError.ReadToEndAsync()
+  while (-not $p.HasExited) {
+    if ($reloj.Elapsed.TotalSeconds -gt $Segundos) {
+      Stop-Proceso $p
+      [void]$p.WaitForExit(5000)
+      $v.Agotado = $true
+      break
+    }
+    Start-Sleep -Milliseconds 100
+  }
+  if (-not $v.Agotado) { $p.WaitForExit(); $v.Codigo = $p.ExitCode }
+  $v.Texto = (Get-TextoPipe $o) + (Get-TextoPipe $e)
+  $v.Segundos = [int]$reloj.Elapsed.TotalSeconds
+  return $v
 }
 
 # Latido: mientras un programa largo corre, una linea cada $Cada segundos para que se vea que el script sigue vivo
@@ -162,6 +250,25 @@ function Get-Mvn([string]$Raiz) {
   if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $w = Join-Path $Raiz 'mvnw.cmd' } else { $w = Join-Path $Raiz 'mvnw' }
   if (Test-Path -LiteralPath $w) { return $w }
   return 'mvn'
+}
+
+# Maven en $Dir con los argumentos $A, con latido ($Que) y con tope: pasados $Cfg.MinutosMaven minutos se para Maven con sus
+# procesos hijos (Stop-Proceso) y la llamada cuenta como fallida (Codigo -1). Lo que haya escrito queda en $Registro. Devuelve
+# Codigo, Salida (las lineas: las de la salida y despues las de errores) y Tope: '' o el mensaje que dice que se ha pasado, que
+# sale tambien por la consola. Lo usan rescate.ps1, la cobertura de tareas.ps1 y prueba-local.ps1: una sola regla.
+function Invoke-MavenTope([string]$Dir, [string[]]$A, [string]$Que, [string]$Registro) {
+  $latido = Start-Latido $Que $Cfg.SegundosLatido
+  try { $p = Invoke-Proceso (Get-Mvn $Dir) $A $Dir ([int][Math]::Ceiling([double]$Cfg.MinutosMaven * 60)) }
+  finally { Stop-Latido $latido }
+  $salida = @()
+  if ($p.Texto) { $salida = @(($p.Texto -replace '\r?\n$', '') -split '\r?\n') }
+  [System.IO.File]::WriteAllText($Registro, (($salida -join "`n") + "`n"), $Utf8)
+  $r = [pscustomobject]@{ Codigo = $p.Codigo; Salida = $salida; Tope = '' }
+  if ($p.Agotado) {
+    $r.Tope = "Maven se ha pasado del tope de $($Cfg.MinutosMaven) min y se ha parado ($Que). Registro: $Registro."
+    Aviso $r.Tope
+  }
+  return $r
 }
 
 # Huella de una carpeta de solo lectura, para detectar si alguien la toca.

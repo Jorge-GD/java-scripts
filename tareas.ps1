@@ -7,12 +7,12 @@ migracion.ps1 o desde cualquier script que necesite lo mismo (un preflight) sin 
 por el arranque. Cargarlo no ejecuta nada. Solo ASCII a proposito.
 Necesita la carpeta tareas\ (plantilla del prompt y fichero de la prueba) junto a este script.
 
-DEFINE al cargarse: $Utf8, las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
+DEFINE al cargarse: las claves de $Cfg de abajo (CONFIGURACION: Paralelo,
 SegundosPorLlamada, Intentos, LineasPorTarea, CitaMax, CitaCerca, EsfuerzoLectura,
 EsfuerzoRedaccion, EsfuerzoReintento, CaracteresPorTarea, ClasesPorJob, ProfundidadJob,
 PasosDefinicionMax, PasosFichaMax, GlosarioMax, CasosMax, FicherosComparar, EstadosComparar, ListasJob, Papeles, TiposDato, JavaExe, JacocoPlugin y
 CoberturaMinima) y
-las funciones. Get-Lanzador usa Get-Lanzable, de comun.ps1.
+las funciones. El lanzador de programas (Get-Lanzador y lo que usa) y $Utf8 son de comun.ps1.
 
 ESPERA que quien lo carga haya puesto, antes de llamar a sus funciones:
   $Cfg            el de comun.ps1 (este fichero le anade sus claves al cargarse)
@@ -67,8 +67,6 @@ $Cfg += @{
 }
 
 # ============================== UTILIDADES ==============================
-$Utf8 = New-Object System.Text.UTF8Encoding($false)
-
 function Stop-Arranque([string]$Mensaje) { Fallo $Mensaje; exit 1 }
 
 function Read-Json([string]$Ruta) { return ([System.IO.File]::ReadAllText($Ruta, $Utf8) | ConvertFrom-Json) }
@@ -88,54 +86,6 @@ function Get-Hash8([string]$Texto) {
 }
 
 # ================================ LLAMADAS ================================
-# Comillas para la linea de comandos de Windows (valen tambien en Linux). Para cmd, ademas,
-# se entrecomilla lo que lleve & | < > ^ ( ), que cmd leeria como suyo.
-function ConvertTo-ArgWin([string]$A, [bool]$ParaCmd = $false) {
-  $raro = '[\s"]'
-  if ($ParaCmd) { $raro = '[\s"&|<>^()]' }
-  if ($A -ne '' -and $A -notmatch $raro) { return $A }
-  $s = $A -replace '(\\*)"', '$1$1\"'
-  $s = $s -replace '(\\+)$', '$1$1'
-  return '"' + $s + '"'
-}
-
-function Get-PowerShellExe {
-  $e = (Get-Process -Id $PID).Path
-  if ([System.IO.Path]::GetFileNameWithoutExtension($e) -notmatch '^(pwsh|powershell)') {
-    $e = (@(Get-Command pwsh, powershell -ErrorAction SilentlyContinue)[0]).Source
-  }
-  return $e
-}
-
-# Que programa y que argumentos lanzar: un .ps1 va por PowerShell, un .cmd por cmd.
-function Get-Lanzador([string]$Exe, [string[]]$A) {
-  $l = Get-Lanzable $Exe
-  if (-not $l.Ruta) { throw $l.Mensaje }
-  $ruta = $l.Ruta
-  $ext = [System.IO.Path]::GetExtension($ruta).ToLowerInvariant()
-  if ($ext -eq '.ps1') {
-    return [pscustomobject]@{ Exe = (Get-PowerShellExe); Args = (((@('-NoProfile', '-File', $ruta) + $A) | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }
-  }
-  if ($ext -eq '.cmd' -or $ext -eq '.bat') {
-    return [pscustomobject]@{ Exe = $env:ComSpec; Args = ('/d /s /c "' + ((@($ruta) + $A | ForEach-Object { ConvertTo-ArgWin $_ $true }) -join ' ') + '"') }
-  }
-  return [pscustomobject]@{ Exe = $ruta; Args = (($A | ForEach-Object { ConvertTo-ArgWin $_ }) -join ' ') }
-}
-
-function Stop-Proceso($P) {
-  try {
-    if ($env:OS -eq 'Windows_NT') { [void](Invoke-Nativo 'taskkill' @('/F', '/T', '/PID', "$($P.Id)")) }
-    else { $P.Kill() }
-  }
-  catch { }
-}
-
-# Lo que ha escrito una tuberia; si un nieto la mantiene abierta no espera para siempre.
-function Get-TextoPipe($Tarea) {
-  if ($Tarea.Wait(3000)) { return $Tarea.Result }
-  return ''
-}
-
 function Start-Llamada([string]$Dir, [string[]]$A) {
   $v = [pscustomobject]@{ Proceso = $null; Salida = $null; Error = $null; Reloj = [System.Diagnostics.Stopwatch]::StartNew(); Fin = $false; Agotado = $false; Codigo = -1; Texto = ''; Segundos = 0 }
   try {
@@ -1272,10 +1222,8 @@ function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila) {
   $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
   if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
   $j = $Cfg.JacocoPlugin
-  $latido = Start-Latido 'Maven (cobertura)' $Cfg.SegundosLatido
-  try { $r = Invoke-Nativo (Get-Mvn $Dir) @('-B', "${j}:prepare-agent", 'test', "${j}:report") $Dir }
-  finally { Stop-Latido $latido }
-  [System.IO.File]::WriteAllText($Registro, ((@($r.Salida) -join "`n") + "`n"), $Utf8)
+  $r = Invoke-MavenTope $Dir @('-B', "${j}:prepare-agent", 'test', "${j}:report") 'Maven (cobertura)' $Registro
+  if ($r.Tope) { $o.motivo = $r.Tope; return $o }
   if ($r.Codigo -ne 0) {
     $e = @($r.Salida | Where-Object { "$_" -match '^\[ERROR\]\s*\S' } | Select-Object -First 1)
     $o.motivo = "Maven ha salido con error (codigo $($r.Codigo))"
