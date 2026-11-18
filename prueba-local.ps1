@@ -755,9 +755,12 @@ function Get-TareaCaso([string]$Job, [string]$Caso) {
   return @($tareasCasos | Where-Object { $_.entradas.job -ceq $Job -and $_.entradas.caso -ceq $Caso })[0]
 }
 
+# Un resultado de Get-Resultado que no es bueno: igual y no determinista son buenos; todo lo demas, no.
+function Test-Malo($Res) { return ($Res.resultado -ne 'igual' -and $Res.resultado -ne 'no determinista') }
+
 # Como esta el caso $T en el migrado de $Commit: Malo ($true si sale distinto o no se puede ejecutar), Motivo (por que no se
-# pudo ejecutar, o '') y Resultado (lo de Get-Resultado, comparado con salidas\original). Igual y no determinista son buenos.
-# Lo ya visto de un (commit, job, caso) se guarda en $script:Estados y no se vuelve a ejecutar.
+# pudo ejecutar, o '': con motivo, el commit ni es bueno ni es malo, Find-Culpable lo salta) y Resultado (lo de Get-Resultado,
+# comparado con salidas\original). Lo ya visto de un (commit, job, caso) se guarda en $script:Estados y no se vuelve a ejecutar.
 function Get-EstadoEn([string]$Commit, $T) {
   $j = $T.entradas.job
   $c = $T.entradas.caso
@@ -776,7 +779,7 @@ function Get-EstadoEn([string]$Commit, $T) {
   $script:Maven["$nombre|$j|$c"] = $mvn
   Copy-Carpeta (Join-Ruta $CopiaMig "target/prueba-local/$j/$c") $dest
   $res = Get-Resultado $T $nombre
-  $malo = ($res.resultado -ne 'igual' -and $res.resultado -ne 'no determinista')
+  $malo = (Test-Malo $res)
   $motivo = ''
   if ($malo -and -not (Test-Path -LiteralPath (Join-Path $dest 'estado.txt'))) { $motivo = Get-Resumen (Get-Porque $dest $mvn) }
   elseif ($malo -and $res.resultado -ne 'distinto') { $motivo = Get-Resumen $res.motivo }
@@ -786,7 +789,9 @@ function Get-EstadoEn([string]$Commit, $T) {
 }
 
 # El commit que rompe el caso $T, buscado por biseccion en $Commits (los de la rama despues de -Desde, del mas viejo al mas
-# nuevo; el ultimo, el HEAD, ya se sabe que es malo). $null si el caso ya era distinto en -Desde.
+# nuevo; el ultimo, el HEAD, ya se sabe que es malo). Un commit donde el caso no se pudo ejecutar (no compila, Maven se pasa del
+# tope...) ni es bueno ni es malo: se salta, como git bisect skip, y se prueba otro. $null, y sin culpable, si el caso ya era distinto
+# en -Desde o si solo quedan commits saltados antes del malo (no se puede decir cual rompe).
 function Find-Culpable($T, [string[]]$Commits) {
   $j = $T.entradas.job
   $c = $T.entradas.caso
@@ -799,15 +804,25 @@ function Find-Culpable($T, [string[]]$Commits) {
   }
   $lo = 0
   $hi = $Commits.Count - 1
+  $saltados = @{}   # indice -> por que no se pudo ejecutar el caso en ese commit
   while ($lo -lt $hi) {
-    $mid = [int][Math]::Floor(($lo + $hi) / 2)
-    if ((Get-EstadoEn $Commits[$mid] $T).Malo) { $hi = $mid } else { $lo = $mid + 1 }
+    $libres = @($lo..($hi - 1) | Where-Object { -not $saltados.ContainsKey($_) })
+    if ($libres.Count -eq 0) { break }
+    $mid = $libres[[int][Math]::Floor($libres.Count / 2)]
+    $e = Get-EstadoEn $Commits[$mid] $T
+    if ($e.Motivo) { $saltados[$mid] = $e.Motivo }
+    elseif ($e.Malo) { $hi = $mid }
+    else { $lo = $mid + 1 }
   }
-  $e = Get-EstadoEn $Commits[$lo] $T
+  if ($lo -lt $hi) {
+    $lista = (@($lo..$hi | ForEach-Object { $Commits[$_].Substring(0, 7) + ' (' + (Get-Asunto $Commits[$_]) + ')' }) -join ', ')
+    Aviso "El caso ${j}/${c}: no se puede decir que commit lo rompe, es uno de estos: $lista. Los saltados son commits donde no se pudo ejecutar el caso (como git bisect skip). No deshago nada."
+    foreach ($i in @($saltados.Keys | Sort-Object)) { Info "  En $($Commits[$i].Substring(0, 7)) no se pudo ejecutar el caso: $($saltados[$i])" }
+    return $null
+  }
   $asunto = Get-Asunto $Commits[$lo]
-  $m = "El caso $j/$c era igual en $($DesdeCommit.Substring(0, 7)) y se rompe en $($Commits[$lo].Substring(0, 7)) ($asunto)."
-  if ($e.Motivo) { $m += " En ese commit el caso no se pudo ejecutar: $($e.Motivo)" }
-  Fallo $m
+  Fallo "El caso $j/$c era igual en $($DesdeCommit.Substring(0, 7)) y se rompe en $($Commits[$lo].Substring(0, 7)) ($asunto)."
+  if ($saltados.Count -gt 0) { Aviso ('  Commits saltados (no se pudo ejecutar el caso): ' + ((@($saltados.Keys | Sort-Object | ForEach-Object { $Commits[$_].Substring(0, 7) })) -join ', ')) }
   return [pscustomobject]@{ job = $j; caso = $c; commit = $Commits[$lo]; asunto = $asunto; deshecho = $false; indice = $lo }
 }
 
