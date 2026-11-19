@@ -231,14 +231,17 @@ function Get-Porque([string]$Sal, $Maven) {
 
 # ================================ TAREAS ================================
 # Llama a Copilot para todas las tareas de $Lote a la vez (cada una en la copia de su entradas.copia) y deja un
-# registro por llamada. Devuelve las llamadas en el mismo orden. Para el script si fallan FallosSeguidos seguidas.
+# registro por llamada. Las de la copia del original arrancan con JAVA_HOME = -JavaLegacy (si se ha dado), como su Maven: la IA
+# ejecuta mvn en esa copia. Devuelve las llamadas en el mismo orden. Para el script si fallan FallosSeguidos seguidas.
 function Invoke-Lote($Lote, [string]$Esfuerzo) {
   $items = @()
   foreach ($t in $Lote) {
     $esf = $Esfuerzo
     $motivo = ''
     if ($t.intentos -gt 0) { $esf = $Cfg.EsfuerzoReintento; $motivo = $t.motivo }
-    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = ((Get-Prompt $t '' $motivo) -replace ('(?m)^' + [regex]::Escape($MarcaNo) + '.*\n(\n)?'), ''); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs) })
+    $jdk = ''
+    if ($JavaLegacy -and $t.entradas.copia -eq $CopiaOrig) { $jdk = $JavaLegacy }
+    $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = ((Get-Prompt $t '' $motivo) -replace ('(?m)^' + [regex]::Escape($MarcaNo) + '.*\n(\n)?'), ''); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs); JavaHome = $jdk })
   }
   $ll = @(Invoke-Llamadas $items)
   for ($i = 0; $i -lt $items.Count; $i++) {

@@ -112,7 +112,8 @@ function Start-Llamada([string]$Dir, [string[]]$A) {
   return $v
 }
 
-# Una llamada por elemento de $Lote (Id, Dir, Prompt, Modelo, Esfuerzo, Dirs: las carpetas que puede leer), todas a la vez.
+# Una llamada por elemento de $Lote (Id, Dir, Prompt, Modelo, Esfuerzo, Dirs: las carpetas que puede leer y, si lo lleva, JavaHome:
+# el JAVA_HOME con el que arranca Copilot, para los mvn que ejecuta la IA), todas a la vez.
 # Escribe el prompt, lanza, espera (matando las que pasan del tope) y devuelve, en el
 # mismo orden: Codigo, Texto (lo que ha escrito), Agotado y Segundos.
 function Invoke-Llamadas($Lote) {
@@ -124,7 +125,12 @@ function Invoke-Llamadas($Lote) {
     $salida = Join-Path $carpeta ($it.Id + '.json')
     if (Test-Path -LiteralPath $salida) { Remove-Item -LiteralPath $salida -Force }
     $texto = "Lee el fichero .rescate/tareas/$($it.Id).prompt.md y sigue sus instrucciones al pie de la letra."
-    $vivos += , (Start-Llamada $it.Dir (Get-ArgsCopilot $texto $it.Modelo $it.Esfuerzo @($it.Dirs) $true))
+    $antes = $env:JAVA_HOME
+    try {
+      if ($it.JavaHome) { $env:JAVA_HOME = $it.JavaHome }
+      $vivos += , (Start-Llamada $it.Dir (Get-ArgsCopilot $texto $it.Modelo $it.Esfuerzo @($it.Dirs) $true))
+    }
+    finally { $env:JAVA_HOME = $antes }
   }
   while (@($vivos | Where-Object { -not $_.Fin }).Count -gt 0) {
     foreach ($v in $vivos) {
