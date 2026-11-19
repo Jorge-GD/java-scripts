@@ -2271,5 +2271,139 @@ $Pruebas['m31 (e) plantilla del arnes: las tablas son las que no son de Spring B
   Comprueba 'tablas/<TABLA>.csv: una por cada tabla que no es de Spring Batch ni de Spring Cloud Task (BATCH_..., TASK_...)' ($arnes.Contains('uno por cada tabla que no es de Spring Batch ni de Spring Cloud Task (`BATCH_...`, `TASK_...`), con el nombre')) ''
 }
 
+# ===================== M32: medir y acortar el Maven de cada caso =====================
+# m32-mvn.ps1 deja el XML de surefire de cada caso con un time fijo (0.2 por el numero del caso) y, segun RESCATE_M32, un Maven que sin
+# red no llega a ejecutar el test, un job que falla o un XML que no se renueva. mvn.log (RESCATE_LLAMADAS) apunta cada llamada.
+
+function Escenario-M32([string]$Nombre, $Casos, [hashtable]$Ajustes = @{}, [string]$Mvn = 'm32-mvn.ps1') {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos $Mvn); SegundosPorLlamada = 60 }
+  foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+function Prueba-M32($E, [string]$Guion) {
+  $env:RESCATE_M32 = $Guion
+  try { return (Prueba $E) }
+  finally { $env:RESCATE_M32 = '' }
+}
+
+# Las llamadas a Maven de los casos (-Dprueba.local.caso=caso-<n>) hechas en la copia $Copia, en orden.
+function Casos-Mvn($E, [string]$Copia) { return @(Mavens-Con $E ('^' + [regex]::Escape($Copia + '|') + '.* -Dprueba\.local\.caso=caso-')) }
+
+function Con-O([string]$Linea) { return ($Linea -match ' -o( |$)') }
+
+function Caso-De([string]$Linea) { return [regex]::Match($Linea, '-Dprueba\.local\.caso=(caso-\d+)').Groups[1].Value }
+
+# Las filas de datos\prueba-local-tiempos.json (de todos los lanzamientos, en orden).
+function Tiempos($E) { return @(Lee-Json (Join-Path (Split-Path $E.Json -Parent) 'prueba-local-tiempos.json') | Where-Object { $_ }) }
+
+# segundosTest de cada fila, separados por comas ('null' si no lo hay).
+function Tests-De($Filas) { return ((@($Filas) | ForEach-Object { if ($null -eq $_.segundosTest) { 'null' } else { "$($_.segundosTest)" } }) -join ',') }
+
+$Pruebas['m32 (a) los casos llevan -o y las propiedades de MavenCasoRapido; el test-compile del principio y el arnes no; con la lista vaciada en ajustes solo va -o'] = {
+  $e = Escenario-M32 'm32-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $propiedades = @('-Dcheckstyle.skip', '-Denforcer.skip', '-Dspotbugs.skip', '-Dpmd.skip', '-Dmaven.javadoc.skip', '-Dmaven.source.skip', '-Dmaven.gitcommitid.skip', '-Dlicense.skip')
+  foreach ($copia in @($e.CopiaOrig, $e.CopiaMig)) {
+    $c = @(Casos-Mvn $e $copia)
+    Comprueba "hay llamadas de casos en $(Split-Path $copia -Leaf)" ($c.Count -ge 2) "$($c.Count)"
+    Comprueba '  todas llevan -o' (@($c | Where-Object { -not (Con-O $_) }).Count -eq 0) ($c -join ' / ')
+    foreach ($p in $propiedades) { Comprueba "  y $p" (@($c | Where-Object { $_ -notmatch (' ' + [regex]::Escape($p) + '( |$)') }).Count -eq 0) ($c -join ' / ') }
+  }
+  $otras = @(Mavens-Con $e '.' | Where-Object { $_ -notmatch ' -Dprueba\.local\.caso=caso-' })
+  Comprueba 'el test-compile del principio de cada copia esta entre las demas llamadas' (@($otras | Where-Object { $_ -match ' test-compile( |$)' }).Count -ge 2) ($otras -join ' / ')
+  Comprueba 'el arnes (caso vacio) tambien' (@($otras | Where-Object { $_ -match '-Dprueba\.local\.caso=vacio' }).Count -ge 1) ($otras -join ' / ')
+  Comprueba 'ninguna de las demas lleva -o ni propiedades de plugins' (@($otras | Where-Object { (Con-O $_) -or $_ -match '\.skip( |$)' }).Count -eq 0) ($otras -join ' / ')
+  $e2 = Escenario-M32 'm32-a2' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ MavenCasoRapido = @() }
+  $r = Prueba $e2
+  Igual 'con MavenCasoRapido vacio sale con 0' 0 $r.Codigo
+  $c = @(Casos-Mvn $e2 $e2.CopiaMig)
+  Comprueba 'sigue con -o' ($c.Count -ge 1 -and @($c | Where-Object { -not (Con-O $_) }).Count -eq 0) ($c -join ' / ')
+  Comprueba 'pero sin ninguna propiedad de plugin' (@(Mavens-Con $e2 '\.skip( |$)').Count -eq 0) ((Mavens-Con $e2 '\.skip( |$)') -join ' / ')
+}
+
+$Pruebas['m32 (b) un caso en -o que no llega a ejecutar el test se repite con red y lo dice; esa copia sigue con red y la otra con -o'] = {
+  $e = Escenario-M32 'm32-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M32 $e 'sin-red-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Igual 'la Info sale una sola vez' 1 (@([regex]::Matches($r.Salida, [regex]::Escape('Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'))).Count)
+  $o = @(Casos-Mvn $e $e.CopiaOrig)
+  Comprueba 'la primera llamada del original lleva -o' (Con-O $o[0]) $o[0]
+  Igual 'la segunda es del mismo caso' (Caso-De $o[0]) (Caso-De $o[1])
+  Comprueba 'y va sin -o' (-not (Con-O $o[1])) $o[1]
+  Comprueba 'el resto del original, sin -o' (@($o | Select-Object -Skip 1 | Where-Object { Con-O $_ }).Count -eq 0) ($o -join ' / ')
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'el migrado ejecuta sus tres casos una vez' 3 $m.Count
+  Comprueba 'todos con -o' (@($m | Where-Object { -not (Con-O $_) }).Count -eq 0) ($m -join ' / ')
+  $f = @(Tiempos $e | Where-Object { $_.lado -eq 'original' -and $_.caso -eq (Caso-De $o[0]) })
+  Igual 'filas del primer caso del original: la del -o y la repetida' 'True,False' ((@($f | Select-Object -First 2) | ForEach-Object { $_.offline }) -join ',')
+  Igual 'la del -o no llego al test: sin segundosTest; la repetida si' 'null,0.2' (Tests-De ($f | Select-Object -First 2))
+}
+
+$Pruebas['m32 (b2) si la repeticion con red tambien falla es el fallo de siempre: no lo dice como bueno y la copia vuelve a probar con -o en el caso siguiente'] = {
+  $e = Escenario-M32 'm32-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M32 $e 'migrado-roto'
+  Igual 'la Info sale una sola vez' 1 (@([regex]::Matches($r.Salida, [regex]::Escape('Sin red Maven no ha podido'))).Count)
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'caso-01 dos veces (con -o y sin el) y caso-02 una' 'caso-01 True,caso-01 False,caso-02 True' ((@($m | ForEach-Object { (Caso-De $_) + ' ' + (Con-O $_) })) -join ',')
+  Comprueba 'el original no se entera: sus casos van con -o' (@(Casos-Mvn $e $e.CopiaOrig | Where-Object { -not (Con-O $_) }).Count -eq 0) ((Casos-Mvn $e $e.CopiaOrig) -join ' / ')
+}
+
+$Pruebas['m32 (c) un caso que deja estado.txt (aunque sea FAILED) o error.txt no se repite, ni con -o'] = {
+  $e = Escenario-M32 'm32-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M32 $e 'falla-migrado'
+  Comprueba 'el job falla en el migrado y la prueba lo cuenta (no sale con 0)' ($r.Codigo -ne 0) "rc=$($r.Codigo)"
+  Comprueba 'no sale la Info de repetir con red' ($r.Salida -notmatch 'Sin red Maven no ha podido') (Cola $r.Salida)
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'el migrado ejecuta cada caso una sola vez (caso-01 FAILED, caso-02 con error.txt, caso-03 bien)' 'caso-01,caso-02,caso-03' ((@($m | ForEach-Object { Caso-De $_ })) -join ',')
+  Comprueba 'todas con -o' (@($m | Where-Object { -not (Con-O $_) }).Count -eq 0) ($m -join ' / ')
+  Comprueba 'los casos quedaron como los dejo el job' ((Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-02/error.txt')) -and (Lee $e.CopiaMig 'target/prueba-local/cargaJob/caso-01/estado.txt') -match 'FAILED') ''
+}
+
+$Pruebas['m32 (d) prueba-local-tiempos.json: una fila por ejecucion de un caso, con segundosTest igual al time del XML, y la consola da la media; un segundo lanzamiento anade'] = {
+  $e = Escenario-M32 'm32-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tiempos $e)
+  $llamadas = @(Casos-Mvn $e $e.CopiaOrig).Count + @(Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'una fila por llamada de caso a Maven' $llamadas $t.Count
+  Igual 'original: 6 (los casos de la IA, el original y el original-2) y migrado: 2' '6,2' ((@(@($t | Where-Object { $_.lado -eq 'original' }).Count, @($t | Where-Object { $_.lado -eq 'migrado' }).Count)) -join ',')
+  Comprueba 'cada fila: job, caso, segundosMaven, offline y cuando' ($t.Count -gt 0 -and @($t | Where-Object { $_.job -ne 'cargaJob' -or $_.caso -notmatch '^caso-0[12]$' -or $null -eq $_.segundosMaven -or $_.offline -ne $true -or -not $_.cuando }).Count -eq 0) (($t | ForEach-Object { ConvertTo-Json -InputObject $_ -Compress }) -join ' / ')
+  $uno = @(@($t | Where-Object { $_.caso -eq 'caso-01' }) | ForEach-Object { "$($_.segundosTest)" } | Select-Object -Unique)
+  $dos = @(@($t | Where-Object { $_.caso -eq 'caso-02' }) | ForEach-Object { "$($_.segundosTest)" } | Select-Object -Unique)
+  Igual 'segundosTest: siempre 0.2 en las filas de caso-01 y siempre 0.4 en las de caso-02' '0.2|0.4' (($uno -join ',') + '|' + ($dos -join ','))
+  $xml = New-Object System.Xml.XmlDocument
+  $xml.Load((Get-Ruta $e.CopiaMig 'target/surefire-reports/TEST-com.acme.nuevo.PruebaLocalTest.xml'))
+  $ultimo = @($t | Where-Object { $_.lado -eq 'migrado' })[-1]
+  Igual 'la ultima fila del migrado lleva el time del XML que dejo Maven' $xml.DocumentElement.GetAttribute('time') "$($ultimo.segundosTest)"
+  Comprueba 'la consola da la media: el test 0.3 s (la de 0.2 y 0.4)' ($r.Salida -match 'Maven por caso: [\d\.]+ s de media; el test 0\.3 s y Maven [\d\.]+ s \(arranque, plugins y red\)\. Detalle: .*prueba-local-tiempos\.json') (Cola $r.Salida)
+  $antes = $t.Count
+  $r = Prueba $e
+  $t2 = @(Tiempos $e)
+  Igual 'el segundo lanzamiento anade las suyas (las del original, dos veces, y el migrado) sin pisar las de antes' ($antes + 6) $t2.Count
+  Igual 'las primeras siguen como estaban' (($t | ForEach-Object { "$($_.lado)|$($_.caso)|$($_.cuando)" }) -join ',') ((@($t2 | Select-Object -First $antes) | ForEach-Object { "$($_.lado)|$($_.caso)|$($_.cuando)" }) -join ',')
+  Comprueba 'la media de la consola es la de este lanzamiento' ($r.Salida -match 'Maven por caso: [\d\.]+ s de media; el test 0\.3 s') (Cola $r.Salida)
+}
+
+$Pruebas['m32 (e) un XML de surefire anterior a ese Maven no cuenta (segundosTest null) y la media no lo incluye; sin ningun XML la linea no sale'] = {
+  $e = Escenario-M32 'm32-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M32 $e 'xml-viejo'
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tiempos $e)
+  Igual 'original: el primer Maven escribe el XML; el original y el original-2 dejan el de antes: null' '0.2,null,null' (Tests-De ($t | Where-Object { $_.lado -eq 'original' }))
+  Igual 'migrado: su primer Maven escribe el suyo' '0.2' (Tests-De ($t | Where-Object { $_.lado -eq 'migrado' }))
+  Comprueba 'la media del test es 0.2: las filas null no cuentan como 0' ($r.Salida -match 'Maven por caso: [\d\.]+ s de media; el test 0\.2 s y Maven') (Cola $r.Salida)
+  $e2 = Escenario-M32 'm32-e2' ([ordered]@{ cargaJob = @('importe=10.00') }) @{} 'mvn-local.ps1'
+  $r = Prueba $e2
+  Igual 'sin ningun XML, sale con 0' 0 $r.Codigo
+  $t = @(Tiempos $e2)
+  Comprueba 'hay filas, todas con segundosTest null' ($t.Count -ge 3 -and (Tests-De $t) -notmatch '[0-9]') (Tests-De $t)
+  Comprueba 'y la linea de Maven por caso no sale' ($r.Salida -notmatch 'Maven por caso') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
