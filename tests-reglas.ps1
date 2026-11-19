@@ -15,8 +15,8 @@ corrige con la cita, como hace la comparacion). La IA escribe, con tareas\test-r
 paquete, bajo src/test/java) con un metodo por regla. Una clase cuyo test ya existe, o cuyas reglas no tienen ningun operador que cambiar, se salta.
 Tras cada ronda (hasta $Cfg.Paralelo clases a la vez, en el mismo worktree): se deshace lo que la IA haya tocado fuera de su test; se rechaza el test
 que arranca Spring y el que no compila (una compilacion por ronda; si falla, de uno en uno); cada test se lanza solo (mvn -B test
--Dtest=<Clase>ReglasTest) y tiene que pasar; y se cambia la linea de cada regla (Get-MutanteLinea: ==/!=, >=, <=, >, <, &&, ||, true/false o quitar
-un !), como mucho $Cfg.MutantesPorClase lineas por clase: con cada cambio el test tiene que fallar, y despues la linea vuelve a como estaba (se
+-Dtest=<Clase>ReglasTest) y tiene que pasar; y se cambia la linea de cada regla (Get-MutanteLinea: ==/!=, >=, <=, >, <, &&, ||, true/false, quitar
+un ! o, si no hay nada de eso, poner un ! tras 'if (' o 'while ('), como mucho $Cfg.MutantesPorClase lineas por clase: con cada cambio el test tiene que fallar, y despues la linea vuelve a como estaba (se
 comprueba byte a byte). Resultado de cada regla: vigilada (el test falla con el cambio), no-vigilada (pasa igual) o sin-mutante (nada que cambiar,
 el cambio no compila, no se pudo medir o se paso del tope). Se acepta el test si hay alguna regla vigilada y ninguna no-vigilada: se commitea
 ('test(reglas): <ruta del test>'). Si no, se borra y vuelve a pendiente con el motivo ('Tu test no falla si en la linea N cambio ... por ...: no
@@ -54,7 +54,9 @@ function Get-CambiosReglas {
     @{ Patron = '&&'; Por = @{ '&&' = '||' } },
     @{ Patron = '\|\|'; Por = @{ '||' = '&&' } },
     @{ Patron = '\b(?:true|false)\b'; Por = @{ 'true' = 'false'; 'false' = 'true' } },
-    @{ Patron = '!(?=[(A-Za-z_])'; Por = @{ '!' = '' } }
+    @{ Patron = '!(?=[(A-Za-z_])'; Por = @{ '!' = '' } },
+    # la condicion sin operador (una sola llamada, un nombre): se niega, con un ! tras el parentesis
+    @{ Patron = '\b(?:if|while) ?\((?!\s*!)'; Por = @{ 'if (' = 'if (!'; 'if(' = 'if(!'; 'while (' = 'while (!'; 'while(' = 'while(!' } }
   )
 }
 

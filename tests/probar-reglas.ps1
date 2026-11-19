@@ -461,7 +461,14 @@ $Pruebas['10 h) Get-MutanteLinea: cada cambio de la lista aplicado a una linea d
     @('false', '        return false;', '        return true;'),
     @('! delante de un nombre', '        if (!found) {', '        if (found) {'),
     @('! delante de una llamada', '        if (!lista.isEmpty()) {', '        if (lista.isEmpty()) {'),
-    @('! delante de un parentesis', '        if (!(esValido(x))) {', '        if ((esValido(x))) {')
+    @('! delante de un parentesis', '        if (!(esValido(x))) {', '        if ((esValido(x))) {'),
+    @('if ( sin operador: una llamada', '        if (lista.isEmpty()) {', '        if (!lista.isEmpty()) {'),
+    @('if ( sin operador: un equals', '        if ("A".equals(tipo)) {', '        if (!"A".equals(tipo)) {'),
+    @('if ( sin operador: una llamada a un fichero', '        if (fichero.exists()) {', '        if (!fichero.exists()) {'),
+    @('if ( sin operador: un nombre', '        if (found) {', '        if (!found) {'),
+    @('else if ( sin operador', '        } else if (esUrgente) {', '        } else if (!esUrgente) {'),
+    @('while ( sin operador', '        while (it.hasNext()) {', '        while (!it.hasNext()) {'),
+    @('if( pegado al parentesis', '        if(lista.isEmpty()) {', '        if(!lista.isEmpty()) {')
   )
   foreach ($c in $casos) {
     $m = Get-MutanteLinea $c[1]
@@ -474,6 +481,23 @@ $Pruebas['10 h) Get-MutanteLinea: cada cambio de la lista aplicado a una linea d
   Igual 'orden: && antes que ||' '        if (a || b || c) {' (Get-MutanteLinea '        if (a && b || c) {').Linea
   Igual 'orden: || antes que true' '        return a && true;' (Get-MutanteLinea '        return a || true;').Linea
   Igual 'orden: true antes que !' '        vistos = !seen.add(false);' (Get-MutanteLinea '        vistos = !seen.add(true);').Linea
+  # el cambio de if ( y while ( es el ultimo: solo si no aplica ninguno de los otros
+  Igual 'orden: == antes que if (' '        if (a != b) {' (Get-MutanteLinea '        if (a == b) {').Linea
+  Igual 'orden: == antes que if (: lo que cambia' '==' (Get-MutanteLinea '        if (a == b) {').Antes
+  Igual 'orden: && antes que while (' '        while (a || b) {' (Get-MutanteLinea '        while (a && b) {').Linea
+  Igual 'orden: true antes que if (' '        if (flag.get(false)) {' (Get-MutanteLinea '        if (flag.get(true)) {').Linea
+  Igual 'orden: ! antes que if (: quita el !' '        if (found) {' (Get-MutanteLinea '        if (!found) {').Linea
+  Igual 'orden: ! antes que if (: lo que cambia' '!' (Get-MutanteLinea '        if (!found) {').Antes
+  Igual 'orden: ! antes que if (: con espacio' '        if ( found) {' (Get-MutanteLinea '        if ( !found) {').Linea
+  $m = Get-MutanteLinea '        if (lista.isEmpty()) {'
+  Igual 'if (: Antes' 'if (' $m.Antes
+  Igual 'if (: Despues' 'if (!' $m.Despues
+  $m = Get-MutanteLinea '        while (it.hasNext()) {'
+  Igual 'while (: Antes' 'while (' $m.Antes
+  Igual 'while (: Despues' 'while (!' $m.Despues
+  Igual 'if ( dentro de un texto no cuenta' $null (Get-MutanteLinea '        log.info("if (lista.isEmpty())");')
+  Igual 'if ( dentro de un comentario no cuenta' $null (Get-MutanteLinea '        // if (lista.isEmpty()) {')
+  Igual 'una palabra que acaba en if no cuenta' $null (Get-MutanteLinea '        notif (x);')
   # el primero de la linea cuando hay varios iguales
   Igual 'el primero de dos ==' '        if (a != b && c == d) {' (Get-MutanteLinea '        if (a == b && c == d) {').Linea
   # lo que no es un operador de comparacion o logico
