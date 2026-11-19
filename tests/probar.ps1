@@ -1084,11 +1084,13 @@ $Pruebas['latido: mientras Copilot tarda, la consola dice que sigue, y el arregl
   Pon-Config $e @{ SegundosLatido = 1 }
   $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) 'lento'
   Igual 'el fix sale con 0' 0 $r.Codigo
+  # Con la maquina cargada, el Maven falso tambien puede pasar de 1 s y dejar su linea: aqui solo cuentan las de Copilot
   $l = Lineas-Latido $r.Salida
-  Comprueba 'hay al menos una linea del latido' ($l.Count -ge 1) (Cola $r.Salida)
+  $lc = @($l | Where-Object { $_ -match '^  \.\.\. sigue: Copilot ' })
+  Comprueba 'hay al menos una linea del latido de Copilot' ($lc.Count -ge 1) (Cola $r.Salida)
   # el tope es holgado a proposito: el arranque de pwsh bajo carga suma segundos a los 3 del falso
-  Comprueba 'y no un aluvion (como mucho 6)' ($l.Count -le 6) ($l.Count.ToString() + ' lineas')
-  Comprueba 'cada una dice que espera a Copilot y cuanto lleva' (@($l | Where-Object { $_ -match '^  \.\.\. sigue: Copilot .*\(lleva \d+ min \d+ s\)$' }).Count -eq $l.Count) ($l -join ' / ')
+  Comprueba 'y no un aluvion (como mucho 6)' ($lc.Count -le 6) ($lc.Count.ToString() + ' lineas')
+  Comprueba 'cada una dice a quien espera y cuanto lleva' (@($l | Where-Object { $_ -match '^  \.\.\. sigue: (Copilot|Maven) .*\(lleva \d+ min \d+ s\)$' }).Count -eq $l.Count) ($l -join ' / ')
   $hw = Hallazgos $e.Wt
   Igual 'estructura queda a 0 en el worktree' 0 (Cuenta $hw 'estructura')
   Comprueba 'hay commit del lote' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(estructura\): lote 1') (Cola $r.Salida)
