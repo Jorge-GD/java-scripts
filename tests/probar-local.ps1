@@ -2728,5 +2728,185 @@ $Pruebas['m36 (e4) -Reparar con MaxReparaciones = 1: el aviso de lo que queda si
   Comprueba 'sin nombrar el estado ni el error del caso que se salta' ($r.Salida -notmatch 'quedan sin probar:[^\r\n]*(estado|error)\.txt') (Cola $r.Salida)
 }
 
+# ===================== M37: el test del migrado escrito con una plantilla anterior se escribe otra vez =====================
+# Estos escenarios usan los falsos de m29 (m29-copilot.ps1 y m29-mvn.ps1): el Copilot de mentira apunta en cada llamada de arnes si su
+# prompt lleva el test del original (traduce=, original-existe=) y deja en el test la marca MARCA_ARNES=<repo>-<n>.
+# La tarea del arnes guarda en entradas.plantilla el hash de la plantilla con que se escribio el test guardado; si la del migrado no la
+# tiene o no es la de ahora, se escribe otra vez traduciendo el del original (como con -RehacerArnes). El del original no cambia.
+
+$AvisoM37 = 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.'
+
+# El hash de la plantilla del arnes de ahora, como lo apunta la tarea: los 4 primeros bytes del SHA1 del texto, con saltos de linea LF.
+function Plantilla-Ahora-M37 {
+  $t = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Split-Path -Parent $Script) 'tareas') 'arnes-local.md'), (New-Object System.Text.UTF8Encoding($false))) -replace "`r`n", "`n"
+  $sha = [System.Security.Cryptography.SHA1]::Create()
+  try { $b = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($t)) } finally { $sha.Dispose() }
+  return ((@($b[0..3]) | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# Deja la tarea del arnes del $Repo como la dejaria un lanzamiento anterior: sin plantilla ($Plantilla = $null) o con la que se diga, y con
+# otra huella si se da (la de una plantilla de antes: la tarea ya no es la de ahora y se hace una nueva).
+function Deja-Tarea-M37($E, [string]$Repo, $Plantilla, [string]$Huella = '') {
+  $f = Get-Ruta $E.Local "tareas/arnes-$Repo.json"
+  $t = Lee-Json $f
+  [void]$t.entradas.PSObject.Properties.Remove('plantilla')
+  if ($null -ne $Plantilla) { $t.entradas | Add-Member -NotePropertyName plantilla -NotePropertyValue $Plantilla }
+  if ($Huella) { $t.entradas.huella = $Huella }
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+}
+
+function Plantilla-Tarea-M37($E, [string]$Repo) { return [string](Tarea-Arnes $E $Repo).entradas.plantilla }
+
+$Pruebas['m37 (a) los dos arneses guardados y la tarea del migrado sin plantilla: el del migrado se escribe otra vez (una llamada, con el test del original en el prompt), el del original no, y sale la Info'] = {
+  $e = Escenario-M29 'm37-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $original = Test-Guardado $e 'original'
+  $migrado = Test-Guardado $e 'migrado'
+  Igual 'la tarea del migrado guarda la plantilla con que se escribio' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+  Deja-Tarea-M37 $e 'migrado' $null
+  Igual 'la dejo sin plantilla' '' (Plantilla-Tarea-M37 $e 'migrado')
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'el del migrado: una llamada nueva' 2 (Llamadas-Arnes $e 'migrado').Count
+  Igual 'el del original: ninguna' 1 (Llamadas-Arnes $e 'original').Count
+  $m = @(Llamadas-Arnes $e 'migrado')[1]
+  $ruta = Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'
+  $p = Registro-Arnes $e 'migrado' 1   # el registro lleva el numero de intento de la tarea, que vuelve a empezar
+  Comprueba 'el prompt de la llamada lleva la ruta del test del original y el texto de traducirlo' ($p.Contains($ruta) -and $p.Contains($Traducelo)) $ruta
+  Igual 'el falso ve la seccion de traducir' 'si' $m.traduce
+  Igual 'y el test del original ya guardado' 'si' $m.'original-existe'
+  Comprueba 'sale la Info de que la plantilla ha cambiado, una vez' ([regex]::Matches($r.Salida, [regex]::Escape($AvisoM37)).Count -eq 1) (Cola $r.Salida)
+  Comprueba 'no dice que use el test de otro lanzamiento para el migrado' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'el del original guardado no cambia' $original (Test-Guardado $e 'original')
+  $nuevo = Test-Guardado $e 'migrado'
+  Comprueba 'el del migrado guardado es el de la segunda llamada' ($nuevo.Contains('MARCA_ARNES=migrado-2') -and $nuevo -ne $migrado) $nuevo
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+  Igual 'y con la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+}
+
+$Pruebas['m37 (a2) el caso de verdad: los dos arneses de antes (sin plantilla y con la huella de la plantilla de entonces): el del original se reutiliza sin llamar y el del migrado se escribe otra vez'] = {
+  $e = Escenario-M29 'm37-a2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $original = Test-Guardado $e 'original'
+  Deja-Tarea-M37 $e 'original' $null 'aaaaaaaa'
+  Deja-Tarea-M37 $e 'migrado' $null 'bbbbbbbb'
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el del original: ninguna llamada nueva' 1 (Llamadas-Arnes $e 'original').Count
+  Comprueba 'se reutiliza porque sigue valiendo' ($r.Salida -match 'Arnes del original: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'el del migrado: una llamada nueva' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'con la Info' ($r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Comprueba 'y el del migrado guardado es el de la segunda llamada' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-2'))
+  Igual 'el del original guardado no cambia' $original (Test-Guardado $e 'original')
+  Igual 'la tarea del migrado guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+}
+
+$Pruebas['m37 (b) con la plantilla de ahora en la tarea del migrado: no hay llamada para ningun arnes, ni con la tarea hecha ni con la huella de otro lanzamiento'] = {
+  $e = Escenario-M29 'm37-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $migrado = Test-Guardado $e 'migrado'
+  $n = @(Llamadas $e).Count
+  Deja-Tarea-M37 $e 'migrado' (Plantilla-Ahora-M37)
+  $r = Prueba $e
+  Igual 'con la tarea hecha, sale con 0' 0 $r.Codigo
+  Igual 'y sin llamadas' $n @(Llamadas $e).Count
+  Comprueba 'sin la Info' (-not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Deja-Tarea-M37 $e 'migrado' (Plantilla-Ahora-M37) 'bbbbbbbb'
+  $r = Prueba $e
+  Igual 'con la huella de otro lanzamiento, sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas' $n @(Llamadas $e).Count
+  Comprueba 'el del migrado se reutiliza porque sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'sin la Info' (-not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Igual 'el del migrado guardado es el de antes' $migrado (Test-Guardado $e 'migrado')
+}
+
+$Pruebas['m37 (c) con otra plantilla en la tarea del migrado (otro hash): se escribe otra vez el del migrado, con la tarea hecha o con otra huella'] = {
+  $e = Escenario-M29 'm37-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Deja-Tarea-M37 $e 'migrado' 'deadbeef'
+  $r = Prueba $e
+  Igual 'con la tarea hecha, sale con 0' 0 $r.Codigo
+  Igual 'el del migrado: una llamada nueva' 2 (Llamadas-Arnes $e 'migrado').Count
+  Igual 'el del original: ninguna' 1 (Llamadas-Arnes $e 'original').Count
+  Comprueba 'con la Info' ($r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Igual 'la tarea queda con la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+  Deja-Tarea-M37 $e 'migrado' 'deadbeef' 'bbbbbbbb'
+  $r = Prueba $e
+  Igual 'con otra huella, sale con 0' 0 $r.Codigo
+  Igual 'otra llamada del migrado' 3 (Llamadas-Arnes $e 'migrado').Count
+  Igual 'y ninguna del original' 1 (Llamadas-Arnes $e 'original').Count
+  Comprueba 'con la Info' ($r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Comprueba 'y el del migrado guardado es el de la tercera llamada' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-3'))
+}
+
+$Pruebas['m37 (d) con la misma plantilla y -Job con uno solo de los dos jobs: no se escribe otra vez ningun arnes'] = {
+  $e = Escenario-M29 'm37-d' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'la tarea del migrado guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+  $n = @(Llamadas-Arnes $e 'migrado').Count + @(Llamadas-Arnes $e 'original').Count
+  $migrado = Test-Guardado $e 'migrado'
+  $r = Prueba $e @('-Job', 'remesaJob')
+  Igual 'con -Job sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas de arnes' $n (@(Llamadas-Arnes $e 'migrado').Count + @(Llamadas-Arnes $e 'original').Count)
+  Comprueba 'sin la Info' (-not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Igual 'el del migrado guardado es el de antes' $migrado (Test-Guardado $e 'migrado')
+  Igual 'la plantilla de la tarea sigue siendo la de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+}
+
+$Pruebas['m37 (e) la tarea nueva guarda la plantilla: el lanzamiento que escribe los arneses y el siguiente a otro que rehizo el del migrado no llaman a la IA'] = {
+  $e = Escenario-M29 'm37-e' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'la tarea del original guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'original')
+  Igual 'y la del migrado' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+  Deja-Tarea-M37 $e 'migrado' $null
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'rehace el del migrado: tres llamadas de arnes en total' 3 @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }).Count
+  Igual 'la tarea del migrado guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+  $r = Prueba $e
+  Igual 'el tercer lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'no hay llamadas nuevas' 3 @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }).Count
+  Comprueba 'ni la Info' (-not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Comprueba 'ni el aviso de usar un test de otro lanzamiento' ($r.Salida -notmatch 'el test de otro lanzamiento sigue valiendo') (Cola $r.Salida)
+}
+
+$Pruebas['m37 (f) la pregunta cuenta el arnes del migrado entre las tareas por hacer; con n no se toca nada y el siguiente lanzamiento, con s, lo escribe otra vez'] = {
+  $e = Escenario-M29 'm37-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $migrado = Test-Guardado $e 'migrado'
+  Deja-Tarea-M37 $e 'migrado' $null 'bbbbbbbb'
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e @() '' 'n'
+  Comprueba 'pregunta por 1 tarea' ($r.Salida -match 'Llamar a Copilot para esas 1 tareas\?') (Cola $r.Salida)
+  Comprueba 'con n dice que no se ha hecho nada' ($r.Salida -match 'No se ha hecho nada') (Cola $r.Salida)
+  Igual 'sin llamadas nuevas' $n @(Llamadas $e).Count
+  Igual 'el del migrado guardado sigue ahi' $migrado (Test-Guardado $e 'migrado')
+  Comprueba 'y la tarea sigue sin la plantilla de ahora' ((Plantilla-Tarea-M37 $e 'migrado') -ne (Plantilla-Ahora-M37)) (Plantilla-Tarea-M37 $e 'migrado')
+  $r = Prueba $e @() '' 's'
+  Igual 'con s sale con 0' 0 $r.Codigo
+  Igual 'llama una vez' ($n + 1) @(Llamadas $e).Count
+  Comprueba 'con la Info' ($r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Comprueba 'y el del migrado guardado es el nuevo' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-2'))
+}
+
+$Pruebas['m37 (g) con -RehacerArnes y la tarea del migrado sin plantilla: se escribe otra vez una sola vez y sin la Info, que ya lo pidio el usuario'] = {
+  $e = Escenario-M29 'm37-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Deja-Tarea-M37 $e 'migrado' $null
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el del migrado: una llamada nueva' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'no sale la Info de la plantilla' (-not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Igual 'la tarea del migrado guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
