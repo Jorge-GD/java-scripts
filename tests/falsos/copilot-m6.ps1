@@ -57,21 +57,30 @@ $flags = (@($args | Where-Object { "$_" -match '^--(model|effort)=' }) -join ' '
 $raiz = (Get-Location).Path
 $rescate = Join-Path $raiz '.rescate'
 
-# ---- migracion.ps1 (tests/probar-migracion.ps1): sin .rescate/prompt.md. TIPO: caso-pre lo escribe este falso (un caso por regla sin caso);
-# lo demas es de copilot.ps1. La clave de los regex de RESCATE_FALSO es caso-pre:<job>. Cada llamada deja .rescate/falso/<tarea>-<pid>.txt como
-# las de copilot.ps1 (id, flags, correccion, guion, inicio, fin). ----
+# ---- migracion.ps1 (tests/probar-migracion.ps1): sin .rescate/prompt.md. TIPO: caso-pre, ficha-sh y comparar-sh los escribe este falso (un caso por
+# regla sin caso; la ficha de un script de shell; su comparacion con el migrado); lo demas es de copilot.ps1. La clave de los regex de RESCATE_FALSO es
+# caso-pre:<job>, ficha-sh:<ruta del script> o comparar-sh:<ruta del script>. Cada llamada deja .rescate/falso/<tarea>-<pid>.txt como las de
+# copilot.ps1 (id, flags, correccion, guion, inicio, fin). ----
 #   (vacio)               el caso bueno: titulo propio, entrada, esperado y la referencia de la regla
 #   caso-sin-ref          el caso lleva refs de otros hechos, no la de la regla (siempre)
 #   caso-sin-ref-una-vez  como caso-sin-ref, solo en el primer intento
 #   caso-clase-en-texto   el titulo nombra la clase CargaReader (solo en el primer intento)
 #   caso-titulo-repetido  el titulo es el del primer caso que ya tenia el guion (siempre)
+#   (vacio, ficha-sh)     la ficha buena: un parametro por cada opcion del inventario, y una accion o una salida por cada linea de OBLIGATORIAS
+#   sh-cita-inventada     todas las citas de la ficha son inventadas (siempre)
+#   sh-faltan-una-vez     la ficha deja sin explicar la ultima linea de OBLIGATORIAS, solo en el primer intento
+#   sh-faltan-siempre     la ficha deja sin explicar la ultima linea de OBLIGATORIAS, en todos los intentos
+#   (vacio, comparar-sh)  cada accion igual, citando las primeras lineas con texto de la primera ruta MIGRADO
+#   comparar-sh-inventada todas las citas de la comparacion son inventadas (siempre)
+#   comparar-sh-distinto  la primera accion sale distinta, con nota
 if (-not (Test-Path -LiteralPath (Join-Path $rescate 'prompt.md'))) {
   $textoM = ''
   for ($i = 0; $i -lt $args.Count - 1; $i++) { if ("$($args[$i])" -eq '-p') { $textoM = "$($args[$i + 1])" } }
   $rutaM = [regex]::Match($textoM, '\.rescate/tareas/\S+\.prompt\.md')
   $promptM = ''
   if ($rutaM.Success) { $promptM = [System.IO.File]::ReadAllText((Join-Path (Join-Path $rescate 'tareas') (Split-Path $rutaM.Value -Leaf))) }
-  if ($promptM -notmatch '(?m)^TIPO: caso-pre\s*$') {
+  $tipoM = ([regex]::Match($promptM, '(?m)^TIPO: (\S+)\s*$')).Groups[1].Value
+  if (@('caso-pre', 'ficha-sh', 'comparar-sh') -notcontains $tipoM) {
     & (Join-Path $PSScriptRoot 'copilot.ps1') @todos
     exit $LASTEXITCODE
   }
@@ -79,25 +88,86 @@ if (-not (Test-Path -LiteralPath (Join-Path $rescate 'prompt.md'))) {
   $idM = [System.IO.Path]::GetFileName($salidaM) -replace '\.json$', ''
   $jobM = ([regex]::Match($promptM, '(?m)^JOB: (.+?)\s*$')).Groups[1].Value
   $reglaM = ([regex]::Match($promptM, '(?m)^REGLA: (\S+)\s*$')).Groups[1].Value
+  $scriptM = ([regex]::Match($promptM, '(?m)^SCRIPT: (.+?)\s*$')).Groups[1].Value
+  $claveM = $tipoM + ':' + $jobM
+  if ($tipoM -ne 'caso-pre') { $claveM = $tipoM + ':' + $scriptM }
   $correccionM = ($promptM -match '## CORRECCI')
   $guionM = ''
   foreach ($g in $guiones) {
     $nombre, $solo = ($g -split ':', 2)
     if (-not $solo) { $solo = '.' }
-    if ($nombre -and -not $guionM -and ('caso-pre:' + $jobM) -match $solo) { $guionM = $nombre }
+    if ($nombre -and -not $guionM -and $claveM -match $solo) { $guionM = $nombre }
   }
   $dirM = Join-Path $rescate 'falso'
   [void](New-Item -ItemType Directory -Path $dirM -Force)
   $regM = Join-Path $dirM ($idM + '-' + $PID + '.txt')
   [System.IO.File]::WriteAllLines($regM, [string[]]@("id=$idM", "pid=$PID", "flags=$flags", "correccion=$correccionM", "guion=$guionM", ('inicio=' + [DateTime]::UtcNow.Ticks)))
-  $hechosM = @([regex]::Matches($promptM, '(?m)^(clase-[0-9a-f]{8}#\d+) \[') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
-  $otros = @($hechosM | Where-Object { $_ -cne $reglaM })
-  $refsM = @($reglaM)
-  if ($guionM -eq 'caso-sin-ref' -or ($guionM -eq 'caso-sin-ref-una-vez' -and -not $correccionM)) { $refsM = @($otros | Select-Object -First 1) }
-  $tituloM = "Caso de la regla $reglaM de $jobM"
-  if ($guionM -eq 'caso-clase-en-texto' -and -not $correccionM) { $tituloM = 'Carga con CargaReader' }
-  if ($guionM -eq 'caso-titulo-repetido') { $tituloM = ([regex]::Match($promptM, '(?m)^Casos que ya hay:\s*\r?\n- (.+?)\s*$')).Groups[1].Value }
-  $jsonM = ConvertTo-Json -InputObject ([ordered]@{ titulo = $tituloM; entrada = "Lo que se mete para la regla $reglaM."; esperado = "Lo que tiene que pasar con la regla $reglaM."; refs = $refsM }) -Depth 4
+  if ($tipoM -eq 'caso-pre') {
+    $hechosM = @([regex]::Matches($promptM, '(?m)^(clase-[0-9a-f]{8}#\d+) \[') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $otros = @($hechosM | Where-Object { $_ -cne $reglaM })
+    $refsM = @($reglaM)
+    if ($guionM -eq 'caso-sin-ref' -or ($guionM -eq 'caso-sin-ref-una-vez' -and -not $correccionM)) { $refsM = @($otros | Select-Object -First 1) }
+    $tituloM = "Caso de la regla $reglaM de $jobM"
+    if ($guionM -eq 'caso-clase-en-texto' -and -not $correccionM) { $tituloM = 'Carga con CargaReader' }
+    if ($guionM -eq 'caso-titulo-repetido') { $tituloM = ([regex]::Match($promptM, '(?m)^Casos que ya hay:\s*\r?\n- (.+?)\s*$')).Groups[1].Value }
+    $jsonM = ConvertTo-Json -InputObject ([ordered]@{ titulo = $tituloM; entrada = "Lo que se mete para la regla $reglaM."; esperado = "Lo que tiene que pasar con la regla $reglaM."; refs = $refsM }) -Depth 4
+  }
+  elseif ($tipoM -eq 'ficha-sh') {
+    # el texto de cada linea del script, el inventario de cada linea y las lineas obligatorias, como los trae el prompt
+    $textoLin = @{}
+    foreach ($m in [regex]::Matches($promptM, '(?m)^\s*(\d+)\| (.*?)\r?$')) { $textoLin[[int]$m.Groups[1].Value] = $m.Groups[2].Value.Trim() }
+    $invM = @{}
+    foreach ($m in [regex]::Matches($promptM, '(?m)^(\d+) \[(\w+)\] (.*?)\r?$')) {
+      $n = [int]$m.Groups[1].Value
+      if (-not $invM.ContainsKey($n)) { $invM[$n] = @() }
+      $invM[$n] += [pscustomobject]@{ Tipo = $m.Groups[2].Value; Det = $m.Groups[3].Value.Trim() }
+    }
+    $oblM = @(([regex]::Match($promptM, '(?m)^OBLIGATORIAS: (.+?)\s*$')).Groups[1].Value -split ',\s*' | Where-Object { $_ -match '^\d+$' } | ForEach-Object { [int]$_ })
+    if ($oblM.Count -gt 0 -and ($guionM -eq 'sh-faltan-siempre' -or ($guionM -eq 'sh-faltan-una-vez' -and -not $correccionM))) { $oblM = @($oblM | Select-Object -First ($oblM.Count - 1)) }
+    $citaDe = { param([int]$N) $t = "$($textoLin[$N])"; if ($guionM -eq 'sh-cita-inventada') { return "esta cita no sale en el script $N" }; if ($t.Length -gt 100) { $t = $t.Substring(0, 100) }; return $t }
+    $parM = @(); $accM = @(); $salM = @()
+    foreach ($n in @($invM.Keys | Sort-Object)) {
+      foreach ($i in $invM[$n]) {
+        if ($i.Tipo -eq 'parametro' -and $i.Det -match '^-') { $parM += [ordered]@{ nombre = $i.Det; obligatorio = $false; valores = ''; formato = ''; linea = $n; cita = (& $citaDe $n) } }
+      }
+    }
+    foreach ($n in $oblM) {
+      $tipos = @($invM[$n] | ForEach-Object { $_.Tipo })
+      if ($tipos -contains 'salida') {
+        $cod = -1
+        $dd = @($invM[$n] | Where-Object { $_.Tipo -eq 'salida' })[0].Det
+        if ($dd -match '^\d+') { $cod = [int]$Matches[0] }
+        $salM += [ordered]@{ codigo = $cod; cuando = "Cuando el script acaba por la linea $n."; linea = $n; cita = (& $citaDe $n) }
+      }
+      $otrosT = @($tipos | Where-Object { $_ -ne 'salida' })
+      if ($otrosT.Count -gt 0 -or $tipos.Count -eq 0) {
+        $que = 'otro'
+        if ($otrosT.Count -gt 0) {
+          switch ($otrosT[0]) { 'fichero' { $que = 'mueve' } 'envio' { $que = 'envia' } 'lanza' { $que = 'lanza' } 'cerrojo' { $que = 'comprueba' } 'perfil' { $que = 'elige-job' } 'job' { $que = 'elige-job' } }
+        }
+        $accM += [ordered]@{ cuando = 'antes'; condicion = ''; que = $que; detalle = "Hace lo que cuenta la linea $n del script."; linea = $n; cita = (& $citaDe $n) }
+      }
+    }
+    $jsonM = ConvertTo-Json -InputObject ([ordered]@{ paraQue = 'Lanza el batch con los parametros que le dan.'; parametros = $parM; acciones = $accM; salidas = $salM }) -Depth 6
+  }
+  else {
+    $nDatosM = @([regex]::Matches($promptM, '(?m)^\d+\. \[')).Count
+    $migradosM = @([regex]::Matches($promptM, '(?m)^MIGRADO: (.+?)\s*$') | ForEach-Object { $_.Groups[1].Value })
+    $rutaMig = $raiz
+    foreach ($s in $migradosM[0].Split('/')) { $rutaMig = Join-Path $rutaMig $s }
+    $lineasMig = [System.IO.File]::ReadAllLines($rutaMig)
+    $utilesM = @(for ($n = 1; $n -le $lineasMig.Count; $n++) { if ($lineasMig[$n - 1].Trim()) { $n } })
+    $compM = @()
+    for ($k = 0; $k -lt $nDatosM; $k++) {
+      $n = $utilesM[$k % $utilesM.Count]
+      $citaM = $lineasMig[$n - 1].Trim()
+      if ($citaM.Length -gt 100) { $citaM = $citaM.Substring(0, 100) }
+      if ($guionM -eq 'comparar-sh-inventada') { $citaM = "esta cita no sale en el fichero $k" }
+      $compM += [ordered]@{ dato = $k; estado = 'igual'; fichero = $migradosM[0]; linea = $n; cita = $citaM; nota = '' }
+    }
+    if ($guionM -eq 'comparar-sh-distinto' -and $compM.Count -gt 0) { $compM[0].estado = 'distinto'; $compM[0].nota = 'El migrado lo hace con otro valor.' }
+    $jsonM = ConvertTo-Json -InputObject ([ordered]@{ comparacion = $compM }) -Depth 6
+  }
   $rutaOut = $raiz
   foreach ($s in $salidaM.Split('/')) { if ($s) { $rutaOut = Join-Path $rutaOut $s } }
   [System.IO.File]::WriteAllText($rutaOut, $jsonM)

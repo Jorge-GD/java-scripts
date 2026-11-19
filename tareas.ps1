@@ -179,6 +179,14 @@ function Get-VariablesPrompt($T, [string]$Leer) {
     'prueba-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.VARIABLES = $e.variables; $v.CASOS_MAX = "$($Cfg.CasosMax)" }
     'caso-pre' { $v.JOB = $e.job; $v.PASOS = $e.pasos; $v.DATOS = $e.datos; $v.REGLA = $e.regla; $v.REGLA_REF = $e.ref; $v.GUION = $e.guion }
     'resumen' { $v.JOBS = $e.datos; $v.GLOSARIO_MAX = "$($Cfg.GlosarioMax)"; $v.RELLENO = Get-TextoRelleno }
+    'ficha-sh' {
+      $v.SCRIPT = $e.script; $v.TEXTO = $e.texto; $v.INVENTARIO = $e.inventario; $v.OBLIGATORIAS = $e.obligatorias; $v.JOB = $e.job
+      $v.RELLENO = Get-TextoRelleno
+    }
+    'comparar-sh' {
+      $v.SCRIPT = $e.script; $v.DATOS = $e.datos
+      $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
+    }
     'comparar-pieza' {
       $v.FICHERO = $Leer; $v.CLASE = $e.clase; $v.DATOS = $e.datos
       $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
@@ -578,6 +586,8 @@ function Test-Salida($T, [string]$Dir, [string]$Leer) {
     'prueba-pre' { return (Test-PruebaPre $T $Dir) }
     'caso-pre' { return (Test-CasoPre $T $Dir) }
     'comparar-pieza' { return (Test-Comparar $T $Dir) }
+    'ficha-sh' { return (Test-FichaSh $T $Dir) }
+    'comparar-sh' { return (Test-CompararSh $T $Dir) }
     default { return (Test-Ficha $T $Dir $Leer) }
   }
 }
@@ -593,6 +603,13 @@ function New-TareaTipo([string]$Tipo, [string]$Id, [string]$Ficha, [string]$Sali
 # La ficha de clase de un fichero (o de un trozo de sus lineas).
 function New-Tarea([string]$Id, [string]$Ficha, [string]$Rel, [int]$Desde, [int]$Hasta) {
   return (New-TareaTipo 'ficha-clase' $Id $Ficha "datos/fichas/$Ficha.json" ([pscustomobject]@{ fichero = $Rel; desde = $Desde; hasta = $Hasta }))
+}
+
+# Cuantas tareas hay hechas, atascadas y pendientes.
+function Get-CuentasTareas($Tareas) {
+  $n = @{}
+  foreach ($e in @('hecha', 'atascada', 'pendiente')) { $n[$e] = @($Tareas | Where-Object { $_.estado -eq $e }).Count }
+  return $n
 }
 
 function Save-Tarea($T) { Write-Json (Join-Path (Join-Path $Datos 'tareas') ($T.id + '.json')) $T }
@@ -692,6 +709,7 @@ function Invoke-Ronda($Lote, [string]$Dir, [string]$RaizOrig) {
     $dirs = @()
     $esf = $Cfg.EsfuerzoRedaccion
     if ($t.entradas.fichero) { $leer = Join-Ruta $RaizOrig $t.entradas.fichero; $dirs = @($LegacyRoot); $esf = $Cfg.EsfuerzoLectura }
+    elseif ($t.tipo -eq 'comparar-sh') { $esf = $Cfg.EsfuerzoLectura }   # lee los ficheros del migrado, que ya son su carpeta de trabajo
     $motivo = ''
     if ($t.intentos -gt 0) {
       $esf = $Cfg.EsfuerzoReintento
@@ -1302,6 +1320,12 @@ function Select-FicherosMigrado([string]$Clase, $Java, $Mapa) {
   return @($candidatos | Sort-Object @{ Expression = 'N'; Descending = $true }, Rel | Select-Object -First ([int]$Cfg.FicherosComparar) | ForEach-Object { $_.Rel })
 }
 
+# Si la rama del worktree ya lleva commits de arreglo (rescate(<paso>): ...) desde $Base: 'despues-de-corregir'; si no, 'antes-de-corregir'.
+function Get-MomentoRama([string]$Base) {
+  if (@((Invoke-Git $RepoRoot @('log', '--format=%s', "$Base..HEAD")).Salida | Where-Object { $_ -match '^rescate\(' }).Count -gt 0) { return 'despues-de-corregir' }
+  return 'antes-de-corregir'
+}
+
 # Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea, con el
 # commit del worktree con el que se eligieron y el momento: despues-de-corregir si hay algun commit rescate( entre <Base> y HEAD (lo
 # dice git, no el orden de las fases), antes-de-corregir si no. Sin ficheros no hay llamada: la tarea nace hecha, con todos sus datos
@@ -1310,8 +1334,7 @@ function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
   $java = @(Get-JavaOriginal $RepoRoot)
   $mapa = Get-MapaMovidos $RepoRoot $Base
   $head = Get-Head $RepoRoot
-  $momento = 'antes-de-corregir'
-  if (@((Invoke-Git $RepoRoot @('log', '--format=%s', "$Base..HEAD")).Salida | Where-Object { $_ -match '^rescate\(' }).Count -gt 0) { $momento = 'despues-de-corregir' }
+  $momento = Get-MomentoRama $Base
   $tareas = @()
   foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $Datos 'fichas') -File -Filter 'clase-*.json' | Sort-Object Name)) {
     $x = Read-Json $f.FullName

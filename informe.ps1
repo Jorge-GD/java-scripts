@@ -10,7 +10,7 @@ desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
-    Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, jobs\, resumen.json, pruebas\, comparacion\, variables.json,
+    Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, lanzadores.json, fichas-sh\, comparacion-sh\, jobs\, resumen.json, pruebas\, comparacion\, variables.json,
     hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md, correcciones.json y prueba-local.json) y escribe
     <Salida>\index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
@@ -43,7 +43,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # De que tipo son las tareas de cada fase del script (las demas fases no tienen tareas)
-$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'casos-pre' = 'caso-pre'; 'comparar' = 'comparar-pieza' }
+$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'lanzadores' = 'ficha-sh'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'casos-pre' = 'caso-pre'; 'comparar' = 'comparar-pieza' }
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -61,6 +61,8 @@ $FicherosInforme = @(
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
   @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/comparacion', 'f-comparacion', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
+  @('datos/lanzadores.json', 'f-lanzadores-json', 'f-fichero', $false), @('datos/fichas-sh', 'f-fichas-sh', 'f-carpeta', $false),
+  @('datos/comparacion-sh', 'f-comparacion-sh', 'f-carpeta', $false),
   @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false),
   @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false), @('prueba-local', 'f-prueba-local', 'f-carpeta', $false),
   @('registros/prueba-local.log', 'f-prueba-local-log', 'f-fichero', $false),
@@ -122,6 +124,18 @@ function Read-Comparaciones([string]$Carpeta) {
   foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter 'clase-*.json' | Sort-Object Name)) {
     $x = Read-JsonSuave $f.FullName
     if ($x) { $r[[string]$x.ficha] = $x }
+  }
+  return $r
+}
+
+# Los JSON de datos\<Sub>\sh-*.json (fichas-sh o comparacion-sh), por el campo $Clave: el id del lanzador.
+function Read-PorLanzador([string]$Carpeta, [string]$Sub, [string]$Clave) {
+  $r = [ordered]@{}
+  $dir = Join-Path $Carpeta $Sub
+  if (-not (Test-Path -LiteralPath $dir)) { return $r }
+  foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter 'sh-*.json' | Sort-Object Name)) {
+    $x = Read-JsonSuave $f.FullName
+    if ($x) { $r[[string]$x.$Clave] = $x }
   }
   return $r
 }
@@ -273,7 +287,11 @@ function Read-DatosInforme([string]$Salida) {
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json')); PruebaLocal = (Read-JsonSuave (Join-Path $datos 'prueba-local.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
     Comparacion = (Read-Comparaciones $datos)
+    Lanzadores = @(); LanzadoresLeidos = $false
+    FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
   }
+  $lz = Read-JsonSuave (Join-Path $datos 'lanzadores.json')
+  if ($lz) { $D.LanzadoresLeidos = $true; $D.Lanzadores = @($lz.lanzadores | Where-Object { $null -ne $_ }) }
   if ($D.Mapa) {
     $porNombre = @{}
     foreach ($j in @($D.Mapa.jobs)) { $porNombre[[string]$j.job] = $j }
@@ -369,7 +387,7 @@ function Get-PreHtml($D, $T, $V) {
 
 function Get-JobHtml($D, $T, $V, [int]$N) {
   if (-not $V.Ficha) {
-    return (Format-Trozo $T 'job-pendiente' @{ ID = $V.Id; N = "$N"; JOB = $V.Job; SINDATOS = (Format-Trozo $T 'sin-datos' @{ FASE = 'fichas-job'; ETIQUETA = (Format-Trozo $T 'et-sin') }) })
+    return (Format-Trozo $T 'job-pendiente' @{ ID = $V.Id; N = "$N"; JOB = $V.Job; SINDATOS = (Format-Trozo $T 'sin-datos' @{ FASE = 'fichas-job'; ETIQUETA = (Format-Trozo $T 'et-sin') }); LANZA = (Get-LanzaJobHtml $D $T $V.Job) })
   }
   $et = Format-Trozo $T 'et-sin'
   $aviso = Format-Trozo $T 'job-aviso'
@@ -395,7 +413,7 @@ function Get-JobHtml($D, $T, $V, [int]$N) {
   return (Format-Trozo $T 'job' @{
       ID = $V.Id; N = "$N"; JOB = $V.Job; TITULO = $V.Titulo; PARAQUE = $V.ParaQue; ETIQUETA = $et; AVISO = $aviso; CIFRAS = $cifras
       NECESITA = (Get-NodosHtml $T $V.Necesita); PASOS = $pasos; PRODUCE = (Get-NodosHtml $T $V.Produce); DUDAS = $dudas; DONDE = $donde; OTROS = $otros
-      PRE = (Get-PreHtml $D $T $V)
+      PRE = (Get-PreHtml $D $T $V); LANZA = (Get-LanzaJobHtml $D $T $V.Job)
     })
 }
 
@@ -431,7 +449,7 @@ function Get-CuerpoOriginal($D, $T, [string]$Cuerpo) {
   }
   $et = Format-Trozo $T 'et-sin'
   if ($D.Mapa) { $et = Format-Trozo $T 'et-ia' }
-  return (Expand-Plantilla $Cuerpo @{ BATCH = (Get-BatchInforme $D); ORIGINAL = (Get-Hoja $D.Estado.legacy); ETIQUETA = $et; RESUMEN = $resumen; RECORRIDO = $recorrido; JOBS = $jobs; GLOSARIO = $glosario })
+  return (Expand-Plantilla $Cuerpo @{ BATCH = (Get-BatchInforme $D); ORIGINAL = (Get-Hoja $D.Estado.legacy); ETIQUETA = $et; RESUMEN = $resumen; RECORRIDO = $recorrido; LANZADORES = (Get-LanzadoresOriginal $D $T); JOBS = $jobs; GLOSARIO = $glosario })
 }
 
 # ============================== EL ORIGINAL FRENTE AL MIGRADO ==============================
@@ -459,7 +477,7 @@ function Get-DatosComparar($D, $J) {
 
 # Medido (lo cuenta el script) en sin-pieza; leido por la IA con prueba si la cita salio en el fichero; sin comprobar en lo demas.
 function Get-MarcaComparar($T, $R) {
-  if ($R.Estado -ceq 'sin-pieza') { return (Format-Trozo $T 'marca-medido') }
+  if ($R.Estado -ceq 'sin-pieza' -or $R.Medido) { return (Format-Trozo $T 'marca-medido') }
   return (Get-MarcaHecho $T ($R.Probado -and $R.Migrado))
 }
 
@@ -502,6 +520,189 @@ function Get-MomentoComparar($D, $T) {
     if ($c.momento -ceq 'despues-de-corregir') { return (Format-Trozo $T 'comp-momento-despues' @{ COMMIT = [string]$c.commit }) }
   }
   return ''
+}
+
+# ============================== LOS LANZADORES (.sh) ==============================
+# Todo lo que las paginas cuentan de un lanzador: su ficha, lo que dijo la comparacion de cada accion y como va su tarea.
+function Get-VistaLanzador($D, $Z) {
+  $id = [string]$Z.id
+  $ficha = $D.FichasSh[$id]
+  $comp = $D.ComparacionSh[$id]
+  $motivo = ''
+  $tarea = @($D.Tareas | Where-Object { $_.tipo -eq 'ficha-sh' -and [string]$_.ficha -ceq $id })
+  if ($tarea.Count -gt 0 -and $tarea[0].estado -eq 'atascada') { $motivo = Get-PrimeraLinea ([string]$tarea[0].motivo) }
+  $porAccion = @{}
+  if ($comp) { foreach ($c in @($comp.acciones | Where-Object { $null -ne $_ })) { $porAccion[[int]$c.accion] = $c } }
+  return [pscustomobject]@{
+    Id = $id; Rel = [string]$Z.rel; Jobs = @($Z.jobs | Where-Object { $null -ne $_ }); Como = [string]$Z.enlace.como; Linea = $Z.enlace.linea
+    Donde = "$($Z.enlace.fichero):$($Z.enlace.linea)"; Ficha = $ficha; PorAccion = $porAccion; Motivo = $motivo
+    Acciones = @($ficha.acciones | Where-Object { $null -ne $_ })
+  }
+}
+
+# Como se supo a que job lanza un script (la tabla de la pagina 1): el unico job del batch lleva su marca.
+function Get-ComoLanzador($T, $V) {
+  switch ($V.Como) {
+    'argumento' { return (Format-Trozo $T 'lanz-como-argumento' @{ LINEA = "$($V.Linea)" }) }
+    'yml' { return (Format-Trozo $T 'lanz-como-yml' @{ DONDE = $V.Donde }) }
+    'profile' { return (Format-Trozo $T 'lanz-como-profile' @{ DONDE = $V.Donde }) }
+    'unico' { return (Format-Trozo $T 'lanz-como-unico' @{ MARCA = (Format-Trozo $T 'lanz-marca-unico') }) }
+    default { return (Format-Trozo $T 'lanz-como-sin-enlazar') }
+  }
+}
+
+# Lo que cuenta un script de como se lanza: para que, parametros, lo de antes y despues del java y los codigos de salida.
+function Get-CuerpoLanzador($D, $T, $V) {
+  if (-not $V.Ficha) {
+    if ($V.Motivo) { return (Format-Trozo $T 'lanza-atascada' @{ MOTIVO = $V.Motivo }) }
+    return (Format-Trozo $T 'sin-datos' @{ FASE = 'lanzadores'; ETIQUETA = (Format-Trozo $T 'et-sin') })
+  }
+  $f = $V.Ficha
+  $params = Format-Trozo $T 'lanza-sin-params'
+  $ps = @($f.parametros | Where-Object { $null -ne $_ })
+  if ($ps.Count -gt 0) {
+    $params = Format-Trozo $T 'lanza-params' @{ ITEMS = (Format-Lista $T 'lanza-param' $ps { param($x)
+          $obl = 'lanza-opcional'
+          if ($x.obligatorio -eq $true) { $obl = 'lanza-obligatorio' }
+          $val = ''
+          if ($x.valores) { $val = Format-Trozo $T 'lanza-valores' @{ VALORES = $x.valores } }
+          $fmt = ''
+          if ($x.formato) { $fmt = Format-Trozo $T 'lanza-formato' @{ FORMATO = $x.formato } }
+          @{ NOMBRE = $x.nombre; OBLIGATORIO = (Format-Trozo $T $obl); VALORES = $val; FORMATO = $fmt; MARCA = (Get-MarcaHecho $T ($x.probado -eq $true)) }
+        }) }
+  }
+  $grupos = @()
+  foreach ($c in @('antes', 'despues', 'siempre', 'si-falla')) {
+    $as = @($V.Acciones | Where-Object { [string]$_.cuando -ceq $c })
+    if ($as.Count -eq 0) { continue }
+    $grupos += (Format-Trozo $T 'lanza-acciones' @{ TITULO = (Format-Trozo $T "lanza-cuando-$c"); ITEMS = (Format-Lista $T 'lanza-accion' $as { param($x)
+            $cond = ''
+            if ($x.condicion) { $cond = Format-Trozo $T 'lanza-condicion' @{ TEXTO = $x.condicion } }
+            @{ CONDICION = $cond; DETALLE = $x.detalle; MARCA = (Get-MarcaHecho $T ($x.probado -eq $true)); DONDE = "$($V.Rel):$($x.linea)" }
+          }) })
+  }
+  $salidas = ''
+  $ss = @($f.salidas | Where-Object { $null -ne $_ })
+  if ($ss.Count -gt 0) {
+    $items = @($ss | ForEach-Object {
+        $marca = Get-MarcaHecho $T ($_.probado -eq $true)
+        if ([int]$_.codigo -lt 0) { Format-Trozo $T 'lanza-salida-variable' @{ CUANDO = $_.cuando; MARCA = $marca } }
+        else { Format-Trozo $T 'lanza-salida' @{ CODIGO = "$($_.codigo)"; CUANDO = $_.cuando; MARCA = $marca } }
+      })
+    $salidas = Format-Trozo $T 'lanza-salidas' @{ ITEMS = ($items -join "`n") }
+  }
+  return (Format-Trozo $T 'lanza-cuerpo' @{ PARAQUE = $f.paraQue; PARAMETROS = $params; ACCIONES = ($grupos -join "`n"); SALIDAS = $salidas })
+}
+
+function Get-ScriptLanzadorHtml($D, $T, $V, [string]$Enlace) {
+  return (Format-Trozo $T 'lanza-script' @{ SCRIPT = $V.Rel; ENLACE = $Enlace; CUERPO = (Get-CuerpoLanzador $D $T $V) })
+}
+
+# El bloque Como se lanza de un job: sus scripts, uno detras de otro. Sin scripts enlazados con el job, nada.
+function Get-LanzaJobHtml($D, $T, [string]$Job) {
+  $vs = @($D.Lanzadores | Where-Object { @($_.jobs) -ccontains $Job } | ForEach-Object { Get-VistaLanzador $D $_ })
+  if ($vs.Count -eq 0) { return '' }
+  $scripts = @($vs | ForEach-Object {
+      $enlace = ''
+      if ($_.Como -ceq 'unico') { $enlace = Format-Trozo $T 'lanz-marca-unico' }
+      Get-ScriptLanzadorHtml $D $T $_ $enlace
+    })
+  return (Format-Trozo $T 'lanza' @{ SCRIPTS = ($scripts -join "`n") })
+}
+
+# El panel de la pagina 1: la tabla lanzador -> job y, debajo, lo de los scripts que no se pudieron enlazar con ningun job.
+function Get-LanzadoresOriginal($D, $T) {
+  if (-not $D.LanzadoresLeidos) { return (Format-Trozo $T 'sin-datos' @{ FASE = 'lanzadores'; ETIQUETA = (Format-Trozo $T 'et-sin') }) }
+  if ($D.Lanzadores.Count -eq 0) { return (Format-Trozo $T 'lanz-ninguno') }
+  $vs = @($D.Lanzadores | ForEach-Object { Get-VistaLanzador $D $_ })
+  $filas = @($vs | ForEach-Object {
+      $jobs = Format-Trozo $T 'lanz-marca-sin-enlazar'
+      if ($_.Jobs.Count -gt 0) { $jobs = (@($_.Jobs | ForEach-Object { Format-Trozo $T 'lanz-job' @{ JOB = $_ } }) -join ', ') }
+      Format-Trozo $T 'lanz-fila' @{ SCRIPT = $_.Rel; JOBS = $jobs; COMO = (Get-ComoLanzador $T $_) }
+    })
+  $sueltos = @($vs | Where-Object { $_.Jobs.Count -eq 0 })
+  $suelto = ''
+  if ($sueltos.Count -gt 0) {
+    $marca = Format-Trozo $T 'lanz-marca-sin-enlazar'
+    $suelto = Format-Trozo $T 'lanza-sueltos' @{ SCRIPTS = (@($sueltos | ForEach-Object { Get-ScriptLanzadorHtml $D $T $_ $marca }) -join "`n") }
+  }
+  return (Format-Trozo $T 'lanz-tabla' @{ ETIQUETA = (Format-Trozo $T 'et-medido'); FILAS = ($filas -join "`n"); SUELTOS = $suelto })
+}
+
+# Una fila por accion de la ficha de un script, con lo que dijo la comparacion de ella (o que no se ha comparado): con la forma de las filas de
+# comparar una clase. Lo que no esta en el migrado lleva el aviso de la plataforma, y lo que el script midio sin llamar a la IA va marcado medido.
+function Get-FilasLanzador($T, $V) {
+  $filas = @()
+  $i = 0
+  foreach ($a in @($V.Acciones)) {
+    $c = $V.PorAccion[$i]
+    $estado = 'sin-comparar'; $migrado = ''; $citaM = ''; $notaIa = ''; $medido = $false; $probado = $false
+    if ($c) {
+      $estado = [string]$c.estado; $notaIa = [string]$c.nota; $citaM = [string]$c.cita; $probado = ($c.probado -eq $true)
+      if ($c.fichero) { $migrado = "$($c.fichero):$($c.linea)" }
+      $medido = ([string]$c.busqueda -ceq 'sin-candidatos')
+    }
+    $nota = $notaIa
+    if ($estado -ceq 'falta') { $nota = (($notaIa + ' ' + (Format-Trozo $T 'lanz-falta-plataforma')).Trim()) }
+    $filas += [pscustomobject]@{
+      Job = ''; Clase = [string]$a.que; Estado = $estado; Texto = (([string]$a.condicion + ' ' + [string]$a.detalle).Trim()); Original = "$($V.Rel):$($a.linea)"
+      CitaOriginal = [string]$a.cita; Migrado = $migrado; CitaMigrado = $citaM; Nota = $nota; NotaIa = $notaIa; Probado = $probado; Medido = $medido
+    }
+    $i++
+  }
+  return $filas
+}
+
+# Un script en la pagina 3: sus cuentas, primero lo distinto, lo que falta, lo que no se sabe y lo sin comparar, los iguales plegados y las lineas
+# que la IA no supo explicar.
+function Get-GrupoLanzador($D, $T, $V) {
+  $filas = @(Get-FilasLanzador $T $V)
+  $n = @{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-comparar' = 0 }
+  foreach ($f in $filas) { $n[$f.Estado]++ }
+  $cuenta = ''
+  $cuerpo = ''
+  if (-not $V.Ficha) { $cuerpo = Get-CuerpoLanzador $D $T $V }
+  else {
+    $cuenta = Format-Trozo $T 'lanz-cuenta' @{ IGUAL = "$($n['igual'])"; DISTINTO = "$($n['distinto'])"; FALTA = "$($n['falta'])"; NOLOSE = "$($n['no-lo-se'])"; SINCOMPARAR = "$($n['sin-comparar'])" }
+    $primeras = @(foreach ($e in @('distinto', 'falta', 'no-lo-se', 'sin-comparar')) { @($filas | Where-Object { $_.Estado -ceq $e }) })
+    $iguales = @($filas | Where-Object { $_.Estado -ceq 'igual' })
+    if ($primeras.Count -gt 0) { $cuerpo = Format-Trozo $T 'comp-filas' @{ FILAS = (@($primeras | ForEach-Object { Get-FilaComparar $T $_ }) -join "`n") } }
+    if ($iguales.Count -gt 0) {
+      $texto = Format-Trozo $T 'comp-iguales-otros' @{ N = "$($iguales.Count)" }
+      if ($iguales.Count -eq 1) { $texto = Format-Trozo $T 'comp-iguales-uno' }
+      $cuerpo += Format-Trozo $T 'comp-iguales' @{ TEXTO = $texto; FILAS = (@($iguales | ForEach-Object { Get-FilaComparar $T $_ }) -join "`n") }
+    }
+    if (-not $cuerpo) { $cuerpo = Format-Trozo $T 'lanz-grupo-vacio' }
+    $se = @($V.Ficha.sinExplicar | Where-Object { $null -ne $_ })
+    if ($se.Count -gt 0) { $cuerpo += Format-Trozo $T 'lanz-sin-explicar' @{ LINEAS = (@($se | ForEach-Object { "$($_.linea)" }) -join ', ') } }
+  }
+  return (Format-Trozo $T 'lanz-grupo' @{ ID = $V.Id; SCRIPT = $V.Rel; CUENTA = $cuenta; CUERPO = $cuerpo })
+}
+
+# La seccion Lanzadores de la pagina 3.
+function Get-LanzadoresComparar($D, $T) {
+  $cuerpo = Format-Trozo $T 'sin-datos' @{ FASE = 'lanzadores'; ETIQUETA = (Format-Trozo $T 'et-sin') }
+  if ($D.LanzadoresLeidos) {
+    if ($D.Lanzadores.Count -eq 0) { $cuerpo = Format-Trozo $T 'lanz-ninguno' }
+    else { $cuerpo = (@($D.Lanzadores | ForEach-Object { Get-GrupoLanzador $D $T (Get-VistaLanzador $D $_) }) -join "`n") }
+  }
+  return (Format-Trozo $T 'lanz-seccion' @{ CUERPO = $cuerpo })
+}
+
+# Lo que va a la portada: cada accion que falta o esta distinta en el migrado y cada linea que la IA no supo explicar.
+function Get-ItemsLanzadores($D, $T) {
+  $items = @()
+  foreach ($z in @($D.Lanzadores)) {
+    $v = Get-VistaLanzador $D $z
+    foreach ($f in @(Get-FilasLanzador $T $v | Where-Object { $_.Estado -ceq 'falta' -or $_.Estado -ceq 'distinto' })) {
+      $cab = Format-Trozo $T 'cab-lanzador' @{ SCRIPT = $v.Rel; ESTADO = (Format-Trozo $T "comp-est-$($f.Estado)") }
+      $items += (Format-Trozo $T 'toca-item' @{ CABECERA = $cab; TEXTO = (($f.Texto + ' ' + $f.NotaIa).Trim()) })
+    }
+    foreach ($x in @($v.Ficha.sinExplicar | Where-Object { $null -ne $_ })) {
+      $items += (Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-lanzador-sin' @{ SCRIPT = $v.Rel; LINEA = "$($x.linea)" }); TEXTO = (Get-PrimeraLinea ([string]$x.texto)) })
+    }
+  }
+  return $items
 }
 
 # ============================== LA PRUEBA EN LOCAL ==============================
@@ -612,7 +813,7 @@ function Get-CuerpoComparar($D, $T, [string]$Cuerpo) {
   if (-not $D.Mapa) { $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'mapa'; ETIQUETA = (Format-Trozo $T 'et-sin') } }
   elseif ($D.Comparacion.Count -gt 0) { $jobs = (@($D.Mapa.jobs | ForEach-Object { Get-GrupoComparar $D $T $_ }) -join "`n") }
   return (Expand-Plantilla $Cuerpo @{
-      PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs
+      PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs; LANZADORES = (Get-LanzadoresComparar $D $T)
     })
 }
 
@@ -640,7 +841,7 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
 # Las fases de la pasada en el orden en que se hacen, que depende de la respuesta: con corregir, la comparacion y la prueba en local van
 # despues de la correccion; si no, la comparacion va antes. lectura-hecha y hecha no se pintan: marcan el sitio de esos dos estados.
 function Get-OrdenFases($D) {
-  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
+  $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'lanzadores', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar', 'prueba-local', 'hecha')) }
   return @($lectura + @('comparar', 'lectura-hecha', 'correccion', 'prueba-local', 'hecha'))
 }
@@ -713,7 +914,7 @@ function Get-GrupoToca($T, [string]$Nombre, $Items, [string]$N, [string]$Etiquet
 
 # "Lo que te toca": primero lo mas fiable (los casos distintos al ejecutar los dos, o la prueba en local que no se hizo), luego las tareas atascadas, clases sin ficha, dudas de las fichas de job, reglas sin caso de prueba, datos
 # que nombran clases (los que la pagina de negocio no pinta, y las clases que no cupieron en la redaccion de un job) y
-# los datos que el migrado hace distinto o no hace (uno por job y dato).
+# los datos que el migrado hace distinto o no hace (uno por job y dato) y lo que hacian los .sh y el migrado no hace igual o la IA no supo explicar.
 function Get-TocaHtml($D, $T) {
   $grupos = @()
   $distintos = @()
@@ -739,7 +940,7 @@ function Get-TocaHtml($D, $T) {
   }
   $atascadas = @($D.Tareas | Where-Object { $_.estado -eq 'atascada' })
   if ($atascadas.Count -gt 0) {
-    $items = @($atascadas | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-tarea' @{ ID = $_.id; DONDE = $_.entradas.fichero }); TEXTO = (Get-PrimeraLinea $_.motivo) } })
+    $items = @($atascadas | ForEach-Object { Format-Trozo $T 'toca-item' @{ CABECERA = (Format-Trozo $T 'cab-tarea' @{ ID = $_.id; DONDE = @($_.entradas.fichero, $_.entradas.script, '' | Where-Object { $_ })[0] }); TEXTO = (Get-PrimeraLinea $_.motivo) } })
     $grupos += (Get-GrupoToca $T 'atascadas' $items "$($atascadas.Count)")
   }
   $sinFicha = @($D.Vistas | Where-Object { @($_.SinFicha).Count -gt 0 })
@@ -772,6 +973,8 @@ function Get-TocaHtml($D, $T) {
     }
   }
   if ($diferencias.Count -gt 0) { $grupos += (Get-GrupoToca $T 'diferencias' $diferencias "$($diferencias.Count)") }
+  $lanzadores = @(Get-ItemsLanzadores $D $T)
+  if ($lanzadores.Count -gt 0) { $grupos += (Get-GrupoToca $T 'lanzadores' $lanzadores "$($lanzadores.Count)") }
   if ($D.Correccion) {
     $atascos = @($D.Correccion.atascados | Where-Object { $null -ne $_ })
     if ($atascos.Count -gt 0) {

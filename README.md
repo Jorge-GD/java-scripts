@@ -228,6 +228,7 @@ Migración desatendida de un batch Java: lee el original, mide el migrado, lo co
 .\migracion.ps1 -Legacy ... -Migrado ... -SoloInforme                                # lee y compara; no corrige
 .\migracion.ps1 ... -SinPruebaLocal                                                  # sin la prueba en local del final
 .\migracion.ps1 ... -JavaLegacy C:\jdk8                                              # el JDK del original, si no compila con el de Maven
+.\migracion.ps1 ... -Lanzadores C:\ruta\scripts                                    # los .sh que lanzan el batch, si no están en la carpeta del original
 ```
 
 El orden con la respuesta `corregir` (`-Si`): diagnóstico, lectura (`fichas-clase`, `mapa`, `fichas-job`, `resumen`, `pruebas-pre`), `lectura-hecha`, `correccion`, **`comparar`** y **`prueba-local`**. Con `parar` (`-SoloInforme`), `comparar` va antes de `lectura-hecha`, sobre el migrado tal como llegó, y no hay corrección. Si la corrección se para, no se sigue con nada más. `comparar` sigue con git lo que la corrección movió: el renombrado de un fichero (`git diff -M`) y, de un fichero borrado, los ficheros donde aparecen 2 o más de sus líneas. Cada comparación dice con qué commit y en qué momento (`antes-de-corregir` o `despues-de-corregir`) se hizo, y se rehace si el worktree tiene un commit nuevo.
@@ -235,6 +236,10 @@ El orden con la respuesta `corregir` (`-Si`): diagnóstico, lectura (`fichas-cla
 La última fase llama a `prueba-local.ps1` (con el mismo modelo y `-Si`) y su salida sale por la consola y queda en `registros\prueba-local.log`. Un fallo se avisa y la pasada sigue: el código de salida de `migracion.ps1` no depende de esta fase (0 bien, 1 no pudo arrancar, 2 se paró). `datos\estado.json` lleva `pruebaLocal` (`resultado`: `hecha`, `fallo` o `saltada`, y el código, los minutos, el detalle y el registro), `fase` (`hecha` al acabar todo, sin parada ni tareas pendientes) y `fin` (vacío mientras corre; la hora al salir, también con parada).
 
 Lo que dicen las páginas de esa última fase: la página 3 (`3-original-vs-migrado.html`) empieza por «Probado ejecutando los dos», que sale de `datos\prueba-local.json` (las cuentas por job, cada caso distinto con sus líneas y lo que no se pudo comparar), y debajo va la lectura de la IA con el momento en que se hizo. La portada pone primero, en «Lo que te toca», los casos distintos al ejecutar los dos; muestra «Duró» cuando la pasada ha acabado (`fin`) y «Lleva» mientras corre; y lista la fase «Prueba en local» con su cuenta. La página 4 dice, por área, con cuántos hallazgos empezó y acabó la corrección.
+
+### Los lanzadores (.sh)
+
+Si el original se lanza con scripts de shell (`.sh`, `.ksh`, o un script con `#!`), `migracion.ps1` los lee tras el mapa de jobs (fase `lanzadores`, código en `lanzadores.ps1`): el script saca sin IA los parámetros, los `exit`, lo que mueve o borra y el job al que lanza cada uno, y la IA cuenta de cada script cómo se lanza, qué hace antes y después del java y con qué códigos acaba, con citas que se comprueban. Dentro de `comparar`, otra tarea mira si cada acción del `.sh` está en el migrado. Salen en tres sitios: «Cómo se lanza» en cada job de la página 1, la sección «Lanzadores» de la página 3 y, en «Lo que te toca» de la portada, lo que hacía un `.sh` y no está en el migrado. Si lo hace la plataforma (una planificación, un configmap), no sale en el código: compruébalo allí. La prueba en local lanza los dos jar directamente y no pasa por los `.sh`. Si los scripts están fuera de la carpeta del original, pasa `-Lanzadores <carpeta>`; queda en `datos\estado.json`.
 
 ## prueba-local.ps1
 
