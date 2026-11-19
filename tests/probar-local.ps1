@@ -201,21 +201,21 @@ $Pruebas['5 fuera: un caso que escribe fuera de su carpeta se rechaza y se desha
   Igual 'la tarea queda atascada' 'atascada' $t.estado
 }
 
-$Pruebas['6 arnes prohibido: tocar src/main o meter una dependencia sin scope test se rechaza'] = {
+$Pruebas['6 arnes con extras: tocar src/main se deshace y una dependencia sin scope test recibe el scope; un arnes que no compila sigue rechazado'] = {
   $e = Nuevo-Escenario 'arnes-main' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e @() 'arnes-toca-main:arnes-original'
-  Igual 'sin arnes del original sale con 1' 1 $r.Codigo
+  Igual 'con un fichero de mas en src/main sale con 0' 0 $r.Codigo
   $t = Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')
-  Igual 'el arnes del original queda atascado' 'atascada' $t.estado
-  Comprueba 'con el fichero de src/main en el motivo' ($t.motivo -match 'src/main/java/Tocado\.java') $t.motivo
+  Igual 'el arnes del original queda hecho, a la primera' 'hecha/1' "$($t.estado)/$($t.intentos)"
+  Comprueba 'la consola dice el fichero de src/main que deshace' ($r.Salida.Contains('Deshago lo que la IA ha tocado fuera de lo suyo: src/main/java/Tocado.java')) (Cola $r.Salida)
   Comprueba 'el fichero no queda en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaOrig 'src/main/java/Tocado.java')))
-  Comprueba 'dice que esta atascado y da el texto para Copilot' ($r.Salida -match 'atascad' -and $r.Salida -match 'Copilot') (Cola $r.Salida)
-  Igual 'sin arnes del original no se prepara ningun caso' 0 @(Llamadas $e | Where-Object { $_.tipo -eq 'caso-local' }).Count
+  Comprueba 'ni en el arnes guardado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/original/src/main/java/Tocado.java')))
   $e = Nuevo-Escenario 'arnes-dep' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e @() 'arnes-dep-sin-test:arnes-original'
-  Igual 'con una dependencia sin scope test sale con 1' 1 $r.Codigo
+  Igual 'con una dependencia sin scope test sale con 0' 0 $r.Codigo
   $t = Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')
-  Comprueba 'y el motivo habla del scope test' ($t.estado -eq 'atascada' -and $t.motivo -match 'scope') $t.motivo
+  Igual 'el arnes del original queda hecho' 'hecha' $t.estado
+  Comprueba 'la dependencia nueva lleva scope test en el pom de la copia' ((Lee $e.CopiaOrig 'pom.xml') -match '(?s)<artifactId>runtime</artifactId>.*?<scope>test</scope>.*?</dependency>') (Lee $e.CopiaOrig 'pom.xml')
   $e = Nuevo-Escenario 'arnes-mig' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e @() 'arnes-no-compila:arnes-migrado'
   Igual 'sin arnes del migrado sale con 1' 1 $r.Codigo
@@ -987,13 +987,13 @@ $Pruebas['53 m18 arnes (k3): en el ULTIMO intento una llamada cortada por tiempo
   Igual 'la copia queda como su base: sin cambios' '' (GitEn $e.CopiaOrig @('status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).rescate', ':(exclude)target'))
 }
 
-$Pruebas['54 m18 arnes (k4): la llamada cortada escribio el test (permitido) y toco src/main (prohibido): en la 2.a, el test sigue en la copia y src/main esta como en la base'] = {
+$Pruebas['54 m18 arnes (k4): la llamada cortada escribio un test que no vale (permitido) y toco src/main (prohibido): el script deshace src/main al comprobar y, en la 2.a, el test sigue en la copia'] = {
   $e = Nuevo-Escenario 'm18-k4' ([ordered]@{ cargaJob = @('importe=10.00') })
   Ajustes-Arnes $e
   $r = Prueba $e @() 'colgado-toca-main:arnes-original'
   Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
   $p2 = Registro-Arnes $e 'original' 2
-  Comprueba 'el motivo de la 1.a nombra el fichero de src/main que toco' ($p2 -match 'Tocado\.java') $p2
+  Comprueba 'el motivo de la 1.a empieza por el fichero de src/main que deshizo' ($p2 -match 'He deshecho lo que tocaste fuera de .*: src/main/java/Tocado\.java\.') $p2
   $f = Join-Path $e.Llamadas 'arnes-original.reintento'
   $v = ''
   if (Test-Path -LiteralPath $f) { $v = ([System.IO.File]::ReadAllLines($f) -join ' ') }
@@ -1321,10 +1321,10 @@ $Pruebas['m25 (a) -Reparar: dos casos distintos por la misma causa: una llamada,
   Comprueba 'el parche queda en prueba-local' (@(Get-ChildItem -LiteralPath $e.Local -File -Filter '*.patch').Count -ge 1) ''
 }
 
-$Pruebas['m25 (b) -Reparar: la IA toca un test: rechazado con ese motivo, reintento y, al final, no arreglado; la rama de rescate no se mueve'] = {
-  $e = Escenario-M25 'm25-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+$Pruebas['m25 (b) -Reparar: la IA toca un test y su cambio de src/main/ no mejora el caso: el test se deshace y el motivo lo dice; reintento y, al final, no arreglado; la rama de rescate no se mueve'] = {
+  $e = Escenario-M25 'm25-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test -Ajustes @{ CopilotExe = (Join-Path $falsos 'm30-copilot.ps1') }
   $antes = Estado-Git $e.Wt
-  $r = Prueba $e @('-Reparar') 'reparar-test'
+  $r = Prueba $e @('-Reparar') 'reparar-test-inutil'
   Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
   Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
   Igual 'dos llamadas: el intento y el reintento' 2 (Llamadas-Reparar $e).Count
@@ -1332,8 +1332,8 @@ $Pruebas['m25 (b) -Reparar: la IA toca un test: rechazado con ese motivo, reinte
   $rep = @(Reparaciones $e)
   Igual 'reparaciones: una entrada, no arreglado' 'no arreglado' $rep[0].resultado
   Igual 'con dos intentos' 2 $rep[0].intentos
-  Comprueba 'el motivo nombra el test que ha tocado' ($rep[0].motivo -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') $rep[0].motivo
-  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
+  Comprueba 'el motivo empieza por lo que ha deshecho: el test que ha tocado, fuera de src/main/' ($rep[0].motivo -match '^He deshecho lo que tocaste fuera de src/main/: src/test/java/com/acme/nuevo/ReglaTest\.java\. ') $rep[0].motivo
+  Comprueba 'y sigue con el motivo de siempre' ($rep[0].motivo -match 'sigue igual de distinto') $rep[0].motivo
   Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
   Igual 'la copia del migrado queda como estaba: regla.txt con el limite de antes' "minimo=5.01`n" (Lee $e.CopiaMig 'src/main/resources/regla.txt')
   Igual 'y el test, sin lo que le anadio la IA' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" (Lee $e.CopiaMig 'src/test/java/com/acme/nuevo/ReglaTest.java')
@@ -1424,24 +1424,24 @@ $Pruebas['m25 (f) -Reparar: con -Desde o -Deshacer, sin worktree de rescate o co
 }
 
 $Pruebas['m25 (g) -Reparar: el reintento lleva en su prompt el motivo y el diff rechazado, y arregla; el primer intento no lleva la correccion'] = {
-  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ CopilotExe = (Join-Path $falsos 'm30-copilot.ps1') }
   $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
-  $r = Prueba $e @('-Reparar') 'reparar-test1'
+  $r = Prueba $e @('-Reparar') 'reparar-inutil1'
   Igual 'sale con 0 (el reintento arregla)' 0 $r.Codigo
   Igual 'dos llamadas' 2 (Llamadas-Reparar $e).Count
   $uno = @(Registros-Reparar $e 1)[0]
   $dos = @(Registros-Reparar $e 2)[0]
   Comprueba 'el primer prompt no lleva la correccion' ($uno -notmatch 'CORRECCI') ''
-  Comprueba 'el segundo si, con el test que toco' ($dos -match 'CORRECCI' -and $dos -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') ''
-  Comprueba 'y con el diff que se rechazo (el cambio de regla.txt y el del test)' ($dos -match 'diff --git a/src/main/resources/regla\.txt' -and $dos -match '\+minimo=5\.00' -and $dos -match 'diff --git a/src/test/java/com/acme/nuevo/ReglaTest\.java') ''
+  Comprueba 'el segundo si, con el motivo (sigue igual de distinto)' ($dos -match 'CORRECCI' -and $dos -match 'sigue igual de distinto') ''
+  Comprueba 'y con el diff que se rechazo (el cambio de nota.txt)' ($dos -match 'diff --git a/src/main/resources/nota\.txt' -and $dos -match '\+sin efecto') ''
   Igual 'un commit nuevo' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
-  Comprueba 'sin el test que la IA toco en el primer intento' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java'))) ''
+  Comprueba 'sin la nota.txt que la IA dejo en el primer intento' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/main/resources/nota.txt'))) ''
   Igual 'la entrada dice arreglado con dos intentos' 'arreglado 2' ((@(Reparaciones $e)[0]).resultado + ' ' + (@(Reparaciones $e)[0]).intentos)
 }
 
 $Pruebas['m25 (h) -Reparar: relanzar con el mismo HEAD y la tarea atascada no llama a Copilot y lo dice'] = {
   $e = Escenario-M25 'm25-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
-  $r = Prueba $e @('-Reparar') 'reparar-test'
+  $r = Prueba $e @('-Reparar') 'reparar-inutil'
   Igual 'la primera vez sale con 2' 2 $r.Codigo
   $n = (Llamadas-Reparar $e).Count
   Igual 'con dos llamadas' 2 $n
@@ -1556,19 +1556,18 @@ $Pruebas['m26 (a) -Reparar: la IA arregla src/main/ y la ejecucion deja logs/bat
   Comprueba 'y datos/h2.mv.db' ($r.Salida -match 'Quito lo que ha dejado la ejecucion fuera de src/: [^\r\n]*datos/h2\.mv\.db') (Cola $r.Salida)
 }
 
-$Pruebas['m26 (b) -Reparar: la IA arregla src/main/ y crea src/test/.../NuevoTest.java: rechazado nombrando ese fichero y src/main/, sin commit'] = {
-  $e = Escenario-M25 'm26-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
-  $antes = Estado-Git $e.Wt
+$Pruebas['m26 (b) -Reparar: la IA arregla src/main/ y crea src/test/.../NuevoTest.java (bajo src/, no es ruido): el script lo deshace, lo dice y el arreglo vale, con un commit que solo toca src/main/'] = {
+  $e = Escenario-M25 'm26-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $r = Prueba $e @('-Reparar') 'reparar-test-nuevo'
-  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
-  Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
-  $rep = @(Reparaciones $e)
-  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
-  Comprueba 'el motivo nombra el test nuevo' ($rep[0].motivo -match 'src/test/java/com/acme/nuevo/NuevoTest\.java') $rep[0].motivo
-  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
-  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'una sola llamada' 1 (Llamadas-Reparar $e).Count
+  Igual 'reparaciones: arreglado' 'arreglado' (@(Reparaciones $e)[0]).resultado
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  Igual 'que solo toca src/main/' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Comprueba 'la consola nombra el test nuevo en lo que deshace' ($r.Salida -match 'Deshago lo que la IA ha tocado fuera de lo suyo: src/test/java/com/acme/nuevo/NuevoTest\.java') (Cola $r.Salida)
   Comprueba 'lo nuevo bajo src/ no es ruido: la consola no dice que lo quita' ($r.Salida -notmatch 'Quito lo que ha dejado') (Cola $r.Salida)
-  Comprueba 'el test nuevo se deshace en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'src/test/java/com/acme/nuevo/NuevoTest.java'))) ''
+  Comprueba 'el test nuevo no esta en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'src/test/java/com/acme/nuevo/NuevoTest.java'))) ''
 }
 
 $Pruebas['m26 (c) -Reparar: la IA solo deja logs/batch.log: es ruido, asi que no ha cambiado src/main/: rechazado con ese motivo y el fichero ya no esta'] = {
@@ -1584,16 +1583,14 @@ $Pruebas['m26 (c) -Reparar: la IA solo deja logs/batch.log: es ruido, asi que no
   Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
 }
 
-$Pruebas['m26 (d) -Reparar: la IA arregla src/main/ y cambia pom.xml (con seguimiento): rechazado nombrando pom.xml, sin commit'] = {
-  $e = Escenario-M25 'm26-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
-  $antes = Estado-Git $e.Wt
+$Pruebas['m26 (d) -Reparar: la IA arregla src/main/ y cambia pom.xml (con seguimiento): el script lo deja como estaba, lo dice y el arreglo vale, con un commit que solo toca src/main/'] = {
+  $e = Escenario-M25 'm26-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $r = Prueba $e @('-Reparar') 'reparar-pom'
-  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
-  $rep = @(Reparaciones $e)
-  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
-  Comprueba 'el motivo nombra pom.xml' ($rep[0].motivo -match 'pom\.xml') $rep[0].motivo
-  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
-  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'reparaciones: arreglado' 'arreglado' (@(Reparaciones $e)[0]).resultado
+  Igual 'un commit nuevo que solo toca src/main/' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Comprueba 'la consola dice que deshace pom.xml' ($r.Salida -match 'Deshago lo que la IA ha tocado fuera de lo suyo: pom\.xml') (Cola $r.Salida)
   Comprueba 'el pom.xml de la copia queda como estaba' ((Lee $e.CopiaMig 'pom.xml') -notmatch 'tocado por la IA') ''
 }
 
@@ -1948,6 +1945,282 @@ $Pruebas['m29 (h) -RehacerArnes con un arnes nuevo que no vale: lo viejo ya no e
   Comprueba 'y no usa el arnes viejo' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
   Comprueba 'lo guardado ahora es lo que escribio esa llamada' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-4'))
   Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+}
+
+# ===================== M30: lo que la IA toca de mas, el script lo deshace y prueba lo que queda =====================
+# Estos escenarios usan m30-copilot.ps1 y m30-mvn.ps1 (sobre los de m25 y, con ellos, los de siempre): el Copilot de mentira deja, ademas de
+# un arnes bueno, lo que dice su guion (ficheros de mas, un pom.xml cambiado, un cambio en src/main/ sin el que el arnes no compila). Con
+# -Pom, el original lleva un pom.xml con CRLF y dos dependencias (org.projectlombok:lombok 1.16.20 y com.acme:otra con scope provided).
+# Con -Reparar, el escenario es el de m25 (con tests que pasan) y ReglaTest.java con seguimiento en el migrado.
+
+# El pom.xml del original de los escenarios con -Pom, con el salto de linea $Nl.
+function Pom-M30([string]$Nl) {
+  $l = @('<?xml version="1.0" encoding="UTF-8"?>', '<project xmlns="http://maven.apache.org/POM/4.0.0">', '  <!-- el pom del batch -->', '  <modelVersion>4.0.0</modelVersion>',
+    '  <groupId>com.acme</groupId>', '  <artifactId>batch-viejo</artifactId>', '  <version>1.0.0</version>', '  <description/>', '  <dependencies>',
+    '    <dependency>', '      <groupId>org.projectlombok</groupId>', '      <artifactId>lombok</artifactId>', '      <version>1.16.20</version>', '    </dependency>',
+    '    <dependency>', '      <groupId>com.acme</groupId>', '      <artifactId>otra</artifactId>', '      <version>3.0</version>', '      <scope>provided</scope>', '    </dependency>',
+    '  </dependencies>', '</project>')
+  return (($l -join $Nl) + $Nl)
+}
+
+function Escenario-M30([string]$Nombre, $Casos, [switch]$Reparar, [switch]$Pom) {
+  if ($Reparar) {
+    $e = Escenario-M25 $Nombre $Casos -Sano
+    [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java' "package com.acme.nuevo;`nclass ReglaTest {}`n" 'test de la regla')
+  }
+  else { $e = Nuevo-Escenario $Nombre $Casos }
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm30-copilot.ps1'); MvnExe = (Join-Path $falsos 'm30-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  if ($Pom) { [void](Commit-En $e.Legacy 'pom.xml' (Pom-M30 "`r`n") 'pom con dependencias') }
+  return $e
+}
+
+# Un mvnw de mentira (sh) en $Repo, ya en git y ejecutable: falla si no tiene al lado .mvn/wrapper/maven-wrapper.properties (como el de verdad
+# sin red: intenta bajarse el wrapper) y, si lo tiene, hace lo que el Maven de mentira $Falso.
+function Pon-Mvnw([string]$Repo, [string]$Falso) {
+  Escribe $Repo 'mvnw' ("#!/bin/sh`n" + "[ -f ./.mvn/wrapper/maven-wrapper.properties ] || { echo '[ERROR] no puedo bajar el wrapper de repo.maven.apache.org'; exit 1; }`n" + "exec '" + $ps + "' -NoProfile -File '" + $Falso + "' `"`$@`"`n")
+  & chmod +x (Get-Ruta $Repo 'mvnw')
+  [void](GitEn $Repo @('add', '--', 'mvnw'))
+  [void](GitEn $Repo @('update-index', '--chmod=+x', '--', 'mvnw'))
+  [void](GitEn $Repo @('commit', '-q', '-m', 'mvnw'))
+}
+
+$Pruebas['m30 (a) Maven de la copia: .mvn/wrapper/ del repo pasa a la copia sin pisar lo que git ya trae, y Get-Mvn solo usa mvnw si tiene maven-wrapper.properties al lado'] = {
+  $e = Nuevo-Escenario 'm30-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  foreach ($d in @($e.Legacy, $e.Migrado)) {
+    [void](Commit-En $d '.mvn/wrapper/en-git.txt' "de git`n" 'wrapper en git')
+    Escribe $d '.mvn/wrapper/en-git.txt' "tocado a mano`n"
+    Escribe $d '.mvn/wrapper/maven-wrapper.properties' "distributionUrl=x`n"
+    Escribe $d '.mvn/wrapper/maven-wrapper.jar' "jar`n"
+  }
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  foreach ($c in @($e.CopiaOrig, $e.CopiaMig)) {
+    Igual "$(Split-Path $c -Leaf): la copia trae maven-wrapper.properties, que git no tiene" "distributionUrl=x`n" (Lee $c '.mvn/wrapper/maven-wrapper.properties')
+    Comprueba "$(Split-Path $c -Leaf): y el jar" (Test-Path -LiteralPath (Get-Ruta $c '.mvn/wrapper/maven-wrapper.jar'))
+  }
+  Igual 'lo que git ya trae en la copia no se pisa' "de git`n" (Lee $e.CopiaOrig '.mvn/wrapper/en-git.txt')
+  if ($env:OS -ne 'Windows_NT') {   # el mvnw de mentira es un script de sh
+    $e2 = Nuevo-Escenario 'm30-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+    Escribe $e2.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); SegundosPorLlamada = 60 }))
+    foreach ($d in @($e2.Legacy, $e2.Migrado, $e2.Wt)) { Pon-Mvnw $d (Join-Path $falsos 'mvn-local.ps1') }
+    foreach ($d in @($e2.Legacy, $e2.Migrado)) { Escribe $d '.mvn/wrapper/maven-wrapper.properties' "distributionUrl=x`n" }
+    $r = Prueba $e2
+    Igual 'con un mvnw que sin su maven-wrapper.properties no funciona (y sin MvnExe), sale con 0' 0 $r.Codigo
+    Igual 'y el caso sale igual' 'igual' ((Resultados $e2) -join ',')
+  }
+  $f = Join-Path $Dir 'get-mvn.ps1'
+  [System.IO.File]::WriteAllText($f, "param([string]`$Sis, [string]`$Raiz)`n. (Join-Path `$Sis 'comun.ps1')`n'MVN ' + (Get-Mvn `$Raiz)`n")
+  $sis = Split-Path -Parent $Script
+  $raiz = Join-Path $Dir 'm30-a-get-mvn'
+  Escribe $raiz 'mvnw' "x`n"
+  Escribe $raiz 'mvnw.cmd' "x`n"
+  $r = Lanzar $f @($sis, $raiz)
+  Igual 'con mvnw y sin maven-wrapper.properties, Get-Mvn da mvn' 'MVN mvn' (@($r.Salida -split "`n" | Where-Object { $_ -like 'MVN *' })[0]).Trim()
+  Escribe $raiz '.mvn/wrapper/maven-wrapper.properties' "distributionUrl=x`n"
+  $r = Lanzar $f @($sis, $raiz)
+  $envoltorio = 'mvnw'
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $envoltorio = 'mvnw.cmd' }
+  Igual 'con maven-wrapper.properties al lado, el envoltorio' ('MVN ' + (Join-Path $raiz $envoltorio)) (@($r.Salida -split "`n" | Where-Object { $_ -like 'MVN *' })[0]).Trim()
+}
+
+$Pruebas['m30 (b) arnes: la IA deja META-INF/ y un .class en la raiz y toca src/main (y el pom del migrado): sale bien, lo de fuera se deshace y la consola lo dice'] = {
+  $e = Escenario-M30 'm30-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $appO = Lee $e.Legacy 'src/main/java/com/acme/viejo/App.java'
+  $appM = Lee $e.Wt 'src/main/java/com/acme/nuevo/App.java'
+  $pomM = Lee $e.Wt 'pom.xml'
+  $r = Prueba $e @() 'arnes-de-mas'
+  Igual 'sale con 0' 0 $r.Codigo
+  foreach ($lado in @('original', 'migrado')) { Igual "el arnes del $lado sale bien a la primera" 'hecha/1' "$((Tarea-Arnes $e $lado).estado)/$((Tarea-Arnes $e $lado).intentos)" }
+  foreach ($c in @($e.CopiaOrig, $e.CopiaMig)) {
+    $n = Split-Path $c -Leaf
+    Comprueba "${n}: META-INF/MANIFEST.MF ya no esta" (-not (Test-Path -LiteralPath (Get-Ruta $c 'META-INF/MANIFEST.MF'))) (Cola $r.Salida)
+    Comprueba "${n}: com/x/Y.class tampoco" (-not (Test-Path -LiteralPath (Get-Ruta $c 'com/x/Y.class'))) (Cola $r.Salida)
+  }
+  Igual 'el original: el fichero de src/main vuelve a como estaba' $appO (Lee $e.CopiaOrig 'src/main/java/com/acme/viejo/App.java')
+  Igual 'el migrado: el de src/main vuelve a como estaba' $appM (Lee $e.CopiaMig 'src/main/java/com/acme/nuevo/App.java')
+  Igual 'y su pom.xml (que el arnes del migrado no puede tocar)' $pomM (Lee $e.CopiaMig 'pom.xml')
+  Comprueba 'el arnes guardado del original no lleva lo de fuera' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/original/META-INF')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'))) ''
+  Comprueba 'la consola dice lo que deshace en el original' ($r.Salida.Contains('Deshago lo que la IA ha tocado fuera de lo suyo: META-INF/MANIFEST.MF, com/x/Y.class, src/main/java/com/acme/viejo/App.java')) (Cola $r.Salida)
+  Comprueba 'y en el migrado, con su pom.xml' ($r.Salida.Contains('Deshago lo que la IA ha tocado fuera de lo suyo: META-INF/MANIFEST.MF, com/x/Y.class, pom.xml, src/main/java/com/acme/nuevo/App.java')) (Cola $r.Salida)
+  Comprueba 'y no rechaza el arnes' ($r.Salida -notmatch 'Arnes del (original|migrado) rechazado') (Cola $r.Salida)
+  $e = Escenario-M30 'm30-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() 'arnes-de-mas-muchos:arnes-original'
+  Igual 'con siete ficheros de mas sale con 0' 0 $r.Codigo
+  Comprueba 'la consola nombra cinco y dice cuantos mas' ($r.Salida.Contains('Deshago lo que la IA ha tocado fuera de lo suyo: fuera/f1.txt, fuera/f2.txt, fuera/f3.txt, fuera/f4.txt, fuera/f5.txt (y 2 mas)')) (Cola $r.Salida)
+  Comprueba 'y los siete ya no estan' (@(1..7 | Where-Object { Test-Path -LiteralPath (Get-Ruta $e.CopiaOrig "fuera/f$_.txt") }).Count -eq 0) ''
+}
+
+$Pruebas['m30 (c) pom.xml del original: la IA cambia la version de una dependencia que ya estaba y anade dos nuevas: queda el pom de antes con las dos con scope test, y la consola dice que version deshace'] = {
+  $e = Escenario-M30 'm30-c' ([ordered]@{ cargaJob = @('importe=10.00') }) -Pom
+  $antes = Lee $e.Legacy 'pom.xml'
+  $r = Prueba $e @() 'arnes-pom-lombok:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el arnes del original sale bien a la primera' 'hecha/1' "$((Tarea-Arnes $e 'original').estado)/$((Tarea-Arnes $e 'original').intentos)"
+  $pom = Lee $e.CopiaOrig 'pom.xml'
+  $q = $antes.IndexOf("`r`n  </dependencies>")
+  Comprueba 'el pom final empieza y acaba como el original, byte a byte (con sus CRLF, su comentario y su <description/>)' ($q -gt 0 -and $pom.StartsWith($antes.Substring(0, $q), [System.StringComparison]::Ordinal) -and $pom.EndsWith($antes.Substring($q), [System.StringComparison]::Ordinal)) $pom
+  $medio = ''
+  if ($pom.Length -gt $antes.Length) { $medio = $pom.Substring($q, $pom.Length - $antes.Length) }
+  Comprueba 'lo unico que anade son las dos dependencias nuevas' ($medio.Contains('<artifactId>nueva-sin-scope</artifactId>') -and $medio.Contains('<artifactId>nueva-test</artifactId>') -and -not $medio.Contains('lombok')) $medio
+  Igual 'las dos con <scope>test</scope>' 2 ([regex]::Matches($medio, '<scope>test</scope>')).Count
+  Comprueba 'lombok sigue con su version de antes' ($pom.Contains('<version>1.16.20</version>') -and -not $pom.Contains('1.18.30')) $pom
+  Comprueba 'sin BOM' ([System.IO.File]::ReadAllBytes((Get-Ruta $e.CopiaOrig 'pom.xml'))[0] -eq 0x3C) ''
+  Igual 'el pom que se guarda con el arnes es ese' $pom (Lee $e.Local 'arnes/original/pom.xml')
+  Comprueba 'la consola dice la dependencia y el cambio de version' ($r.Salida -match 'Dejo el pom\.xml del original como estaba, con tus dependencias nuevas de test: [^\r\n]*org\.projectlombok:lombok: <version> 1\.16\.20 -> 1\.18\.30') (Cola $r.Salida)
+  Comprueba 'y no rechaza el arnes' ($r.Salida -notmatch 'Arnes del original rechazado') (Cola $r.Salida)
+  $e = Escenario-M30 'm30-c2' ([ordered]@{ cargaJob = @('importe=10.00') }) -Pom
+  $r = Prueba $e @() 'arnes-pom-mas:arnes-original'
+  Igual 'quitar un scope y anadir una <properties>: sale con 0' 0 $r.Codigo
+  $pom = Lee $e.CopiaOrig 'pom.xml'
+  Comprueba 'la dependencia que ya estaba conserva su scope y no hay <properties>' ($pom.Contains('<scope>provided</scope>') -and -not $pom.Contains('<properties>')) $pom
+  Comprueba 'la nueva sin scope lo recibe' ($pom -match '(?s)<artifactId>nueva-sin-scope</artifactId>.*?<scope>test</scope>') $pom
+  Comprueba 'la consola dice que scope se quita y que hay algo mas fuera de <dependencies>' ($r.Salida -match 'com\.acme:otra: <scope> quitado' -and $r.Salida.Contains('algo mas del pom.xml fuera de <dependencies>')) (Cola $r.Salida)
+  $e = Escenario-M30 'm30-c3' ([ordered]@{ cargaJob = @('importe=10.00') }) -Pom
+  $r = Prueba $e @() 'arnes-pom-roto:arnes-original'
+  Igual 'un pom que no es XML valido: sale con 0' 0 $r.Codigo
+  Igual 'el pom vuelve al del original' (Lee $e.Legacy 'pom.xml') (Lee $e.CopiaOrig 'pom.xml')
+  Comprueba 'y la consola lo dice' ($r.Salida -match 'Dejo el pom\.xml del original como estaba, con tus dependencias nuevas de test: [^\r\n]*XML valido') (Cola $r.Salida)
+}
+
+$Pruebas['m30 (d) arnes: deshacer no esconde un fallo: si solo compila con el cambio de src/main que se deshace, se rechaza y el motivo empieza por lo que se ha deshecho y lleva el error de Maven'] = {
+  $e = Escenario-M30 'm30-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() 'arnes-solo-con-main:arnes-original'
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda atascada tras dos intentos' 'atascada/2' "$($t.estado)/$($t.intentos)"
+  $m = [string]$t.motivo
+  Comprueba 'el motivo empieza por lo que se ha deshecho, con lo permitido y la ruta' ($m.StartsWith('He deshecho lo que tocaste fuera de src/test/java/com/acme/viejo/PruebaLocalTest.java, src/test/resources/application-prueba-local.yml, pom.xml: src/main/java/com/acme/viejo/App.java.')) $m
+  Comprueba 'y sigue con el fallo de Maven' ($m -match 'El test no compila' -and $m -match 'MAIN_TOCADO') $m
+  Comprueba 'el reintento recibe ese motivo' ((Registro-Arnes $e 'original' 2).Contains('He deshecho lo que tocaste fuera de')) ''
+  Comprueba 'el cambio de src/main ya no esta en la copia' (-not (Lee $e.CopiaOrig 'src/main/java/com/acme/viejo/App.java').Contains('MAIN_TOCADO')) ''
+}
+
+$Pruebas['m30 (e) -Reparar: un arreglo que cambia src/main/ y un test se acepta con el test deshecho; uno que solo cambia un test da No has cambiado ningun fichero de src/main/'] = {
+  $e = Escenario-M30 'm30-e' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Reparar
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $test = Lee $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java'
+  $r = Prueba $e @('-Reparar') 'reparar-test'
+  Igual 'sale con 0 (el caso sale igual)' 0 $r.Codigo
+  Igual 'una sola llamada' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones: arreglado, en un intento' 'arreglado 1' "$($rep[0].resultado) $($rep[0].intentos)"
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  Igual 'que solo toca src/main/' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Igual 'el test de la copia queda como estaba' $test (Lee $e.CopiaMig 'src/test/java/com/acme/nuevo/ReglaTest.java')
+  Comprueba 'la consola dice que deshace el test' ($r.Salida.Contains('Deshago lo que la IA ha tocado fuera de lo suyo: src/test/java/com/acme/nuevo/ReglaTest.java')) (Cola $r.Salida)
+  $e = Escenario-M30 'm30-e2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Reparar
+  $antes = Estado-Git $e.Wt
+  $test = Lee $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java'
+  $r = Prueba $e @('-Reparar') 'reparar-solo-test'
+  Igual 'con un arreglo que solo cambia un test sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado, con dos intentos' 'no arreglado 2' "$($rep[0].resultado) $($rep[0].intentos)"
+  Comprueba 'el motivo empieza por lo que se ha deshecho' ($rep[0].motivo.StartsWith('He deshecho lo que tocaste fuera de src/main/: src/test/java/com/acme/nuevo/ReglaTest.java.')) $rep[0].motivo
+  Comprueba 'y sigue con No has cambiado ningun fichero de src/main/' ($rep[0].motivo.Contains('No has cambiado ningun fichero de src/main/.')) $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'y el test de la copia, como estaba' $test (Lee $e.CopiaMig 'src/test/java/com/acme/nuevo/ReglaTest.java')
+}
+
+$Pruebas['m30 (f) plantillas: la del arnes lleva las tres vinetas nuevas y lo que hace el script con el pom y con lo de fuera; ni ella ni reparar.md dicen que se rechaza entero'] = {
+  $tareas = Join-Path (Split-Path -Parent $Script) 'tareas'
+  $arnes = [System.IO.File]::ReadAllText((Join-Path $tareas 'arnes-local.md'), [System.Text.Encoding]::UTF8)
+  $reparar = [System.IO.File]::ReadAllText((Join-Path $tareas 'reparar.md'), [System.Text.Encoding]::UTF8)
+  Comprueba 'el arnes: el script pone el scope test a las dependencias que falten' ($arnes.Contains('Si una no lleva `<scope>test</scope>`, el script se lo pone. Lo dem') -and $arnes -match 'el script lo deja como estaba y prueba tu test sin ese cambio') ''
+  Comprueba 'las tres vinetas van en Lo de fuera, simulado, detras de la de sustituir la clase de la libreria y en este orden' ($arnes -match '(?s)## Lo de fuera, simulado.*Sustituye la clase de la librer.a.*spring\.autoconfigure\.exclude.*Cannot register bean definition.*jar tf <jar>.*javap -cp <jar> <clase>.*## Formato de la salida') ''
+  Comprueba 'la 1.a: autoconfiguracion con spring.factories o AutoConfiguration.imports' ($arnes.Contains('META-INF/spring.factories') -and $arnes.Contains('META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports') -and $arnes.Contains('`application-prueba-local.yml` con `spring.autoconfigure.exclude`')) ''
+  Comprueba 'la 2.a: no declarar un bean con el nombre de otro (dataSource, transactionManager)' ($arnes.Contains('`dataSource` o `transactionManager`') -and $arnes.Contains('otro nombre y `@Primary`')) ''
+  Comprueba 'la 3.a: no descomprimir el jar dentro de la copia' ($arnes.Contains('No lo descomprimas dentro de la copia.')) ''
+  Comprueba 'el arnes ya no dice que se rechaza el test entero ni que el pom no se toca mas' ($arnes -notmatch 'rechaza el test entero' -and $arnes -notmatch 'Nada m.s del `pom\.xml`') ''
+  Comprueba 'reparar.md: lo de fuera de src/main/ se deja como estaba y se prueba el arreglo sin ello' ($reparar -match 'el script lo deja como estaba y prueba tu arreglo sin ese cambio' -and $reparar -notmatch 'rechaza todo tu arreglo') ''
+}
+
+# ===================== M31: menos diferencias falsas y un orden de comprobacion mas barato en -Reparar =====================
+# m31-mvn.ps1 deja tablas que dice RESCATE_M31 en cada caso, segun el lado, y apunta en mvn.log cada suite de tests unitarios.
+
+# Un escenario normal con el Maven de mentira de m31.
+function Escenario-M31([string]$Nombre, $Casos) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm31-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza -Si con el guion de tablas $Guion de m31-mvn.ps1 y devuelve lo de Prueba.
+function Prueba-M31($E, [string]$Guion) {
+  $env:RESCATE_M31 = $Guion
+  try { return (Prueba $E) }
+  finally { $env:RESCATE_M31 = '' }
+}
+
+# La posicion de la ultima de las $Lineas que casa con $Patron (-1 si ninguna).
+function Ultimo-Indice([string[]]$Lineas, [string]$Patron) {
+  $u = -1
+  for ($i = 0; $i -lt $Lineas.Count; $i++) { if ($Lineas[$i] -match $Patron) { $u = $i } }
+  return $u
+}
+
+$Pruebas['m31 (a) tablas: las mismas filas con las columnas y las filas en otro orden salen iguales; con un valor cambiado salen distintas y la linea ensenada sale reordenada; con una fila rara se compara tal cual'] = {
+  $e = Escenario-M31 'm31-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'columnas'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'las mismas filas con otro orden de columnas y de filas: igual' 'igual' (Caso $e 'cargaJob' 'caso-01').resultado
+  $e = Escenario-M31 'm31-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'columnas-valor'
+  Igual 'con un valor cambiado sale con 2' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)
+  Igual 'con una sola diferencia, en la tabla' 'tablas/T.csv' ($d | ForEach-Object { $_.fichero }) 
+  Igual 'una linea distinta' 1 $d[0].lineas
+  Igual 'la tercera: la de luis, ya reordenada' 3 $d[0].linea
+  Igual 'lo del original, con las columnas en orden de nombre' '2;20;luis' $d[0].original
+  Igual 'y lo del migrado, igual' '2;25;luis' $d[0].migrado
+  $e = Escenario-M31 'm31-a3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'columnas-fila-rara'
+  Igual 'con una fila de otro numero de campos sale con 2' 2 $r.Codigo
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)
+  Igual 'se compara tal cual: la primera linea es la cabecera de cada lado' 'ID;NOMBRE|NOMBRE;ID' "$($d[0].original)|$($d[0].migrado)"
+}
+
+$Pruebas['m31 (b) tablas del framework: TASK_EXECUTION.csv solo en el migrado y BATCH_JOB_INSTANCE.csv distinto en los dos no cuentan: el caso sale igual'] = {
+  $e = Escenario-M31 'm31-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'framework'
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale igual' 'igual' $c.resultado
+  Igual 'sin diferencias' 0 @($c.diferencias).Count
+  Comprueba 'las tablas estan en las salidas de los dos lados (es la comparacion la que no las cuenta)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/tablas/TASK_EXECUTION.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/tablas/BATCH_JOB_INSTANCE.csv'))) ''
+}
+
+$Pruebas['m31 (c) -Reparar: un arreglo que mejora su caso pero rompe un test unitario se rechaza con el motivo de los tests y los demas casos no se ejecutan'] = {
+  $e = Escenario-M25 'm31-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test -Ajustes @{ MvnExe = (Join-Path $falsos 'm31-mvn.ps1') }
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo es el de los tests: arregla el caso pero rompe el test' ($rep[0].motivo -match 'arregla el caso, pero rompe estos tests' -and $rep[0].motivo -match 'com\.acme\.nuevo\.ReglaTest') $rep[0].motivo
+  Igual 'dos llamadas: el intento y el reintento' 2 (Llamadas-Reparar $e).Count
+  Igual 'el caso de la tarea se ejecuta en el migrado al empezar y en cada intento' 3 (Ejecuciones-Mig $e 'caso-01')
+  Igual 'el otro caso, solo al empezar: tras un arreglo que rompe un test ya no se ejecuta' 1 (Ejecuciones-Mig $e 'caso-02')
+}
+
+$Pruebas['m31 (d) -Reparar: un arreglo bueno pasa los tres pasos en el orden nuevo: el caso de la tarea, los tests unitarios y los demas casos'] = {
+  $e = Escenario-M25 'm31-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm31-mvn.ps1') }
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'reparaciones: arreglado, con un intento' 'arreglado 1' ((@(Reparaciones $e)[0]).resultado + ' ' + (@(Reparaciones $e)[0]).intentos)
+  $l = @(Mavens-Con $e ('^' + [regex]::Escape($e.CopiaMig + '|')))
+  $uno = Ultimo-Indice $l '-Dprueba\.local\.caso=caso-01( |$)'
+  $suite = Ultimo-Indice $l 'surefire\.excludesFile'
+  $dos = Ultimo-Indice $l '-Dprueba\.local\.caso=caso-02( |$)'
+  Comprueba 'los tres pasos se ejecutan' ($uno -ge 0 -and $suite -ge 0 -and $dos -ge 0) "caso-01 en $uno, suite en $suite, caso-02 en $dos"
+  Comprueba 'primero el caso de la tarea, despues la suite y al final los demas casos' ($uno -lt $suite -and $suite -lt $dos) "caso-01 en $uno, suite en $suite, caso-02 en $dos"
+}
+
+$Pruebas['m31 (e) plantilla del arnes: las tablas son las que no son de Spring Batch ni de Spring Cloud Task'] = {
+  $arnes = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Split-Path -Parent $Script) 'tareas') 'arnes-local.md'), [System.Text.Encoding]::UTF8)
+  Comprueba 'tablas/<TABLA>.csv: una por cada tabla que no es de Spring Batch ni de Spring Cloud Task (BATCH_..., TASK_...)' ($arnes.Contains('uno por cada tabla que no es de Spring Batch ni de Spring Cloud Task (`BATCH_...`, `TASK_...`), con el nombre')) ''
 }
 
 # ================================ LANZADOR ================================

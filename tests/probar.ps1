@@ -802,7 +802,8 @@ $Pruebas['prompt: con mvnw en la raiz del repo el prompt dice ./mvnw'] = {
     Escribe $e.Repo $w ('#!/bin/sh' + "`n" + 'exec "' + $ps + '" -NoProfile -File "' + $mvn + '" "$@"' + "`n")
     & chmod +x (Get-Ruta $e.Repo $w)   # ejecutable de verdad: un mvnw que no se puede lanzar ya no pasa por un build bueno
   }
-  [void](GitEn $e.Repo @('add', '--', $w))
+  Escribe $e.Repo '.mvn/wrapper/maven-wrapper.properties' "distributionUrl=x`n"   # sin este fichero Get-Mvn no usa el mvnw (M30)
+  [void](GitEn $e.Repo @('add', '--', $w, '.mvn/wrapper/maven-wrapper.properties'))
   [void](GitEn $e.Repo @('update-index', '--chmod=+x', '--', $w))
   [void](GitEn $e.Repo @('commit', '-q', '-m', 'mvnw'))
   Escribe $e.Repo '.rescate/config.json' (ConvertTo-Json -InputObject ([pscustomobject]@{ CopilotExe = (Join-Path $falsos 'copilot.ps1') }))

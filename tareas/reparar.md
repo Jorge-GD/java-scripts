@@ -47,7 +47,7 @@ Prohibido: `mvn test` sin `-Dtest`, `mvn verify`, `mvn package`, `mvn install`, 
 
 ## Reglas
 
-- Solo cambias ficheros de `src/main/`. No toques los tests, el arnés `PruebaLocalTest`, las carpetas de los casos ni el `pom.xml`: si cambias algo fuera de `src/main/`, el script rechaza todo tu arreglo.
+- Solo cambias ficheros de `src/main/`. No toques los tests, el arnés `PruebaLocalTest`, las carpetas de los casos ni el `pom.xml`: si cambias algo fuera de `src/main/`, el script lo deja como estaba y prueba tu arreglo sin ese cambio.
 - El migrado tiene que hacer lo mismo que el original. No escribas en el código valores sacados del caso (una fecha, un importe, un nombre de fichero concreto): arregla la causa, no este caso.
 - Después de tu arreglo, el script ejecuta también todos los demás casos y los tests del proyecto. Si alguno empeora, tu arreglo se rechaza: cambia lo mínimo.
 - Si la diferencia solo existe porque la prueba local simula algo (una base de datos H2 en vez de la de verdad, el correo o el SFTP simulados) y en el entorno real el migrado ya está bien, no cambies nada. Escribe `.rescate/reparar-no.txt` con el motivo, en una línea.
