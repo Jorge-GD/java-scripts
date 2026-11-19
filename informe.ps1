@@ -59,6 +59,7 @@ $FicherosInforme = @(
   @('datos/cobertura-antes.json', 'f-cobertura-antes', 'f-fichero', $false), @('datos/cobertura-despues.json', 'f-cobertura-despues', 'f-fichero', $false),
   @('datos/practicas-antes.json', 'f-practicas-antes-json', 'f-fichero', $false), @('datos/practicas-despues.json', 'f-practicas-despues-json', 'f-fichero', $false),
   @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false), @('datos/prueba-local.json', 'f-prueba-local-json', 'f-fichero', $false),
+  @('datos/prueba-local-cobertura.json', 'f-prueba-local-cobertura-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
   @('datos/pruebas', 'f-pruebas', 'f-carpeta', $false), @('datos/comparacion', 'f-comparacion', 'f-carpeta', $false), @('datos/fichas', 'f-fichas', 'f-carpeta', $false),
@@ -471,25 +472,30 @@ function ConvertTo-ConjuntoLineas([string]$Rangos) {
 }
 
 # Lo que recorrieron los casos, por fichero del original (datos\prueba-local-cobertura.json): las lineas de los casos que salieron iguales en los dos
-# lados y las de los que salieron distintos. Una linea puede estar en las dos.
+# lados, las de los que salieron distintos (una linea puede estar en las dos) y las que no recorrio ninguno.
 function Get-LineasCasos($Cob) {
   $r = @{}
   if ($Cob.ficheros) {
     foreach ($f in $Cob.ficheros.PSObject.Properties) {
-      $r[$f.Name] = @{ Igual = (ConvertTo-ConjuntoLineas ([string]$f.Value.igual)); Distinto = (ConvertTo-ConjuntoLineas ([string]$f.Value.distinto)) }
+      $r[$f.Name] = @{
+        Igual = (ConvertTo-ConjuntoLineas ([string]$f.Value.igual)); Distinto = (ConvertTo-ConjuntoLineas ([string]$f.Value.distinto)); SinCubrir = (ConvertTo-ConjuntoLineas ([string]$f.Value.sinCubrir))
+      }
     }
   }
   return $r
 }
 
 # Que hicieron los casos con la linea de un dato del original: ejecutado-distinto (alguno que salio distinto la ejecuto, aunque otros salieran iguales),
-# ejecutado-igual o sin-ejecutar. Vacio si los casos no se midieron.
+# ejecutado-igual o sin-ejecutar (esta en sinCubrir). Vacio si los casos no se midieron, si el fichero no viene en el JSON o si la linea no esta en ninguna
+# de las tres listas: no es codigo para JaCoCo (una anotacion, una declaracion) y no se puede decir que ningun caso la recorra.
 function Get-EjecucionLinea($D, [string]$Fichero, [int]$Linea) {
-  if ($null -eq $D.LineasCasos) { return '' }
-  $f = $D.LineasCasos[$Fichero]
-  if ($f -and $f.Distinto.Contains($Linea)) { return 'ejecutado-distinto' }
-  if ($f -and $f.Igual.Contains($Linea)) { return 'ejecutado-igual' }
-  return 'sin-ejecutar'
+  $f = $null
+  if ($null -ne $D.LineasCasos) { $f = $D.LineasCasos[$Fichero] }
+  if (-not $f) { return '' }
+  if ($f.Distinto.Contains($Linea)) { return 'ejecutado-distinto' }
+  if ($f.Igual.Contains($Linea)) { return 'ejecutado-igual' }
+  if ($f.SinCubrir.Contains($Linea)) { return 'sin-ejecutar' }
+  return ''
 }
 
 # Las filas de la comparacion de un job del mapa: por cada clase del job (en su orden) y cada dato de su comparacion, lo que dijo
@@ -535,8 +541,8 @@ function Get-FilaComparar($T, $R) {
     })
 }
 
-# Las filas de un estado: primero las que ejecuto algun caso que salio distinto, despues las que ningun caso recorre y al final las que salieron iguales.
-# Sin medida la ejecucion va vacia y el orden es el de siempre.
+# Las filas de un estado: primero las que ejecuto algun caso que salio distinto, despues las que ningun caso recorre, las que no llevan etiqueta y al final
+# las que salieron iguales. Sin medida la ejecucion va vacia en todas y el orden es el de siempre.
 function Sort-PorEjecucion($Filas) {
   return @(foreach ($e in @('ejecutado-distinto', 'sin-ejecutar', '', 'ejecutado-igual')) { @($Filas | Where-Object { [string]$_.Ejecucion -ceq $e }) })
 }
@@ -855,6 +861,13 @@ function Get-PruebaLocalHtml($D, $T) {
   return (Format-Trozo $T 'pl-seccion' @{ CUERPO = $cuerpo })
 }
 
+# El trozo en singular ($Base-uno) si la cuenta es 1 y el plural ($Base-varios) si no.
+function Get-TrozoPorCuenta($T, [string]$Base, [int]$N, $Valores) {
+  $sufijo = 'varios'
+  if ($N -eq 1) { $sufijo = 'uno' }
+  return (Format-Trozo $T "$Base-$sufijo" $Valores)
+}
+
 # El resumen de arriba de la pagina 3: cuanto del original recorren los casos y, de los datos que la IA no pudo dar por iguales, cuantos ejecuto un caso que
 # salio igual y cuantos no recorre ninguno. Con los casos sin medir, una frase con el motivo; sin JSON, nada.
 function Get-ResumenCasos($D, $T) {
@@ -877,8 +890,11 @@ function Get-ResumenCasos($D, $T) {
       $dudosos = @(foreach ($j in @($D.Mapa.jobs)) { @(Get-DatosComparar $D $j | Where-Object { @('distinto', 'falta', 'no-lo-se') -ccontains $_.Estado }) })
       if ($dudosos.Count -eq 0) { $frases += Format-Trozo $T 'm34-sin-dudosos' }
       else {
+        $igual = @($dudosos | Where-Object { $_.Ejecucion -ceq 'ejecutado-igual' }).Count
+        $ninguno = @($dudosos | Where-Object { $_.Ejecucion -ceq 'sin-ejecutar' }).Count
         $frases += Format-Trozo $T 'm34-dudosos' @{
-          N = "$($dudosos.Count)"; IGUAL = "$(@($dudosos | Where-Object { $_.Ejecucion -ceq 'ejecutado-igual' }).Count)"; NINGUNO = "$(@($dudosos | Where-Object { $_.Ejecucion -ceq 'sin-ejecutar' }).Count)"
+          DATOS = (Get-TrozoPorCuenta $T 'm34-datos' $dudosos.Count @{ N = "$($dudosos.Count)" }); IGUAL = (Get-TrozoPorCuenta $T 'm34-igual' $igual @{ N = "$igual" })
+          NINGUNO = (Get-TrozoPorCuenta $T 'm34-ninguno' $ninguno @{ N = "$ninguno" })
         }
       }
     }
