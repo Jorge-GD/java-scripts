@@ -960,6 +960,18 @@ $Pruebas['19 bp4 b) codigo cambiado en uno: vuelve atras, se reintenta con el mo
   Comprueba 'avisa de la atascada con su fichero' (@($x.Avisos | Where-Object { $_ -match ('Atascada: ' + [regex]::Escape("${Ruta4}Alfa.java")) }).Count -eq 1) ($x.Avisos -join ' / ')
 }
 
+$Pruebas['19b bp4 b3) el fichero rechazado en la primera ronda esta como en HEAD cuando empieza el reintento'] = {
+  $E = Nuevo-Escenario4 'p4b3' @('Alfa', 'Beta')
+  $deHead = Join-Path $E.Raiz 'copilot-estado.txt'
+  [void](Fase4 $E @{ RESCATE_FALSO = 'codigo:Alfa'; BP4_ESTADO = $deHead })
+  $todas = Llamadas-De $deHead
+  $ll = @($todas | Where-Object { $_ -match 'Alfa\.java\|' })
+  Igual 'dos llamadas a Alfa: la primera ronda y el reintento' 2 $ll.Count
+  if ($ll.Count -ne 2) { return }
+  Comprueba 'la primera: el fichero empieza como en HEAD' ($ll[0] -match '\|0\|0$') $ll[0]
+  Comprueba 'el reintento: el fichero rechazado esta como en HEAD, sin lo que cambio la primera vez' ($ll[1] -match '\|1\|0$') $ll[1]
+}
+
 $Pruebas['20 bp4 b2) el primer intento cambia el codigo y el reintento, con el motivo, lo hace bien: hecha con dos intentos'] = {
   $E = Nuevo-Escenario4 'p4b2' @('Alfa', 'Beta')
   $x = Fase4 $E @{ RESCATE_FALSO = 'codigo1:Alfa' }
@@ -1008,6 +1020,22 @@ $Pruebas['22 bp4 d) un fichero no compila: la ronda se deshace, se prueban de un
   Igual 'Maven: 5 compilaciones' 5 (Compilaciones4 $E).Count
 }
 
+$Pruebas['22b bp4 d2) el que no compila va el segundo: de uno en uno cada fichero se prueba aislado, el primero se acepta'] = {
+  $E = Nuevo-Escenario4 'p4d2' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'no-compila:Beta' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'solo se commitea Alfa' ("$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Beta vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Beta'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  Comprueba 'lo dice: la ronda no compila y se prueba de uno en uno' ($x.Texto -match 'de uno en uno') $x.Texto
+  Igual 'Alfa: hecha' 'hecha' (Tarea4 $x 'Alfa').estado
+  $t = Tarea4 $x 'Beta'
+  Igual 'Beta: atascada tras dos intentos' 'atascada' $t.estado
+  Comprueba 'Beta: el motivo es que no compila, con la linea de Maven' ($t.motivo -match 'no compila' -and $t.motivo -match 'Beta\.java') $t.motivo
+  # foto (1) + la ronda entera (1) + Alfa sola (1) y Beta sola (1) + el reintento de Beta, que va sola (1)
+  Igual 'Maven: 5 compilaciones' 5 (Compilaciones4 $E).Count
+}
+
 $Pruebas['23 bp4 e) sin Lombok en el pom: ninguna llamada, ni Maven ni Copilot, y un aviso'] = {
   $E = Nuevo-Escenario4 'p4e' @('Alfa', 'Beta') $false
   $x = Fase4 $E
@@ -1052,6 +1080,23 @@ $Pruebas['24b bp4 f2) relanzar con una atascada: se conserva sin repetir; con -R
   Igual 'una llamada nueva a Copilot' ($copias + 1) (Llamadas-De $E.Copilot).Count
   Igual 'una sola compilacion nueva: la de la ronda, sin rehacer la foto' ($mvn + 1) (Compilaciones4 $E).Count
   Igual 'los dos commits' ("$Commit4${Ruta4}Alfa.java|$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+}
+
+$Pruebas['24c bp4 f3) un commit ajeno entre dos lanzamientos cambia el HEAD de partida: la foto se rehace con el HEAD nuevo'] = {
+  $E = Nuevo-Escenario4 'p4f3' @('Alfa')
+  [void](Fase4 $E @{ RESCATE_FALSO = 'codigo:Alfa' })
+  Igual 'Alfa, atascada' 'atascada' (Tarea4 (Fase4 $E @{ RESCATE_FALSO = 'bien' }) 'Alfa').estado
+  # un cambio de codigo en una clase que no es de ninguna tarea, confirmado por otra mano
+  Escribe $E.Repo "${Ruta4}Gama.java" ((Fuente-P4 'Gama').Replace('private long importe;', "private long importe;`n    private int nuevo;"))
+  [void](GitEn $E.Repo @('commit', '-q', '-a', '-m', 'cambio ajeno'))
+  $head = GitEn $E.Repo @('rev-parse', 'HEAD')
+  $mvn = (Compilaciones4 $E).Count
+  $x = Fase4 $E @{ RESCATE_FALSO = 'bien' } @{} $false
+  Igual 'con -Reintentar: Alfa, hecha (la foto vieja no tiene lo nuevo de Gama)' 'hecha' (Tarea4 $x 'Alfa').estado
+  Igual 'dos compilaciones nuevas: la foto, rehecha, y la ronda' ($mvn + 2) (Compilaciones4 $E).Count
+  Comprueba 'la foto nueva lleva lo nuevo de Gama' ((Lee $E.Repo '.rescate/practicas/antes/com/acme/p4/Gama.class') -match 'nuevo')
+  Igual 'partida.txt lleva el HEAD nuevo' $head ((Lee $E.Repo '.rescate/practicas/partida.txt').Trim())
+  Igual 'el commit de Alfa y el ajeno' ("$Commit4${Ruta4}Alfa.java|cambio ajeno|inicial") ($x.Commits -join '|')
 }
 
 $Pruebas['25 bp4 g) migracion.ps1: -Practicas es un switch y la fase solo se llama con el, despues de la correccion y antes de la prueba en local'] = {
