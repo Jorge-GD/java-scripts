@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, analisis.ps1, practicas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\, informe\ y analisis\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, analisis.ps1, practicas.ps1, huella.ps1, arreglo-practicas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\, informe\ y analisis\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -56,6 +56,11 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 commit nuevo. Con lanzadores hay ademas una tarea por script: la IA busca en el migrado lo que hacia cada accion
                 del .sh (los ficheros donde buscar los elige el script) y dice igual, distinto, falta o no lo se, con citas de los dos
                 lados: datos\comparacion-sh\<id>.json. Las acciones que no se parecen a nada del migrado salen en falta sin llamada.
+    practicas   solo con -Practicas, despues de la correccion (y de comparar) y antes de prueba-local: pasa a Lombok los getters y setters
+                escritos a mano (los de datos\practicas-despues.json, o de practicas-antes.json), una tarea por fichero, y solo se
+                queda con el cambio de un fichero si lo compilado queda igual que antes (arreglo-practicas.ps1): un commit por
+                fichero; datos\practicas-arreglos.json. Sin -Practicas la fase no existe. Si el pom no usa Lombok, avisa y no
+                llama a nadie
     prueba-local  prueba-local.ps1 -Si (con el mismo modelo, y -JavaLegacy si lo das) ejecuta el original y el migrado con las
                 mismas entradas: datos\prueba-local.json y registros\prueba-local.log; su salida sale por la consola mientras
                 corre. Siempre se lanza (al relanzar reutiliza lo hecho) salvo con -SinPruebaLocal. Un fallo se avisa y la
@@ -81,6 +86,7 @@ USO
   .\migracion.ps1 ... -MaxHoras 6      # no empieza rondas nuevas pasado ese tiempo
   .\migracion.ps1 ... -Limite 5        # ensayo corto: solo las 5 primeras tareas pendientes
   .\migracion.ps1 ... -Reintentar      # vuelve a llamar a las tareas atascadas de antes
+  .\migracion.ps1 ... -Practicas       # antes de la prueba en local, pasa a Lombok los getters y setters escritos a mano (un commit por fichero)
   .\migracion.ps1 ... -SinPruebaLocal # no hace la ultima fase (ejecutar el original y el migrado)
   .\migracion.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original para prueba-local.ps1, si no compila con el de Maven
   .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
@@ -101,6 +107,7 @@ param(
   [double]$MaxHoras = 0,      # 0 = sin tope
   [int]$Limite = 0,           # 0 = sin limite; N = en este lanzamiento solo las N primeras tareas pendientes
   [switch]$Reintentar,        # volver a intentar las tareas atascadas de un lanzamiento anterior
+  [switch]$Practicas,         # antes de la prueba en local, pasar a Lombok los getters y setters escritos a mano (la fase practicas)
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
   [string]$JavaLegacy = '',   # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
   [string]$Lanzadores = ''    # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
@@ -112,6 +119,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lanzadores.ps1')
 . (Join-Path $PSScriptRoot 'analisis.ps1')
 . (Join-Path $PSScriptRoot 'practicas.ps1')
+. (Join-Path $PSScriptRoot 'huella.ps1')
+. (Join-Path $PSScriptRoot 'arreglo-practicas.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -724,6 +733,7 @@ try {
     $sigue = -not $script:Parada
     if ($sigue -and $respuesta -eq 'corregir') { $sigue = Invoke-FaseTareas 'comparar' }
   }
+  if ($sigue -and $Practicas) { $sigue = Invoke-FasePracticas $conservar }
   if ($sigue) {
     Invoke-FasePruebaLocal
     $Estado['fase'] = 'hecha'
