@@ -24,8 +24,10 @@ QUE HACE
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
-     se borra y se escribe otra vez (el del original no se toca). Lo mismo, sin pedirlo, si el del migrado guardado se escribio
-     con otra plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara.
+     se borra y se escribe otra vez (el del original no se toca). Lo mismo, sin pedirlo, si el guardado se escribio con otra
+     plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
+     escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
+     tambien con -RehacerArnes.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -484,9 +486,10 @@ function Get-HuellaArnes([string]$Test, [string[]]$Jobs, [string]$HashOriginal) 
 # Va aparte de la huella, que cambia tambien con los jobs y el test del original y no debe rehacer nada por eso.
 function Get-HashPlantillaArnes { return (Get-Hash8 (Get-Plantilla 'arnes-local')) }
 
-# El test guardado del migrado se escribio con otra plantilla que la de ahora, o con una de antes de que la tarea la apuntara.
+# El test guardado del arnes $T (el del original o el del migrado) se escribio con otra plantilla que la de ahora, o con una de antes de
+# que la tarea la apuntara.
 function Test-PlantillaVieja($T) {
-  return ($T.entradas.repo -eq 'migrado' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado')) -and $T.entradas.plantilla -ne (Get-HashPlantillaArnes))
+  return ((Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($T.entradas.repo)")) -and $T.entradas.plantilla -ne (Get-HashPlantillaArnes))
 }
 
 # La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado (la
@@ -1850,17 +1853,26 @@ try {
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()
-  $RehacerMigrado = [bool]$RehacerArnes
+  $rehacer = @{ original = $false; migrado = [bool]$RehacerArnes }   # los que se escriben otra vez sin pasar por Use-ArnesGuardado
   $testOriginal = ''   # donde va el test del original: el del migrado lo traduce
   foreach ($x in @(@('original', $CopiaOrig), @('migrado', $CopiaMig))) {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs $testOriginal
-    # El test guardado del migrado se escribio con otra plantilla: como con -RehacerArnes, pero sin que lo pida nadie
-    if ($x[0] -eq 'migrado' -and -not $RehacerMigrado -and (Test-PlantillaVieja $t)) { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.'; $RehacerMigrado = $true }
-    # Con -RehacerArnes el del migrado vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
-    if ($RehacerMigrado -and $x[0] -eq 'migrado') { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
+    # El test guardado se escribio con otra plantilla: se escribe otra vez, como con -RehacerArnes pero sin que lo pida nadie. Una sola Info:
+    # ninguna si ya se rehace el del migrado (-RehacerArnes) y, con el original viejo, la del original y no la del migrado.
+    if (-not $rehacer[$x[0]] -and (Test-PlantillaVieja $t)) {
+      if (-not $rehacer.migrado -and $x[0] -eq 'original') { Info 'La plantilla del test ha cambiado desde que se escribio el del original: escribo otra vez los dos (el del migrado traduce el nuevo).' }
+      if (-not $rehacer.migrado -and $x[0] -eq 'migrado') { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.' }
+      $rehacer[$x[0]] = $true
+    }
+    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
+    if ($rehacer[$x[0]]) { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
     elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
+    # Si el del original no queda hecho (la plantilla, o ya no vale en este commit), se escribe otra vez y el del migrado guardado tambien: lo
+    # traduce (Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Sin migrado guardado no hay que dejar de fiarse de nada:
+    # su tarea sigue por su intento y su motivo, como hoy.
+    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) { $rehacer.migrado = $true }
     $arneses += , $t
     if ($x[0] -eq 'original') { $testOriginal = $test }
   }
@@ -1877,7 +1889,7 @@ try {
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
-  if ($RehacerMigrado) { Remove-Carpeta (Join-Ruta $Local 'arnes/migrado') }
+  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Remove-Carpeta (Join-Ruta $Local "arnes/$repo") } }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
