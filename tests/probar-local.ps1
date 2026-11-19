@@ -1451,5 +1451,20 @@ $Pruebas['m25 (h) -Reparar: relanzar con el mismo HEAD y la tarea atascada no ll
   Comprueba 'con el motivo de antes tras lo de ya probado' ($rep[0].motivo -match '^ya probado en este commit: ' -and $rep[0].motivo.Contains(($motivo -split "`n")[0])) $rep[0].motivo
 }
 
+$Pruebas['m25 (i) -Reparar: con dos claves se prueba primero la que tienen mas casos; MaxReparaciones corta y la consola dice lo que queda sin probar'] = {
+  $e = Escenario-M25 'm25-i' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00 | SQL importe=5.00', 'importe=10.00 | SQL importe=5.00') }) -Ajustes @{ MaxReparaciones = 1 }
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'sale con 2 (siguen distintos)' 2 $r.Codigo
+  Igual 'una sola llamada: el tope es 1' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones lleva una entrada' 1 $rep.Count
+  Igual 'la clave es la tabla, que tienen 2 casos y la otra 1' 'tablas/DATOS.csv' $rep[0].clave
+  Igual 'con su primer caso' 'caso-02' $rep[0].caso
+  Igual 'y los 2 casos' 2 $rep[0].casos
+  Comprueba 'la consola dice que quedan sin probar la otra clave' ($r.Salida -match 'MaxReparaciones' -and $r.Salida -match 'sin probar' -and $r.Salida.Contains('resultado_')) (Cola $r.Salida)
+  Igual 'sin commit nuevo' $antes (Estado-Git $e.Wt)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
