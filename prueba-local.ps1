@@ -197,19 +197,48 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
   $script:Mavens++
   $previos = @(Get-Cambios $Dir)
   $antes = $env:JAVA_HOME
+  $desde = [DateTime]::UtcNow
   if ($EsOriginal -and $JavaLegacy) { $env:JAVA_HOME = $JavaLegacy }
   try { $r = Invoke-MavenTope $Dir (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) "Maven, $Que" (Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')) }
   finally { $env:JAVA_HOME = $antes }
+  $causa = ''
+  if ($r.Codigo -ne 0) { $causa = Get-CausaMaven $Dir $desde }
+  Add-Member -InputObject $r -NotePropertyName Causa -NotePropertyValue $causa
   [void](Remove-Ruido $Dir $previos)
   return $r
 }
 
+# La causa de un Maven que ha fallado: de los informes de surefire de la copia $Dir escritos desde $Desde (los de antes pueden ser de otro
+# caso), en el primero que tenga <<< ERROR! o <<< FAILURE!, el ultimo 'Caused by:' o, si no hay, la primera linea con texto tras la marca.
+# Recortada a 300 caracteres. '' si no hay informes (o no se pueden leer): la salida de Maven no se queda sin decir nada por esto.
+function Get-CausaMaven([string]$Dir, [DateTime]$Desde) {
+  try {
+    $carpeta = Join-Ruta $Dir 'target/surefire-reports'
+    if (-not (Test-Path -LiteralPath $carpeta)) { return '' }
+    foreach ($f in @(Get-ChildItem -LiteralPath $carpeta -Filter '*.txt' -File | Where-Object { $_.LastWriteTimeUtc -ge $Desde } | Sort-Object Name)) {
+      $l = @([System.IO.File]::ReadAllLines($f.FullName))
+      $marca = -1
+      for ($i = 0; $i -lt $l.Count -and $marca -lt 0; $i++) { if ($l[$i] -match '<<< (ERROR|FAILURE)!') { $marca = $i } }
+      if ($marca -lt 0) { continue }
+      $causa = ''
+      foreach ($x in $l) { if ($x -match '^Caused by:') { $causa = $x } }
+      for ($i = $marca + 1; $i -lt $l.Count -and -not $causa; $i++) { if ($l[$i].Trim() -and $l[$i] -notmatch '<<<') { $causa = $l[$i] } }
+      $causa = $causa.Trim()
+      if ($causa.Length -gt 300) { $causa = $causa.Substring(0, 300) }
+      return $causa
+    }
+  }
+  catch { }
+  return ''
+}
+
 # Lo que sirve para entender un fallo de Maven (lo que da Invoke-Maven): pasado el tope, el mensaje; si no, las primeras
-# lineas [ERROR] o, si no hay, las ultimas.
+# lineas [ERROR] o, si no hay, las ultimas, y, si hay, la causa de verdad de su informe de surefire (Get-CausaMaven).
 function Get-FalloMaven($Maven) {
   if ($Maven.Tope) { return $Maven.Tope }
   $e = @($Maven.Salida | Where-Object { $_ -match '^\[ERROR\]' } | Select-Object -First ([int]$Cfg.LineasError))
   if ($e.Count -eq 0) { $e = @($Maven.Salida | Select-Object -Last ([int]$Cfg.LineasError)) }
+  if ($Maven.Causa) { $e += "Causa: $($Maven.Causa)" }
   return ($e -join "`n")
 }
 
