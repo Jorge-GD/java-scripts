@@ -49,7 +49,7 @@ function Commit-En([string]$D, [string]$Rel, [string]$Texto, [string]$Asunto) {
 # worktree de rescate (rama rescate/main-1, con $ReglaMig en regla.txt), los casos de migracion.ps1 ($Casos: job -> entradas, una por caso) y la
 # carpeta de ajustes, con el Copilot de m25 y el Maven de m33. Con -Limite, la rama de rescate lleva minimo=5.01 en src/main/resources/regla.txt (que
 # mvn-local.ps1 lee antes que el de la raiz) y el 'arreglo' de m25-copilot.ps1 (reparar-arregla) es dejarlo en 5.00.
-function Escenario-M33([string]$Nombre, $Casos, [string]$ReglaOrig = 'minimo=5.00', [string]$ReglaMig = 'minimo=5.00', [switch]$Limite) {
+function Escenario-M33([string]$Nombre, $Casos, [string]$ReglaOrig = 'minimo=5.00', [string]$ReglaMig = 'minimo=5.00', [switch]$Limite, [switch]$SinPaquete) {
   $raizE = Join-Path $Dir $Nombre
   if (Test-Path -LiteralPath $raizE) { Remove-Item -LiteralPath $raizE -Recurse -Force }
   $leg = Join-Path $raizE 'batch-viejo'
@@ -60,7 +60,8 @@ function Escenario-M33([string]$Nombre, $Casos, [string]$ReglaOrig = 'minimo=5.0
   Escribe $leg 'src/main/java/com/acme/viejo/Lector.java' "package com.acme.viejo;`n`npublic class Lector {`n}`n"
   Escribe $leg 'regla.txt' "$ReglaOrig`n"
   Escribe $mig 'pom.xml' (Pom 'batch-nuevo')
-  Escribe $mig 'src/main/java/com/acme/nuevo/App.java' (App 'com.acme.nuevo')
+  if ($SinPaquete) { Escribe $mig 'src/main/java/App.java' "@SpringBootApplication`npublic class App {`n}`n" }
+  else { Escribe $mig 'src/main/java/com/acme/nuevo/App.java' (App 'com.acme.nuevo') }
   Escribe $mig 'regla.txt' "minimo=5.00`n"
   foreach ($d in @($leg, $mig)) { Inicia-Repo $d }
   $wt = $mig + '-rescate'
@@ -115,6 +116,29 @@ function Estado-Git([string]$D) { return ((GitEn $D @('rev-parse', 'HEAD')) + '|
 
 function Foto([string]$D) { return ((GitEn $D @('rev-parse', 'HEAD')) + '|' + (GitEn $D @('status', '--porcelain')) + '|' + (GitEn $D @('branch', '-v', '--no-abbrev'))) }
 
+# Un hook pre-commit que siempre falla, para el repo de $E.Migrado (y su worktree de rescate). core.hooksPath de ese repo manda sobre el global del equipo.
+function Pon-Hook($E) {
+  $dir = Join-Path $E.Raiz 'hooks'
+  [void](New-Item -ItemType Directory -Path $dir -Force)
+  $h = Join-Path $dir 'pre-commit'
+  [System.IO.File]::WriteAllText($h, "#!/bin/sh`necho 'hook de mentira: no se puede commitear'`nexit 1`n")
+  if (Get-Command chmod -ErrorAction SilentlyContinue) { [void](& chmod +x $h) }
+  [void](GitEn $E.Migrado @('config', 'core.hooksPath', $dir))
+}
+
+# Un lanzamiento con -Regresion que no tiene que commitear nada: sale con 0, la rama de rescate no se mueve y regresion.json no lleva commit ni casos.
+# Devuelve el escenario, la salida y el json, para mirar el motivo de cada caso.
+function Sin-Commit([string]$Nombre, $Casos, [string]$Modo, [string]$ReglaMig = 'minimo=5.00') {
+  $e = Escenario-M33 $Nombre $Casos 'minimo=5.00' $ReglaMig
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Regresion') '' $Modo
+  Igual 'sale con 0 (los casos salen iguales)' 0 $r.Codigo
+  Igual 'la rama de rescate no se mueve' $antes (Estado-Git $e.Wt)
+  Comprueba 'no hay commit en regresion.json' ((Lee-Json $e.Regresion).commit -eq '' -and @((Lee-Json $e.Regresion).casos).Count -eq 0) ''
+  Comprueba 'y la consola no dice que quedan tests' ($r.Salida -cnotmatch 'quedan como tests') (Cola $r.Salida)
+  return [pscustomobject]@{ E = $e; R = $r; J = (Lee-Json $e.Regresion) }
+}
+
 # El esperado y las entradas de un caso, en la rama de rescate, tal como los deja -Regresion.
 $Esp = 'src/test/resources/prueba-local-esperado'
 $Ent = 'src/test/resources/prueba-local'
@@ -167,7 +191,7 @@ $Pruebas['m33 (b) el esperado no lleva las tablas BATCH_ ni TASK_, aunque estan 
   $e = Escenario-M33 'm33-b' ([ordered]@{ cargaJob = @('importe=10.00 | SQL importe=7.00') })
   $r = Prueba $e @('-Regresion') '' 'estable,framework'
   Igual 'sale con 0' 0 $r.Codigo
-  Comprueba 'la salida del original tiene las tablas del framework (si no, esta prueba no prueba nada)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/tablas/BATCH_JOB_INSTANCE.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/tablas/TASK_EXECUTION.csv'))) ''
+  Comprueba 'la salida del original tiene las tablas del framework (si no, esta prueba no prueba nada)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/tablas/BATCH_JOB_INSTANCE.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/tablas/TASK_EXECUTION.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/tablas/TASK_EXECUTION.csv'))) ''
   Igual 'el caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-01').resultado
   $f = @((Ficheros-Del-Commit $e.Wt) -split '\|')
   Comprueba 'el commit lleva el esperado de la tabla del batch' ($f -contains "$Esp/cargaJob/caso-01/tablas/DATOS.csv") ($f -join ' ')
@@ -200,6 +224,7 @@ $Pruebas['m33 (d) un caso que falla en la copia (el estado static de la JVM pasa
   Comprueba 'hay un commit, con un caso' ($j.commit -and (GitEn $e.Wt @('log', '-1', '--format=%s')) -eq 'test(regresion): casos de la prueba en local como tests (1 casos, 1 jobs)') (GitEn $e.Wt @('log', '-1', '--format=%s'))
   Comprueba 'el arbol lleva el caso 1 y no el 2 ni el 3' ((Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-01/estado.txt")) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-02")) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Ent/cargaJob/caso-03"))) ''
   Comprueba 'la consola cuenta los quitados' ($r.Salida -match 'Quitados: 2\.') (Cola $r.Salida)
+  Comprueba 'y avisa de cada uno, con su motivo' ($r.Salida -match 'quitado: cargaJob/caso-02: falla en la copia' -and $r.Salida -match 'quitado: cargaJob/caso-03: falla en la copia') (Cola $r.Salida)
   Igual 'la carpeta de la rama de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
 }
 
@@ -219,6 +244,8 @@ $Pruebas['m33 (n) lanzarlo dos veces: la segunda no hace otro commit y lo dice; 
   $r = Prueba $e @('-Regresion')
   Igual 'la primera sale con 0' 0 $r.Codigo
   $primero = GitEn $e.Wt @('rev-parse', 'HEAD')
+  Igual 'dos casos del mismo job: el asunto cuenta un job' 'test(regresion): casos de la prueba en local como tests (2 casos, 1 jobs)' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Comprueba 'y la consola tambien' ($r.Salida -match 'Regresion: 2 casos de 1 jobs quedan como tests') (Cola $r.Salida)
   $r = Prueba $e @('-Regresion')
   Igual 'la segunda sale con 0' 0 $r.Codigo
   Igual 'la rama de rescate no se mueve' $primero (GitEn $e.Wt @('rev-parse', 'HEAD'))
@@ -239,6 +266,121 @@ $Pruebas['m33 (p) la suite de tests unitarios de -Reparar no lleva RegresionLoca
   $informes = Get-Ruta ($e.Migrado + '-prueba-local') 'target/surefire-reports'
   Comprueba 'la suite se ha ejecutado: lleva el informe de OtroTest' (Test-Path -LiteralPath (Join-Path $informes 'TEST-com.acme.nuevo.OtroTest.xml')) ((@(Get-ChildItem -LiteralPath $informes -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })) -join ' ')
   Comprueba 'y no lleva el de RegresionLocalTest' (-not (Test-Path -LiteralPath (Join-Path $informes 'TEST-com.acme.nuevo.RegresionLocalTest.xml'))) ((@(Get-ChildItem -LiteralPath $informes -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })) -join ' ')
+}
+
+$Pruebas['m33 (q) la rama refleja solo los casos iguales de este lanzamiento: uno que ya estaba y ahora sale distinto no es un quitado, se retira de la rama en el mismo commit y se dice'] = {
+  $e = Escenario-M33 'm33-q' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e @('-Regresion')
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Comprueba 'y deja los dos casos en la rama' ((Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-01/estado.txt")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-02/estado.txt"))) ''
+  Commit-En $e.Wt 'src/main/resources/regla.txt' "minimo=5.01`n" 'migra el limite'
+  $antes = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Regresion')
+  Igual 'el segundo sale con 2 (caso-01 ya sale distinto)' 2 $r.Codigo
+  Igual 'los casos: distinto, igual' 'distinto,igual' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.resultado })) -join ',')
+  $j = Lee-Json $e.Regresion
+  Igual 'regresion.json: el caso que sigue igual' 'cargaJob/caso-02' ((@($j.casos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Igual 'ningun quitado (un caso distinto no es un caso que falle en la copia)' 0 @($j.quitados).Count
+  Igual 'retirados: el que ya estaba y ahora sale distinto' 'cargaJob/caso-01' ((@($j.retirados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Igual 'un solo commit nuevo' 1 (GitEn $e.Wt @('rev-list', '--count', "$antes..HEAD"))
+  Igual 'con el asunto de un caso' 'test(regresion): casos de la prueba en local como tests (1 casos, 1 jobs)' (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Igual 'y el commit solo lleva lo que se retira: el esperado y las entradas del caso-01' (((@("$Esp/cargaJob/caso-01/estado.txt", "$Esp/cargaJob/caso-01/ficheros/salida/resultado.txt", "$Ent/cargaJob/caso-01/ficheros/entrada/datos.txt")) | Sort-Object { $_ } -CaseSensitive) -join '|') (Ficheros-Del-Commit $e.Wt)
+  Comprueba 'no queda nada del caso-01 en la rama' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-01")) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Ent/cargaJob/caso-01"))) ''
+  Comprueba 'y el caso-02 sigue' ((Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-02/estado.txt")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Ent/cargaJob/caso-02/ficheros/entrada/datos.txt"))) ''
+  Comprueba 'la consola dice cuantos se retiran' ($r.Salida -match 'Retirados de la rama: 1 \(ahora salen distintos o ya no estan\)') (Cola $r.Salida)
+  Igual 'la carpeta de la rama de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m33 (r) un caso con la fecha, la hora o la ruta de hoy no se commitea, este en el nombre, en el texto o en los dos; si no vale ninguno, no hay commit ni copia'] = {
+  $n = 0
+  foreach ($x in @(@('', 'en el nombre y en el texto'), @('estable-nombre', 'solo en el texto'), @('estable-texto', 'solo en el nombre'))) {
+    $n++
+    $e = Escenario-M33 "m33-r$n" ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+    $antes = Estado-Git $e.Wt
+    $r = Prueba $e @('-Regresion') '' $x[0]
+    $d = "(la fecha $($x[1]))"
+    Igual "$d sale con 0" 0 $r.Codigo
+    Igual "$d los casos salen iguales" 'igual,igual' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.resultado })) -join ',')
+    Igual "$d la rama de rescate no se mueve" $antes (Estado-Git $e.Wt)
+    $j = Lee-Json $e.Regresion
+    Igual "$d sin commit" '' $j.commit
+    Igual "$d los dos casos quitados" 'cargaJob/caso-01,cargaJob/caso-02' ((@($j.quitados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+    Comprueba "$d con el motivo de la fecha y el fichero" ($j.quitados[0].motivo -match 'ficheros/salida/resultado.*lleva la fecha') $j.quitados[0].motivo
+    Comprueba "$d y el motivo de regresion.json" ($j.motivo -match 'ningun caso vale como test fijo') $j.motivo
+    Comprueba "$d la consola dice que ningun caso vale" ($r.Salida -match 'Regresion: ningun caso vale como test fijo: no se commitea nada\. Quitados: 2\.') (Cola $r.Salida)
+    Comprueba "$d y no llega a hacer la copia ni a ejecutar Maven con ella" (-not (Test-Path -LiteralPath ($e.Migrado + '-regresion'))) ''
+  }
+}
+
+$Pruebas['m33 (s) si git commit falla (un hook que no deja): se dice, no hay commit y la rama de rescate queda como estaba, tambien lo que habia en ella'] = {
+  $e = Escenario-M33 'm33-s' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  # lo que -Regresion cambiaria o borraria en la rama: unas propiedades de JUnit de otro y un caso de un lanzamiento anterior
+  Commit-En $e.Wt 'src/test/resources/junit-platform.properties' "junit.otra=1`n" 'propiedades'
+  Commit-En $e.Wt "$Esp/viejoJob/caso-01/estado.txt" "estado=COMPLETED`n" 'esperado viejo'
+  Commit-En $e.Wt "$Ent/viejoJob/caso-01/ficheros/entrada/datos.txt" "importe=1.00`n" 'entrada vieja'
+  Pon-Hook $e
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Regresion')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la rama de rescate no se mueve: ni commit ni cambios' $antes (Estado-Git $e.Wt)
+  Igual 'git status sin nada' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'las propiedades son las de antes' "junit.otra=1`n" (Lee $e.Wt 'src/test/resources/junit-platform.properties')
+  Comprueba 'el caso de antes sigue en la rama' ((Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/viejoJob/caso-01/estado.txt")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Ent/viejoJob/caso-01/ficheros/entrada/datos.txt"))) ''
+  $quedan = @(Get-ChildItem -LiteralPath (Join-Path $e.Wt 'src/test') -Recurse -File | ForEach-Object { $_.FullName.Substring($e.Wt.Length).Replace('\', '/') } | Where-Object { $_ -notlike '*/viejoJob/*' -and $_ -ne '/src/test/resources/junit-platform.properties' })
+  Igual 'y no han quedado ni el arnes ni RegresionLocalTest ni los casos nuevos (ningun fichero mas que los de antes)' '' ($quedan -join ' ')
+  $j = Lee-Json $e.Regresion
+  Igual 'regresion.json: sin commit' '' $j.commit
+  Comprueba 'con el motivo' ($j.motivo -match 'git commit ha fallado') $j.motivo
+  Comprueba 'la consola lo dice y no da ningun commit' ($r.Salida -match 'git commit ha fallado' -and $r.Salida -match 'no se commitea nada' -and $r.Salida -cnotmatch 'quedan como tests') (Cola $r.Salida)
+}
+
+$Pruebas['m33 (u1) si Maven falla en la copia sin decir que caso (no compila): no hay commit y el motivo lo dice con lo que dice Maven'] = {
+  $x = Sin-Commit 'm33-u1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) 'estable,roto'
+  Comprueba 'el motivo: Maven falla sin decir que caso, con su [ERROR]' ($x.J.motivo -match 'Maven falla con los tests de regresion sin decir que caso' -and $x.J.motivo -match 'COMPILATION ERROR') $x.J.motivo
+  Igual 'no se quita ningun caso' 0 @($x.J.quitados).Count
+}
+
+$Pruebas['m33 (u2) si tras quitar los casos que fallan Maven sigue fallando: no hay commit y el motivo es el de la segunda ejecucion'] = {
+  $x = Sin-Commit 'm33-u2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) 'estable,incompleto' "minimo=5.00`nestatico=si"
+  Comprueba 'el motivo: sin esos casos Maven sigue fallando' ($x.J.motivo -match 'Sin esos casos, Maven sigue fallando') $x.J.motivo
+  Igual 'solo se quito el primero que apunto el test (el otro sigue fallando)' 'cargaJob/caso-02' ((@($x.J.quitados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+}
+
+$Pruebas['m33 (u3) si fallan todos los casos en la copia: no hay commit, se quitan todos y el motivo es que ninguno pasa'] = {
+  $x = Sin-Commit 'm33-u3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) 'estable,todos-fallan'
+  Igual 'el motivo: ningun caso pasa en la copia' 'ningun caso pasa en la copia' $x.J.motivo
+  Igual 'los dos quitados' 'cargaJob/caso-01,cargaJob/caso-02' ((@($x.J.quitados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Comprueba 'cada uno con su motivo: falla en la copia' (@($x.J.quitados | Where-Object { $_.motivo -match '^falla en la copia: ' }).Count -eq 2) (($x.J.quitados | ForEach-Object { $_.motivo }) -join ' / ')
+}
+
+$Pruebas['m33 (u4) la sensibilidad pide que falle el caso cambiado: si Maven falla por otro caso (ruido), no es sensible y no hay commit'] = {
+  $x = Sin-Commit 'm33-u4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) 'estable,ruido'
+  Comprueba 'el motivo: la comprobacion no es sensible, con el fichero y el caso' ($x.J.motivo -match 'La comprobacion no es sensible: con un byte cambiado en .* del esperado de cargaJob/caso-01, Maven no ha fallado en ese caso') $x.J.motivo
+}
+
+$Pruebas['m33 (v) junit-platform.properties que ya existe: se le anade la linea del orden en la suya, sin pisar lo que tenia ni duplicarla'] = {
+  $orden = 'junit.jupiter.testclass.order.default=org.junit.jupiter.api.ClassOrderer$OrderAnnotation'
+  $e = Escenario-M33 'm33-v1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Commit-En $e.Wt 'src/test/resources/junit-platform.properties' 'junit.jupiter.execution.parallel.enabled=false' 'propiedades sin salto final'
+  $r = Prueba $e @('-Regresion')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'quedan las dos lineas, cada una en la suya (la de antes, sin salto final, y la del orden)' ("junit.jupiter.execution.parallel.enabled=false`n" + $orden + "`n") (Lee $e.Wt 'src/test/resources/junit-platform.properties')
+  Comprueba 'y el commit lleva el fichero cambiado' (@((Ficheros-Del-Commit $e.Wt) -split '\|') -contains 'src/test/resources/junit-platform.properties') (Ficheros-Del-Commit $e.Wt)
+  $e = Escenario-M33 'm33-v2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Commit-En $e.Wt 'src/test/resources/junit-platform.properties' "junit.jupiter.testclass.order.default=otra.Clase`n" 'propiedades con otro orden'
+  $r = Prueba $e @('-Regresion')
+  Igual 'con otro orden ya puesto, sale con 0' 0 $r.Codigo
+  Igual 'no se toca: ni se pisa ni se duplica' "junit.jupiter.testclass.order.default=otra.Clase`n" (Lee $e.Wt 'src/test/resources/junit-platform.properties')
+  Comprueba 'y el commit no lo lleva' (@((Ficheros-Del-Commit $e.Wt) -split '\|') -notcontains 'src/test/resources/junit-platform.properties') (Ficheros-Del-Commit $e.Wt)
+}
+
+$Pruebas['m33 (w) si el arnes no tiene paquete, RegresionLocalTest.java tampoco lleva linea package'] = {
+  $e = Escenario-M33 'm33-w' ([ordered]@{ cargaJob = @('importe=10.00') }) -SinPaquete
+  $r = Prueba $e @('-Regresion')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el arnes esta en src/test/java, sin carpeta de paquete' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/test/java/PruebaLocalTest.java')) (GitEn $e.Wt @('ls-files', 'src/test'))
+  $t = Lee $e.Wt 'src/test/java/RegresionLocalTest.java'
+  Comprueba 'RegresionLocalTest.java esta junto a el, sin package ni marca de la plantilla' ($t -cnotmatch '(?m)^\s*package\b' -and -not $t.Contains('{{') -and $t -match '(?m)^class RegresionLocalTest ') $t.Substring(0, [Math]::Min(120, $t.Length))
 }
 
 $Pruebas['m33 (f) sin -Regresion no cambia nada: ni commit ni regresion.json'] = {
@@ -269,7 +411,7 @@ function Escribe-JUnit-Falso([string]$Raiz) {
   Escribe $Raiz "$api/Tag.java" "package org.junit.jupiter.api;`nimport java.lang.annotation.*;`n@Retention(RetentionPolicy.RUNTIME) @Target({ElementType.TYPE, ElementType.METHOD})`npublic @interface Tag { String value(); }`n"
   Escribe $Raiz "$api/Order.java" "package org.junit.jupiter.api;`nimport java.lang.annotation.*;`n@Retention(RetentionPolicy.RUNTIME) @Target({ElementType.TYPE, ElementType.METHOD})`npublic @interface Order { int value(); }`n"
   Escribe $Raiz "$api/Assertions.java" "package org.junit.jupiter.api;`npublic class Assertions { public static void fail(String m) { throw new AssertionError(m); } }`n"
-  Escribe $Raiz 'Runner.java' ("public class Runner {`n  public static void main(String[] a) throws Exception {`n    Class<?> c = Class.forName(a[0]);`n    java.lang.reflect.Constructor<?> k = c.getDeclaredConstructor();`n    k.setAccessible(true);`n    Object o = k.newInstance();`n    int rc = 0;`n" +
+  Escribe $Raiz 'Runner.java' ("public class Runner {`n  public static void main(String[] a) throws Exception {`n    Class<?> c = Class.forName(a[0]);`n    java.lang.reflect.Constructor<?> k = c.getDeclaredConstructor();`n    k.setAccessible(true);`n    Object o = k.newInstance();`n    int rc = 0;`n    org.junit.jupiter.api.Order orden = c.getAnnotation(org.junit.jupiter.api.Order.class);`n    System.out.println(`"ORDER `" + (orden == null ? `"ninguno`" : String.valueOf(orden.value())));`n" +
     "    for (java.lang.reflect.Method m : c.getDeclaredMethods()) {`n      if (!m.isAnnotationPresent(org.junit.jupiter.api.Test.class)) continue;`n      m.setAccessible(true);`n      try { m.invoke(o); System.out.println(`"PASA `" + m.getName()); }`n      catch (java.lang.reflect.InvocationTargetException e) { System.out.println(`"FALLA `" + e.getCause().getMessage()); rc = 1; }`n    }`n    System.exit(rc);`n  }`n}`n")
 }
 
@@ -350,6 +492,7 @@ $Pruebas['m33 (h) la plantilla compila en Java 17 contra un JUnit 5 falso, con y
   $r = Corre-Runner $java $clases $p1 $clase
   Igual 'mismas filas con otro orden, CRLF, sin ultimo salto y tablas del framework distintas: pasa' 0 $r.Codigo
   Comprueba 'y no deja fichero de fallos' ($r.Fallos -eq '') $r.Fallos
+  Comprueba 'la clase va la ultima: su @Order es Integer.MAX_VALUE (2147483647)' ($r.Salida -match '(?m)^ORDER 2147483647\s*$') $r.Salida
   # 2. Un caso distinto en un fichero, uno sin salida, uno con un fichero de mas, uno con la tabla cambiada y uno con una fila rara: fallan, con job, caso, fichero y linea
   $p2 = Join-Path $base 'p2'
   Escribe-Proyecto $p2 @{
@@ -375,9 +518,37 @@ $Pruebas['m33 (h) la plantilla compila en Java 17 contra un JUnit 5 falso, con y
   Comprueba 'una tabla con un valor cambiado: la linea ya ordenada' ($r.Salida.Contains("job1/caso-05: tablas/T.csv: linea 2: esperado '1;ana' y sale '1;luis'")) $r.Salida
   Comprueba 'una fila con otros campos que la cabecera se compara tal cual (la cabecera, que ya difiere)' ($r.Salida.Contains("job2/caso-01: tablas/T.csv: linea 1: esperado 'ID;NOMBRE' y sale 'NOMBRE;ID'")) $r.Salida
   Comprueba 'el caso que sale igual no esta en el mensaje' (-not $r.Salida.Contains('job1/caso-01')) $r.Salida
-  $lineas = @($r.Fallos -split "`n" | Where-Object { $_ })
+  $lineas = @($r.Fallos -split '\r?\n' | Where-Object { $_ })
   Igual 'target/regresion-fallos.txt: una linea por caso que falla' 5 $lineas.Count
   Igual 'con job, caso y mensaje separados por tabuladores' "job1`tcaso-02`tficheros/salida/a.txt: linea 3: esperado 'tres' y sale 'trex'" $lineas[0]
+  # 3. Mas o menos lineas de las esperadas, y un fichero esperado que no sale
+  $p3 = Join-Path $base 'p3'
+  Escribe-Proyecto $p3 @{
+    'job3/caso-01/a.txt' = "uno`ndos`n"
+    'job3/caso-02/a.txt' = "uno`ndos`ntres`n"
+    'job4/caso-01/a.txt' = "uno`n"
+    'job4/caso-01/b.txt' = "dos`n"
+  } @{
+    'job3/caso-01/a.txt' = "uno`ndos`ntres`n"
+    'job3/caso-02/a.txt' = "uno`ndos`n"
+    'job4/caso-01/a.txt' = "uno`n"
+  }
+  $r = Corre-Runner $java $clases $p3 $clase
+  Igual 'con lineas de mas, de menos y un fichero que no sale falla' 1 $r.Codigo
+  Comprueba 'sale una linea de mas: la que se esperaba no hay' ($r.Salida.Contains("job3/caso-01: a.txt: linea 3: esperado '(no hay)' y sale 'tres'")) $r.Salida
+  Comprueba 'sale una linea de menos: la que sale no hay' ($r.Salida.Contains("job3/caso-02: a.txt: linea 3: esperado 'tres' y sale '(no hay)'")) $r.Salida
+  Comprueba 'un fichero esperado que no sale: lo dice' ($r.Salida.Contains('job4/caso-01: b.txt: no sale')) $r.Salida
+  # 4. La linea distinta se ensena en UTF-8 si lo es y, si no, tal cual (Latin-1): nunca con U+FFFD
+  $p4 = Join-Path $base 'p4'
+  Escribe-Proyecto $p4 @{ 'job5/caso-01/a.txt' = ''; 'job5/caso-02/a.txt' = '' } @{ 'job5/caso-01/a.txt' = "cafe`n"; 'job5/caso-02/a.txt' = "cafe`n" }
+  $e9 = [string][char]0xE9
+  [System.IO.File]::WriteAllBytes((Join-Path $p4 'src/test/resources/prueba-local-esperado/job5/caso-01/a.txt'), [System.Text.Encoding]::UTF8.GetBytes("caf$e9`n"))
+  [System.IO.File]::WriteAllBytes((Join-Path $p4 'src/test/resources/prueba-local-esperado/job5/caso-02/a.txt'), [byte[]]@(0x63, 0x61, 0x66, 0xE9, 0x0A))
+  $r = Corre-Runner $java $clases $p4 $clase
+  Igual 'dos lineas con acento distintas: falla' 1 $r.Codigo
+  Comprueba 'una linea en UTF-8 se ensena con su acento' ($r.Fallos.Contains("job5`tcaso-01`ta.txt: linea 1: esperado 'caf$e9' y sale 'cafe'")) $r.Fallos
+  Comprueba 'una linea que no es UTF-8 se ensena tal cual, con el acento de Latin-1' ($r.Fallos.Contains("job5`tcaso-02`ta.txt: linea 1: esperado 'caf$e9' y sale 'cafe'")) $r.Fallos
+  Comprueba 'y ninguna lleva U+FFFD (el caracter de reemplazo)' (-not $r.Fallos.Contains([string][char]0xFFFD)) $r.Fallos
 }
 
 # ============================== EL ARRANQUE (l) Y LA AYUDA ==============================
