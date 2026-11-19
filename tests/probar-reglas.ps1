@@ -685,6 +685,7 @@ $Pruebas['21 s) si src/main no se puede dejar como estaba: parada git, sin segui
   if ($script:Paradas.Count -ne 1) { return }
   Igual 'motivo git' 'git' $script:Paradas[0][0]
   Comprueba 'el detalle dice el fichero que no pudo dejar como estaba' ($script:Paradas[0][1].Contains("${Ruta35}ReciboValidator.java")) $script:Paradas[0][1]
+  Comprueba 'el detalle lleva lo que dijo git al intentar restaurarlo (el index.lock)' ($script:Paradas[0][1] -match 'index\.lock') $script:Paradas[0][1]
   Igual 'solo se llego al primer mutante: dos corridas (sin cambio y el primero)' 2 @(Corridas35 $E 'ReciboValidator').Count
   Igual 'ningun commit' 'inicial' ($x.Commits -join '|')
   Igual 'la tarea sigue pendiente, sin intentos gastados' 0 (Tarea35 $x 'ReciboValidator').intentos
@@ -783,6 +784,165 @@ $Pruebas['24 v) tests-reglas.ps1: solo funciones, cabecera, ASCII, nada de Power
   }
   Comprueba 'la plantilla no deja lanzar Maven' ($texto -match 'No ejecutes Maven')
   Comprueba 'esfuerzo medium en el codigo de la ronda' ($codigo -match "Esfuerzo = 'medium'")
+}
+
+# Lo que los mutantes de tests-reglas.ps1 dejaron vivo (verif/mut-m35): cada prueba de aqui abajo mata uno o dos.
+$Pruebas['25 w) un test que falla contra el codigo tal como esta: no se llega a los mutantes, reintento y atascada, sin commit'] = {
+  $E = Nuevo-Escenario35 'w'
+  $x = Fase35 $E @{ RESCATE_FALSO = 'falla-previo:ReciboValidator' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'solo se commitea el de RemesaCalculador' ("$Commit35$(Test-De 'RemesaCalculador')|inicial") ($x.Commits -join '|')
+  $t = Tarea35 $x 'ReciboValidator'
+  Igual 'ReciboValidator: atascada' 'atascada' $t.estado
+  Igual 'dos intentos' 2 $t.intentos
+  Comprueba 'el motivo dice que no pasa con el codigo tal como esta' ($t.motivo -match 'no pasa con el codigo tal como esta') $t.motivo
+  Igual 'src/main queda byte a byte igual' $true (Main-Igual35 $E)
+  Igual 'el worktree queda limpio' '' (Estado-Git35 $E)
+  $cv = @(Corridas35 $E 'ReciboValidator')
+  Igual 'dos corridas, una por intento' 2 $cv.Count
+  Igual 'ninguna con src/main cambiado: no se llega a los mutantes' 0 @($cv | Where-Object { $_ }).Count
+  Igual 'JSON: ninguna regla comprobada' 0 @((Fila35 $x 'ReciboValidator').reglas).Count
+}
+
+$Pruebas['26 x) el test que no compila es el segundo de la ronda: el primero se acepta y el otro se atasca'] = {
+  $E = Nuevo-Escenario35 'x'
+  $x = Fase35 $E @{ RESCATE_FALSO = 'no-compila:RemesaCalculador' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'solo se commitea el de ReciboValidator' ("$Commit35$(Test-De 'ReciboValidator')|inicial") ($x.Commits -join '|')
+  Igual 'el worktree queda limpio' '' (Estado-Git35 $E)
+  Comprueba 'lo dice: la ronda no compila y se prueba de uno en uno' ($x.Texto -match 'de uno en uno') $x.Texto
+  Igual 'ReciboValidator: hecha con un intento' 'hecha' (Tarea35 $x 'ReciboValidator').estado
+  Igual 'ReciboValidator: un intento' 1 (Tarea35 $x 'ReciboValidator').intentos
+  $t = Tarea35 $x 'RemesaCalculador'
+  Igual 'RemesaCalculador: atascada' 'atascada' $t.estado
+  Comprueba 'su motivo es que no compila' ($t.motivo -match 'No compila') $t.motivo
+}
+
+$Pruebas['27 y) el tope de Maven con un cambio puesto cuenta como vigilada: el test se pasa del tiempo'] = {
+  $E = Nuevo-Escenario35 'y' @('importe')
+  # el Maven de mentira se duerme con src/main cambiado; con 9 s de tope se para (las demas llamadas tardan una fraccion)
+  $x = Fase35 $E @{ M35_COLGAR = '1' } @{ MinutosMaven = 0.15 }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'se commitea el test' "$Commit35$(Test-De 'ReciboValidator')" $x.Commits[0]
+  $f = Fila35 $x 'ReciboValidator'
+  Igual 'hecha' 'hecha' $f.estado
+  $i = Regla35 $f 'El importe tiene que ser mayor que cero.'
+  Igual 'importe: vigilada' 'vigilada' $i.resultado
+  Comprueba 'importe: el motivo dice que se pasa del tiempo' ($i.motivo -match 'se pasa del tiempo') $i.motivo
+  Comprueba 'avisa del tope de Maven' (@($x.Avisos | Where-Object { $_ -match 'se ha pasado del tope' }).Count -ge 1) ($x.Avisos -join ' / ')
+  Igual 'src/main queda byte a byte igual' $true (Main-Igual35 $E)
+  Igual 'el worktree queda limpio' '' (Estado-Git35 $E)
+}
+
+$Pruebas['28 z) una cita que sale dos veces: la regla se ubica en la linea mas cercana a la de la comparacion'] = {
+  $cita = 'if (recibo.getImporte() <= 0) {'
+  $otra = @'
+
+    public void revalidar(Recibo recibo) {
+        if (recibo.getImporte() <= 0) {
+            throw new IllegalArgumentException("Otra vez: " + recibo.getNumero());
+        }
+    }
+}
+'@
+  $fuente = ($Fuentes35['ReciboValidator'] -replace '\}\s*$', '') + $otra
+  $lineas = @($fuente -split "`r?`n")
+  $donde = @(for ($k = 0; $k -lt $lineas.Count; $k++) { if ($lineas[$k].Trim() -ceq $cita) { $k + 1 } })
+  Igual 'la cita sale en dos lineas' 2 $donde.Count
+  if ($donde.Count -ne 2) { return }
+  # la comparacion dice la linea de justo antes del segundo sitio (lejos del primero)
+  $E = Nuevo-Escenario35 'z' @('importe') @{ Fuentes = @{ ReciboValidator = $fuente }; Desplaza = ($donde[1] - 1 - 6) }
+  $RepoRoot = $E.Repo
+  $Datos = $E.Datos
+  $v = @(Con-Falso35 @{} @{} { Get-TareasReglas $true }) | Where-Object { $_.entradas.clase -ceq 'ReciboValidator' } | Select-Object -First 1
+  Igual 'importe: el segundo sitio, el mas cercano' $donde[1] $v.entradas.reglas[0].linea
+  # y si la comparacion dice la del primero, el primero
+  $E = Nuevo-Escenario35 'z2' @('importe') @{ Fuentes = @{ ReciboValidator = $fuente } }
+  $RepoRoot = $E.Repo
+  $Datos = $E.Datos
+  $v = @(Con-Falso35 @{} @{} { Get-TareasReglas $true }) | Where-Object { $_.entradas.clase -ceq 'ReciboValidator' } | Select-Object -First 1
+  Igual 'importe: el primer sitio, el mas cercano' $donde[0] $v.entradas.reglas[0].linea
+}
+
+$Pruebas['29 aa) Get-SpringReglas: cada anotacion que arranca Spring se rechaza y un test con Mockito no'] = {
+  foreach ($a in @('@SpringBootTest', '@SpringBootTest(classes = App.class)', '@ContextConfiguration(classes = X.class)', '@SpringJUnitConfig', '@SpringBatchTest', '@WebMvcTest(Foo.class)', '@DataJpaTest', '@JdbcTest', '@ExtendWith(SpringExtension.class)')) {
+    $dice = Get-SpringReglas "package x;`n`n$a`nclass T { }`n"
+    Comprueba "rechaza $a" ($dice -cne '') "no ha visto nada"
+  }
+  Igual 'un test con Mockito no es de Spring' '' (Get-SpringReglas "@ExtendWith(MockitoExtension.class)`nclass T { @Mock Repo r; }`n")
+  Igual 'ni un nombre que solo se parece' '' (Get-SpringReglas "@SpringBootTestPlus`nclass T { }`n")
+}
+
+$Pruebas['30 ab) una regla igual con fichero y sin linea (0) en la comparacion no entra en las tareas'] = {
+  $E = Nuevo-Escenario35 'ab' @('importe', 'cliente')
+  $comp = Get-Ruta $E.Datos 'comparacion/clase-1-validator.json'
+  $j = Lee-Json $comp
+  $j.datos[0].linea = 0
+  Write-Json $comp $j
+  $RepoRoot = $E.Repo
+  $Datos = $E.Datos
+  $v = @(Con-Falso35 @{} @{} { Get-TareasReglas $true }) | Where-Object { $_.entradas.clase -ceq 'ReciboValidator' } | Select-Object -First 1
+  Igual 'una sola regla' 1 @($v.entradas.reglas).Count
+  Igual 'la de cliente' 'Todo recibo lleva cliente.' $v.entradas.reglas[0].texto
+}
+
+$Pruebas['31 ac) dos reglas en la misma linea: se cambia una sola vez y las dos quedan vigiladas'] = {
+  $E = Nuevo-Escenario35 'ac' @('importe')
+  $cita = 'if (recibo.getImporte() <= 0) {'
+  # una segunda regla sobre la linea del importe, en la ficha (dato 4) y en la comparacion
+  $rf = Get-Ruta $E.Datos 'fichas/clase-1-validator.json'
+  $f = Lee-Json $rf
+  $f.datos = @($f.datos) + [pscustomobject]@{ tipo = 'regla'; texto = 'Un importe a cero no se cobra.'; linea = 31; cita = $cita }
+  Write-Json $rf $f
+  $rc = Get-Ruta $E.Datos 'comparacion/clase-1-validator.json'
+  $c = Lee-Json $rc
+  $c.datos = @($c.datos) + [pscustomobject]@{ dato = 4; estado = 'igual'; fichero = "${Ruta35}ReciboValidator.java"; linea = 6; cita = $cita; nota = ''; probado = $true }
+  Write-Json $rc $c
+  $x = Fase35 $E
+  Igual 'se commitea el test' "$Commit35$(Test-De 'ReciboValidator')" $x.Commits[0]
+  $fila = Fila35 $x 'ReciboValidator'
+  Igual 'dos reglas' 2 @($fila.reglas).Count
+  Igual 'las dos, vigiladas' 2 @($fila.reglas | Where-Object { $_.resultado -ceq 'vigilada' }).Count
+  Igual 'dos corridas: sin cambio y un solo mutante para las dos' 2 @(Corridas35 $E 'ReciboValidator').Count
+  Igual 'src/main queda byte a byte igual' $true (Main-Igual35 $E)
+}
+
+$Pruebas['32 ad) Get-MotivoNoVigiladaReglas: la linea y el cambio, y quitar un ! lo dice con sus palabras'] = {
+  $m = Get-MotivoNoVigiladaReglas 5 ([pscustomobject]@{ Antes = '!'; Despues = '' }) 'Todo recibo lleva cliente.'
+  Igual 'quitar un !' 'Tu test no falla si en la linea 5 quito el `!`: no comprueba la regla "Todo recibo lleva cliente."' $m
+  $m = Get-MotivoNoVigiladaReglas 9 ([pscustomobject]@{ Antes = '=='; Despues = '!=' }) 'Texto.'
+  Igual 'un cambio de operador' 'Tu test no falla si en la linea 9 cambio `==` por `!=`: no comprueba la regla "Texto."' $m
+}
+
+$Pruebas['33 ae) un test sin ningun @Test (Tests run: 0): no cuenta como que ha corrido, reintento y atascada sin llegar a los mutantes'] = {
+  $E = Nuevo-Escenario35 'ae'
+  $x = Fase35 $E @{ RESCATE_FALSO = 'sin-tests:ReciboValidator' }
+  Igual 'solo se commitea el de RemesaCalculador' ("$Commit35$(Test-De 'RemesaCalculador')|inicial") ($x.Commits -join '|')
+  $t = Tarea35 $x 'ReciboValidator'
+  Igual 'ReciboValidator: atascada' 'atascada' $t.estado
+  Comprueba 'el motivo dice que Maven no ha ejecutado ningun test' ($t.motivo -match 'no ha ejecutado ningun test') $t.motivo
+  $cv = @(Corridas35 $E 'ReciboValidator')
+  Igual 'dos corridas, una por intento' 2 $cv.Count
+  Igual 'ninguna con src/main cambiado: no se llega a los mutantes' 0 @($cv | Where-Object { $_ }).Count
+  Igual 'src/main queda byte a byte igual' $true (Main-Igual35 $E)
+  Igual 'el worktree queda limpio' '' (Estado-Git35 $E)
+}
+
+$Pruebas['34 af) Test-FicheroReglas: solo es verdad si el fichero tiene exactamente esos bytes'] = {
+  $r = Join-Path $Dir 'af'
+  [void](New-Item -ItemType Directory -Path $r -Force)
+  $f = Join-Path $r 'X.java'
+  $bytes = [byte[]](0x61, 0x62, 0x0D, 0x0A, 0xE9, 0x63)
+  [System.IO.File]::WriteAllBytes($f, $bytes)
+  Igual 'los mismos bytes' $true (Test-FicheroReglas $f $bytes)
+  [System.IO.File]::WriteAllBytes($f, [byte[]](0x61, 0x62, 0x0D, 0x0A, 0xE8, 0x63))
+  Igual 'un byte distinto de la misma longitud' $false (Test-FicheroReglas $f $bytes)
+  [System.IO.File]::WriteAllBytes($f, [byte[]](0x61, 0x62, 0x0D, 0x0A, 0xC9, 0x63))
+  Igual 'una mayuscula en vez de la minuscula (E9 y C9)' $false (Test-FicheroReglas $f $bytes)
+  [System.IO.File]::WriteAllBytes($f, [byte[]](0x61, 0x62, 0x0A, 0xE9, 0x63))
+  Igual 'sin el CR' $false (Test-FicheroReglas $f $bytes)
+  Igual 'un fichero que no esta' $false (Test-FicheroReglas (Join-Path $r 'No.java') $bytes)
+  Igual 'una carpeta' $false (Test-FicheroReglas $r $bytes)
 }
 
 # ================================ LANZADOR ================================

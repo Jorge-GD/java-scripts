@@ -14,6 +14,8 @@
 #   nada        no escribe nada
 #   falla       no escribe nada y sale con 1
 #   falla-cambia  como bien, pero sale con 1
+#   falla-previo  como bien, pero cada VIGILA lleva una linea que el codigo no tiene (el test falla contra el codigo tal como esta)
+#   sin-tests   como bien, pero sin ningun @Test (el Maven de mentira dice 'Tests run: 0')
 # Variables:
 #   M35_COPILOT   fichero: cada llamada anade '<clase>|<guion>|<reintento: 0 o 1>'
 $texto = ''
@@ -41,7 +43,7 @@ function Anade-Comentario([string]$Rel) {
   $r = Ruta-Fichero $Rel
   [System.IO.File]::WriteAllText($r, ([System.IO.File]::ReadAllText($r) + "// tocado por la IA`n"))
 }
-function Escribe-Test([bool]$Spring, [bool]$Rota, [int]$SinVigila) {
+function Escribe-Test([bool]$Spring, [bool]$Rota, [int]$SinVigila, [bool]$Falsa = $false, [bool]$SinTests = $false) {
   $reglas = @()
   $ms = @([regex]::Matches($prompt, '(?m)^REGLA (\d+): ([^\r\n]*)\r?\n[ \t]+Linea (\d+): ([^\r\n]*)'))
   foreach ($m in $ms) { $reglas += , @($m.Groups[2].Value.Trim(), $m.Groups[4].Value.Trim()) }
@@ -52,8 +54,11 @@ function Escribe-Test([bool]$Spring, [bool]$Rota, [int]$SinVigila) {
   if ($Spring) { $t += "@SpringBootTest`n" }
   $t += "class $clase {`n"
   for ($i = 0; $i -lt $reglas.Count; $i++) {
-    $t += "    @Test`n    @DisplayName(`"$($reglas[$i][0])`")`n    void regla$($i + 1)() {`n"
-    if ($i -lt ($reglas.Count - $SinVigila)) { $t += "        // VIGILA: $($reglas[$i][1])`n" }
+    if ($SinTests) { $t += "    void regla$($i + 1)() {`n" }
+    else { $t += "    @Test`n    @DisplayName(`"$($reglas[$i][0])`")`n    void regla$($i + 1)() {`n" }
+    $vigila = $reglas[$i][1]
+    if ($Falsa) { $vigila = 'una linea que el codigo ya no tiene' }
+    if ($i -lt ($reglas.Count - $SinVigila)) { $t += "        // VIGILA: $vigila`n" }
     $t += "    }`n`n"
   }
   if ($Rota) { $t += "    int x = NO-COMPILA;`n" }
@@ -67,6 +72,8 @@ switch ($guion) {
   'parcial' { Escribe-Test $false $false 1 }
   'spring' { Escribe-Test $true $false 0 }
   'no-compila' { Escribe-Test $false $true 0 }
+  'falla-previo' { Escribe-Test $false $false 0 $true }
+  'sin-tests' { Escribe-Test $false $false 0 $false $true }
   'otro' { Escribe-Test $false $false 0; Anade-Comentario $fichero; Anade-Comentario 'src/main/java/com/acme/recibos/Recibo.java' }
   'otro-add' {
     Escribe-Test $false $false 0

@@ -11,6 +11,7 @@
 #   M35_NO_COMPILA  regex: un .java de src/main que la cumple no compila
 #   M35_ROMPE       con ella (un .java bajo src/main/java), una llamada 'test' con src/main cambiado (un mutante) deja ese fichero hecho un
 #                   directorio y pone .git/index.lock: ni se puede volver a escribir el fichero ni git lo puede restaurar
+#   M35_COLGAR      con ella (cualquier valor), una llamada 'test' con src/main cambiado (un mutante) se queda dormida 120 s (el tope de Maven la para)
 if ($args -contains '--version') { 'Apache Maven 3.9.8 (de mentira)'; exit 0 }
 $raiz = (Get-Location).Path
 $cambiadas = @(& git -C $raiz diff -U0 -- src/main 2>$null | Where-Object { $_ -match '^\+[^+]' } | ForEach-Object { $_.Substring(1) })
@@ -36,6 +37,7 @@ if ($errores.Count -gt 0) {
   exit 1
 }
 if ($esCompile) { '[INFO] BUILD SUCCESS'; exit 0 }
+if ($env:M35_COLGAR -and $cambiadas.Count -gt 0) { Start-Sleep -Seconds 120 }
 $clase = ''
 foreach ($a in $args) { if ("$a" -match '^-Dtest=(.+)$') { $clase = $Matches[1] } }
 $test = $null
