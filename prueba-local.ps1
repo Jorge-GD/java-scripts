@@ -54,8 +54,9 @@ QUE HACE
      despues de cada arreglo se recalcula. Una tarea de IA por clave escribe, en la copia del migrado y solo en src\main\, el
      arreglo; el script lo da por bueno si pasa seis puertas, de la mas barata a la mas cara: la llamada acaba bien; la IA no
      dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); algo cambia en src\main\
-     (lo que cambie fuera se deshace y se sigue con lo que quede); el caso de la tarea mejora; ningun otro caso empeora
-     (ni claves nuevas, ni mas lineas distintas, ni deja de ejecutarse); y la suite de tests unitarios, sin el arnes, no falla mas ni se ejecuta menos que al empezar. Un arreglo que pasa va a la
+     (lo que cambie fuera se deshace y se sigue con lo que quede); el caso de la tarea mejora; la suite de tests unitarios, sin
+     el arnes, no falla mas ni se ejecuta menos que al empezar; y ningun otro caso empeora (ni claves nuevas, ni mas lineas distintas, ni
+     deja de ejecutarse). Los tests van antes que los demas casos porque tardan mucho menos. Un arreglo que pasa va a la
      rama de rescate (un commit por arreglo: 'rescate(local): <job>/<caso> <clave>'); uno que no pasa se deshace y se
      reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
      rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice. Una clave
@@ -850,11 +851,34 @@ function Get-Normal([string]$Texto) {
 }
 
 # Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
-# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
-function Get-LineasNormales([string]$Ruta) {
+# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este. Con $Tabla (un .csv de
+# tablas\: campos separados por ';', la primera linea con los nombres de las columnas), antes se ordenan las columnas por su nombre y las
+# filas: cada lado crea la tabla con su DDL y lee las filas en el orden que sea, y eso no es una diferencia del batch. Si una fila no
+# tiene tantos campos como la cabecera no se sabe cortarla y el fichero se queda como esta.
+function Get-LineasNormales([string]$Ruta, [bool]$Tabla = $false) {
   $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta)))) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
+  if ($Tabla -and $l.Count -gt 0) { return @(Sort-Tabla $l) }
   return $l
+}
+
+# Las lineas $L de una tabla con las columnas ordenadas por su nombre (ordinal; a igual nombre, como estaban) y las filas ordenadas
+# (String.CompareOrdinal), o $L tal cual si alguna fila no tiene tantos campos como la cabecera.
+function Sort-Tabla([string[]]$L) {
+  $cab = $L[0].Split(';')
+  $filas = @()
+  foreach ($x in @($L | Select-Object -Skip 1)) {
+    $f = $x.Split(';')
+    if ($f.Count -ne $cab.Count) { return $L }
+    $filas += , $f
+  }
+  $claves = New-Object 'string[]' $cab.Count
+  $orden = New-Object 'int[]' $cab.Count
+  for ($i = 0; $i -lt $cab.Count; $i++) { $claves[$i] = $cab[$i] + [char]0 + $i.ToString('D6'); $orden[$i] = $i }
+  [System.Array]::Sort($claves, $orden, [System.StringComparer]::Ordinal)
+  $cuerpo = [string[]]@($filas | ForEach-Object { $f = $_; (@($orden | ForEach-Object { $f[$_] }) -join ';') })
+  [System.Array]::Sort($cuerpo, [System.StringComparer]::Ordinal)
+  return @((@($orden | ForEach-Object { $cab[$_] }) -join ';')) + $cuerpo
 }
 
 # Una linea leida byte a byte, para ensenarla: en UTF-8 si lo es; si no, tal cual (Latin-1).
@@ -878,12 +902,13 @@ function Get-NotaJdk([string]$A, [string]$B) {
   return ''
 }
 
-# Compara dos ficheros ('' si falta uno) linea a linea, normalizados. $null si son iguales; si no, Lineas (cuantas son
-# distintas, posicion a posicion), Linea (la primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota.
-function Compare-Fichero([string]$A, [string]$B) {
+# Compara dos ficheros ('' si falta uno) linea a linea, normalizados (con $Tabla, una tabla sin orden de columnas ni de filas: la linea
+# que se ensena es la ya ordenada). $null si son iguales; si no, Lineas (cuantas son distintas, posicion a posicion), Linea (la
+# primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota.
+function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false) {
   $x = @(); $y = @()
-  if ($A) { $x = @(Get-LineasNormales $A) }
-  if ($B) { $y = @(Get-LineasNormales $B) }
+  if ($A) { $x = @(Get-LineasNormales $A $Tabla) }
+  if ($B) { $y = @(Get-LineasNormales $B $Tabla) }
   $n = 0
   $primera = -1
   for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count); $i++) {
@@ -902,13 +927,16 @@ function Compare-Fichero([string]$A, [string]$B) {
 
 # Las diferencias entre lo que dejo un caso en dos carpetas: una por fichero que no coincide (con su ruta relativa).
 # Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
-# mayusculas.
+# mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
+# Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
+# .csv de tablas\ se comparan sin orden de columnas ni de filas (Get-LineasNormales).
 function Compare-Caso([string]$A, [string]$B) {
   $pares = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
   foreach ($lado in @(@('A', $A), @('B', $B))) {
     if (-not (Test-Path -LiteralPath $lado[1])) { continue }
     foreach ($f in @(Get-ChildItem -LiteralPath $lado[1] -Recurse -File)) {
       $rel = Get-Rel $lado[1] $f.FullName
+      if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$') { continue }
       $k = Get-Normal $rel
       if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = ''; B = ''; Rel = $rel } }
       $pares[$k][$lado[0]] = $f.FullName
@@ -917,7 +945,7 @@ function Compare-Caso([string]$A, [string]$B) {
   $dif = @()
   foreach ($k in @($pares.Keys | Sort-Object)) {
     $p = $pares[$k]
-    $c = Compare-Fichero $p.A $p.B
+    $c = Compare-Fichero $p.A $p.B ($p.Rel -cmatch '^tablas/.+\.csv$')
     if ($c) { $dif += [ordered]@{ fichero = $p.Rel; lineas = $c.Lineas; linea = $c.Linea; original = $c.Original; migrado = $c.Migrado; nota = $c.Nota } }
   }
   return $dif
@@ -1310,7 +1338,8 @@ function Remove-NuevosFueraDeSrc([string]$Dir) {
   return $nuevos
 }
 
-# Pasa lo que ha dejado la IA en la copia tras la llamada $Ll de la tarea $T por las puertas, de la mas barata a la mas cara. Devuelve:
+# Pasa lo que ha dejado la IA en la copia tras la llamada $Ll de la tarea $T por las puertas, de la mas barata a la mas cara (el caso de la
+# tarea, los tests unitarios y, por ultimo, los demas casos: son un Maven cada uno). Devuelve:
 # Tipo ('rechazado', 'no se arregla' o 'bien'), Motivo, ConDiff (si hay un diff que ensenar en el reintento: no, si fallo la llamada) y,
 # si es bueno, Nuevos (los resultados medidos de ahora, por posicion en $S.Res). Las salidas medidas quedan en salidas\reparar\<n>.
 function Test-Arreglo($T, $Ll, $S) {
@@ -1352,7 +1381,16 @@ function Test-Arreglo($T, $Ll, $S) {
     return $v
   }
   $v.Nuevos[$i] = $r
-  # 5. todos los demas casos que se pueden ejecutar: ninguno peor
+  # 5. la suite de tests unitarios: ni mas fallos ni menos tests que al empezar (antes que los demas casos: cada uno es un Maven, y la suite
+  #    tarda mucho menos que todos ellos juntos)
+  $t = Measure-Tests "reparar $($S.N), tests unitarios"
+  if ($t.Motivo) { $v.Motivo = $t.Motivo; return $v }
+  if ($t.Fallos -gt $S.Base.Fallos) {
+    $v.Motivo = 'Tu cambio arregla el caso, pero rompe estos tests (esperan el comportamiento de ahora?): ' + (@($t.Nombres | Select-Object -First 5) -join ', ') + ". Fallan $($t.Fallos) y antes fallaban $($S.Base.Fallos)."
+    return $v
+  }
+  if ($t.Ejecutados -lt $S.Base.Ejecutados) { $v.Motivo = "Con tu cambio se ejecutan menos tests unitarios: $($t.Ejecutados) y antes eran $($S.Base.Ejecutados)."; return $v }
+  # 6. todos los demas casos que se pueden ejecutar: ninguno peor
   $otros = @(0..($tareasCasos.Count - 1) | Where-Object { $_ -ne $i -and (Test-Ejecutable $S.Res[$_]) })
   Invoke-Salidas $CopiaMig $false $nombre @($otros | ForEach-Object { $tareasCasos[$_] }) $false
   $peor = @()
@@ -1363,14 +1401,6 @@ function Test-Arreglo($T, $Ll, $S) {
     $v.Nuevos[$k] = $n
   }
   if ($peor.Count -gt 0) { $v.Motivo = (@($peor | Select-Object -First 3) -join "`n"); return $v }
-  # 6. la suite de tests unitarios: ni mas fallos ni menos tests que al empezar
-  $t = Measure-Tests "reparar $($S.N), tests unitarios"
-  if ($t.Motivo) { $v.Motivo = $t.Motivo; return $v }
-  if ($t.Fallos -gt $S.Base.Fallos) {
-    $v.Motivo = 'Tu cambio arregla el caso, pero rompe estos tests (esperan el comportamiento de ahora?): ' + (@($t.Nombres | Select-Object -First 5) -join ', ') + ". Fallan $($t.Fallos) y antes fallaban $($S.Base.Fallos)."
-    return $v
-  }
-  if ($t.Ejecutados -lt $S.Base.Ejecutados) { $v.Motivo = "Con tu cambio se ejecutan menos tests unitarios: $($t.Ejecutados) y antes eran $($S.Base.Ejecutados)."; return $v }
   $v.Tipo = 'bien'
   return $v
 }
