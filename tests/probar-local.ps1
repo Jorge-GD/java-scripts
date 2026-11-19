@@ -3379,6 +3379,17 @@ $Pruebas['m40 (c, d) sin la tabla en todos los intentos el arnes se acepta con e
   Igual '(d) el Aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
   Comprueba '(d) y no rechaza nada' ($r.Salida -notmatch 'rechazado') (Cola $r.Salida)
   Igual '(d) la tarea sigue hecha con sus dos intentos' 'hecha,2' "$((Tarea-Arnes $e 'original').estado),$((Tarea-Arnes $e 'original').intentos)"
+  # (d2) Un arnes guardado que otro lanzamiento dio por bueno (Use-ArnesGuardado le deja 0 intentos), como uno escrito antes de m40, aun tiene
+  # intentos: la puerta no lo rechaza igual, porque un arnes que ya sale todo igual no se rehace por esto.
+  $f = Get-Ruta $e.Local 'tareas/arnes-original.json'
+  $t = Lee-Json $f; $t.intentos = 0
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 20))
+  $n = (Llamadas $e).Count
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
+  Igual '(d2) con 0 intentos guardados sale con 0' 0 $r.Codigo
+  Igual '(d2) sin ninguna llamada nueva' $n (Llamadas $e).Count
+  Igual '(d2) el Aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Comprueba '(d2) no dice que el test ya no vale' ($r.Salida -notmatch 'ya no vale') (Cola $r.Salida)
 }
 
 $Pruebas['m40 (e) un caso cuyo original da Tabla "T_A" no encontrada, con T_A en el inventario: no se pudo preparar con su motivo, sin reintento (una sola llamada)'] = {
