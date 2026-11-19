@@ -58,6 +58,7 @@ $FicherosInforme = @(
   @('datos/hallazgos-despues.json', 'f-hallazgos-despues', 'f-fichero', $false), @('datos/diagnostico-despues.md', 'f-diagnostico-despues', 'f-fichero', $false),
   @('datos/cobertura-antes.json', 'f-cobertura-antes', 'f-fichero', $false), @('datos/cobertura-despues.json', 'f-cobertura-despues', 'f-fichero', $false),
   @('datos/practicas-antes.json', 'f-practicas-antes-json', 'f-fichero', $false), @('datos/practicas-despues.json', 'f-practicas-despues-json', 'f-fichero', $false),
+  @('datos/tests-reglas.json', 'f-tests-reglas-json', 'f-fichero', $false),
   @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false), @('datos/prueba-local.json', 'f-prueba-local-json', 'f-fichero', $false),
   @('datos/prueba-local-cobertura.json', 'f-prueba-local-cobertura-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
@@ -290,6 +291,7 @@ function Read-DatosInforme([string]$Salida) {
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json')); PruebaLocal = (Read-JsonSuave (Join-Path $datos 'prueba-local.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
     Practicas = (Read-Practicas $datos); Arreglos = (Read-JsonSuave (Join-Path $datos 'practicas-arreglos.json'))
+    Reglas = (Read-JsonSuave (Join-Path $datos 'tests-reglas.json'))
     Comparacion = (Read-Comparaciones $datos); CoberturaCasos = (Read-JsonSuave (Join-Path $datos 'prueba-local-cobertura.json')); LineasCasos = $null
     Lanzadores = @(); LanzadoresLeidos = $false
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
@@ -948,13 +950,16 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
 # Las fases de la pasada en el orden en que se hacen, que depende de la respuesta: con corregir, la comparacion y la prueba en local van
 # despues de la correccion; si no, la comparacion va antes. lectura-hecha y hecha no se pintan: marcan el sitio de esos dos estados.
 # practicas (-Practicas) va despues de la correccion y de comparar y antes de prueba-local, y solo si la pasada la tiene: el estado esta en ella
-# o hay datos\practicas-arreglos.json.
+# o hay datos\practicas-arreglos.json. reglas (-Reglas) va despues de practicas y antes de prueba-local, con la misma regla: el estado esta en ella o hay
+# datos\tests-reglas.json.
 function Get-OrdenFases($D) {
   $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'lanzadores', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   $practicas = @()
   if (($D.Estado -and [string]$D.Estado.fase -ceq 'practicas') -or $D.Arreglos) { $practicas = @('practicas') }
-  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar') + $practicas + @('prueba-local', 'hecha')) }
-  return @($lectura + @('comparar', 'lectura-hecha', 'correccion') + $practicas + @('prueba-local', 'hecha'))
+  $reglas = @()
+  if (($D.Estado -and [string]$D.Estado.fase -ceq 'reglas') -or $D.Reglas) { $reglas = @('reglas') }
+  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar') + $practicas + $reglas + @('prueba-local', 'hecha')) }
+  return @($lectura + @('comparar', 'lectura-hecha', 'correccion') + $practicas + $reglas + @('prueba-local', 'hecha'))
 }
 
 # Una linea de una fase: su estado (segun la fase en que va la pasada) y lo que cuentan sus tareas.
@@ -1001,6 +1006,10 @@ function Get-FaseHtml($D, $T, [string]$Fase) {
   elseif ($Fase -eq 'practicas') {
     $cuenta = Format-Trozo $T 'sin-valor'
     if ($D.Arreglos) { $cuenta = Format-Trozo $T 'cuenta-practicas' @{ PASADOS = "$([int]$D.Arreglos.pasados)"; ATASCADOS = "$([int]$D.Arreglos.atascados)"; SIN = "$([int]$D.Arreglos.sinCambios)" } }
+  }
+  elseif ($Fase -eq 'reglas') {
+    $cuenta = Format-Trozo $T 'sin-valor'
+    if ($D.Reglas) { $cuenta = Format-Trozo $T 'cuenta-reglas' @{ CLASES = "$([int]$D.Reglas.conTest)"; VIGILADAS = "$([int]$D.Reglas.reglasVigiladas)"; ATASCADAS = "$([int]$D.Reglas.atascadas)"; SALTADAS = "$([int]$D.Reglas.saltadas)" } }
   }
   elseif ($ts.Count -gt 0) {
     $c = @{}
