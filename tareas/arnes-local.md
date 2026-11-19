@@ -15,9 +15,9 @@ POM: {{POM}}
 
 - `{{TEST}}`: el test, con todo lo que necesite dentro (clases internas incluidas). Es el único fichero de Java que escribes.
 - `src/test/resources/application-prueba-local.yml`, solo si te hace falta configuración para este test (perfil de Spring `prueba-local`).
-- Si POM es `si`, puedes añadir al `pom.xml` las dependencias que falten para el test, todas con `<scope>test</scope>` (por ejemplo `spring-boot-starter-test` o `spring-batch-test`). Nada más del `pom.xml`. Si POM es `no`, el `pom.xml` no se toca.
+- Si POM es `si`, puedes añadir al `pom.xml` las dependencias que falten para el test, todas con `<scope>test</scope>` (por ejemplo `spring-boot-starter-test` o `spring-batch-test`). Si una no lleva `<scope>test</scope>`, el script se lo pone. Lo demás del `pom.xml` (versiones, plugins, las dependencias que ya estaban) el script lo deja como estaba. Si POM es `no`, el `pom.xml` no se toca.
 
-Nada más: ni el código de `src/main`, ni otros tests, ni la configuración del batch. Si cambias otra cosa, el script lo deshace y rechaza el test entero. Puedes crear casos de prueba en `src/test/resources/prueba-local/`: el script los borra al acabar.
+Nada más: ni el código de `src/main`, ni otros tests, ni la configuración del batch. Si cambias otra cosa, el script lo deja como estaba y prueba tu test sin ese cambio. Puedes crear casos de prueba en `src/test/resources/prueba-local/`: el script los borra al acabar.
 
 ## Qué puedes lanzar
 
@@ -55,6 +55,9 @@ Pueden ser de otra versión de Spring Boot o de Java: usa solo lo que exista en 
 Nada sale del equipo. La configuración del batch se queda como viene por defecto: lo que por defecto está apagado (por ejemplo, un envío de correo que solo se hace con una propiedad encendida) sigue apagado, y lo que el batch deja en la consola o en el log no es un envío. Lo que con esa configuración intentaría conectarse fuera (una base de datos de verdad, SFTP, correo, HTTP, colas) se simula: si el batch ya tiene un modo local (carpetas en vez de SFTP), usa ese; si no, sigue estas reglas, iguales en el original y en el migrado. Las contraseñas y las variables que el batch pide para arrancar, con valores inventados en `application-prueba-local.yml` o en el test.
 
 - Sustituye la clase de la librería que abre la conexión, no una clase del batch. Por ejemplo, `JavaMailSender`, el cliente o la sesión SFTP de la librería o `RestTemplate`; la sustituta guarda lo que recibe en `envios/`. Nunca sustituyas los puertos, adaptadores o servicios del batch: su código se ejecuta entero, también las plantillas del correo.
+- Si la conexión la abre una librería que se configura sola (su jar trae `META-INF/spring.factories` o `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`), quita esa autoconfiguración en `application-prueba-local.yml` con `spring.autoconfigure.exclude` y declara tú la sustituta.
+- No declares un bean con el nombre de uno que ya declara el batch o una librería (por ejemplo, `dataSource` o `transactionManager`): Spring no lo deja y el contexto no arranca («Cannot register bean definition»). Quita la autoconfiguración que lo declara, como en el punto anterior, o dale a tu bean otro nombre y `@Primary`.
+- Para ver qué hay dentro del jar de una librería, usa `jar tf <jar>` y `javap -cp <jar> <clase>`. No lo descomprimas dentro de la copia.
 - El cuerpo de `envios/<n>-correo.txt` es el del mensaje, como quedaría en la bandeja (con la plantilla ya aplicada). Cada adjunto va en la cabecera con una línea `adjunto=<nombre del fichero>`, sin su contenido.
 - Carga `datos.sql` con `ScriptUtils.executeSqlScript` o `ResourceDatabasePopulator` de Spring. No lo partas a mano por `;`: un `INSERT` con varios correos `a@x;b@x` dentro de unas comillas se cortaría por la mitad.
 
