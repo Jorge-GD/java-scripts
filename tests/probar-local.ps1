@@ -1261,10 +1261,11 @@ $Pruebas['m24 config.json del migrado: las claves de rescate.ps1 (PalabrasConfig
 # Con -Reparar, de los casos distintos la IA escribe arreglos en la copia del migrado y el script solo da por bueno el que pasa las
 # puertas: el caso, los demas casos y la suite de tests unitarios. Estos escenarios usan m25-copilot.ps1 y m25-mvn.ps1: el migrado (su
 # rama de rescate) lleva minimo=5.01 en src/main/resources/regla.txt, el original 5.00, y el 'arreglo' es dejar 5.00 ahi. Con -Test,
-# la rama lleva un test unitario que espera lo de ahora (minimo=5.01); con -Sano, uno que pasa con cualquier limite. El caso del
-# limite (importe=5.00) sale distinto.
+# la rama lleva un test unitario que espera lo de ahora (minimo=5.01); con -Sano, uno que pasa con cualquier limite; con -SuiteRota, la
+# suite de tests unitarios no se puede ejecutar. El caso del limite (importe=5.00) sale distinto. Una entrada con ';;' lleva una linea
+# de datos por trozo (m25-copilot.ps1).
 
-function Escenario-M25([string]$Nombre, $Casos, [switch]$Test, [switch]$Sano, [hashtable]$Ajustes = @{}) {
+function Escenario-M25([string]$Nombre, $Casos, [switch]$Test, [switch]$Sano, [switch]$SuiteRota, [hashtable]$Ajustes = @{}) {
   $e = Nuevo-Escenario $Nombre $Casos
   $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm25-copilot.ps1'); MvnExe = (Join-Path $falsos 'm25-mvn.ps1'); SegundosPorLlamada = 60 }
   foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
@@ -1272,6 +1273,7 @@ function Escenario-M25([string]$Nombre, $Casos, [switch]$Test, [switch]$Sano, [h
   [void](Commit-En $e.Wt 'src/main/resources/regla.txt' "minimo=5.01`n" 'migra el limite')
   if ($Test) { [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" 'test del limite') }
   if ($Sano) { [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/OtroTest.java' "package com.acme.nuevo;`nclass OtroTest {}`n" 'otro test') }
+  if ($SuiteRota) { [void](Commit-En $e.Wt 'src/main/resources/suite-rota.txt' "la suite no se ejecuta`n" 'suite rota') }
   return $e
 }
 
@@ -1464,6 +1466,69 @@ $Pruebas['m25 (i) -Reparar: con dos claves se prueba primero la que tienen mas c
   Igual 'y los 2 casos' 2 $rep[0].casos
   Comprueba 'la consola dice que quedan sin probar la otra clave' ($r.Salida -match 'MaxReparaciones' -and $r.Salida -match 'sin probar' -and $r.Salida.Contains('resultado_')) (Cola $r.Salida)
   Igual 'sin commit nuevo' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['m25 (j) -Reparar: un cambio en src/main/ que no mejora el caso, o ningun cambio: rechazado con su motivo, sin commit y no arreglado'] = {
+  $e = Escenario-M25 'm25-j1' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-inutil'
+  Igual 'con un cambio sin efecto sale con 2' 2 $r.Codigo
+  Igual 'el caso sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
+  Igual 'dos llamadas: el intento y el reintento' 2 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Igual 'con dos intentos' 2 $rep[0].intentos
+  Comprueba 'el motivo dice que sigue igual de distinto' ($rep[0].motivo -match 'sigue igual de distinto' -and $rep[0].motivo -match 'cargaJob/caso-01') $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Comprueba 'lo que dejo la IA se deshace en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'src/main/resources/nota.txt'))) ''
+  $e = Escenario-M25 'm25-j2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-nada'
+  Igual 'sin ningun cambio tambien sale con 2' 2 $r.Codigo
+  Igual 'con dos llamadas' 2 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo dice que no ha cambiado ningun fichero de src/main/' ($rep[0].motivo -match 'No has cambiado ningun fichero de src/main/' -and $rep[0].motivo -notmatch 'sigue igual') $rep[0].motivo
+  Igual 'sin commit nuevo' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['m25 (k) -Reparar: el arreglo iguala el caso de la tarea pero otro caso distinto con la misma clave tiene mas lineas distintas: rechazado, nombrando ese caso'] = {
+  $e = Escenario-M25 'm25-k' ([ordered]@{ cargaJob = @('importe=5.00;;importe=5.00;;importe=5.00', 'importe=5.00;;importe=4.80;;importe=4.80') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-pasado'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'los dos siguen distintos (nada se da por arreglado)' 'distinto,distinto' ((Resultados $e) -join ',')
+  $rep = @(Reparaciones $e)
+  Igual 'la tarea es la del primer caso, con la clave de los dos' 'caso-01 2' "$($rep[0].caso) $($rep[0].casos)"
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo nombra el otro caso' ($rep[0].motivo -match 'cargaJob/caso-02') $rep[0].motivo
+  Comprueba 'y las lineas distintas de antes (1) y de ahora (2)' ($rep[0].motivo -match 'antes tenia 1 lineas distintas y ahora 2') $rep[0].motivo
+  Comprueba 'no es una clave nueva' ($rep[0].motivo -notmatch 'diferencia nueva') $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['m25 (l) -Reparar: el arreglo iguala el caso de la tarea pero otro caso ya no se puede ejecutar: rechazado, nombrando ese caso'] = {
+  $e = Escenario-M25 'm25-l' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Ajustes @{ MinutosMaven = 0.1 }
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-cuelga'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo dice que el caso ya no se puede ejecutar' ($rep[0].motivo -match 'cargaJob/caso-02 ya no se puede ejecutar') $rep[0].motivo
+  Comprueba 'con el motivo de Maven' ($rep[0].motivo -match 'tope') $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['m25 (m) -Reparar: la suite de tests unitarios de partida no se puede ejecutar: no se repara nada, sin llamadas a Copilot, y lo dice'] = {
+  $e = Escenario-M25 'm25-m' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -SuiteRota
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2 (hay un caso distinto)' 2 $r.Codigo
+  Igual 'ninguna llamada a reparar' 0 (Llamadas-Reparar $e).Count
+  Comprueba 'la consola dice que no ha podido medir los tests unitarios de partida' ($r.Salida -match 'no he podido medir los tests unitarios de partida') (Cola $r.Salida)
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'reparaciones queda vacio' 0 (Reparaciones $e).Count
 }
 
 # ================================ LANZADOR ================================

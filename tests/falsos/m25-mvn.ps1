@@ -2,11 +2,18 @@
 # tests unitarios (un 'test' sin -Dtest). Esa la hace como Surefire: deja un target/surefire-reports/TEST-<clase>.xml por cada
 # src/test/java/**/*Test.java (menos PruebaLocalTest) y la clase falla si su texto lleva 'ESPERA minimo=<n>' y el 'minimo' de regla.txt
 # (el de src/main/resources/regla.txt o, si no esta, el de la raiz) es otro. Con src/main/resources/sin-tests.txt no ejecuta ninguna clase.
-# Falla (exit 1) si la suite no lleva -Dsurefire.excludesFile=<fichero con **/PruebaLocalTest*> y -Dmaven.test.failure.ignore=true.
+# Falla (exit 1) si la suite no lleva -Dsurefire.excludesFile=<fichero con **/PruebaLocalTest*> y -Dmaven.test.failure.ignore=true, o si
+# existe src/main/resources/suite-rota.txt (la suite no se puede ejecutar).
+# Si regla.txt lleva cuelga=<caso>, la ejecucion de ese caso (-Dprueba.local.caso=<caso>) se cuelga 60 s: la para MinutosMaven.
 $raiz = (Get-Location).Path
 $argumentos = @($args)
+$regla = @{}
+$fr = Join-Path $raiz 'src/main/resources/regla.txt'
+if (-not (Test-Path -LiteralPath $fr)) { $fr = Join-Path $raiz 'regla.txt' }
+if (Test-Path -LiteralPath $fr) { foreach ($l in [System.IO.File]::ReadAllLines($fr)) { $k, $v = $l -split '=', 2; if ($k) { $regla[$k.Trim()] = "$v".Trim() } } }
 $suite = ($argumentos -contains 'test' -and @($argumentos | Where-Object { "$_" -like '-Dtest=*' }).Count -eq 0)
 if (-not $suite) {
+  if ($regla.cuelga -and ($argumentos -contains ('-Dprueba.local.caso=' + $regla.cuelga))) { Start-Sleep -Seconds 60 }
   & (Join-Path $PSScriptRoot 'mvn-local.ps1') @argumentos
   exit $LASTEXITCODE
 }
@@ -17,10 +24,8 @@ if (-not $excluye -or -not (Test-Path -LiteralPath $excluye) -or [System.IO.File
   exit 1
 }
 if ($argumentos -notcontains '-Dmaven.test.failure.ignore=true') { '[ERROR] la suite no lleva -Dmaven.test.failure.ignore=true'; exit 1 }
-$fr = Join-Path $raiz 'src/main/resources/regla.txt'
-if (-not (Test-Path -LiteralPath $fr)) { $fr = Join-Path $raiz 'regla.txt' }
-$minimo = ''
-if (Test-Path -LiteralPath $fr) { foreach ($l in [System.IO.File]::ReadAllLines($fr)) { if ($l -match '^minimo=(.*)$') { $minimo = $Matches[1].Trim() } } }
+if (Test-Path -LiteralPath (Join-Path $raiz 'src/main/resources/suite-rota.txt')) { '[ERROR] No se pueden ejecutar los tests unitarios: suite-rota.txt'; exit 1 }
+$minimo = "$($regla.minimo)"
 $informes = Join-Path $raiz 'target/surefire-reports'
 [void](New-Item -ItemType Directory -Path $informes -Force)
 $tests = Join-Path $raiz 'src/test/java'
