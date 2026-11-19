@@ -3033,5 +3033,38 @@ $Pruebas['m37 (l) la pregunta cuenta los dos arneses; con n no se toca nada y el
   Comprueba 'y el del migrado' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-2'))
 }
 
+# M37c: el original guardado ya no vale en este commit (Rompe-Arnes-Guardado: mvn-local.ps1 no compila un .java con NO_COMPILA; Use-ArnesGuardado lo deja pendiente) y
+# el migrado guardado si vale y tiene la plantilla de ahora: se escribe otra vez el del original y, como lo traduce, el del migrado tambien.
+$Pruebas['m37 (m) el arnes del original guardado ya no vale en este commit: se escribe otra vez y el del migrado tambien, traduciendo el nuevo, aunque el suyo siga valiendo y lleve la plantilla de ahora; sin Info de la plantilla'] = {
+  $e = Escenario-M37 'm37-m' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $casos = (Llamadas-Casos $e).Count
+  $migrado = Test-Guardado $e 'migrado'
+  Igual 'la tarea del original guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'original')
+  Igual 'y la del migrado' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+  Rompe-Arnes-Guardado $e 'original'
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Comprueba 'dice que el del original ya no vale en este commit' ($r.Salida -match 'PruebaLocalTest del original de otro lanzamiento ya no vale en este commit') (Cola $r.Salida)
+  Igual 'el del original: una llamada nueva' 2 (Llamadas-Arnes $e 'original').Count
+  Igual 'el del migrado: una llamada nueva' 2 (Llamadas-Arnes $e 'migrado').Count
+  $m = @(Arneses-En-Orden-M37 $e 'migrado')[1]
+  Igual 'el del migrado traduce el test del original' 'si' $m.traduce
+  Igual 'y es el nuevo, no el que ya no valia' 'original-2' $m.'original-marca'
+  Comprueba 'sin Info de la plantilla, ni la del original ni la del migrado' (-not $r.Salida.Contains($AvisoM37b) -and -not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Comprueba 'no dice que use el test de otro lanzamiento para el migrado' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'los casos no se rehacen: sin llamadas de casos nuevas' $casos (Llamadas-Casos $e).Count
+  $nuevoOriginal = Test-Guardado $e 'original'
+  Comprueba 'el del original guardado es el de la segunda llamada' ($nuevoOriginal.Contains('MARCA_ARNES=original-2') -and -not $nuevoOriginal.Contains('NO_COMPILA')) $nuevoOriginal
+  $nuevoMigrado = Test-Guardado $e 'migrado'
+  Comprueba 'y el del migrado' ($nuevoMigrado.Contains('MARCA_ARNES=migrado-2') -and $nuevoMigrado -ne $migrado) $nuevoMigrado
+  Igual 'las dos tareas quedan hechas' 'hecha,hecha' ((Tarea-Arnes $e 'original').estado + ',' + (Tarea-Arnes $e 'migrado').estado)
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e
+  Igual 'el tercer lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas' $n @(Llamadas $e).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
