@@ -28,7 +28,11 @@ QUE HACE
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
-  4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada).
+  4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). Cada caso, en su Maven
+     (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
+     no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
+     de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
+     acabar, dice cuanto es test y cuanto Maven.
   5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
      fecha de hoy: igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
@@ -111,6 +115,9 @@ $Cfg += @{
   EsfuerzoReparar = 'high'
   SegundosReparar = 1800  # tope de una llamada que repara (-Reparar; las demas usan SegundosPorLlamada)
   MaxReparaciones = 8     # claves de diferencia que -Reparar prueba como mucho en un lanzamiento
+  # Propiedades que saltan plugins que no influyen en el test: Invoke-Job las pasa en cada caso (no en el test-compile, ni en el arnes ni en los
+  # tests unitarios). Sin JaCoCo: su argLine lo usa surefire. Vacia la lista (en ajustes.json: "MavenCasoRapido": []) para no saltar ninguno.
+  MavenCasoRapido = @('-Dcheckstyle.skip', '-Denforcer.skip', '-Dspotbugs.skip', '-Dpmd.skip', '-Dmaven.javadoc.skip', '-Dmaven.source.skip', '-Dmaven.gitcommitid.skip', '-Dlicense.skip')
 }
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
 # Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
@@ -261,12 +268,80 @@ function Get-FalloMaven($Maven) {
   return ($e -join "`n")
 }
 
+# Los segundos del test de un caso: el time del testsuite del TEST-*PruebaLocalTest.xml de surefire de $Dir escrito desde $Desde (el de
+# antes es de otro Maven), o $null si no hay o no se lee.
+function Get-SegundosTest([string]$Dir, [DateTime]$Desde) {
+  try {
+    $f = @(Get-ChildItem -LiteralPath (Join-Ruta $Dir 'target/surefire-reports') -Filter 'TEST-*PruebaLocalTest.xml' -File | Where-Object { $_.LastWriteTimeUtc -ge $Desde } | Sort-Object LastWriteTimeUtc)
+    if ($f.Count -eq 0) { return $null }
+    $xml = New-Object System.Xml.XmlDocument
+    $xml.Load($f[-1].FullName)
+    return [double]::Parse($xml.DocumentElement.GetAttribute('time'), $Inv)
+  }
+  catch { return $null }
+}
+
+# Un Maven de un caso de un job (con -o si $SinRed), cronometrado: apunta en $script:Tiempos una fila con los segundos de Maven y los de su test.
+function Invoke-MavenCaso([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [bool]$SinRed, [string]$Que) {
+  $a = @('test', '-Dtest=PruebaLocalTest', "-Dprueba.local.job=$Job", "-Dprueba.local.caso=$Caso") + @($Cfg.MavenCasoRapido | Where-Object { $_ })
+  if ($SinRed) { $a += '-o' }
+  $lado = 'migrado'
+  if ($EsOriginal) { $lado = 'original' }
+  $desde = [DateTime]::UtcNow
+  $cron = [System.Diagnostics.Stopwatch]::StartNew()
+  $r = Invoke-Maven $Dir $EsOriginal $a $Que
+  $segundos = [Math]::Round($cron.Elapsed.TotalSeconds, 1)
+  $script:Tiempos += [pscustomobject][ordered]@{ lado = $lado; job = $Job; caso = $Caso; segundosMaven = $segundos; segundosTest = (Get-SegundosTest $Dir $desde); offline = $SinRed; cuando = (Get-Date).ToString('s') }
+  return $r
+}
+
+# Ha llegado Maven a ejecutar el test del caso? Si, si ha dejado su estado.txt (aunque el job acabe FAILED) o su error.txt.
+function Test-CasoEjecutado([string]$Sal) { return ((Test-Path -LiteralPath (Join-Path $Sal 'estado.txt')) -or (Test-Path -LiteralPath (Join-Path $Sal 'error.txt'))) }
+
+# Dice la salida de Maven que ha fallado por estar sin red (-o)? Lo dice con 'Cannot access <repo> in offline mode and the artifact ... has not
+# been downloaded from it before' o con 'The repository system is offline but the artifact ... is not available'. Sin esa palabra el fallo es
+# otro (por ejemplo, el contexto de Spring no arranca: el arnes solo deja error.txt si el caso no se puede preparar) y repetir con red no lo arregla.
+function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ -match '(?i)\boffline\b' }).Count -gt 0) }
+
 # Ejecuta en una copia un caso de un job (con su salida anterior borrada), en su propio Maven: cada caso en una JVM
 # nueva, como cada ejecucion en produccion. En la misma JVM, lo que el batch deja en campos static (un fichero abierto,
-# un contador) pasaria de un caso al siguiente.
+# un contador) pasaria de un caso al siguiente. Va sin red (-o: no mira los repositorios remotos) y sin los plugins de
+# $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
+# una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
+# repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
-  Remove-Carpeta (Join-Ruta $Dir "target/prueba-local/$Job/$Caso")
-  return (Invoke-Maven $Dir $EsOriginal @('test', '-Dtest=PruebaLocalTest', "-Dprueba.local.job=$Job", "-Dprueba.local.caso=$Caso") $Que)
+  $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
+  Remove-Carpeta $sal
+  $sinRed = -not $script:ConRed.ContainsKey($Dir)
+  $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
+  if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
+    Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
+    Remove-Carpeta $sal
+    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que
+    if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+  }
+  return $r
+}
+
+# Anade las filas de este lanzamiento a datos\prueba-local-tiempos.json (se anade, no se pisa). Un fallo al guardar no para la prueba.
+function Save-Tiempos {
+  if ($script:Tiempos.Count -eq 0) { return }
+  $ruta = Join-Path $DatosMig 'prueba-local-tiempos.json'
+  try {
+    $antes = @()
+    if (Test-Path -LiteralPath $ruta) { $antes = @(Read-Json $ruta) }
+    Write-Json $ruta (@($antes) + @($script:Tiempos))
+  }
+  catch { Aviso "No he podido guardar los tiempos en ${ruta}: $($_.Exception.Message)" }
+}
+
+# De las ejecuciones de este lanzamiento que tienen segundosTest: lo que tarda Maven por caso y cuanto de eso es el test.
+function Show-Tiempos {
+  $f = @($script:Tiempos | Where-Object { $null -ne $_.segundosTest })
+  if ($f.Count -eq 0) { return }
+  $maven = ($f | Measure-Object -Property segundosMaven -Average).Average
+  $test = ($f | Measure-Object -Property segundosTest -Average).Average
+  Info ("Maven por caso: $([Math]::Round($maven, 1)) s de media; el test $([Math]::Round($test, 1)) s y Maven $([Math]::Round($maven - $test, 1)) s (arranque, plugins y red). Detalle: " + (Join-Path $DatosMig 'prueba-local-tiempos.json'))
 }
 
 # Por que un caso no ha dejado estado.txt en $Sal: su error.txt o, si no hay, el error de Maven.
@@ -1645,6 +1720,8 @@ $script:Llamadas = 0
 $script:Racha = 0
 $script:Mavens = 0
 $script:Maven = @{}
+$script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
+$script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 try {
@@ -1752,6 +1829,7 @@ try {
     }
   }
   Info ''
+  Show-Tiempos
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
   Info $NoPromete
 
@@ -1763,5 +1841,6 @@ try {
   exit 0
 }
 finally {
+  Save-Tiempos
   [void](Set-Despierto $false)
 }
