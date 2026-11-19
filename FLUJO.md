@@ -159,6 +159,9 @@ El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'resca
 - Al empezar, la consola enseña cuántas incidencias hay de cada familia (constantes, logs, complejidad…). La tabla entera queda en `.rescate\sonar-por-familia.tsv`.
 - La IA solo compila. Los tests los pasa el script, una vez por intento.
 - Cada intento deja una línea en `.rescate\intentos.tsv`: paso, lote, segundos de Copilot y de Maven, y si pasa o no. Al acabar, la consola dice cuánto se ha ido en Copilot y cuánto en Maven.
+- Cada lote pasa solo los tests ligeros. Los de Spring, que arrancan el contexto o lanzan un job, van en un control: la suite entera cada 10 lotes y al final. La lista de los que se dejan fuera queda en `.rescate\tests-de-contexto.txt`.
+- Si un control sale en rojo, el script busca el lote que lo ha roto y lo deshace con `git revert`. Sus ficheros no se vuelven a intentar en esa pasada. Si no lo encuentra, deshace todos los lotes desde el último control en verde. Al final, la rama ha pasado la suite entera, o la consola lo dice en rojo.
+- Para cambiar cada cuántos lotes va el control, pon en `.rescate\config.json` `"LotesEntreControles": 5`. Para volver a pasar la suite entera en cada lote: `"PasosTestsElegidos": []`.
 
 ### La cobertura
 
