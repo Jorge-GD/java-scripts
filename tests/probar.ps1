@@ -5781,5 +5781,123 @@ $Pruebas['m22: todo en ASCII (el falso nuevo)'] = {
   Igual 'sin bytes fuera de ASCII en m22-mvn.ps1' 0 @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
 }
 
+# ===== M23: EL PASO CALIDAD PUEDE IR COMO SONAR (SOLO COMPILA Y TESTS ELEGIDOS), ACTIVANDOLO EN config.json =====
+# Reutilizan Escenario-Sonar, el Maven de m22 (m22-mvn.ps1) y los ayudantes de M21 y M22 (Lanza-M22, Llamadas-M22, Marca-M22, Controles-M22...). El Copilot de
+# mentira es m23-copilot.ps1: en calidad pone un Javadoc a lo que el prompt marca (con RESCATE_M23_ROMPE=<Clase> deja ademas ' + 0;' en esa clase, que es lo
+# que hace fallar su test de contexto en m22-mvn.ps1) y en build quita NO_COMPILA; en lo demas es el de m22.
+$M23Config = @{ PasosSoloCompila = @('sonar', 'calidad'); PasosTestsElegidos = @('sonar', 'calidad') }
+
+# Un repo con clases sin Javadoc (las de $SinDoc, dos errores de calidad cada una) y el config.json de arriba: calidad va como sonar.
+function Escenario-M23([string]$Nombre, [string[]]$SinDoc, [hashtable]$Tests = @{}, [hashtable]$Mas = @{}, [hashtable]$Extra = @{}) {
+  $cfg = @{ MvnExe = $M22Mvn; CopilotExe = (Join-Path $falsos 'm23-copilot.ps1') }
+  foreach ($k in $M23Config.Keys) { $cfg[$k] = $M23Config[$k] }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  $ficheros = @{}
+  foreach ($k in $Tests.Keys) { $ficheros['/' + $M22Dir + $k + '.java'] = $Tests[$k] }
+  foreach ($k in $Extra.Keys) { $ficheros[$k] = $Extra[$k] }
+  return (Escenario-Sonar $Nombre @('service/TotalService') $cfg $SinDoc $ficheros)
+}
+
+# Lanza el fix del escenario (lotes de un fichero, sin -Sonar), con el registro de Maven de M22. $Mas: -Paso calidad o -Todo. $Env: variables de entorno mientras dura.
+function Lanza-M23($E, [string]$Registro, [string[]]$Mas, [hashtable]$Env = @{}) {
+  $a = @('-Modo', 'fix', '-Si', '-MaxIntentos', '1', '-Lote', '1') + $Mas
+  $env:RESCATE_M22_LOG = $Registro
+  $env:RESCATE_M22_ESTADO = Join-Path $E.Raiz 'estado'
+  foreach ($k in $Env.Keys) { Set-Item -Path ('Env:' + $k) -Value $Env[$k] }
+  try { return (Sonar-Lanza $E $a) }
+  finally { Remove-Item (@('Env:RESCATE_M22_LOG', 'Env:RESCATE_M22_ESTADO') + @($Env.Keys | ForEach-Object { 'Env:' + $_ })) -ErrorAction SilentlyContinue }
+}
+
+# Nada de lo especifico de Sonar se escribe en un paso que no es sonar.
+function Sin-Sonar-M23($E) {
+  return (@('sonar-base.json', 'sonar-faltan.md', 'sonar-por-familia.tsv') | Where-Object { Test-Path -LiteralPath (Get-Ruta $E.Wt ('.rescate/' + $_)) }).Count -eq 0
+}
+
+$Pruebas['m23 (a): con calidad en las dos listas de config.json, dos lotes buenos: el prompt solo compila, las puertas llevan el excludesFile y un control cierra la pasada'] = {
+  $e = Escenario-M23 'm23-a' @('service/SinDoc1', 'service/SinDoc2') $CtxM22
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M23 $e $log @('-Paso', 'calidad')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'dos lotes buenos de calidad' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'calidad'")).Count
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el prompt lleva la orden de compilar y dice que los tests los pasa el script' ($prompt -match '(?m)^- Ejecuta: .* -q -B -DskipTests test-compile  y corrige hasta que compile\. Los tests los pasa el script despues\.$') $prompt
+  Comprueba 'y no lleva la orden de los tests' ($prompt -notmatch 'DskipTests=false' -and $prompt -notmatch 'corrige los tests que fallen') $prompt
+  $c = @(Llamadas-M22 $log)
+  $parc = @($c | Where-Object { $_.Tipo -eq 'parcial' })
+  Igual 'cada lote pasa las puertas con el excludesFile de la lista de contexto: 2 Maven parciales' 2 $parc.Count
+  Comprueba 'con -Dsurefire.excludesFile y solo el test ligero' (@($parc | Where-Object { $_.Args -match '-Dsurefire\.excludesFile=\S*tests-de-contexto\.txt' -and $_.Clases -eq 'TotalServiceTest' }).Count -eq 2) (($c | ForEach-Object { $_.Tipo + ': ' + $_.Clases + ' ' + $_.Args }) -join ' // ')
+  Igual 'la suite entera, dos veces: el diagnostico de antes y el control final' 2 (Cuenta-M22 $c 'suite')
+  Igual 'la marca refs/rescate/control-ok esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  $k = @(Controles-M22 $e)
+  Igual 'intentos.tsv lleva una linea de control, verde, tras el lote 2' 'verde 2' ((@($k | ForEach-Object { $_.resultado + ' ' + $_.lote })) -join ' ')
+  $t = Intentos-M21 $e
+  Igual 'y dos lineas de intento del paso calidad' 2 @($t.Filas | Where-Object { $_.paso -eq 'calidad' -and $_.resultado -eq 'pasa' }).Count
+  Comprueba 'nada de lo de Sonar: ni base, ni faltan, ni familias' (Sin-Sonar-M23 $e) (Cola $r.Salida)
+}
+
+$Pruebas['m23 (b): un lote de calidad rompe un test de contexto: el control sale rojo, la biseccion da ese lote, se revierte y su fichero no se reintenta'] = {
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_CON:SinDoc2' '@SpringBootTest') }
+  $e = Escenario-M23 'm23-b' @('service/SinDoc1', 'service/SinDoc2', 'service/SinDoc3') $t
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M23 $e $log @('-Paso', 'calidad') @{ RESCATE_M23_ROMPE = 'SinDoc2' }
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0: la pasada no falla' 0 $r.Codigo
+  Igual 'los tres lotes pasan sus puertas (el test de contexto no se ejecuta en el lote)' 3 @([regex]::Matches($r.Salida, "Lote \d OK: 'calidad'")).Count
+  Comprueba 'la consola dice que el lote rompe el test de contexto en el control' ($r.Salida -match 'rompe com\.acme\.plantillabatch\.AppContextTest en el control') (Cola $r.Salida)
+  Comprueba 'y que el fichero no se vuelve a intentar en esta pasada' ($r.Salida -match 'SinDoc2\.java: .*no se vuelve a intentar') (Cola $r.Salida)
+  $sub = @((GitEn $e.Wt @('log', '--format=%s')) -split "`n")
+  Igual 'un commit de revert del control' 1 @($sub | Where-Object { $_ -match '^rescate\(control\): ' }).Count
+  Igual 'los tres lotes siguen en la rama' 3 @($sub | Where-Object { $_ -match '^rescate\(calidad\): lote \d' }).Count
+  $dir = 'src/main/java/com/acme/plantillabatch/service/'
+  Comprueba 'SinDoc2 vuelve a como estaba: ni su Javadoc ni su cambio' ((Lee $e.Wt ($dir + 'SinDoc2.java')) -notmatch '/\*\* Documentado' -and (Lee $e.Wt ($dir + 'SinDoc2.java')) -notmatch '\+ 0;') ''
+  Comprueba 'SinDoc1 y SinDoc3 siguen con su Javadoc' ((@('SinDoc1', 'SinDoc3') | Where-Object { (Lee $e.Wt ($dir + $_ + '.java')) -match '/\*\* Documentado' }).Count -eq 2) ''
+  Igual 'el lote culpable no se reintenta: tres intentos de calidad y ninguno mas' 3 @((Intentos-M21 $e).Filas | Where-Object { $_.paso -eq 'calidad' }).Count
+  Igual 'sus dos errores de calidad vuelven a pendientes' 2 (Cuenta (Hallazgos $e.Wt) 'calidad')
+  Igual 'intentos.tsv: un control, revertido 1' 'revertido 1' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  $solas = @(Llamadas-M22 $log | Where-Object { $_.Tipo -eq 'solas' })
+  Igual 'tres pasadas con -Dtest: en el HEAD y las dos de la biseccion entre tres lotes' 3 $solas.Count
+  Comprueba 'nada de lo de Sonar: ni base, ni faltan, ni familias' (Sin-Sonar-M23 $e) (Cola $r.Salida)
+}
+
+$Pruebas['m23 (c): con -Todo, el paso anterior a calidad (build) pasa la suite entera en cada lote y calidad solo los ligeros'] = {
+  $roto = 'src/main/java/com/acme/plantillabatch/service/Roto.java'
+  $texto = "package com.acme.plantillabatch.service;`n`n/** Roto. */`npublic class Roto {`n    // NO_COMPILA`n}`n"
+  # Orden reducido a build y calidad (como m10 -Todo): el paso anterior a calidad es build
+  $e = Escenario-M23 'm23-c' @('service/SinDoc1', 'service/SinDoc2') $CtxM22 @{ Orden = @('build', 'calidad') } @{ ('/' + $roto) = $texto }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M23 $e $log @('-Todo', '-SinPlan')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el lote de build pasa' ($r.Salida -match "Lote 1 OK: 'build'") (Cola $r.Salida)
+  Igual 'y los dos de calidad' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'calidad'")).Count
+  $c = @(Llamadas-M22 $log)
+  Igual 'Maven con tests, en orden: el diagnostico (no compila), el lote de build, los dos de calidad y el control final' 'suite suite parcial parcial suite' ((@($c | ForEach-Object { $_.Tipo })) -join ' ')
+  Igual 'el lote de build pasa la suite entera, la de contexto tambien' 'AppContextTest,TotalServiceTest' ((@($c[1].Clases -split ',') | Sort-Object) -join ',')
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+}
+
+$Pruebas['m23 (d): migracion.ps1 lanza rescate.ps1 sobre el worktree (-Repo <migrado>-rescate): manda el config.json del worktree y no el del migrado'] = {
+  # el migrado trae el config.json por defecto (calidad con el modelo pasando la suite entera) y el del worktree activa las dos listas
+  $e = Escenario-M23 'm23-d' @('service/SinDoc1') $CtxM22 @{ PasosSoloCompila = @('sonar'); PasosTestsElegidos = @('sonar') }
+  $r0 = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'calidad', '-Si', '-MaxLotes', '0')   # solo crea el worktree
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r0.Salida); return }
+  Config-Sonar ([pscustomobject]@{ Repo = $e.Wt }) @{ MvnExe = $M22Mvn; CopilotExe = (Join-Path $falsos 'm23-copilot.ps1'); PasosSoloCompila = @('sonar', 'calidad'); PasosTestsElegidos = @('sonar', 'calidad') }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $env:RESCATE_M22_LOG = $log
+  try { $r = Sonar-Lanza ([pscustomobject]@{ Repo = $e.Wt }) @('-Modo', 'fix', '-Paso', 'calidad', '-Si', '-MaxIntentos', '1', '-Lote', '1') }
+  finally { Remove-Item 'Env:RESCATE_M22_LOG' -ErrorAction SilentlyContinue }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el lote pasa' ($r.Salida -match "Lote 1 OK: 'calidad'") (Cola $r.Salida)
+  Comprueba 'el prompt solo compila: manda el config.json del worktree' ((Lee $e.Wt '.rescate/prompt.md') -match 'Los tests los pasa el script despues\.') ''
+  Comprueba 'y el lote pasa las puertas con el excludesFile' (Cuenta-M22 @(Llamadas-M22 $log) 'parcial' -eq 1) (Cola $r.Salida)
+}
+
+$Pruebas['m23: todo en ASCII (el falso nuevo)'] = {
+  $f = Join-Path $falsos 'm23-copilot.ps1'
+  Igual 'sin bytes fuera de ASCII en m23-copilot.ps1' 0 @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

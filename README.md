@@ -146,6 +146,7 @@ Comprueba, por texto, el código de `src/main`:
 
 El Javadoc se exige aunque la plantilla no lo tenga. Las demás reglas bajan a aviso si la plantilla también las incumple.
 Para apagar una regla, quítala de `CalidadErrores` en `.rescate/config.json`.
+Para que `calidad` vaya como `sonar` (la IA solo compila, cada lote pasa los tests ligeros y la suite entera va en un control), pon `"PasosSoloCompila": ["sonar", "calidad"]` y `"PasosTestsElegidos": ["sonar", "calidad"]` en `.rescate/config.json` (el de la copia de rescate, `<migrado>-rescate/.rescate/config.json`, si lo lanza `migracion.ps1`); por defecto solo `sonar`. Mide el paso en `.rescate/intentos.tsv` antes y después.
 
 ### El paso `sonar`
 
