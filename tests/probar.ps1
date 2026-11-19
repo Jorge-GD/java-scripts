@@ -539,7 +539,7 @@ $Pruebas['worktree: el fix trabaja aparte y la carpeta original no se toca'] = {
   Comprueba 'la foto lleva el fichero nuevo' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'notas/pendiente.txt'))
   Comprueba 'lo ignorado no viaja' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'local.env')))
   Comprueba 'y el script avisa de lo ignorado' ($r.Salida -match 'local\.env')
-  Comprueba 'dice como traer los cambios' ($r.Salida -match 'git merge rescate/main-')
+  Comprueba 'dice como traer los cambios' ($r.Salida -match 'git -C "[^"]+" merge rescate/main-')
   $hw = Hallazgos $e.Wt
   Igual 'estructura queda a 0 en el worktree' 0 (Cuenta $hw 'estructura')
   Igual 'la calidad no empeora al mover' 8 (Cuenta $hw 'calidad')
