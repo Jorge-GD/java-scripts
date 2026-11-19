@@ -1715,7 +1715,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1947,7 +1947,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
