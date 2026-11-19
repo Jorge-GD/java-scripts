@@ -6,6 +6,7 @@
 #      columnas             T.csv: el original ID;NOMBRE;IMPORTE (1 ana 10, 2 luis 20) y el migrado, lo mismo con las columnas y las filas en otro orden
 #      columnas-valor       como columnas, pero el migrado lleva 25 y no 20 en la fila de luis
 #      columnas-fila-rara   T.csv con una fila con mas campos que la cabecera, y el migrado con las columnas en otro orden
+#      csv-fuera            ficheros/salida/x.csv (no es de tablas/) con las columnas permutadas en el migrado
 #      framework            BATCH_JOB_INSTANCE.csv con otro contenido en cada lado y, solo en el migrado, TASK_EXECUTION.csv
 $raiz = (Get-Location).Path
 $suite = ($args -contains 'test' -and @($args | Where-Object { "$_" -like '-Dtest=*' }).Count -eq 0)
@@ -33,6 +34,12 @@ if ($env:RESCATE_M31 -and $codigo -eq 0 -and $job -and $caso -and $caso -ne 'vac
   }
   if ($g -eq 'columnas-fila-rara') {
     if ($original) { Escribe-Tabla 'T.csv' "ID;NOMBRE`n1;ana;x`n" } else { Escribe-Tabla 'T.csv' "NOMBRE;ID`nana;1;x`n" }
+  }
+  if ($g -eq 'csv-fuera') {
+    $fich = [System.IO.Path]::Combine($raiz, 'target', 'prueba-local', $job, $caso, 'ficheros', 'salida')
+    [void](New-Item -ItemType Directory -Path $fich -Force)
+    if ($original) { $texto = "ID;NOMBRE;IMPORTE`n1;ana;10`n2;luis;20`n" } else { $texto = "NOMBRE;IMPORTE;ID`nana;10;1`nluis;20;2`n" }
+    [System.IO.File]::WriteAllText((Join-Path $fich 'x.csv'), $texto)
   }
   if ($g -eq 'framework') {
     if ($original) { Escribe-Tabla 'BATCH_JOB_INSTANCE.csv' "JOB_INSTANCE_ID;JOB_NAME`n1;viejo`n" }
