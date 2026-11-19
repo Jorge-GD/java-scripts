@@ -1,0 +1,370 @@
+  Last modified 19 nov 2026; size 2913 bytes
+  SHA-256 checksum f44914ca4106511fa529e38a50fd1f1c75cd6a051c7937a6b789316107eda567
+  Compiled from "GenerarRemesa.java"
+public class com.ejemplo.application.usecase.GenerarRemesa
+  minor version: 0
+  major version: 65
+  flags: (0x0021) ACC_PUBLIC, ACC_SUPER
+  this_class: #2                          // com/ejemplo/application/usecase/GenerarRemesa
+  super_class: #52                        // java/lang/Object
+  interfaces: 0, fields: 4, methods: 6, attributes: 4
+Constant pool:
+    #1 = Fieldref           #2.#3         // com/ejemplo/application/usecase/GenerarRemesa.puerto:Lcom/ejemplo/application/ports/output/RemesaPort;
+    #2 = Class              #4            // com/ejemplo/application/usecase/GenerarRemesa
+    #3 = NameAndType        #5:#6         // puerto:Lcom/ejemplo/application/ports/output/RemesaPort;
+    #4 = Utf8               com/ejemplo/application/usecase/GenerarRemesa
+    #5 = Utf8               puerto
+    #6 = Utf8               Lcom/ejemplo/application/ports/output/RemesaPort;
+    #7 = InterfaceMethodref #8.#9         // com/ejemplo/application/ports/output/RemesaPort.pendientes:()Ljava/util/List;
+    #8 = Class              #10           // com/ejemplo/application/ports/output/RemesaPort
+    #9 = NameAndType        #11:#12       // pendientes:()Ljava/util/List;
+   #10 = Utf8               com/ejemplo/application/ports/output/RemesaPort
+   #11 = Utf8               pendientes
+   #12 = Utf8               ()Ljava/util/List;
+   #13 = Fieldref           #2.#14        // com/ejemplo/application/usecase/GenerarRemesa.LOGGER:Lorg/slf4j/Logger;
+   #14 = NameAndType        #15:#16       // LOGGER:Lorg/slf4j/Logger;
+   #15 = Utf8               LOGGER
+   #16 = Utf8               Lorg/slf4j/Logger;
+   #17 = InterfaceMethodref #18.#19       // java/util/List.size:()I
+   #18 = Class              #20           // java/util/List
+   #19 = NameAndType        #21:#22       // size:()I
+   #20 = Utf8               java/util/List
+   #21 = Utf8               size
+   #22 = Utf8               ()I
+   #23 = InvokeDynamic      #0:#24        // #0:makeConcatWithConstants:(I)Ljava/lang/String;
+   #24 = NameAndType        #25:#26       // makeConcatWithConstants:(I)Ljava/lang/String;
+   #25 = Utf8               makeConcatWithConstants
+   #26 = Utf8               (I)Ljava/lang/String;
+   #27 = InterfaceMethodref #28.#29       // org/slf4j/Logger.info:(Ljava/lang/String;)V
+   #28 = Class              #30           // org/slf4j/Logger
+   #29 = NameAndType        #31:#32       // info:(Ljava/lang/String;)V
+   #30 = Utf8               org/slf4j/Logger
+   #31 = Utf8               info
+   #32 = Utf8               (Ljava/lang/String;)V
+   #33 = InterfaceMethodref #18.#34       // java/util/List.get:(I)Ljava/lang/Object;
+   #34 = NameAndType        #35:#36       // get:(I)Ljava/lang/Object;
+   #35 = Utf8               get
+   #36 = Utf8               (I)Ljava/lang/Object;
+   #37 = Class              #38           // com/ejemplo/domain/Remesa
+   #38 = Utf8               com/ejemplo/domain/Remesa
+   #39 = Methodref          #37.#40       // com/ejemplo/domain/Remesa.getCodigo:()Ljava/lang/String;
+   #40 = NameAndType        #41:#42       // getCodigo:()Ljava/lang/String;
+   #41 = Utf8               getCodigo
+   #42 = Utf8               ()Ljava/lang/String;
+   #43 = Fieldref           #2.#44        // com/ejemplo/application/usecase/GenerarRemesa.sufijo:Ljava/lang/String;
+   #44 = NameAndType        #45:#46       // sufijo:Ljava/lang/String;
+   #45 = Utf8               sufijo
+   #46 = Utf8               Ljava/lang/String;
+   #47 = InvokeDynamic      #1:#48        // #1:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+   #48 = NameAndType        #25:#49       // makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+   #49 = Utf8               (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+   #50 = String             #51           // otro %s
+   #51 = Utf8               otro %s
+   #52 = Class              #53           // java/lang/Object
+   #53 = Utf8               java/lang/Object
+   #54 = Methodref          #55.#56       // java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+   #55 = Class              #57           // java/lang/String
+   #56 = NameAndType        #58:#59       // format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+   #57 = Utf8               java/lang/String
+   #58 = Utf8               format
+   #59 = Utf8               (Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+   #60 = Methodref          #55.#61       // java/lang/String.hashCode:()I
+   #61 = NameAndType        #62:#22       // hashCode:()I
+   #62 = Utf8               hashCode
+   #63 = String             #64           // A
+   #64 = Utf8               A
+   #65 = Methodref          #55.#66       // java/lang/String.equals:(Ljava/lang/Object;)Z
+   #66 = NameAndType        #67:#68       // equals:(Ljava/lang/Object;)Z
+   #67 = Utf8               equals
+   #68 = Utf8               (Ljava/lang/Object;)Z
+   #69 = String             #70           // B
+   #70 = Utf8               B
+   #71 = String             #72           // SELECT codigo, importe\nFROM remesa\nWHERE enviada = 0\n
+   #72 = Utf8               SELECT codigo, importe\nFROM remesa\nWHERE enviada = 0\n
+   #73 = Methodref          #52.#74       // java/lang/Object."<init>":()V
+   #74 = NameAndType        #75:#76       // "<init>":()V
+   #75 = Utf8               <init>
+   #76 = Utf8               ()V
+   #77 = Methodref          #78.#79       // org/slf4j/LoggerFactory.getLogger:(Ljava/lang/Class;)Lorg/slf4j/Logger;
+   #78 = Class              #80           // org/slf4j/LoggerFactory
+   #79 = NameAndType        #81:#82       // getLogger:(Ljava/lang/Class;)Lorg/slf4j/Logger;
+   #80 = Utf8               org/slf4j/LoggerFactory
+   #81 = Utf8               getLogger
+   #82 = Utf8               (Ljava/lang/Class;)Lorg/slf4j/Logger;
+   #83 = Utf8               SQL
+   #84 = Utf8               ConstantValue
+   #85 = Utf8               primera
+   #86 = Utf8               Code
+   #87 = Utf8               LineNumberTable
+   #88 = Utf8               LocalVariableTable
+   #89 = Utf8               this
+   #90 = Utf8               Lcom/ejemplo/application/usecase/GenerarRemesa;
+   #91 = Utf8               lista
+   #92 = Utf8               Ljava/util/List;
+   #93 = Utf8               r
+   #94 = Utf8               Lcom/ejemplo/domain/Remesa;
+   #95 = Utf8               u
+   #96 = Utf8               LocalVariableTypeTable
+   #97 = Utf8               Ljava/util/List<Lcom/ejemplo/domain/Remesa;>;
+   #98 = Utf8               describe
+   #99 = Utf8               (Ljava/lang/Object;)Ljava/lang/String;
+  #100 = Utf8               o
+  #101 = Utf8               Ljava/lang/Object;
+  #102 = Utf8               StackMapTable
+  #103 = Utf8               peso
+  #104 = Utf8               (Ljava/lang/String;)I
+  #105 = Utf8               tipo
+  #106 = Utf8               sql
+  #107 = Utf8               (Lcom/ejemplo/application/ports/output/RemesaPort;Ljava/lang/String;)V
+  #108 = Utf8               RuntimeInvisibleAnnotations
+  #109 = Utf8               Llombok/Generated;
+  #110 = Utf8               <clinit>
+  #111 = Utf8               SourceFile
+  #112 = Utf8               GenerarRemesa.java
+  #113 = Utf8               RuntimeVisibleAnnotations
+  #114 = Utf8               Lorg/springframework/stereotype/Service;
+  #115 = Utf8               BootstrapMethods
+  #116 = String             #117          // pendientes: \u0001
+  #117 = Utf8               pendientes: \u0001
+  #118 = String             #119          // \u0001\u0001\u0001
+  #119 = Utf8               \u0001\u0001\u0001
+  #120 = MethodHandle       6:#121        // REF_invokeStatic java/lang/invoke/StringConcatFactory.makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+  #121 = Methodref          #122.#123     // java/lang/invoke/StringConcatFactory.makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+  #122 = Class              #124          // java/lang/invoke/StringConcatFactory
+  #123 = NameAndType        #25:#125      // makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+  #124 = Utf8               java/lang/invoke/StringConcatFactory
+  #125 = Utf8               (Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+  #126 = Utf8               InnerClasses
+  #127 = Class              #128          // java/lang/invoke/MethodHandles$Lookup
+  #128 = Utf8               java/lang/invoke/MethodHandles$Lookup
+  #129 = Class              #130          // java/lang/invoke/MethodHandles
+  #130 = Utf8               java/lang/invoke/MethodHandles
+  #131 = Utf8               Lookup
+{
+  private static final org.slf4j.Logger LOGGER;
+    descriptor: Lorg/slf4j/Logger;
+    flags: (0x001a) ACC_PRIVATE, ACC_STATIC, ACC_FINAL
+
+  private static final java.lang.String SQL;
+    descriptor: Ljava/lang/String;
+    flags: (0x001a) ACC_PRIVATE, ACC_STATIC, ACC_FINAL
+    ConstantValue: String SELECT codigo, importe\nFROM remesa\nWHERE enviada = 0\n
+
+  private final com.ejemplo.application.ports.output.RemesaPort puerto;
+    descriptor: Lcom/ejemplo/application/ports/output/RemesaPort;
+    flags: (0x0012) ACC_PRIVATE, ACC_FINAL
+
+  private final java.lang.String sufijo;
+    descriptor: Ljava/lang/String;
+    flags: (0x0012) ACC_PRIVATE, ACC_FINAL
+
+  public java.lang.String primera();
+    descriptor: ()Ljava/lang/String;
+    flags: (0x0001) ACC_PUBLIC
+    Code:
+      stack=3, locals=4, args_size=1
+         0: aload_0
+         1: getfield      #1                  // Field puerto:Lcom/ejemplo/application/ports/output/RemesaPort;
+         4: invokeinterface #7,  1            // InterfaceMethod com/ejemplo/application/ports/output/RemesaPort.pendientes:()Ljava/util/List;
+         9: astore_1
+        10: getstatic     #13                 // Field LOGGER:Lorg/slf4j/Logger;
+        13: aload_1
+        14: invokeinterface #17,  1           // InterfaceMethod java/util/List.size:()I
+        19: invokedynamic #23,  0             // InvokeDynamic #0:makeConcatWithConstants:(I)Ljava/lang/String;
+        24: invokeinterface #27,  2           // InterfaceMethod org/slf4j/Logger.info:(Ljava/lang/String;)V
+        29: aload_1
+        30: iconst_0
+        31: invokeinterface #33,  2           // InterfaceMethod java/util/List.get:(I)Ljava/lang/Object;
+        36: checkcast     #37                 // class com/ejemplo/domain/Remesa
+        39: astore_2
+        40: aload_1
+        41: aload_1
+        42: invokeinterface #17,  1           // InterfaceMethod java/util/List.size:()I
+        47: iconst_1
+        48: isub
+        49: invokeinterface #33,  2           // InterfaceMethod java/util/List.get:(I)Ljava/lang/Object;
+        54: checkcast     #37                 // class com/ejemplo/domain/Remesa
+        57: astore_3
+        58: aload_2
+        59: invokevirtual #39                 // Method com/ejemplo/domain/Remesa.getCodigo:()Ljava/lang/String;
+        62: aload_0
+        63: getfield      #43                 // Field sufijo:Ljava/lang/String;
+        66: aload_3
+        67: invokevirtual #39                 // Method com/ejemplo/domain/Remesa.getCodigo:()Ljava/lang/String;
+        70: invokedynamic #47,  0             // InvokeDynamic #1:makeConcatWithConstants:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+        75: areturn
+      LineNumberTable:
+        line 22: 0
+        line 23: 10
+        line 24: 29
+        line 25: 40
+        line 26: 58
+      LocalVariableTable:
+        Start  Length  Slot  Name   Signature
+            0      76     0  this   Lcom/ejemplo/application/usecase/GenerarRemesa;
+           10      66     1 lista   Ljava/util/List;
+           40      36     2     r   Lcom/ejemplo/domain/Remesa;
+           58      18     3     u   Lcom/ejemplo/domain/Remesa;
+      LocalVariableTypeTable:
+        Start  Length  Slot  Name   Signature
+           10      66     1 lista   Ljava/util/List<Lcom/ejemplo/domain/Remesa;>;
+
+  public java.lang.String describe(java.lang.Object);
+    descriptor: (Ljava/lang/Object;)Ljava/lang/String;
+    flags: (0x0001) ACC_PUBLIC
+    Code:
+      stack=5, locals=3, args_size=2
+         0: aload_1
+         1: instanceof    #37                 // class com/ejemplo/domain/Remesa
+         4: ifeq          17
+         7: aload_1
+         8: checkcast     #37                 // class com/ejemplo/domain/Remesa
+        11: astore_2
+        12: aload_2
+        13: invokevirtual #39                 // Method com/ejemplo/domain/Remesa.getCodigo:()Ljava/lang/String;
+        16: areturn
+        17: ldc           #50                 // String otro %s
+        19: iconst_1
+        20: anewarray     #52                 // class java/lang/Object
+        23: dup
+        24: iconst_0
+        25: aload_1
+        26: aastore
+        27: invokestatic  #54                 // Method java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+        30: areturn
+      LineNumberTable:
+        line 30: 0
+        line 31: 7
+        line 32: 12
+        line 34: 17
+      LocalVariableTable:
+        Start  Length  Slot  Name   Signature
+           12       5     2     r   Lcom/ejemplo/domain/Remesa;
+            0      31     0  this   Lcom/ejemplo/application/usecase/GenerarRemesa;
+            0      31     1     o   Ljava/lang/Object;
+      StackMapTable: number_of_entries = 1
+        frame_type = 17 /* same */
+
+  public int peso(java.lang.String);
+    descriptor: (Ljava/lang/String;)I
+    flags: (0x0001) ACC_PUBLIC
+    Code:
+      stack=2, locals=4, args_size=2
+         0: aload_1
+         1: astore_2
+         2: iconst_m1
+         3: istore_3
+         4: aload_2
+         5: invokevirtual #60                 // Method java/lang/String.hashCode:()I
+         8: lookupswitch  { // 2
+                      65: 36
+                      66: 50
+                 default: 61
+            }
+        36: aload_2
+        37: ldc           #63                 // String A
+        39: invokevirtual #65                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+        42: ifeq          61
+        45: iconst_0
+        46: istore_3
+        47: goto          61
+        50: aload_2
+        51: ldc           #69                 // String B
+        53: invokevirtual #65                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+        56: ifeq          61
+        59: iconst_1
+        60: istore_3
+        61: iload_3
+        62: lookupswitch  { // 2
+                       0: 88
+                       1: 90
+                 default: 92
+            }
+        88: iconst_1
+        89: ireturn
+        90: iconst_2
+        91: ireturn
+        92: iconst_0
+        93: ireturn
+      LineNumberTable:
+        line 38: 0
+        line 40: 88
+        line 42: 90
+        line 44: 92
+      LocalVariableTable:
+        Start  Length  Slot  Name   Signature
+            0      94     0  this   Lcom/ejemplo/application/usecase/GenerarRemesa;
+            0      94     1  tipo   Ljava/lang/String;
+      StackMapTable: number_of_entries = 6
+        frame_type = 253 /* append */
+          offset_delta = 36
+          locals = [ class java/lang/String, int ]
+        frame_type = 13 /* same */
+        frame_type = 10 /* same */
+        frame_type = 26 /* same */
+        frame_type = 1 /* same */
+        frame_type = 1 /* same */
+
+  public java.lang.String sql();
+    descriptor: ()Ljava/lang/String;
+    flags: (0x0001) ACC_PUBLIC
+    Code:
+      stack=1, locals=1, args_size=1
+         0: ldc           #71                 // String SELECT codigo, importe\nFROM remesa\nWHERE enviada = 0\n
+         2: areturn
+      LineNumberTable:
+        line 49: 0
+      LocalVariableTable:
+        Start  Length  Slot  Name   Signature
+            0       3     0  this   Lcom/ejemplo/application/usecase/GenerarRemesa;
+
+  public com.ejemplo.application.usecase.GenerarRemesa(com.ejemplo.application.ports.output.RemesaPort, java.lang.String);
+    descriptor: (Lcom/ejemplo/application/ports/output/RemesaPort;Ljava/lang/String;)V
+    flags: (0x0001) ACC_PUBLIC
+    Code:
+      stack=2, locals=3, args_size=3
+         0: aload_0
+         1: invokespecial #73                 // Method java/lang/Object."<init>":()V
+         4: aload_0
+         5: aload_1
+         6: putfield      #1                  // Field puerto:Lcom/ejemplo/application/ports/output/RemesaPort;
+         9: aload_0
+        10: aload_2
+        11: putfield      #43                 // Field sufijo:Ljava/lang/String;
+        14: return
+      LineNumberTable:
+        line 11: 0
+      LocalVariableTable:
+        Start  Length  Slot  Name   Signature
+            0      15     0  this   Lcom/ejemplo/application/usecase/GenerarRemesa;
+            0      15     1 puerto   Lcom/ejemplo/application/ports/output/RemesaPort;
+            0      15     2 sufijo   Ljava/lang/String;
+    RuntimeInvisibleAnnotations:
+      0: #109()
+        lombok.Generated
+
+  static {};
+    descriptor: ()V
+    flags: (0x0008) ACC_STATIC
+    Code:
+      stack=1, locals=0, args_size=0
+         0: ldc           #2                  // class com/ejemplo/application/usecase/GenerarRemesa
+         2: invokestatic  #77                 // Method org/slf4j/LoggerFactory.getLogger:(Ljava/lang/Class;)Lorg/slf4j/Logger;
+         5: putstatic     #13                 // Field LOGGER:Lorg/slf4j/Logger;
+         8: return
+      LineNumberTable:
+        line 13: 0
+}
+SourceFile: "GenerarRemesa.java"
+RuntimeVisibleAnnotations:
+  0: #114()
+    org.springframework.stereotype.Service
+BootstrapMethods:
+  0: #120 REF_invokeStatic java/lang/invoke/StringConcatFactory.makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+    Method arguments:
+      #116 pendientes: \u0001
+  1: #120 REF_invokeStatic java/lang/invoke/StringConcatFactory.makeConcatWithConstants:(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/invoke/CallSite;
+    Method arguments:
+      #118 \u0001\u0001\u0001
+InnerClasses:
+  public static final #131= #127 of #129; // Lookup=class java/lang/invoke/MethodHandles$Lookup of class java/lang/invoke/MethodHandles

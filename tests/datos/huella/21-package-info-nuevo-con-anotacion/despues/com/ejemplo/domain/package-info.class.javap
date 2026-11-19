@@ -1,0 +1,25 @@
+  Last modified 19 nov 2026; size 189 bytes
+  SHA-256 checksum b02de9aef3f425d37601db7b9b978de698e66b72940399b71fb1ff8f0653c845
+  Compiled from "package-info.java"
+interface com.ejemplo.domain.package-info
+  minor version: 0
+  major version: 65
+  flags: (0x1600) ACC_INTERFACE, ACC_ABSTRACT, ACC_SYNTHETIC
+  this_class: #1                          // "com/ejemplo/domain/package-info"
+  super_class: #3                         // java/lang/Object
+  interfaces: 0, fields: 0, methods: 0, attributes: 2
+Constant pool:
+  #1 = Class              #2              // "com/ejemplo/domain/package-info"
+  #2 = Utf8               com/ejemplo/domain/package-info
+  #3 = Class              #4              // java/lang/Object
+  #4 = Utf8               java/lang/Object
+  #5 = Utf8               SourceFile
+  #6 = Utf8               package-info.java
+  #7 = Utf8               RuntimeVisibleAnnotations
+  #8 = Utf8               Ljava/lang/Deprecated;
+{
+}
+SourceFile: "package-info.java"
+RuntimeVisibleAnnotations:
+  0: #8()
+    java.lang.Deprecated
