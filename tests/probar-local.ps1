@@ -3103,6 +3103,14 @@ function Registro-Caso-M40($E, [string]$Job, [string]$Caso, [int]$N) {
 
 function Tarea-Caso-M40($E, [string]$Job, [string]$Caso) { return (Lee-Json (Get-Ruta $E.Local "tareas/caso-$Job-$Caso.json")) }
 
+# Lanza Get-TablasBatch sobre $Raiz en un .ps1 con solo las funciones del inventario: una linea 'T|tabla|sitio' por tabla, y despues el $Extra que se pase.
+function Inventario-M40([string]$Raiz, [string]$Extra = '') {
+  $f = Join-Path $Dir 'm40-inventario.ps1'
+  $cuerpo = "foreach (`$t in @(Get-TablasBatch `$Raiz)) { 'T|' + `$t.tabla + '|' + `$t.sitio }`n" + $Extra
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-TablasSql', 'Get-NombreTabla', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel')) + "`n" + $cuerpo))
+  return (Lanzar $f @($Raiz))
+}
+
 $Pruebas['m40 (a) inventario de tablas: las de las cadenas de los .java, @Table y el texto de .sql, .xml, .properties y .yml, con su primer sitio; no las de comentarios, Spring Batch, DUAL ni las de :x, ? o $'] = {
   $raiz = Join-Path $Dir 'm40-inventario'
   Escribe $raiz 'src/main/java/com/acme/Dao.java' @'
@@ -3138,15 +3146,10 @@ public class Dao {
   Escribe $raiz 'src/main/resources/application.yml' "consulta: delete from T_G where x = 1`n"
   Escribe $raiz 'src/main/resources/notas.txt' "from T_TXT`n"
   Escribe $raiz 'src/test/java/com/acme/DaoTest.java' "class DaoTest { String s = `"INSERT INTO T_TEST (ID) VALUES (1)`"; }`n"
-  $f = Join-Path $Dir 'm40-inventario.ps1'
-  $cuerpo = @'
-$Utf8 = New-Object System.Text.UTF8Encoding($false)
-foreach ($t in @(Get-TablasBatch $Raiz)) { 'T|' + $t.tabla + '|' + $t.sitio }
+  $r = Inventario-M40 $raiz @'
 'L|' + (Get-ListaTablas @(1..12 | ForEach-Object { [pscustomobject]@{ tabla = ('T_' + $_.ToString('00')); sitio = "x.java:$_" } }))
 'V|' + @(Get-TablasBatch (Join-Path $Raiz 'no-existe')).Count
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-TablasSql', 'Get-NombreTabla', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel')) + "`n" + $cuerpo))
-  $r = Lanzar $f @($raiz)
   $t = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^T\|' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   $c = 'src/main/java/com/acme/Dao.java'
   $s = 'src/main/resources'
@@ -3156,6 +3159,31 @@ foreach ($t in @(Get-TablasBatch $Raiz)) { 'T|' + $t.tabla + '|' + $t.sitio }
   $l = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^L\|' })[0]
   Igual 'la lista del motivo: 10 tablas con su sitio y las demas contadas' ('L|' + ((@(1..10 | ForEach-Object { 'T_' + $_.ToString('00') + " (x.java:$_)" }) -join ', ') + ' y 2 mas')) ($l.TrimEnd())
   Igual 'una carpeta sin src/main: ninguna' 'V|0' (@($r.Salida -split "`n" | Where-Object { $_ -cmatch '^V\|' })[0]).TrimEnd()
+}
+
+$Pruebas['m40 (a2) inventario: una tabla de una cadena de .java solo cuenta si la cadena lleva otra palabra de SQL o si el nombre va todo en mayusculas; los mensajes de log no dan tablas'] = {
+  $raiz = Join-Path $Dir 'm40-inventario-log'
+  Escribe $raiz 'src/main/java/com/acme/Logs.java' @'
+package com.acme;
+
+class Logs {
+  void f(Object x) {
+    log.error("Error reading from file {}", x);
+    log.warn("Unable to update record");
+    log.info("Updating from file " + x);
+    String a = "select a from t_low where x = ?";
+    String b = " FROM T_FRAG ";
+    String c = "from file";
+    String d = " JOIN esq.T_SCH ";
+    String e = " into t_bajo ";
+    String f = "order by x" + " from t_orden";
+  }
+}
+'@
+  $r = Inventario-M40 $raiz
+  $t = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^T\|' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  $c = 'src/main/java/com/acme/Logs.java'
+  Igual 'solo las de SQL: la de select ... where en minusculas, las de nombre en mayusculas (con su esquema en minusculas) y ninguna de los mensajes' "T_FRAG|${c}:9,T_LOW|${c}:8,T_SCH|${c}:11" ($t -join ',')
 }
 
 $Pruebas['m40 (b) arnes nuevo cuyo caso vacio no deja la tabla del codigo: el primer intento se rechaza con la tabla y su sitio; el segundo, que la deja, se acepta'] = {
