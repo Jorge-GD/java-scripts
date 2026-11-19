@@ -4,8 +4,11 @@
 #   arnes-de-mas         un arnes bueno y, ademas, META-INF/MANIFEST.MF y com/x/Y.class en la raiz de la copia (un jar descomprimido) y
 #                        un comentario en src/main/**/App.java; en el arnes sin pom (POM: no), tambien en el pom.xml
 #   arnes-de-mas-muchos  un arnes bueno y siete ficheros nuevos en fuera/
+#   arnes-de-mas-cinco   un arnes bueno y cinco ficheros nuevos en fuera/
 #   arnes-pom-lombok     un arnes bueno y un pom.xml que cambia la <version> de org.projectlombok:lombok (ya estaba), anade
 #                        com.acme:nueva-sin-scope (sin scope) y com.acme:nueva-test (con <scope>test</scope>)
+#   arnes-pom-version    un arnes bueno y un pom.xml que solo cambia la <version> de org.projectlombok:lombok (ya estaba), sin dependencias nuevas
+#   arnes-pom-version-no-compila  como arnes-pom-version, y el test lleva NO_COMPILA (m30-mvn.ps1 no lo compila)
 #   arnes-pom-mas        un arnes bueno y un pom.xml que quita el <scope> de com.acme:otra, anade una <properties> y la dependencia
 #                        com.acme:nueva-sin-scope
 #   arnes-pom-roto       un arnes bueno y un pom.xml que no es XML valido
@@ -31,7 +34,7 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
   if ($nombre -and -not $guion -and $id -match $solo) { $guion = $nombre }
 }
 $tipo = ([regex]::Match($prompt, '(?m)^TIPO: (.*?)\s*$')).Groups[1].Value
-$mio = ($tipo -eq 'arnes-local' -and @('arnes-de-mas', 'arnes-de-mas-muchos', 'arnes-pom-lombok', 'arnes-pom-mas', 'arnes-pom-roto', 'arnes-solo-con-main') -contains $guion) -or ($tipo -eq 'reparar' -and @('reparar-solo-test', 'reparar-test-inutil', 'reparar-inutil1') -contains $guion)
+$mio = ($tipo -eq 'arnes-local' -and @('arnes-de-mas', 'arnes-de-mas-muchos', 'arnes-de-mas-cinco', 'arnes-pom-lombok', 'arnes-pom-version', 'arnes-pom-version-no-compila', 'arnes-pom-mas', 'arnes-pom-roto', 'arnes-solo-con-main') -contains $guion) -or ($tipo -eq 'reparar' -and @('reparar-solo-test', 'reparar-test-inutil', 'reparar-inutil1') -contains $guion)
 if (-not $mio) {
   & (Join-Path $PSScriptRoot 'm25-copilot.ps1') @args
   exit $LASTEXITCODE
@@ -62,6 +65,8 @@ if ($guion -eq 'arnes-de-mas') {
   if ($prompt -match '(?m)^POM: no\s*$') { [System.IO.File]::AppendAllText((Ruta-M30 'pom.xml'), "<!-- tocado por la IA -->`n") }
 }
 if ($guion -eq 'arnes-de-mas-muchos') { foreach ($n in 1..7) { Escribe-M30 "fuera/f$n.txt" "x`n" } }
+if ($guion -eq 'arnes-de-mas-cinco') { foreach ($n in 1..5) { Escribe-M30 "fuera/f$n.txt" "x`n" } }
+if ($guion -eq 'arnes-pom-version-no-compila') { [System.IO.File]::AppendAllText((Ruta-M30 'src/test/java/com/acme/viejo/PruebaLocalTest.java'), "// NO_COMPILA`n") }
 if ($guion -eq 'arnes-solo-con-main') {
   [System.IO.File]::AppendAllText((Ruta-M30 'src/test/java/com/acme/viejo/PruebaLocalTest.java'), "// NECESITA_MAIN`n")
   [System.IO.File]::AppendAllText((App-M30), "// MAIN_TOCADO`n")
@@ -77,6 +82,7 @@ if ($guion -like 'arnes-pom-*') {
       '    <dependency>', '      <groupId>com.acme</groupId>', '      <artifactId>nueva-test</artifactId>', '      <version>2.0</version>', '      <scope>test</scope>', '    </dependency>'
     $x = $x.Replace('<version>1.16.20</version>', '<version>1.18.30</version>').Replace("  </dependencies>", (($nuevas -join $nl) + $nl + '  </dependencies>'))
   }
+  if ($guion -like 'arnes-pom-version*') { $x = $x.Replace('<version>1.16.20</version>', '<version>1.18.30</version>') }
   if ($guion -eq 'arnes-pom-mas') {
     $nueva = '    <dependency>', '      <groupId>com.acme</groupId>', '      <artifactId>nueva-sin-scope</artifactId>', '      <version>1.0</version>', '    </dependency>'
     $x = $x.Replace(('      <scope>provided</scope>' + $nl), '').Replace('  </dependencies>', (($nueva -join $nl) + $nl + '  </dependencies>' + $nl + '  <properties>' + $nl + '    <java.version>21</java.version>' + $nl + '  </properties>'))

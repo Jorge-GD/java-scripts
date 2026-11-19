@@ -1996,10 +1996,16 @@ $Pruebas['m30 (a) Maven de la copia: .mvn/wrapper/ del repo pasa a la copia sin 
   $r = Prueba $e
   Igual 'sale con 0' 0 $r.Codigo
   foreach ($c in @($e.CopiaOrig, $e.CopiaMig)) {
-    Igual "$(Split-Path $c -Leaf): la copia trae maven-wrapper.properties, que git no tiene" "distributionUrl=x`n" (Lee $c '.mvn/wrapper/maven-wrapper.properties')
+    $props = Get-Ruta $c '.mvn/wrapper/maven-wrapper.properties'
+    $texto = '(no esta)'
+    if (Test-Path -LiteralPath $props) { $texto = [System.IO.File]::ReadAllText($props) }
+    Igual "$(Split-Path $c -Leaf): la copia trae maven-wrapper.properties, que git no tiene" "distributionUrl=x`n" $texto
     Comprueba "$(Split-Path $c -Leaf): y el jar" (Test-Path -LiteralPath (Get-Ruta $c '.mvn/wrapper/maven-wrapper.jar'))
   }
-  Igual 'lo que git ya trae en la copia no se pisa' "de git`n" (Lee $e.CopiaOrig '.mvn/wrapper/en-git.txt')
+  $enGit = Get-Ruta $e.CopiaOrig '.mvn/wrapper/en-git.txt'
+  $texto = '(no esta)'
+  if (Test-Path -LiteralPath $enGit) { $texto = [System.IO.File]::ReadAllText($enGit) }
+  Igual 'lo que git ya trae en la copia no se pisa' "de git`n" $texto
   if ($env:OS -ne 'Windows_NT') {   # el mvnw de mentira es un script de sh
     $e2 = Nuevo-Escenario 'm30-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
     Escribe $e2.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); SegundosPorLlamada = 60 }))
@@ -2051,6 +2057,15 @@ $Pruebas['m30 (b) arnes: la IA deja META-INF/ y un .class en la raiz y toca src/
   Comprueba 'y los siete ya no estan' (@(1..7 | Where-Object { Test-Path -LiteralPath (Get-Ruta $e.CopiaOrig "fuera/f$_.txt") }).Count -eq 0) ''
 }
 
+$Pruebas['m30 (b3) arnes: con exactamente cinco ficheros de mas la linea los nombra los cinco y no dice cuantos mas'] = {
+  $e = Escenario-M30 'm30-b3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() 'arnes-de-mas-cinco:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  $linea = ([regex]::Match($r.Salida, 'Deshago lo que la IA ha tocado fuera de lo suyo: [^\r\n]*')).Value
+  Igual 'la linea lista los cinco, sin (y N mas)' 'Deshago lo que la IA ha tocado fuera de lo suyo: fuera/f1.txt, fuera/f2.txt, fuera/f3.txt, fuera/f4.txt, fuera/f5.txt' $linea
+  Comprueba 'y los cinco ya no estan' (@(1..5 | Where-Object { Test-Path -LiteralPath (Get-Ruta $e.CopiaOrig "fuera/f$_.txt") }).Count -eq 0) ''
+}
+
 $Pruebas['m30 (c) pom.xml del original: la IA cambia la version de una dependencia que ya estaba y anade dos nuevas: queda el pom de antes con las dos con scope test, y la consola dice que version deshace'] = {
   $e = Escenario-M30 'm30-c' ([ordered]@{ cargaJob = @('importe=10.00') }) -Pom
   $antes = Lee $e.Legacy 'pom.xml'
@@ -2081,6 +2096,28 @@ $Pruebas['m30 (c) pom.xml del original: la IA cambia la version de una dependenc
   Igual 'un pom que no es XML valido: sale con 0' 0 $r.Codigo
   Igual 'el pom vuelve al del original' (Lee $e.Legacy 'pom.xml') (Lee $e.CopiaOrig 'pom.xml')
   Comprueba 'y la consola lo dice' ($r.Salida -match 'Dejo el pom\.xml del original como estaba, con tus dependencias nuevas de test: [^\r\n]*XML valido') (Cola $r.Salida)
+}
+
+$Pruebas['m30 (c4) pom.xml del original: la IA solo cambia la version de una dependencia que ya estaba: el pom final es el del original, byte a byte, y la consola dice que version deshace'] = {
+  $e = Escenario-M30 'm30-c4' ([ordered]@{ cargaJob = @('importe=10.00') }) -Pom
+  $antes = Lee $e.Legacy 'pom.xml'
+  $r = Prueba $e @() 'arnes-pom-version:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el arnes del original sale bien a la primera' 'hecha/1' "$((Tarea-Arnes $e 'original').estado)/$((Tarea-Arnes $e 'original').intentos)"
+  Igual 'sin dependencias nuevas, el pom final es el del original, byte a byte' $antes (Lee $e.CopiaOrig 'pom.xml')
+  Comprueba 'la consola dice la dependencia y el cambio de version' ($r.Salida -match 'Dejo el pom\.xml del original como estaba, con tus dependencias nuevas de test: [^\r\n]*org\.projectlombok:lombok: <version> 1\.16\.20 -> 1\.18\.30') (Cola $r.Salida)
+}
+
+$Pruebas['m30 (c5) pom.xml del original: si con el cambio de pom el arnes no compila, el motivo empieza por lo que se ha dejado como estaba, con la lista, y lleva el error de Maven'] = {
+  $e = Escenario-M30 'm30-c5' ([ordered]@{ cargaJob = @('importe=10.00') }) -Pom
+  $r = Prueba $e @() 'arnes-pom-version-no-compila:arnes-original'
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda atascada tras dos intentos' 'atascada/2' "$($t.estado)/$($t.intentos)"
+  $m = [string]$t.motivo
+  Comprueba 'el motivo empieza por lo del pom, con la dependencia y su cambio de version' ($m.StartsWith('Dejo el pom.xml del original como estaba, con tus dependencias nuevas de test: org.projectlombok:lombok: <version> 1.16.20 -> 1.18.30')) $m
+  Comprueba 'y sigue con el fallo de Maven' ($m -match 'El test no compila' -and $m -match 'simbolo de mentira') $m
+  Comprueba 'el reintento recibe ese motivo' ((Registro-Arnes $e 'original' 2).Contains('Dejo el pom.xml del original como estaba, con tus dependencias nuevas de test')) ''
 }
 
 $Pruebas['m30 (d) arnes: deshacer no esconde un fallo: si solo compila con el cambio de src/main que se deshace, se rechaza y el motivo empieza por lo que se ha deshecho y lleva el error de Maven'] = {
@@ -2181,6 +2218,17 @@ $Pruebas['m31 (a) tablas: las mismas filas con las columnas y las filas en otro 
   Igual 'con una fila de otro numero de campos sale con 2' 2 $r.Codigo
   $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)
   Igual 'se compara tal cual: la primera linea es la cabecera de cada lado' 'ID;NOMBRE|NOMBRE;ID' "$($d[0].original)|$($d[0].migrado)"
+}
+
+$Pruebas['m31 (a4) un .csv fuera de tablas/ con las columnas permutadas no se reordena: sale distinto'] = {
+  $e = Escenario-M31 'm31-a4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'csv-fuera'
+  Igual 'sale con 2' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)
+  Igual 'por ese fichero y solo por ese' 'ficheros/salida/x.csv' ($d | ForEach-Object { $_.fichero })
+  Igual 'se compara tal cual: la primera linea es la cabecera de cada lado' 'ID;NOMBRE;IMPORTE|NOMBRE;IMPORTE;ID' "$($d[0].original)|$($d[0].migrado)"
 }
 
 $Pruebas['m31 (b) tablas del framework: TASK_EXECUTION.csv solo en el migrado y BATCH_JOB_INSTANCE.csv distinto en los dos no cuentan: el caso sale igual'] = {
