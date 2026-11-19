@@ -91,7 +91,7 @@ Carpetas que verás aparecer:
 - No repite la lectura del paso 1.
 - Arregla fichero a fichero en `C:\ruta\migrado-rescate`, con un commit por arreglo. Un arreglo solo se queda si compila, no fallan más tests que antes, bajan los problemas y no empeora nada.
 - Después vuelve a medir, a comparar y a ejecutar los dos. La página 4 dice qué ha quitado y qué queda.
-- Opcional: para que la corrección de `calidad` vaya como la de Sonar (la IA solo compila, cada lote pasa los tests ligeros y un control pasa la suite entera), pon en `C:\ruta\migrado-rescate\.rescate\config.json` (el que lee la corrección; antes de crear la copia vale el de `C:\ruta\migrado\.rescate\config.json`) `{"PasosSoloCompila": ["sonar", "calidad"], "PasosTestsElegidos": ["sonar", "calidad"]}`. Por defecto no cambia nada: mide el paso en `.rescate\intentos.tsv` antes y después, y `migracion.ps1` solo avisa de claves «desconocidas».
+- Opcional: para que la corrección de `calidad` vaya como la de Sonar (la IA solo compila, cada lote pasa los tests ligeros y un control pasa la suite entera), pon en `C:\ruta\migrado-rescate\.rescate\config.json` (el que lee la corrección; antes de crear la copia vale el de `C:\ruta\migrado\.rescate\config.json`) `{"PasosSoloCompila": ["sonar", "calidad"], "PasosTestsElegidos": ["sonar", "calidad"]}`. Por defecto no cambia nada: mide el paso en `.rescate\intentos.tsv` antes y después.
 - Si una pasada anterior ya terminó la corrección, se la salta. Para volver a corregir, lanza el motor directamente:
 
 ```powershell
