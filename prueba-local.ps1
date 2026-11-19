@@ -24,7 +24,8 @@ QUE HACE
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
-     se borra y se escribe otra vez (el del original no se toca).
+     se borra y se escribe otra vez (el del original no se toca). Lo mismo, sin pedirlo, si el del migrado guardado se escribio
+     con otra plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -471,6 +472,15 @@ function Get-HuellaArnes([string]$Test, [string[]]$Jobs, [string]$HashOriginal) 
   return (Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ',') + '|' + $HashOriginal))
 }
 
+# El hash de la plantilla del arnes de ahora. La tarea lo guarda en entradas.plantilla: la plantilla con que se escribio el test guardado.
+# Va aparte de la huella, que cambia tambien con los jobs y el test del original y no debe rehacer nada por eso.
+function Get-HashPlantillaArnes { return (Get-Hash8 (Get-Plantilla 'arnes-local')) }
+
+# El test guardado del migrado se escribio con otra plantilla que la de ahora, o con una de antes de que la tarea la apuntara.
+function Test-PlantillaVieja($T) {
+  return ($T.entradas.repo -eq 'migrado' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado')) -and $T.entradas.plantilla -ne (Get-HashPlantillaArnes))
+}
+
 # La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado (la
 # plantilla, el test, los jobs y, en el migrado, el test del original guardado: $TestOriginal es su ruta dentro del arnes,
 # y '' en el original). El commit no entra en la huella: un arnes de antes se vuelve a comprobar en el commit
@@ -495,11 +505,18 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   }
   $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = ''; SI_ORIGINAL = $siOriginal; ORIGINAL = $rutaOriginal }
   $huella = Get-HuellaArnes $Test $Jobs $hashOriginal
-  $e = [pscustomobject]@{ repo = $Repo; test = $Test; testOriginal = $TestOriginal; hashOriginal = $hashOriginal; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
+  $e = [pscustomobject]@{ repo = $Repo; test = $Test; testOriginal = $TestOriginal; hashOriginal = $hashOriginal; copia = $Dir; dirs = $dirs; huella = $huella; plantilla = (Get-HashPlantillaArnes); prompt = $prompt }
   $guardada = Join-Path (Join-Path $Datos 'tareas') ('arnes-' + $Repo + '.json')
   $antes = $null
   if (Test-Path -LiteralPath $guardada) { try { $antes = Read-Json $guardada } catch { } }
+  # Con un test guardado, la plantilla de la tarea es la de la tarea de antes (o '' si no la apuntaba), no la de ahora: sigue asi hasta que
+  # se escriba otro test (Invoke-Arneses). Un no a la pregunta o un corte no dan por bueno en el siguiente lanzamiento un test de otra plantilla.
+  if (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$Repo")) {
+    $e.plantilla = ''
+    if ($antes -and $antes.entradas.plantilla) { $e.plantilla = [string]$antes.entradas.plantilla }
+  }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
+  if (-not $t.entradas.PSObject.Properties['plantilla']) { $t.entradas | Add-Member -NotePropertyName plantilla -NotePropertyValue '' }   # una tarea de antes de M37
   # Un arnes invalidado (Stop-Vacios, o un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
   # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas. Que el test del
   # original ya no este guardado (Stop-Vacios lo borra) no cuenta: la huella se compara con el hash del original de entonces.
@@ -782,7 +799,7 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
         $m = Get-MotivoArnes $t $ll[0] $Jobs
         # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
         $sigue = [bool]($m -and $ll[0].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
-        if (-not $m) { Save-Arnes $t }
+        if (-not $m) { Save-Arnes $t; $t.entradas.plantilla = Get-HashPlantillaArnes }
         elseif (-not $sigue) { Undo-Copia $t.entradas.copia }   # con $sigue, lo escrito se queda: Test-Arnes ya ha deshecho lo de fuera
         $t.entradas.prompt.SI_CORTADO = $MarcaNo
         $t.entradas.prompt.SI_DESHECHO = ''
@@ -1823,13 +1840,16 @@ try {
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()
+  $RehacerMigrado = [bool]$RehacerArnes
   $testOriginal = ''   # donde va el test del original: el del migrado lo traduce
   foreach ($x in @(@('original', $CopiaOrig), @('migrado', $CopiaMig))) {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs $testOriginal
+    # El test guardado del migrado se escribio con otra plantilla: como con -RehacerArnes, pero sin que lo pida nadie
+    if ($x[0] -eq 'migrado' -and -not $RehacerMigrado -and (Test-PlantillaVieja $t)) { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.'; $RehacerMigrado = $true }
     # Con -RehacerArnes el del migrado vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
-    if ($RehacerArnes -and $x[0] -eq 'migrado') { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
+    if ($RehacerMigrado -and $x[0] -eq 'migrado') { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
     elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     $arneses += , $t
     if ($x[0] -eq 'original') { $testOriginal = $test }
@@ -1847,7 +1867,7 @@ try {
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
-  if ($RehacerArnes) { Remove-Carpeta (Join-Ruta $Local 'arnes/migrado') }
+  if ($RehacerMigrado) { Remove-Carpeta (Join-Ruta $Local 'arnes/migrado') }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
