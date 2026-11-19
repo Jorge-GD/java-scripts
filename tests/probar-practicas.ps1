@@ -1358,6 +1358,9 @@ public class Entrada {
                 true);
         BufferedReader n = new BufferedReader(new FileReader(ruta)); // X
         byte[] o = new FileReader(ruta).toString().getBytes(); // X
+        Reader p = new InputStreamReader(abrir(ruta, fichero)); // X
+        Reader q = new FileReader("a,b.txt"); // X
+        Reader r = new FileReader("a)b(c.txt"); // X
         System.out.println(new String(k));
     }
 }
@@ -1387,6 +1390,9 @@ public class Explicito {
         PrintWriter j = new PrintWriter(fichero, "UTF-8");
         PrintWriter k = new PrintWriter(fichero, StandardCharsets.UTF_8);
         PrintStream m = new PrintStream(ruta, "UTF-8");
+        PrintWriter r = new PrintWriter(writer);
+        PrintWriter s = new PrintWriter(fileWriter);
+        PrintStream t = new PrintStream(System.out);
         byte[] n = ruta.getBytes(StandardCharsets.UTF_8);
         byte[] o = ruta.getBytes("UTF-8");
         BufferedReader p = Files.newBufferedReader(fichero.toPath());
@@ -1437,6 +1443,18 @@ public class LectorCon {
         FlatFileItemWriter<Remesa> w = new FlatFileItemWriter<>();
         w.setEncoding("ISO-8859-1");
         return w;
+    }
+}
+'@
+
+$Fuente6FlatSet = @'
+package com.acme.texto;
+
+public class LectorSet {
+    FlatFileItemReader<Remesa> lector() {
+        FlatFileItemReader<Remesa> reader = new FlatFileItemReader<>();
+        reader.setEncoding("ISO-8859-1");
+        return reader;
     }
 }
 '@
@@ -1556,9 +1574,10 @@ $Pruebas['42 bp6 c) un patron dentro de un comentario (// y /* */), de una caden
   Igual 'ni charset ni formato en los comentarios: tres incidencias' 3 (Inc $x.Json 'java21-texto').Count
 }
 
-$Pruebas['43 bp6 d) FlatFileItemReader y Writer (y sus Builder): con .encoding( o setEncoding( en el fichero no saltan; sin el, si, y un .encoding( en un comentario no cuenta'] = {
-  $x = Mide6 'bp6d' @{ LectorCon = $Fuente6FlatCon; LectorSin = $Fuente6FlatSin }
+$Pruebas['43 bp6 d) FlatFileItemReader y Writer (y sus Builder): con .encoding( o con solo setEncoding( en el fichero no saltan; sin el, si, y un .encoding( en un comentario no cuenta'] = {
+  $x = Mide6 'bp6d' @{ LectorCon = $Fuente6FlatCon; LectorSet = $Fuente6FlatSet; LectorSin = $Fuente6FlatSin }
   Igual 'con encoding: ninguna' '' (Lineas6 $x.Json "${Dir6}LectorCon.java" 'charset-por-defecto')
+  Igual 'con solo setEncoding (sin .encoding): ninguna' '' (Lineas6 $x.Json "${Dir6}LectorSet.java" 'charset-por-defecto')
   Igual 'sin encoding: el Builder, el Writer y el Reader (no la declaracion de un campo)' (Marcadas6 $Fuente6FlatSin) (Lineas6 $x.Json "${Dir6}LectorSin.java" 'charset-por-defecto')
 }
 
@@ -1621,8 +1640,8 @@ $Pruebas['47 bp6 h) sin src/main/java: java21-texto no aplica con su motivo y la
   Comprueba 'la pagina dice java21-texto no aplica y por que' ($h -match '(?s)<code>java21-texto</code> <b>no aplica</b>: no hay src/main/java')
 }
 
-$Pruebas['48 bp6 i) una llamada sin cerrar no para el detector: los demas ficheros dan sus incidencias'] = {
-  $x = Mide6 'bp6i' @{ Entrada = $Fuente6Charset; Roto = "package com.acme.texto;`nclass Roto { Object a = new FileReader(`n" }
+$Pruebas['48 bp6 i) una llamada sin cerrar (new FileWriter( sin ) ) no da incidencia ni para el detector: los demas ficheros dan las suyas'] = {
+  $x = Mide6 'bp6i' @{ Entrada = $Fuente6Charset; Roto = "package com.acme.texto;`nclass Roto { Object a = new FileWriter(`n" }
   Igual 'estado ok' 'ok' (Det $x.Json 'java21-texto').estado
   Igual 'las del fichero bueno estan' (Marcadas6 $Fuente6Charset) (Lineas6 $x.Json "${Dir6}Entrada.java" 'charset-por-defecto')
   Igual 'el que no cierra el parentesis no da incidencia' '' (Lineas6 $x.Json "${Dir6}Roto.java" 'charset-por-defecto')
@@ -1637,6 +1656,17 @@ $Pruebas['49 bp6 j) ninguna funcion de practicas.ps1 esta definida tambien en ot
   $repetidas = @($suyas | Where-Object { $deMas -contains $_ })
   Comprueba 'practicas.ps1 define funciones' ($suyas.Count -gt 0)
   Comprueba 'ninguna esta repetida en otro .ps1 de la raiz' ($repetidas.Count -eq 0) ($repetidas -join ', ')
+}
+
+$Pruebas['50 bp6 k) solo se lee src/main/java: el mismo codigo en src/test/java no da incidencias'] = {
+  $E = Nuevo-Escenario 'bp6k'
+  Escribe $E.Repo "${Dir6}Entrada.java" $Fuente6Charset
+  Escribe $E.Repo 'src/test/java/com/acme/texto/EntradaTest.java' $Fuente6Charset
+  Escribe $E.Repo 'src/test/java/com/acme/texto/FormatosTest.java' $Fuente6Formatos
+  $j = (Mide $E @{} $Rapido).Json
+  Igual 'estado ok' 'ok' (Det $j 'java21-texto').estado
+  Igual 'las de src/main/java estan' (Marcadas6 $Fuente6Charset) (Lineas6 $j "${Dir6}Entrada.java" 'charset-por-defecto')
+  Igual 'ninguna en src/test/java' 0 @($j.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' -and $_.fichero -like 'src/test/*' }).Count
 }
 
 # ================================ LANZADOR ================================
