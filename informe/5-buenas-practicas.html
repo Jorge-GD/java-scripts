@@ -1,0 +1,153 @@
+<div class="bp">
+<header class="cab-bp">
+  <h1>Buenas prácticas del batch migrado</h1>
+  <p class="lede">Cómo está <code>{{BATCH}}</code> frente a Java 21, Spring Boot 3, Batch 5 y Lombok, y si su arquitectura cumple lo que cumple la referencia.</p>
+  {{{CABECERA}}}
+</header>
+
+{{{PRACTICAS}}}
+</div>
+<!--TROZO titulo-practicas-->Buenas prácticas del batch migrado {{BATCH}}<!--FIN-->
+<!--TROZO bp-sin-datos--><p class="sin-datos">{{{ETIQUETA}}}<span>Todavía no se han medido las buenas prácticas: el diagnóstico no ha llegado a ese punto.</span></p><!--FIN-->
+<!--TROZO bp-cabecera--><div class="bp-estado"><p>Esta página verifica: no cambia código.</p><p>Medido sin IA en {{SEGUNDOS}} s, {{{CUANDO}}}.</p>{{{ETIQUETA}}}</div>
+  <dl class="bp-ficha">
+    <div><dt>Batch migrado</dt><dd>{{BATCH}}</dd></div>
+    <div><dt>Referencia</dt><dd>{{REFERENCIA}}</dd></div>
+    <div><dt>Medido el</dt><dd>{{MEDIDO}}</dd></div>
+    <div><dt>Paquete base</dt><dd>{{PAQUETE}}</dd></div>
+    <div><dt>Midieron</dt><dd>{{{MIDIERON}}}</dd></div>
+  </dl><!--FIN-->
+<!--TROZO bp-cuando-antes-->antes de corregir<!--FIN-->
+<!--TROZO bp-cuando-despues-->después de corregir<!--FIN-->
+<!--TROZO bp-herramientas--><ul class="bp-herr">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO bp-herramienta-->    <li>{{ID}}</li><!--FIN-->
+<!--TROZO bp-ninguno-->ninguno<!--FIN-->
+<!--TROZO bp-datos--><svg class="sprite" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="e-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="currentColor"/><path d="M9.5 7.5l7 4.5-7 4.5z" fill="#fff"/></symbol>
+    <symbol id="e-sonar" viewBox="0 0 24 24"><path d="M12 2.5l8.2 4.75v9.5L12 21.5l-8.2-4.75v-9.5z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+    <symbol id="e-tampoco" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M7.5 9.8h9M7.5 14.2h9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+<h2 class="sr">Indicadores</h2>
+<div class="bp-ind-fila bp-ind-n{{N_IND}}">
+{{{INDICADORES}}}
+</div>
+{{{DETECTORES}}}
+{{{SONAR}}}
+{{{ARQUITECTURA}}}
+{{{LISTA}}}<!--FIN-->
+<!--TROZO bp-ind-areas-->    <section class="bp-ind" id="ind-areas" aria-labelledby="t-ind-areas">
+      <h3 id="t-ind-areas">Incidencias por área</h3>
+      <p class="bp-ind-n">{{TOTAL}}</p>
+      <div class="bp-areas-ap" role="img" aria-label="{{RESUMEN}}">{{{SEGMENTOS}}}</div>
+      <ul class="bp-ley">
+{{{LEYENDA}}}
+      </ul>
+    </section><!--FIN-->
+<!--TROZO bp-barra-->/<wbr><!--FIN-->
+<!--TROZO bp-ind-resumen-->{{NOMBRE}}: {{N}}<!--FIN-->
+<!--TROZO bp-ind-seg--><span class="bp-ar-{{ID}}" style="flex:{{N}} 1 0"></span><!--FIN-->
+<!--TROZO bp-ind-ley-->        <li class="bp-ley-{{ID}}"><i class="bp-sw bp-sw-{{ID}}" aria-hidden="true"></i>{{{NOMBRE}}}<b class="bp-ley-n">{{N}}</b></li><!--FIN-->
+<!--TROZO bp-ind-sonar-->    <section class="bp-ind" id="ind-sonar" aria-labelledby="t-ind-sonar">
+      <h3 id="t-ind-sonar">Con regla de Sonar</h3>
+      <div class="bp-ind-anillo"><div class="bp-anillo"><svg viewBox="0 0 128 128" aria-hidden="true">
+        <defs><pattern id="bp-rayas" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#fff"/><rect width="4" height="8" fill="#C3CAF7"/></pattern></defs>
+        <g transform="rotate(-90 64 64)" fill="none" stroke-width="24">
+          <circle cx="64" cy="64" r="42" stroke="url(#bp-rayas)" stroke-dasharray="{{RESTO}} {{C}}" stroke-dashoffset="-{{ARCO}}"/>
+          <circle cx="64" cy="64" r="42" stroke="#2D3FE0" stroke-dasharray="{{ARCO}} {{C}}"/>
+        </g>
+        <circle cx="64" cy="64" r="54" fill="none" stroke="#14151A" stroke-width="2"/>
+        <circle cx="64" cy="64" r="30" fill="none" stroke="#14151A" stroke-width="2"/>
+      </svg><b>{{S}}</b></div><p class="bp-ind-sub"><b>{{S}}</b> de {{TOTAL}}</p></div>
+      <ul class="bp-ley"><li><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Con regla de Sonar<b class="bp-ley-n">{{S}}</b></li><li><i class="bp-sw bp-sw-r" aria-hidden="true"></i>De la referencia<b class="bp-ley-n">{{R}}</b></li></ul>
+    </section><!--FIN-->
+<!--TROZO bp-ind-reglas-->    <section class="bp-ind" id="ind-reglas" aria-labelledby="t-ind-reglas">
+      <h3 id="t-ind-reglas">Reglas de Sonar way que medimos</h3>
+      <p class="bp-ind-n">{{AQUI}} <small>de {{WAY}}</small></p>
+      <div class="bp-escala" role="img" aria-label="{{AQUI}} de {{WAY}} reglas"><span class="bp-esc-aqui" style="width:{{PCT}}%"></span></div>
+      <p class="bp-ind-sub">Solo el {{PCT_TXT}} %. Cero incidencias aquí no es un Sonar limpio.</p>
+    </section><!--FIN-->
+<!--TROZO bp-ind-xlsx-->    <section class="bp-ind" id="ind-xlsx" aria-labelledby="t-ind-xlsx">
+      <h3 id="t-ind-xlsx">Último <code>.xlsx</code> de Sonar</h3>
+      <p class="bp-ind-n"><span class="bp-ok">{{RESUELTAS}}</span> <small>de {{TOTAL}} resueltas</small></p>
+      <div class="bp-meter" role="img" aria-label="{{RESUELTAS}} de {{TOTAL}} resueltas"><span class="bp-fill" style="--v:{{PCT}}"></span></div>
+      <p class="bp-ind-sub"><b class="bp-mal">{{SIGUEN}}</b> siguen abiertas.</p>
+    </section><!--FIN-->
+<!--TROZO bp-detectores--><section class="bp-detectores" id="detectores" aria-labelledby="t-detectores">
+  <h2 id="t-detectores">Estado de los detectores</h2>
+  <div class="bp-notas">
+{{{NOTAS}}}
+  </div>
+</section><!--FIN-->
+<!--TROZO bp-det-estado-->    <p class="bp-nota">{{{ETIQUETA}}}<span><code>{{ID}}</code> <b>{{ESTADO}}</b>{{{MOTIVO}}}</span></p><!--FIN-->
+<!--TROZO bp-det-motivo-->: {{MOTIVO}}<!--FIN-->
+<!--TROZO bp-det-corte-->    <p class="bp-nota">{{{ETIQUETA}}}<span><code>{{ID}}</code> <b>100 o más</b> avisos. Se detiene en 100 y no lo dice, así que puede haber más.</span></p><!--FIN-->
+<!--TROZO bp-sonar--><section class="panel" id="sonar" aria-labelledby="t-sonar">
+  <h2 id="t-sonar">Cómo leer lo de Sonar</h2>
+  <div class="bp-notas">
+    <p class="bp-prosa">{{{FRASE}}}</p>
+    <p class="bp-nota">{{{ETIQUETA}}}<span>No sabemos qué reglas tiene activas vuestro perfil de Sonar.</span></p>
+    <p class="bp-prosa">Sonar way tiene {{WAY}} reglas; aquí medimos {{AQUI}}. Cero aquí no es un Sonar limpio.</p>
+    {{{XLSX}}}
+  </div>
+</section><!--FIN-->
+<!--TROZO bp-sonar-total-uno-->De <b>{{N}}</b> incidencia, <!--FIN-->
+<!--TROZO bp-sonar-total-otros-->De <b>{{N}}</b> incidencias, <!--FIN-->
+<!--TROZO bp-sonar-con-uno--><b>{{N}}</b> tiene regla de Sonar: si vuestro perfil la tiene activa, saldrá en vuestro informe. <!--FIN-->
+<!--TROZO bp-sonar-con-otros--><b>{{N}}</b> tienen regla de Sonar: si vuestro perfil la tiene activa, saldrá en vuestro informe. <!--FIN-->
+<!--TROZO bp-sonar-ref-uno--><b>{{N}}</b> no la mira Sonar: es de la referencia.<!--FIN-->
+<!--TROZO bp-sonar-ref-otros--><b>{{N}}</b> no las mira Sonar: son de la referencia.<!--FIN-->
+<!--TROZO bp-sonar-xlsx--><p class="bp-prosa">Último <code>.xlsx</code> de Sonar: {{TOTAL}} incidencias, {{RESUELTAS}} resueltas, {{SIGUEN}} siguen.</p><!--FIN-->
+<!--TROZO bp-arquitectura-sin--><section class="panel" id="arquitectura" aria-labelledby="t-arq">
+  <h2 id="t-arq">Arquitectura frente a la referencia {{{ETIQUETA}}}</h2>
+  <p>Las reglas de arquitectura de la referencia todavía no se miden.</p>
+</section><!--FIN-->
+<!--TROZO bp-lista--><section class="panel bp-lista" id="lista" aria-labelledby="t-lista">
+  <h2 id="t-lista">{{{TITULO}}} {{{ETIQUETA}}}</h2>
+  <p class="bp-prosa">Una sola lista. Agrúpala por lo que tienes que hacer o por área.</p>
+  <fieldset class="bp-agrupar"><legend>Agrupar por</legend>
+    <input type="radio" name="bp-modo" id="bp-m-que" class="sr" checked><label for="bp-m-que">Qué hago</label>
+    <input type="radio" name="bp-modo" id="bp-m-area" class="sr"><label for="bp-m-area">Área</label>
+  </fieldset>
+  <div class="bp-vista bp-vista-que" id="vista-que">
+{{{QUE}}}
+  </div>
+  <div class="bp-vista bp-vista-area" id="vista-area">
+{{{AREA}}}
+  </div>
+</section><!--FIN-->
+<!--TROZO bp-lista-titulo-uno-->La incidencia<!--FIN-->
+<!--TROZO bp-lista-titulo-otros-->Las {{N}} incidencias<!--FIN-->
+<!--TROZO bp-lista-vacia--><section class="panel" id="lista" aria-labelledby="t-lista">
+  <h2 id="t-lista">Las incidencias {{{ETIQUETA}}}</h2>
+  <p>Ninguna: los detectores que midieron no han encontrado nada. Cero incidencias aquí no es un Sonar limpio.</p>
+</section><!--FIN-->
+<!--TROZO bp-grupo-->    <section class="bp-grupo" aria-labelledby="{{ID}}">
+      <header class="bp-gh"><h3 id="{{ID}}">{{{TITULO}}}</h3><span class="bp-num">{{N}}</span><p>{{{EXPLICACION}}}</p></header>
+      <ol class="bp-filas">
+{{{FILAS}}}
+      </ol>
+    </section><!--FIN-->
+<!--TROZO bp-fila-->        <li class="bp-fila bp-q-{{QUE}}"><div class="bp-fb-c"><code class="bp-donde">{{{DONDE}}}</code></div><div class="bp-fb-o">{{{ORIGEN}}}<span class="bp-regla">{{REGLA}}</span></div><p class="bp-fb-p">{{TEXTO}}</p><div class="bp-fb-extra">{{{EXTRA}}}</div></li><!--FIN-->
+<!--TROZO bp-origen-sonar--><span class="bp-tag"><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Sonar {{CLAVE}}</span><!--FIN-->
+<!--TROZO bp-origen-spotbugs--><span class="bp-tag"><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Sonar (SpotBugs)</span><!--FIN-->
+<!--TROZO bp-origen-referencia--><span class="bp-tag"><i class="bp-sw bp-sw-r" aria-hidden="true"></i>de la referencia</span><!--FIN-->
+<!--TROZO bp-queHago-mano--><span class="bp-que bp-que-mano"><svg aria-hidden="true"><use href="#e-aviso"/></svg>A mano</span><!--FIN-->
+<!--TROZO bp-queHago-mano-expl-->Esto lo haces tú.<!--FIN-->
+<!--TROZO bp-queHago-paso2--><span class="bp-que bp-que-paso2"><svg aria-hidden="true"><use href="#e-auto"/></svg>Lo arregla el paso 2</span><!--FIN-->
+<!--TROZO bp-queHago-paso2-expl-->Se arregla solo al lanzar el paso 2.<!--FIN-->
+<!--TROZO bp-queHago-sonar--><span class="bp-que bp-que-sonar"><svg aria-hidden="true"><use href="#e-sonar"/></svg>Lo arregla -Sonar si sale en tu informe</span><!--FIN-->
+<!--TROZO bp-queHago-sonar-expl-->Se arregla con -Sonar, si la regla sale en tu informe de Sonar.<!--FIN-->
+<!--TROZO bp-queHago-notoca--><span class="bp-que bp-que-notoca"><svg aria-hidden="true"><use href="#e-tampoco"/></svg>No se toca: la referencia tampoco</span><!--FIN-->
+<!--TROZO bp-queHago-notoca-expl-->No se toca: la referencia tampoco lo cumple.<!--FIN-->
+<!--TROZO bp-area-java21-->Java 21<!--FIN-->
+<!--TROZO bp-area-java21-expl-->PMD y SpotBugs sobre el código del migrado. Cada hallazgo lleva la regla de Sonar que lo cubre.<!--FIN-->
+<!--TROZO bp-area-boot3-batch5-->Spring Boot 3 y Batch 5<!--FIN-->
+<!--TROZO bp-area-boot3-batch5-expl-->Avisos de javac por APIs marcadas «for removal», que se borrarán, y lo que la referencia hace distinto con Boot 3 y Batch 5.<!--FIN-->
+<!--TROZO bp-area-lombok-->Lombok<!--FIN-->
+<!--TROZO bp-area-lombok-expl-->Código que Lombok escribiría por ti y un riesgo al usarlo con Spring. Sonar no tiene reglas de Lombok: lo mira solo la referencia.<!--FIN-->
+<!--TROZO bp-area-arquitectura-->Arquitectura<!--FIN-->
+<!--TROZO bp-area-arquitectura-expl-->Cómo están puestas las capas frente a lo que cumple la referencia, y las dependencias reales que ve jdeps.<!--FIN-->
