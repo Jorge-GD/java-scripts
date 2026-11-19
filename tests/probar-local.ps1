@@ -1734,5 +1734,21 @@ $Pruebas['m28 (d) la causa se recorta a 300 caracteres'] = {
   Comprueba 'y es el principio del ultimo Caused by' ($causa.StartsWith('Caused by: java.lang.IllegalStateException: largalarga')) $causa
 }
 
+# Surefire 2.x recorta la traza del informe (trimStackTrace) y puede dejarlo sin la cadena de Caused by: la traza entera sale en la salida de Maven.
+$Pruebas['m28 (e) sin informe de surefire y con dos Caused by en la salida de Maven: la causa es el ultimo, sin el [ERROR] de delante'] = {
+  $x = Arnes-Falla-Surefire 'm28-e' 'arnes-surefire-salida'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo acaba con Causa: y el ultimo Caused by de la salida' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'el prompt del reintento la lleva' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
+}
+
+$Pruebas['m28 (f) informe con <<< ERROR! y sin Caused by, y un Caused by en la salida de Maven: gana el de la salida'] = {
+  $x = Arnes-Falla-Surefire 'm28-f' 'arnes-surefire-sin-causa-con-salida'
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo acaba con Causa: y el Caused by de la salida, no la linea del informe' ($m.TrimEnd().EndsWith("`nCausa: Caused by: java.net.ConnectException: Connection refused")) $m
+  Comprueba 'y no lleva la excepcion del informe como causa' ($m -notmatch 'Causa: java\.lang\.NullPointerException') $m
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

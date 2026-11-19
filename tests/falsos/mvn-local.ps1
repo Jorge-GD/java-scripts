@@ -18,6 +18,8 @@
 #   SIN_CAUSA  <<< ERROR! y ningun 'Caused by:'
 #   LARGA      como ERROR, con un ultimo 'Caused by:' de mas de 300 caracteres
 #   VIEJO      ningun informe nuevo: solo queda uno de hace un dia, con otra causa (el de una ejecucion anterior)
+#   SALIDA     ningun informe (surefire recorta la traza y a veces no deja nada): la traza entera, con dos 'Caused by:', va en la salida de Maven
+#   SIN_CAUSA_CON_SALIDA  informe como SIN_CAUSA y, en la salida de Maven, una traza con un 'Caused by:'
 # Cada 'test' anade una linea a logs/mvn.log en la raiz del repo (fuera de target, como un log de verdad).
 # Cada llamada anade a RESCATE_LLAMADAS/mvn.log (si esta) una linea: carpeta|JAVA_HOME|argumentos.
 $raiz = (Get-Location).Path
@@ -42,16 +44,19 @@ if ($sure) {
   $texto = @($linea, 'Test set: com.acme.viejo.PruebaLocalTest', $linea, 'Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 1.2 s <<< FAILURE! - in com.acme.viejo.PruebaLocalTest', 'ejecutaCasosLocales  Time elapsed: 1.1 s  <<< ERROR!')
   $ultimo = "Caused by: java.lang.IllegalArgumentException: Could not resolve placeholder 'acme.entrada.ruta' in value `"`${acme.entrada.ruta}`""
   if ($sure -eq 'LARGA') { $ultimo = 'Caused by: java.lang.IllegalStateException: ' + ('larga' * 100) }
-  if ($sure -eq 'SIN_CAUSA') { $texto += @('java.lang.NullPointerException: no hay nada de fondo', "`tat com.acme.viejo.Lector.lee(Lector.java:10)") }
+  if ($sure -like 'SIN_CAUSA*') { $texto += @('java.lang.NullPointerException: no hay nada de fondo', "`tat com.acme.viejo.Lector.lee(Lector.java:10)") }
   else { $texto += @('java.lang.IllegalStateException: Failed to load ApplicationContext', "`tat org.springframework.test.context.cache.DefaultCacheAwareContextLoaderDelegate.loadContext(DefaultCacheAwareContextLoaderDelegate.java:132)", "Caused by: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'reciboReader'", "`tat org.springframework.beans.factory.support.ConstructorResolver.createArgumentArray(ConstructorResolver.java:800)", $ultimo, "`t... 40 more") }
   if ($sure -eq 'VIEJO') {
     $texto = @($linea, 'Test set: com.acme.viejo.PruebaLocalTest', $linea, 'ejecutaCasosLocales  Time elapsed: 1.1 s  <<< ERROR!', 'Caused by: java.io.FileNotFoundException: causa-vieja-de-otra-ejecucion')
   }
-  [System.IO.File]::WriteAllText($informe, (($texto -join "`n") + "`n"))
+  if ($sure -ne 'SALIDA') { [System.IO.File]::WriteAllText($informe, (($texto -join "`n") + "`n")) }
   if ($sure -eq 'VIEJO') { (Get-Item -LiteralPath $informe).LastWriteTime = (Get-Date).AddDays(-1) }
+  if ($sure -eq 'SALIDA') { 'java.lang.IllegalStateException: Failed to load ApplicationContext'; "Caused by: org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'reciboReader'" }
+  if ($sure -eq 'SIN_CAUSA_CON_SALIDA') { '    Caused by: java.net.ConnectException: Connection refused' }
   '[ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 1.2 s <<< FAILURE! - in com.acme.viejo.PruebaLocalTest'
   '[ERROR] PruebaLocalTest.ejecutaCasosLocales ? IllegalState Failed to load ApplicationC...'
   '[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:2.22.2:test (default-test) on project batch-viejo: There are test failures.'
+  if ($sure -eq 'SALIDA') { '[ERROR] ' + $ultimo }
   exit 1
 }
 $soloJob = ''

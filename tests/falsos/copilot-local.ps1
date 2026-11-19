@@ -10,7 +10,7 @@
 #   arnes-dep-sin-test   el arnes anade al pom.xml una dependencia sin <scope>test</scope> (prohibido)
 #   arnes-no-compila     el test lleva NO_COMPILA (mvn-local.ps1 no lo compila)
 #   arnes-sin-filtro     el test lleva IGNORA_CASO (mvn-local.ps1 no hace caso de -Dprueba.local.caso)
-#   arnes-surefire-error | arnes-surefire-sin-causa | arnes-surefire-larga | arnes-surefire-viejo
+#   arnes-surefire-error | arnes-surefire-sin-causa | arnes-surefire-larga | arnes-surefire-viejo | arnes-surefire-salida | arnes-surefire-sin-causa-con-salida
 #                        el test lleva ARNES_SUREFIRE_<...> (mvn-local.ps1 falla como un test de verdad y deja el informe de surefire que dice)
 #   caso-fuera           el caso escribe ademas src/main/resources/fuera.txt (prohibido), en todos los intentos
 #   caso-no-aplica       el caso solo escribe no-aplica.txt con una frase
