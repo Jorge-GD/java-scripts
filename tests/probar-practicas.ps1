@@ -319,8 +319,8 @@ function Mide($E, [hashtable]$Entorno = @{}, [hashtable]$Ajustes = @{}, [string]
 }
 
 function Llamadas-De([string]$Fichero) {
-  if (-not (Test-Path -LiteralPath $Fichero)) { return @() }
-  return @([System.IO.File]::ReadAllLines($Fichero) | Where-Object { $_ })
+  if (-not (Test-Path -LiteralPath $Fichero)) { return , @() }
+  return , @([System.IO.File]::ReadAllLines($Fichero) | Where-Object { $_ })
 }
 
 function Det($J, [string]$Id) { return @($J.detectores | Where-Object { $_.id -ceq $Id })[0] }
@@ -497,7 +497,7 @@ $Pruebas['6 b) lombok-a-mano: javap va en lotes de menos de 8.000 caracteres y n
   for ($i = 1; $i -le 100; $i++) { Escribe $E.Raiz ('clases/com/acme/domain/ClaseDeRelleno{0:D3}.class' -f $i) '' }
   $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido
   Igual 'estado' 'ok' (Det $m.Json 'lombok-a-mano').estado
-  $jl = @(Llamadas-De $E.Javap)
+  $jl = Llamadas-De $E.Javap
   Comprueba 'mas de una llamada (no una por clase, ni todas a la vez)' ($jl.Count -ge 2 -and $jl.Count -le 20) "$($jl.Count) llamadas"
   $largos = @($jl | Where-Object { [int]("$_".Split('|')[1]) -ge 8000 })
   Igual 'ninguna llamada llega a 8.000 caracteres' 0 $largos.Count
@@ -628,7 +628,9 @@ function Comprueba-Formato($J, $E) {
   Igual 'formato: version' 1 $J.version
   Igual 'formato: cuando' 'antes' $J.cuando
   Comprueba 'formato: clave de 8 hex' ("$($J.clave)" -match '^[0-9a-f]{8}$') "$($J.clave)"
-  Comprueba 'formato: medido es una fecha con hora' ("$($J.medido)" -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$') "$($J.medido)"
+  # (PowerShell 7 convierte esa cadena en fecha al leer el JSON: se mira el texto del fichero)
+  $crudo = [System.IO.File]::ReadAllText((Join-Path $E.Datos 'practicas-antes.json'))
+  Comprueba 'formato: medido es una fecha con hora ISO' ($crudo -match '"medido": "\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d"') ($crudo.Substring(0, [Math]::Min(300, $crudo.Length)))
   Comprueba 'formato: segundos es un numero' ($J.segundos -is [double] -or $J.segundos -is [int] -or $J.segundos -is [decimal]) "$($J.segundos)"
   Igual 'formato: paquete (el prefijo comun de los paquetes de src/main/java)' 'com.acme' $J.paquete
   Igual 'formato: referencia (el nombre de su carpeta)' 'batch-ejemplo' $J.referencia
