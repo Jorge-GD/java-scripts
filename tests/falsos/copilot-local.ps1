@@ -16,8 +16,8 @@
 #   caso-carpeta-vacia   el caso solo crea la carpeta ficheros/entrada, vacia
 #   caso-sin-efecto      el caso solo escribe parametros.properties (su salida es la de un caso vacio)
 #   caso-commit          el caso escribe lo suyo y src/main/resources/fuera.txt, y hace git add y git commit
-# Cada llamada deja en la carpeta RESCATE_LLAMADAS (si esta) <id>-<pid>.txt con id, tipo, flags y las horas de inicio y
-# de fin (ticks UTC). Con RESCATE_ESPERA=<n>, cada llamada tarda n segundos (para ver cuantas van a la vez).
+# Cada llamada deja en la carpeta RESCATE_LLAMADAS (si esta) <id>-<pid>.txt con id, tipo, flags, el JAVA_HOME que ve
+# (javahome) y las horas de inicio y de fin (ticks UTC). Con RESCATE_ESPERA=<n>, cada llamada tarda n segundos (para ver cuantas van a la vez).
 $texto = ''
 for ($i = 0; $i -lt $args.Count; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
 if ($texto -notmatch 'tareas/([\w\-]+)\.prompt\.md') { 'no entiendo el prompt'; exit 1 }
@@ -33,7 +33,7 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
   if ($nombre -and -not $guion -and $id -match $solo) { $guion = $nombre }
 }
 $flags = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=)' }) -join ' ')
-$reg = @("id=$id", "pid=$PID", "tipo=$tipo", "flags=$flags", "guion=$guion", ('inicio=' + [DateTime]::UtcNow.Ticks))
+$reg = @("id=$id", "pid=$PID", "tipo=$tipo", "flags=$flags", "guion=$guion", "javahome=$env:JAVA_HOME", ('inicio=' + [DateTime]::UtcNow.Ticks))
 $fichero = ''
 if ($env:RESCATE_LLAMADAS) {
   [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
