@@ -3225,5 +3225,216 @@ $Pruebas['m39 (h) -Job: lo del job de ahora es lo nuevo aunque lo guardado diga 
   Igual 'los culpables del otro job se quedan' 'remesaJob/caso-01 m39: culpable de antes' (@($n.culpables | ForEach-Object { "$($_.job)/$($_.caso) $($_.asunto)" }) -join ',')
 }
 
+# ===================== M40: la base de prueba tiene las tablas que usa el batch =====================
+# Estos escenarios usan los falsos m40-copilot.ps1 y m40-mvn.ps1 (guiones en RESCATE_M40, 'guion=valor:regex' separados por ';'):
+#   tablas=<n>/<T_A,T_B>:<id de tarea>   el arnes cuyo id casa deja en su test la base con esas tablas desde su llamada n (con n alto, nunca)
+#   falta-tabla=T_A:<job/caso>           el original, la primera vez que ejecuta el caso, no lo prepara: Tabla "T_A" no encontrada
+#   falta-columna=T_A.X:<job/caso>       lo mismo con Columna "X" no encontrada en un INSERT INTO T_A
+#   migrado-no-corre:<job/caso>          el migrado no deja nada de ese caso
+# El original lleva un Repo.java con 'INSERT INTO T_A' en la linea 4.
+
+$SitioTablaM40 = 'src/main/java/com/acme/viejo/Repo.java:4'
+
+function Escenario-M40([string]$Nombre, $Casos) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm40-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  Escribe $e.Legacy 'src/main/java/com/acme/viejo/Repo.java' "package com.acme.viejo;`n`npublic class Repo {`n  static final String A = `"INSERT INTO T_A (ID, NOMBRE) VALUES (?, ?)`";`n}`n"
+  [void](GitEn $e.Legacy @('add', 'src/main/java/com/acme/viejo/Repo.java'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'repo con sql'))
+  return $e
+}
+
+function Prueba-M40($E, [string]$Guion, [string[]]$A = @()) {
+  $env:RESCATE_M40 = $Guion
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M40 = '' }
+}
+
+# El registro (prompt y respuesta) de la llamada $N de la tarea del caso $Caso (de dos digitos) del job $Job.
+function Registro-Caso-M40($E, [string]$Job, [string]$Caso, [int]$N) {
+  $f = Get-Ruta $E.Local "registros/caso-$Job-$Caso-$N.log"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return [System.IO.File]::ReadAllText($f)
+}
+
+function Tarea-Caso-M40($E, [string]$Job, [string]$Caso) { return (Lee-Json (Get-Ruta $E.Local "tareas/caso-$Job-$Caso.json")) }
+
+# Lanza Get-TablasBatch sobre $Raiz en un .ps1 con solo las funciones del inventario: una linea 'T|tabla|sitio' por tabla, y despues el $Extra que se pase.
+function Inventario-M40([string]$Raiz, [string]$Extra = '') {
+  $f = Join-Path $Dir 'm40-inventario.ps1'
+  $cuerpo = "foreach (`$t in @(Get-TablasBatch `$Raiz)) { 'T|' + `$t.tabla + '|' + `$t.sitio }`n" + $Extra
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-TablasSql', 'Get-NombreTabla', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel')) + "`n" + $cuerpo))
+  return (Lanzar $f @($Raiz))
+}
+
+$Pruebas['m40 (a) inventario de tablas: las de las cadenas de los .java, @Table y el texto de .sql, .xml, .properties y .yml, con su primer sitio; no las de comentarios, Spring Batch, DUAL ni las de :x, ? o $'] = {
+  $raiz = Join-Path $Dir 'm40-inventario'
+  Escribe $raiz 'src/main/java/com/acme/Dao.java' @'
+package com.acme;
+
+// lee from the file y nada mas
+/* y actualiza update the cache */
+@Table(name = "T_C")
+public class Dao {
+  static final String A = "INSERT INTO T_A (ID) VALUES (?)";
+  static final String B = "select x from ESQ.T_B b where b.id = 1"; // delete from T_COMENTADA
+  static final String M = "MERGE INTO T_M USING DUAL ON (1 = 1)";
+  static final String P = "SELECT * FROM BATCH_JOB_INSTANCE, TASK_EXECUTION JOIN DUAL";
+  static final String Q = "SELECT * FROM :tabla";
+  static final String R = "SELECT * FROM ${esquema}.T_Z";
+  static final String S = "select a from ab where x = ?";
+  static final String U = "SELECT 1 FROM ? x";
+  static final String D = "DELETE FROM T_DEL WHERE 1 = 1";
+  static final String J = "SELECT * FROM T_A a JOIN T_J j ON a.id = j.id";
+  static final String T = "CREATE TABLE IF NOT EXISTS T_CREADA (ID INT)";
+  static final char C = '"';
+  static final String L = "http://x?q=1 UPDATE T_URL SET a = 1" + C;
+  static final String N = "SELECT * FROM T_NL\n WHERE 1 = 1";
+  static final String TB = """
+      SELECT *
+        FROM T_TB
+      """;
+}
+'@
+  Escribe $raiz 'src/main/resources/schema.sql' "-- insert into T_SQL_COMENTADA`nUPDATE T_D SET x = 1;`n`nselect * from`n  T_D2;`n"
+  Escribe $raiz 'src/main/resources/mapper.xml' "<!-- select * from T_XML_COMENTADA -->`n<mapper>`n  <select id=`"x`">select * from T_E</select>`n</mapper>`n"
+  Escribe $raiz 'src/main/resources/batch.properties' "# delete from T_PROP_COMENTADA`nsql.lista=select * from T_F`n"
+  Escribe $raiz 'src/main/resources/application.yml' "consulta: delete from T_G where x = 1`n"
+  Escribe $raiz 'src/main/resources/notas.txt' "from T_TXT`n"
+  Escribe $raiz 'src/test/java/com/acme/DaoTest.java' "class DaoTest { String s = `"INSERT INTO T_TEST (ID) VALUES (1)`"; }`n"
+  $r = Inventario-M40 $raiz @'
+'L|' + (Get-ListaTablas @(1..12 | ForEach-Object { [pscustomobject]@{ tabla = ('T_' + $_.ToString('00')); sitio = "x.java:$_" } }))
+'V|' + @(Get-TablasBatch (Join-Path $Raiz 'no-existe')).Count
+'@
+  $t = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^T\|' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  $c = 'src/main/java/com/acme/Dao.java'
+  $s = 'src/main/resources'
+  $esperado = @("T_A|${c}:7", "T_B|${c}:8", "T_C|${c}:5", "T_CREADA|${c}:17", "T_D|$s/schema.sql:2", "T_D2|$s/schema.sql:5", "T_DEL|${c}:15", "T_E|$s/mapper.xml:3", "T_F|$s/batch.properties:2", "T_G|$s/application.yml:1", "T_J|${c}:16", "T_M|${c}:9", "T_NL|${c}:20", "T_TB|${c}:23", "T_URL|${c}:19")
+  Igual 'las tablas con su primer sitio, en orden' ($esperado -join ',') ($t -join ',')
+  Comprueba 'ni una de las que no son' (@($t | Where-Object { $_ -match 'COMENTADA|THE|CACHE|BATCH_|TASK_|DUAL|T_Z|TABLA|T_TEST|T_TXT|^AB\|' }).Count -eq 0) ($t -join ',')
+  $l = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^L\|' })[0]
+  Igual 'la lista del motivo: 10 tablas con su sitio y las demas contadas' ('L|' + ((@(1..10 | ForEach-Object { 'T_' + $_.ToString('00') + " (x.java:$_)" }) -join ', ') + ' y 2 mas')) ($l.TrimEnd())
+  Igual 'una carpeta sin src/main: ninguna' 'V|0' (@($r.Salida -split "`n" | Where-Object { $_ -cmatch '^V\|' })[0]).TrimEnd()
+}
+
+$Pruebas['m40 (a2) inventario: una tabla de una cadena de .java solo cuenta si la cadena lleva otra palabra de SQL o si el nombre va todo en mayusculas; los mensajes de log no dan tablas'] = {
+  $raiz = Join-Path $Dir 'm40-inventario-log'
+  Escribe $raiz 'src/main/java/com/acme/Logs.java' @'
+package com.acme;
+
+class Logs {
+  void f(Object x) {
+    log.error("Error reading from file {}", x);
+    log.warn("Unable to update record");
+    log.info("Updating from file " + x);
+    String a = "select a from t_low where x = ?";
+    String b = " FROM T_FRAG ";
+    String c = "from file";
+    String d = " JOIN esq.T_SCH ";
+    String e = " into t_bajo ";
+    String f = "order by x" + " from t_orden";
+  }
+}
+'@
+  $r = Inventario-M40 $raiz
+  $t = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^T\|' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  $c = 'src/main/java/com/acme/Logs.java'
+  Igual 'solo las de SQL: la de select ... where en minusculas, las de nombre en mayusculas (con su esquema en minusculas) y ninguna de los mensajes' "T_FRAG|${c}:9,T_LOW|${c}:8,T_SCH|${c}:11" ($t -join ',')
+}
+
+$Pruebas['m40 (b) arnes nuevo cuyo caso vacio no deja la tabla del codigo: el primer intento se rechaza con la tabla y su sitio; el segundo, que la deja, se acepta'] = {
+  $e = Escenario-M40 'm40-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M40 $e 'tablas=2/T_A:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'dos llamadas al arnes del original' 2 (Llamadas-Arnes $e 'original').Count
+  $p = Registro-Arnes $e 'original' 2
+  Comprueba 'el prompt del reintento lleva el motivo con la tabla y su fichero:linea' ($p.Contains("La base de prueba no tiene estas tablas que usa el batch: T_A ($SitioTablaM40). Crealas en el paso de la base limpia con las columnas que usa el codigo.")) (Cola $p)
+  Comprueba 'la consola dice que lo rechaza' ($r.Salida -match 'Arnes del original rechazado: La base de prueba no tiene estas tablas que usa el batch: T_A') (Cola $r.Salida)
+  Comprueba 'y no avisa de que siga sin ellas' ($r.Salida -notmatch 'sigue sin estas tablas') (Cola $r.Salida)
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda hecha con dos intentos' 'hecha,2' "$($t.estado),$($t.intentos)"
+  Comprueba 'el test guardado es el del segundo intento (con la tabla)' ((Lee $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java').Contains('BASE_TABLAS=T_A')) ''
+  Comprueba 'y su caso vacio guardado lleva la tabla' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv')) ''
+  Igual 'el arnes del migrado (sin tablas en su codigo) no se rechaza: una llamada' 1 (Llamadas-Arnes $e 'migrado').Count
+}
+
+$Pruebas['m40 (c, d) sin la tabla en todos los intentos el arnes se acepta con el Aviso; el guardado la ultima vez se usa con el mismo Aviso y sin llamada nueva al arnes'] = {
+  $e = Escenario-M40 'm40-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $aviso = "La base de prueba sigue sin estas tablas: T_A ($SitioTablaM40). Los casos que las usen saldran FAILED en el original."
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
+  Igual '(c) sale con 0' 0 $r.Codigo
+  Igual '(c) dos llamadas al arnes del original' 2 (Llamadas-Arnes $e 'original').Count
+  Comprueba '(c) el primer intento se rechaza' ($r.Salida -match 'Arnes del original rechazado: La base de prueba no tiene estas tablas') (Cola $r.Salida)
+  Igual '(c) el Aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Comprueba '(c) y despues, el arnes del original bien' ($r.Salida -match 'Arnes del original: bien\.') (Cola $r.Salida)
+  $t = Tarea-Arnes $e 'original'
+  Igual '(c) la tarea queda hecha con dos intentos' 'hecha,2' "$($t.estado),$($t.intentos)"
+  Comprueba '(c) el test se guarda' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java')) ''
+  Comprueba '(c) y su caso vacio, el que usa la comparacion' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/estado.txt')) ''
+  $n = (Llamadas $e).Count
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
+  Igual '(d) el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual '(d) sin ninguna llamada nueva (ni de arnes ni de casos)' $n (Llamadas $e).Count
+  Igual '(d) el Aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Comprueba '(d) y no rechaza nada' ($r.Salida -notmatch 'rechazado') (Cola $r.Salida)
+  Igual '(d) la tarea sigue hecha con sus dos intentos' 'hecha,2' "$((Tarea-Arnes $e 'original').estado),$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m40 (e) un caso cuyo original da Tabla "T_A" no encontrada, con T_A en el inventario: no se pudo preparar con su motivo, sin reintento (una sola llamada)'] = {
+  $e = Escenario-M40 'm40-e' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original;falta-tabla=T_A:^cargaJob/caso-01'
+  Igual 'sale con 0 (el otro caso sale igual)' 0 $r.Codigo
+  $motivo = "La base de prueba no tiene la tabla T_A (el test no la crea; la usa $SitioTablaM40)."
+  Igual 'el caso 1: una sola llamada' 1 @(Llamadas-Casos $e | Where-Object { $_.id -eq 'caso-cargaJob-01' }).Count
+  Igual 'el caso 2: una sola llamada' 1 @(Llamadas-Casos $e | Where-Object { $_.id -eq 'caso-cargaJob-02' }).Count
+  $t = Tarea-Caso-M40 $e 'cargaJob' '01'
+  Igual 'la tarea del caso 1 queda atascada con un intento' 'atascada,1' "$($t.estado),$($t.intentos)"
+  Igual 'con ese motivo' $motivo $t.motivo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el resultado: no se pudo preparar' 'no se pudo preparar' $c.resultado
+  Comprueba 'con el motivo' ($c.motivo.Contains($motivo)) $c.motivo
+  Comprueba 'la consola lo dice' ($r.Salida -match [regex]::Escape("caso-cargaJob-01 rechazado: $motivo")) (Cola $r.Salida)
+  Igual 'el caso 2 sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
+}
+
+$Pruebas['m40 (e2) Tabla "X" no encontrada con X que no usa el codigo: el reintento dice que no existe en el batch y el caso se hace'] = {
+  $e = Escenario-M40 'm40-e2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original;falta-tabla=T_INVENTADA:^cargaJob/caso-01'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'dos llamadas para el caso' 2 @(Llamadas-Casos $e).Count
+  Comprueba 'el reintento lleva que la tabla no existe en el batch' ((Registro-Caso-M40 $e 'cargaJob' '01' 2).Contains('La tabla T_INVENTADA no existe en el batch: usa solo tablas que use su codigo.')) ''
+  $t = Tarea-Caso-M40 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha con dos intentos' 'hecha,2' "$($t.estado),$($t.intentos)"
+  Igual 'el caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+$Pruebas['m40 (f) Columna "X" no encontrada en T_A: el reintento lleva las columnas de T_A en la base de prueba; sin su .csv, solo la primera frase'] = {
+  $e = Escenario-M40 'm40-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original;falta-columna=T_A.X:^cargaJob/caso-01'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'dos llamadas para el caso' 2 @(Llamadas-Casos $e).Count
+  Comprueba 'el reintento lleva la tabla, la columna y las columnas de la base de prueba' ((Registro-Caso-M40 $e 'cargaJob' '01' 2).Contains('La tabla T_A no tiene la columna X. Sus columnas en la base de prueba son: ID, NOMBRE.')) (Cola (Registro-Caso-M40 $e 'cargaJob' '01' 2))
+  Igual 'el caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-01').resultado
+  $e = Escenario-M40 'm40-f2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original;falta-columna=T_A.X:^cargaJob/caso-01'
+  $p = Registro-Caso-M40 $e 'cargaJob' '01' 2
+  Comprueba 'sin el .csv de la tabla, solo la primera frase' ($p.Contains('La tabla T_A no tiene la columna X.') -and -not $p.Contains('Sus columnas')) (Cola $p)
+}
+
+$Pruebas['m40 (g) un caso que el migrado no corrio (sin estado.txt) sale distinto y su motivo dice que no lo corrio y por que'] = {
+  $e = Escenario-M40 'm40-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original;migrado-no-corre:^cargaJob/caso-01'
+  Igual 'sale con 2' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso 1 sale distinto' 'distinto' $c.resultado
+  Comprueba 'con el motivo de que el migrado no lo corrio' ($c.motivo.StartsWith('El migrado no corrio este caso: ')) $c.motivo
+  Comprueba 'y la causa de Maven' ($c.motivo.Contains('El job del migrado no arranca')) $c.motivo
+  Comprueba 'las diferencias siguen: el estado.txt del original' (@($c.diferencias | Where-Object { $_.fichero -eq 'estado.txt' }).Count -eq 1) ''
+  Comprueba 'la consola ensena el motivo antes de las diferencias' ($r.Salida -match '(?s)distinto: cargaJob/caso-01.*?El migrado no corrio este caso:.*?estado\.txt: lineas distintas') (Cola $r.Salida)
+  $c2 = Caso $e 'cargaJob' 'caso-02'
+  Igual 'el caso 2 sale igual y sin motivo' 'igual|' "$($c2.resultado)|$($c2.motivo)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
