@@ -14,7 +14,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
   en %USERPROFILE%\.rescate\ajustes.json, o se pregunta), modelo, prueba de
   aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree.
   Diagnostico (sin IA, la primera fase): rescate.ps1 -Modo diagnostico mide el migrado y deja datos\hallazgos-antes.json y
-  datos\diagnostico-antes.md; su pagina es 2-problemas.html. Se hace una vez: relanzar no repite Maven.
+  datos\diagnostico-antes.md; su pagina es 2-problemas.html. Lleva el commit del migrado que midio (datos\diagnostico-antes.json): con el
+  mismo commit relanzar no repite Maven; con otro (o sin ese dato) se hace otra vez, con cobertura y buenas practicas, y el diagnostico
+  viejo y la correccion anterior se apartan en datos\anterior-<commit7>\. Lo que no tiene commit en tu carpeta no cuenta.
   Lectura: una ficha por clase del original, hasta 4 llamadas a la vez. Tras
   cada ronda el worktree tiene que estar limpio y el original y la referencia sin
   cambios. Una salida invalida se repite una vez, con el motivo y esfuerzo alto;
@@ -46,7 +48,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
     lectura-hecha
     correccion  si contestaste "corregir": rescate.ps1 -Modo fix -Todo arregla el worktree (registros\correccion.log), se vuelve a
                 diagnosticar (datos\hallazgos-despues.json) y datos\correcciones.json cuenta que se ha corregido y que no.
-                Con "parar" (o -SoloInforme) no se corrige nada. Se salta si la correccion ya esta completa.
+                Con "parar" (o -SoloInforme) no se corrige nada. Se salta si la correccion ya esta completa; si dejo ficheros atascados, solo
+                se repite con -Reintentar (y rescate.ps1 los vuelve a intentar).
     comparar    una tarea por clase del original con datos: la IA lee los ficheros del migrado que elige el script (los del
                 mismo nombre; si la correccion los renombro, partio o borro, los que git dice que los recogieron, por el
                 renombrado o por las lineas que se llevaron; y si no, los que comparten palabras con la clase) y dice, dato a
@@ -79,8 +82,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
   Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
-  las tareas hechas y sigue donde se quedo. Las atascadas tampoco se repiten (salvo
-  con -Reintentar o con otro modelo).
+  las tareas hechas y sigue donde se quedo. Las tareas de lectura atascadas tampoco
+  se repiten (salvo con -Reintentar o con otro modelo), y los ficheros que la
+  correccion no pudo arreglar tampoco (salvo con -Reintentar).
 
 USO
   .\migracion.ps1 -Legacy C:\ruta\life-java8 -Migrado C:\ruta\batch-life
@@ -89,7 +93,7 @@ USO
   .\migracion.ps1 ... -Si              # contesta "corregir"
   .\migracion.ps1 ... -MaxHoras 6      # no empieza rondas nuevas pasado ese tiempo
   .\migracion.ps1 ... -Limite 5        # ensayo corto: solo las 5 primeras tareas pendientes
-  .\migracion.ps1 ... -Reintentar      # vuelve a llamar a las tareas atascadas de antes
+  .\migracion.ps1 ... -Reintentar      # repite las tareas de lectura atascadas y los ficheros atascados de la correccion
   .\migracion.ps1 ... -Practicas       # antes de la prueba en local, pasa a Lombok los getters y setters escritos a mano (un commit por fichero)
   .\migracion.ps1 ... -Reglas          # antes de la prueba en local, un test unitario por regla de negocio, comprobado cambiando su linea (un commit por test)
   .\migracion.ps1 ... -SinPruebaLocal # no hace la ultima fase (ejecutar el original y el migrado)
@@ -111,7 +115,7 @@ param(
   [switch]$Si,                # al acabar el informe, corregir
   [double]$MaxHoras = 0,      # 0 = sin tope
   [int]$Limite = 0,           # 0 = sin limite; N = en este lanzamiento solo las N primeras tareas pendientes
-  [switch]$Reintentar,        # volver a intentar las tareas atascadas de un lanzamiento anterior
+  [switch]$Reintentar,        # volver a intentar las tareas de lectura atascadas y los ficheros atascados de la correccion de un lanzamiento anterior
   [switch]$Practicas,         # antes de la prueba en local, pasar a Lombok los getters y setters escritos a mano (la fase practicas)
   [switch]$Reglas,            # antes de la prueba en local, escribir un test unitario por cada regla de negocio (la fase reglas)
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
@@ -265,13 +269,50 @@ function Save-Registro([string]$Ruta, $Salida) {
   [System.IO.File]::WriteAllText($Ruta, ((Get-SinColor $Salida) -join "`n") + "`n", $Utf8)
 }
 
-# La fase diagnostico: el diagnostico de antes. Se salta si ya esta (relanzar no repite Maven).
+# Lo que se aparta (rutas desde la carpeta de salida) cuando el diagnostico de antes se hace otra vez: el diagnostico viejo y la
+# correccion anterior con sus registros. Un informe con una correccion de otro punto de partida mezclaria dos cosas.
+$ApartarAlRehacer = @(
+  'datos/diagnostico-antes.json', 'datos/hallazgos-antes.json', 'datos/diagnostico-antes.md', 'datos/cobertura-antes.json', 'datos/practicas-antes.json',
+  'datos/correcciones.json', 'datos/hallazgos-despues.json', 'datos/diagnostico-despues.md', 'datos/cobertura-despues.json', 'datos/practicas-despues.json',
+  'registros/correccion.log', 'registros/diagnostico-despues.log', 'registros/cobertura-despues.log', 'registros/practicas-despues.log'
+)
+
+# La fase diagnostico: el diagnostico de antes, con el commit del migrado que midio (datos\diagnostico-antes.json). Se salta si ya esta con el
+# mismo commit (relanzar no repite Maven). Con otro commit, o sin el dato (de antes de guardarlo), se hace otra vez y lo de antes y la
+# correccion anterior quedan en datos\anterior-<commit7>\. El worktree, donde se mide, avanza hasta tu commit si puede (solo hacia delante).
 function Invoke-FaseDiagnostico {
-  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-antes.json')) { return }
+  $commit = Get-Head $MigradoRoot
+  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-antes.json')) {
+    $sucio = @((Invoke-Git $MigradoRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
+    if ($sucio.Count -gt 0) { Aviso "Tienes $($sucio.Count) cambios sin commit en ${MigradoRoot}: el diagnostico mide tu ultimo commit ($($commit.Substring(0, 7))) y no los cuenta. Haz commit para que cuenten." }
+    $viejo = ''
+    $guardado = Join-Path $Datos 'diagnostico-antes.json'
+    if (Test-Path -LiteralPath $guardado) { try { $viejo = [string](Read-Json $guardado).commit } catch { $viejo = '' } }
+    if ($viejo -ceq $commit) { return }
+    $v7 = 'sin-commit'
+    if ($viejo.Length -ge 7) { $v7 = $viejo.Substring(0, 7) }
+    $apartado = Join-Path $Datos "anterior-$v7"
+    for ($n = 2; Test-Path -LiteralPath $apartado; $n++) { $apartado = Join-Path $Datos "anterior-$v7-$n" }
+    [void](New-Item -ItemType Directory -Path $apartado)
+    foreach ($rel in $ApartarAlRehacer) {
+      $de = Join-Ruta $Salida $rel
+      if (Test-Path -LiteralPath $de) { Move-Item -LiteralPath $de -Destination (Join-Path $apartado (Split-Path $rel -Leaf)) -Force }
+    }
+    $donde = 'datos\' + (Split-Path $apartado -Leaf)
+    if ($viejo) { Info "Tu rama ha cambiado desde el ultimo diagnostico ($v7 -> $($commit.Substring(0, 7))): lo hago otra vez y lo de la correccion anterior queda en $donde." }
+    else { Info "El ultimo diagnostico no dice con que commit se hizo: lo hago otra vez y lo de la correccion anterior queda en $donde." }
+    $wt = Get-Head $RepoRoot
+    if ($wt -cne $commit) {
+      [void](Invoke-Git $RepoRoot @('merge', '--ff-only', $commit))
+      $wt = Get-Head $RepoRoot
+      if ($wt -cne $commit) { Aviso "El worktree de rescate no esta en tu commit ($($wt.Substring(0, 7)) frente a $($commit.Substring(0, 7))): lo que se mide es el worktree, con los arreglos de su rama. Une la rama de rescate a la tuya para que midan lo mismo." }
+    }
+  }
   $Estado['fase'] = 'diagnostico'
   Save-Estado
   [void](Get-JobsContrato)
   if (-not (Invoke-DiagnosticoMotor 'antes')) { return }
+  Write-Json (Join-Path $Datos 'diagnostico-antes.json') ([ordered]@{ commit = $commit })
   Save-Informes
   $d = Read-Diagnostico $Datos
   Info "Diagnostico: $($d.Errores) errores y $($d.Avisos) avisos. Detalle: $(Join-Path $Salida '2-problemas.html')"
@@ -534,14 +575,23 @@ function Save-Correcciones([int]$Codigo, [bool]$Completa) {
 }
 
 # La fase correccion (tras lectura-hecha): rescate.ps1 -Modo fix -Todo arregla el worktree, se vuelve a diagnosticar y datos\correcciones.json
-# lo cuenta. Con la respuesta 'parar' no se lanza. Si ya hay una correccion completa, se salta. Parada segun el codigo del motor:
+# lo cuenta. Con la respuesta 'parar' no se lanza. Si ya hay una correccion completa, se salta, salvo con -Reintentar y ficheros atascados: se
+# lanza otra vez y rescate.ps1 recibe -Reintentar. Parada segun el codigo del motor:
 # 0 completa; 2 sin compilar -> no-compila, con PARO: -> lotes-deshechos, si no completa con atascados; 3 git; 4 guardas; otro motor.
 function Invoke-FaseCorreccion {
   $ruta = Join-Path $Datos 'correcciones.json'
   if (Test-Path -LiteralPath $ruta) {
     $previa = $null
     try { $previa = Read-Json $ruta } catch { $previa = $null }
-    if ($previa -and $previa.completa -eq $true) { $Estado['fase'] = 'correccion'; Save-Estado; return }
+    if ($previa -and $previa.completa -eq $true) {
+      $quedan = @($previa.atascados | Where-Object { $null -ne $_ }).Count
+      if (-not ($Reintentar -and $quedan -gt 0)) {
+        $Estado['fase'] = 'correccion'
+        Save-Estado
+        if ($quedan -gt 0) { Info "La correccion anterior dejo ficheros atascados ($quedan). Para volver a intentarlos: -Reintentar." }
+        return
+      }
+    }
   }
   if ($respuesta -ne 'corregir') { Info 'No se corrige nada: has pedido parar tras el informe. Para corregir, relanza el mismo comando con -Si.'; return }
   $Estado['fase'] = 'correccion'
@@ -551,6 +601,7 @@ function Invoke-FaseCorreccion {
   Info 'Correccion: corrigiendo el migrado con rescate.ps1 -Modo fix (un fichero por llamada; puede tardar horas)...'
   $a = @('-Modo', 'fix', '-Todo', '-Si', '-Lote', '1', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Legacy', $LegacyRoot, '-Esfuerzo', 'medium', '-EsfuerzoPlan', 'high')
   if ($ModeloElegido) { $a += @('-Modelo', $ModeloElegido) }
+  if ($Reintentar) { $a += '-Reintentar' }
   $r = Invoke-EnVivo 'rescate.ps1' $a
   $registro = Join-Path $Registros 'correccion.log'
   Save-Registro $registro $r.Salida
