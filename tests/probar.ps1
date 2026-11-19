@@ -5878,6 +5878,22 @@ $Pruebas['m23 (c): con -Todo, el paso anterior a calidad (build) pasa la suite e
   Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
 }
 
+$Pruebas['m23 (d): migracion.ps1 lanza rescate.ps1 sobre el worktree (-Repo <migrado>-rescate): manda el config.json del worktree y no el del migrado'] = {
+  # el migrado trae el config.json por defecto (calidad con el modelo pasando la suite entera) y el del worktree activa las dos listas
+  $e = Escenario-M23 'm23-d' @('service/SinDoc1') $CtxM22 @{ PasosSoloCompila = @('sonar'); PasosTestsElegidos = @('sonar') }
+  $r0 = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'calidad', '-Si', '-MaxLotes', '0')   # solo crea el worktree
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r0.Salida); return }
+  Config-Sonar ([pscustomobject]@{ Repo = $e.Wt }) @{ MvnExe = $M22Mvn; CopilotExe = (Join-Path $falsos 'm23-copilot.ps1'); PasosSoloCompila = @('sonar', 'calidad'); PasosTestsElegidos = @('sonar', 'calidad') }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $env:RESCATE_M22_LOG = $log
+  try { $r = Sonar-Lanza ([pscustomobject]@{ Repo = $e.Wt }) @('-Modo', 'fix', '-Paso', 'calidad', '-Si', '-MaxIntentos', '1', '-Lote', '1') }
+  finally { Remove-Item 'Env:RESCATE_M22_LOG' -ErrorAction SilentlyContinue }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el lote pasa' ($r.Salida -match "Lote 1 OK: 'calidad'") (Cola $r.Salida)
+  Comprueba 'el prompt solo compila: manda el config.json del worktree' ((Lee $e.Wt '.rescate/prompt.md') -match 'Los tests los pasa el script despues\.') ''
+  Comprueba 'y el lote pasa las puertas con el excludesFile' (Cuenta-M22 @(Llamadas-M22 $log) 'parcial' -eq 1) (Cola $r.Salida)
+}
+
 $Pruebas['m23: todo en ASCII (el falso nuevo)'] = {
   $f = Join-Path $falsos 'm23-copilot.ps1'
   Igual 'sin bytes fuera de ASCII en m23-copilot.ps1' 0 @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
