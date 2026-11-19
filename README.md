@@ -249,7 +249,7 @@ Prueba en local, caso a caso, que el batch migrado hace lo mismo que el original
 ```powershell
 .\prueba-local.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado
 .\prueba-local.ps1 ... -JavaLegacy C:\jdk8      # si el original no compila con el JDK de Maven
-.\prueba-local.ps1 ... -Job cargaRecibosJob     # solo los casos de ese job
+.\prueba-local.ps1 ... -Job cargaRecibosJob     # solo los casos de ese job; datos\prueba-local.json guarda los otros jobs si el commit no ha cambiado
 .\prueba-local.ps1 ... -Modelo <id> -Si         # otro modelo que el de migracion.ps1; sin preguntar
 .\prueba-local.ps1 ... -Desde <tu-rama>          # de cada caso distinto, el commit de la rama de rescate que lo rompe
 .\prueba-local.ps1 ... -Desde <tu-rama> -Deshacer   # y lo deshace con git revert (solo commits nuevos encima)
