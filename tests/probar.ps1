@@ -1116,7 +1116,8 @@ $Pruebas['latido: con los falsos rapidos y el intervalo por defecto no sale ning
 
 # ============================= TOPE DE MAVEN =============================
 # Pasados MinutosMaven minutos se para Maven con sus procesos hijos y la llamada cuenta como fallida. Estas pruebas lo cuelgan con
-# tests/falsos/mvn-dormido.ps1 (escribe una linea, lanza un hijo que duerme y duerme 40 s) y un tope de 0.05 min (3 s).
+# tests/falsos/mvn-dormido.ps1 (escribe una linea, lanza un hijo que duerme y duerme 120 s) y un tope de 0.05 min (3 s). Si el tope
+# no parase a Maven, la pasada duraria mas de 120 s: el limite de 90 s deja margen al resto de la pasada con la maquina cargada.
 
 # Un script que carga comun.ps1, pone el Maven que se le pasa y un tope de 0.05 min y llama a Invoke-MavenTope; dice lo que
 # da la funcion (una clave por linea: DEFECTO, CODIGO, TOPE, SALIDA y SEGUNDOS).
@@ -1181,9 +1182,10 @@ $Pruebas['tope de Maven: rescate, diagnostico: el hallazgo de build lleva el men
   $carpPids = Join-Path $Dir 'tope-t3-pids'
   $env:RESCATE_MVN_CUELGA = '[ |]test$'
   $env:RESCATE_MVN_PIDS = $carpPids
+  $env:RESCATE_MVN_SEGUNDOS = '120'
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
   try { $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) }
-  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = '' }
+  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = ''; $env:RESCATE_MVN_SEGUNDOS = '' }
   $seg = $reloj.Elapsed.TotalSeconds
   Igual 'el diagnostico sale con 0, como con un build que falla' 0 $r.Codigo
   $h = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'build' -and $_.Sev -eq 'error' })
@@ -1192,7 +1194,7 @@ $Pruebas['tope de Maven: rescate, diagnostico: el hallazgo de build lleva el men
   $ini = 'el build falla: Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (tests)). Registro: '
   Comprueba 'su detalle dice que el build falla y que Maven se paso (0.05: manda el config.json)' ($h.Count -gt 0 -and $h[0].Detalle.StartsWith($ini)) (Cola $r.Salida)
   Comprueba 'y acaba en la ruta del registro' ($h.Count -gt 0 -and $h[0].Detalle.EndsWith('build.log.')) (Cola $r.Salida)
-  Comprueba-Tope $carpPids $seg 30 $reg
+  Comprueba-Tope $carpPids $seg 90 $reg
 }
 
 $Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote se deshace y la consola lo dice'] = {
@@ -1202,9 +1204,10 @@ $Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote s
   $env:RESCATE_MVN_CUELGA = '[ |]test$'
   $env:RESCATE_MVN_PIDS = $carpPids
   $env:RESCATE_MVN_DESDE = '2'
+  $env:RESCATE_MVN_SEGUNDOS = '120'
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
   try { $r = Rescate (@('-Repo', $e.Repo, '-Plantilla', $e.Plantilla) + $ArgsFix) }
-  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = ''; $env:RESCATE_MVN_DESDE = '' }
+  finally { $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = ''; $env:RESCATE_MVN_DESDE = ''; $env:RESCATE_MVN_SEGUNDOS = '' }
   $seg = $reloj.Elapsed.TotalSeconds
   # el diagnostico inicial hace una sola llamada de tests (la 1.a, que pasa); se cuelgan todas las demas (la del lote y los reintentos
   # de uno en uno, hasta que paran los lotes deshechos seguidos), y cada llamada colgada anota 2 PID
@@ -1214,16 +1217,16 @@ $Pruebas['tope de Maven: rescate, lote: si Maven se pasa al comprobar, el lote s
   Comprueba 'el lote 1 se deshace' ($r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
   Comprueba 'y la consola dice que Maven se paso' ($r.Salida -match [regex]::Escape('Maven se ha pasado del tope de 0.05 min y se ha parado (Maven (tests)). Registro: ')) (Cola $r.Salida)
   Comprueba 'sin ningun commit del lote' (-not (Hay-Commit-Del-Lote $e)) (Cola $r.Salida)
-  Comprueba-Tope $carpPids $seg 30 (Join-Path (Join-Path $e.Wt '.rescate') 'build.log')
+  Comprueba-Tope $carpPids $seg 90 (Join-Path (Join-Path $e.Wt '.rescate') 'build.log')
 }
 
 # ============================ TOPE DE COPILOT ============================
 # Pasados MinutosCopilot minutos se para Copilot con sus procesos hijos y la llamada cuenta como fallida (Codigo -1, Tope con el
 # mensaje). El intento se evalua como cualquier otro y no se repite la llamada por el 'rc distinto de 0 sin cambios' del M9 A.
-# Estas pruebas lo cuelgan con tests/falsos/copilot-dormido.ps1 (lanza un hijo que duerme y duerme 40 s) y un tope de 0.05 min (3 s).
+# Estas pruebas lo cuelgan con tests/falsos/copilot-dormido.ps1 (lanza un hijo que duerme y duerme 120 s) y un tope de 0.05 min (3 s).
 
 # Lo que se comprueba en todo tope hecho con copilot-dormido.ps1: sus PID (el del falso y el de su hijo, en $CarpetaPids\pids.txt)
-# ya no viven (10 s de plazo) y la pasada entera ha tardado menos de $Limite s (el falso duerme 40 por llamada).
+# ya no viven (10 s de plazo) y la pasada entera ha tardado menos de $Limite s (el falso duerme 120 por llamada).
 function Comprueba-Tope-Copilot([string]$CarpetaPids, [double]$Segundos, [int]$Limite) {
   $nums = @()
   $f = Join-Path $CarpetaPids 'pids.txt'
@@ -1246,9 +1249,10 @@ function Rescate-Dormido($E, [string]$Cuelga, [string[]]$A, [bool]$Antes = $fals
   $env:RESCATE_COP_CUELGA = $Cuelga
   $env:RESCATE_COP_PIDS = $carp
   if ($Antes) { $env:RESCATE_COP_ANTES = '1' }
+  $env:RESCATE_COP_SEGUNDOS = '120'
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
   try { $r = Rescate $A }
-  finally { $env:RESCATE_COP_CUELGA = ''; $env:RESCATE_COP_PIDS = ''; $env:RESCATE_COP_ANTES = '' }
+  finally { $env:RESCATE_COP_CUELGA = ''; $env:RESCATE_COP_PIDS = ''; $env:RESCATE_COP_ANTES = ''; $env:RESCATE_COP_SEGUNDOS = '' }
   $seg = $reloj.Elapsed.TotalSeconds
   $cuenta = Join-Path $carp 'cuenta.txt'
   $llamadas = @()
@@ -1267,7 +1271,7 @@ $Pruebas['tope de Copilot: un lote que se cuelga se para con sus hijos, la conso
   Comprueba 'el intento se evalua: no cambio ningun fichero y el lote se deshace' ($r.Salida -match 'Lote 1 DESHECHO: no paso las comprobaciones tras 1 intento\(s\)' -and (Lee $e.Wt '.rescate/intento-estructura-1-1.md') -match 'No has cambiado ningun fichero') (Cola $r.Salida)
   Comprueba 'no se repite la llamada por salir con error sin cambios' ($r.Salida -notmatch 'repito la llamada una vez' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/lote-estructura-1-1-repeticion.log'))) (Cola $r.Salida)
   Comprueba 'y el registro del intento esta' (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/lote-estructura-1-1.log')) (Cola $r.Salida)
-  Comprueba-Tope-Copilot $x.Pids $x.Segundos 30
+  Comprueba-Tope-Copilot $x.Pids $x.Segundos 90
 }
 
 $Pruebas['tope de Copilot: si Copilot arregla y despues se cuelga, el intento se evalua con lo que dejo en el arbol y pasa'] = {
@@ -1280,7 +1284,7 @@ $Pruebas['tope de Copilot: si Copilot arregla y despues se cuelga, el intento se
   Comprueba 'hay commit del lote' ((GitEn $e.Wt @('log', '--format=%s')) -match 'rescate\(estructura\): lote 1') (Cola $r.Salida)
   Igual 'una sola llamada a Copilot, sin repeticion' 1 $x.Llamadas.Count
   Igual 'sale con 0' 0 $r.Codigo
-  Comprueba-Tope-Copilot $x.Pids $x.Segundos 30
+  Comprueba-Tope-Copilot $x.Pids $x.Segundos 90
 }
 
 $Pruebas['tope de Copilot: sin pasar el tope todo sigue igual: el registro, la salida de la consola y la repeticion del M9 A'] = {
@@ -1359,7 +1363,7 @@ $Pruebas['tope de Copilot: la revision previa que se cuelga cuenta como fallida:
   Comprueba 'cuenta como fallida, igual que hoy: no ha escrito el plan y sigue sin plan' ($r.Salida -match 'Copilot no ha escrito el plan \(ver \.rescate/plan-estructura\.log\)\. Sigo sin plan\.' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/plan-estructura.md'))) (Cola $r.Salida)
   Igual 'una sola llamada a Copilot' 1 $x.Llamadas.Count
   Igual 'sale con 0, como cuando Copilot falla' 0 $r.Codigo
-  Comprueba-Tope-Copilot $x.Pids $x.Segundos 30
+  Comprueba-Tope-Copilot $x.Pids $x.Segundos 90
 }
 
 # ============================ SFTP COMO REGLA FIJA ============================
