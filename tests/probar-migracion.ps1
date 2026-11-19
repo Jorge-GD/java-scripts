@@ -1413,7 +1413,7 @@ $Pruebas['50 paginas: todo texto de los datos sale escapado (un script es texto,
 
 $Pruebas['51 paginas: sin nada externo (ni http, ni script, ni import) y sus enlaces llevan a sitios que existen'] = {
   $c = Corrida-Dos $GuionBase
-  foreach ($n in @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html')) {
+  foreach ($n in @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html', '5-buenas-practicas.html')) {
     $h = Pagina $c.E.Out $n
     Comprueba "$n : existe" ($h.Length -gt 0)
     Comprueba "$n : ni http:// ni https://" ($h -notmatch 'https?://')
@@ -1453,7 +1453,7 @@ $Pruebas['52 paginas: a medias se generan y dicen que fase falta; tambien al par
 $Pruebas['53 paginas: dos llamadas seguidas dejan los mismos bytes'] = {
   $c = Corrida-Dos $GuionBase
   $s = Copia-Salida $c.E 'idempotente'
-  $paginas = @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html')
+  $paginas = @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html', '5-buenas-practicas.html')
   $g = Genera-Informes $s
   Igual 'la primera sale con 0' 0 $g.Codigo
   $antes = @{}
@@ -4611,7 +4611,7 @@ $Pruebas['m20c secretos (e, f): el valor por defecto de un secreto no esta en va
   Comprueba '(f) CHUNK: con valor por defecto 100 en la pagina 1' ($o -match '<code>CHUNK</code> con valor por defecto <code>100</code>')
   Comprueba 'PASSWORD_TTL: con valor por defecto 300' ($o -match '<code>PASSWORD_TTL</code> con valor por defecto <code>300</code>')
   Comprueba 'DB_URL y SFTP_PORT, igual' ($o -match '<code>DB_URL</code> con valor por defecto <code>jdbc:h2:mem:batch</code>' -and $o -match '<code>SFTP_PORT</code> con valor por defecto <code>22</code>')
-  $todas = (@('index.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html') | ForEach-Object { Pagina $e.Out $_ }) -join "`n"
+  $todas = (@('index.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html', '5-buenas-practicas.html') | ForEach-Object { Pagina $e.Out $_ }) -join "`n"
   Comprueba 'ninguna otra pagina lleva un valor secreto' ($todas -notmatch 'Dev2024|x-valor-2|tkn-3')
 }
 
@@ -5614,6 +5614,234 @@ $Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus c
   Comprueba 'no hay practicas-antes.json' (-not (Test-Path -LiteralPath (Get-Ruta $f.Out 'datos/practicas-antes.json') -PathType Leaf))
   Comprueba 'el diagnostico sigue: hay hallazgos-antes.json y cobertura-antes.json' ((Test-Path -LiteralPath (Get-Ruta $f.Out 'datos/hallazgos-antes.json')) -and (Test-Path -LiteralPath (Get-Ruta $f.Out 'datos/cobertura-antes.json')))
   Comprueba 'y la portada se hizo' (Test-Path -LiteralPath (Get-Ruta $f.Out 'index.html'))
+}
+
+# ================== BP-2: LA PAGINA 5, BUENAS PRACTICAS ==================
+# Un practicas-<Cuando>.json inventado, con el formato de BP-datos.md: 10 incidencias de las 4 areas, con los 4 queHago y los 3 origenes (4 con regla de
+# Sonar o SpotBugs y 6 de la referencia). javac tiene corte, spotbugs no se midio (tope) y un texto, un motivo y una regla llevan markup. Sin sonar.xlsx.
+function Bp2-Incidencia([string]$Area, [string]$Fichero, [int]$Linea, [string]$Herramienta, [string]$Regla, [string]$Origen, [string]$Sonar, [string]$Texto, [string]$QueHago) {
+  return [ordered]@{ area = $Area; fichero = $Fichero; linea = $Linea; herramienta = $Herramienta; regla = $Regla; origen = $Origen; sonar = $Sonar; texto = $Texto; queHago = $QueHago }
+}
+
+function Bp2-Practicas([string]$Cuando = 'antes', [string]$Paquete = 'com.acme.recibos') {
+  $p = 'src/main/java/com/acme/recibos/'
+  return [ordered]@{
+    version = 1; cuando = $Cuando; clave = 'a1b2c3d4'; medido = '2026-11-19T11:42:05'; segundos = 14.2; paquete = $Paquete; referencia = 'batch-referencia'
+    detectores = @(
+      [ordered]@{ id = 'javac'; estado = 'ok'; motivo = ''; segundos = 2.7; corte = $true },
+      [ordered]@{ id = 'pmd'; estado = 'ok'; motivo = ''; segundos = 3.3; corte = $false },
+      [ordered]@{ id = 'spotbugs'; estado = 'no medido (tope)'; motivo = ''; segundos = 0; corte = $false },
+      [ordered]@{ id = 'lombok-a-mano'; estado = 'no aplica'; motivo = 'la referencia no usa <i>Lombok</i> & su config'; segundos = 0.6; corte = $false },
+      [ordered]@{ id = 'lombok-qualifier'; estado = 'ok'; motivo = ''; segundos = 0.1; corte = $false }
+    )
+    sonar = [ordered]@{ reglasWay = 608; reglasAqui = 15 }
+    incidencias = @(
+      (Bp2-Incidencia 'java21' ($p + 'infrastructure/sftp/SubidaTasklet.java') 63 'pmd' 'CloseResource' 'sonar' 'S2095' 'El InputStream de la remesa no se cierra si falla la subida.' 'mano'),
+      (Bp2-Incidencia 'java21' ($p + 'infrastructure/persistence/ReciboDao.java') 58 'pmd' 'EmptyCatchBlock' 'sonar' 'S108' 'Un catch vacio se traga el error.' 'paso2'),
+      (Bp2-Incidencia 'java21' ($p + 'application/usecase/ConciliacionService.java') 77 'spotbugs' 'NP_NULL_ON_SOME_PATH' 'spotbugs' '' 'Cierra <u>antes</u> & <b>despues</b>: puede ser null.' 'sonar'),
+      (Bp2-Incidencia 'java21' ($p + 'domain/service/ReciboValidator.java') 88 'pmd' 'Unused<i>Local</i>Variable' 'referencia' '' 'La variable local pendientes no se usa.' 'mano'),
+      (Bp2-Incidencia 'boot3-batch5' ($p + 'infrastructure/config/CargaJobConfig.java') 31 'javac' 'removal' 'sonar' 'S5738' 'JobBuilderFactory se borrara en Batch 5.' 'paso2'),
+      (Bp2-Incidencia 'boot3-batch5' ($p + 'infrastructure/config/BatchConfig.java') 14 'arquitectura' 'EnableBatchProcessing' 'referencia' '' 'EnableBatchProcessing apaga la configuracion automatica de Boot 3.' 'mano'),
+      (Bp2-Incidencia 'lombok' ($p + 'domain/model/Recibo.java') 18 'lombok' 'getter-a-mano' 'referencia' '' '14 metodos get y set escritos a mano.' 'paso2'),
+      (Bp2-Incidencia 'lombok' ($p + 'application/usecase/EnviarRemesaUseCase.java') 24 'lombok' 'qualifier-sin-copiar' 'referencia' '' 'RequiredArgsConstructor no copia el Qualifier al constructor.' 'mano'),
+      (Bp2-Incidencia 'arquitectura' ($p + 'application/usecase/ReciboService.java') 0 'arquitectura' 'ciclo-entre-paquetes' 'referencia' '' 'Ciclo entre application.usecase e infrastructure.persistence.' 'notoca'),
+      (Bp2-Incidencia 'arquitectura' ($p + 'application/usecase/ReciboService.java') 14 'arquitectura' 'nombre-usecase' 'referencia' '' 'Se llama ReciboService: en la referencia seria ReciboUseCase.' 'paso2')
+    )
+    arquitectura = $null
+  }
+}
+
+# Una carpeta de salida sin correr migracion.ps1 (solo el estado, el diagnostico y los practicas-*.json que se le den, o ninguno) con las seis paginas
+# montadas. Sin rutas con \ en el estado: asi las paginas son las mismas en Windows y en Linux.
+function Bp2-Salida([string]$Nombre, $Antes = $null, $Despues = $null) {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $s = Join-Path $raiz 'migracion-batch-recibos'
+  [void](New-Item -ItemType Directory -Path (Join-Path $s 'datos') -Force)
+  Guarda-Json (Join-Path $s 'datos/estado.json') ([ordered]@{ batch = 'batch-recibos'; legacy = 'acme/recibos-java8'; migrado = 'acme/batch-recibos'; plantilla = 'acme/batch-referencia'; modelo = 'modelo-x'; creado = '2026-11-19T10:00:00'; actualizado = '2026-11-19T11:00:00'; fin = '2026-11-19T11:00:00'; fase = 'hecha'; respuesta = 'parar' })
+  Guarda-Json (Join-Path $s 'datos/hallazgos-antes.json') @((Hallazgo 'build' 'error' 'pom.xml' 0 'pom uno'), (Hallazgo 'estructura' 'error' 'src/main/java/A.java' 3 'A suelta'), (Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests'))
+  Escribe $s 'datos/diagnostico-antes.md' (Md-Diagnostico 'compila: SI | tests: OK')
+  if ($null -ne $Antes) { Guarda-Json (Join-Path $s 'datos/practicas-antes.json') $Antes }
+  if ($null -ne $Despues) { Guarda-Json (Join-Path $s 'datos/practicas-despues.json') $Despues }
+  $g = Genera-Informes $s
+  Comprueba "$Nombre : Write-Informes sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $p5 = Pagina $s '5-buenas-practicas.html'
+  Comprueba "$Nombre : monta 5-buenas-practicas.html" ($p5.Length -gt 0) (Cola $g.Salida)
+  return [pscustomobject]@{ Dir = $s; P5 = $p5 }
+}
+
+# Una vista de la lista de incidencias de la pagina 5 ('que' o 'area'): del id de su <div> hasta el de la otra vista o el final.
+function Bp2-Vista([string]$Html, [string]$Cual) {
+  $q = $Html.IndexOf('id="vista-que"')
+  $a = $Html.IndexOf('id="vista-area"')
+  if ($q -lt 0 -or $a -lt 0) { return '' }
+  if ($Cual -eq 'que') { return $Html.Substring($q, $a - $q) }
+  return $Html.Substring($a)
+}
+
+$Pruebas['bp2 (a) la pagina 5 existe, su enlace esta en la navegacion de las seis paginas con aria-current solo en la suya y la portada la explica'] = {
+  $x = Bp2-Salida 'bp2-nav' (Bp2-Practicas)
+  foreach ($n in @('index.html', '1-batch-original.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html', '5-buenas-practicas.html')) {
+    $h = Pagina $x.Dir $n
+    Comprueba "$n : existe" ($h.Length -gt 0)
+    Comprueba "$n : la navegacion lleva a Buenas practicas" ($h -match 'href="5-buenas-practicas\.html"[^>]*>Buenas pr.cticas<')
+    Igual "$n : aria-current solo en su pagina" 1 ([regex]::Matches($h, 'aria-current="page"').Count)
+    Comprueba "$n : y es el de su enlace" ($h -match ('href="' + [regex]::Escape($n) + '" aria-current="page"'))
+  }
+  Comprueba 'el titulo de la pagina 5 lleva el batch' ($x.P5 -match '<title>Buenas pr.cticas del batch migrado batch-recibos</title>')
+  $f = [regex]::Match((Pagina $x.Dir 'index.html'), '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'la portada: Que es cada fichero lleva 5-buenas-practicas.html, con enlace, y datos/practicas-antes.json' ($f.Contains('href="5-buenas-practicas.html"') -and $f.Contains('datos/practicas-antes.json')) $f
+}
+
+$Pruebas['bp2 (b) los indicadores traen las cifras del JSON: por area, con Sonar, reglasAqui y reglasWay; el del .xlsx solo si el JSON lo trae'] = {
+  $p = Bp2-Practicas
+  $x = Bp2-Salida 'bp2-cifras' $p
+  $areas = Panel-De $x.P5 'ind-areas'
+  Comprueba 'incidencias por area: el total (10)' ($areas.Contains('<p class="bp-ind-n">10</p>')) $areas
+  foreach ($a in @('java21', 'boot3-batch5', 'lombok', 'arquitectura')) {
+    $n = @($p.incidencias | Where-Object { $_.area -ceq $a }).Count
+    Comprueba "incidencias por area: $a lleva $n en la leyenda" ($areas -match ('(?s)<li class="bp-ley-' + $a + '">(?:(?!</li>).)*<b class="bp-ley-n">' + $n + '</b>')) $areas
+    Comprueba "incidencias por area: $a lleva su tramo en la barra" ($areas.Contains('<span class="bp-ar-' + $a + '" style="flex:' + $n + ' 1 0"></span>'))
+  }
+  $son = @($p.incidencias | Where-Object { $_.origen -cne 'referencia' }).Count
+  $ref = @($p.incidencias).Count - $son
+  $s = Panel-De $x.P5 'ind-sonar'
+  Comprueba "con regla de Sonar: $son de 10 (Sonar y SpotBugs, que el Sonar del equipo lanza)" ($s.Contains("<p class=`"bp-ind-sub`"><b>$son</b> de 10</p>") -and $s.Contains("<b>$son</b></div>")) $s
+  Comprueba "con regla de Sonar: la leyenda dice $son y $ref de la referencia" ($s -match ('(?s)Con regla de Sonar<b class="bp-ley-n">' + $son + '</b>.*De la referencia<b class="bp-ley-n">' + $ref + '</b>')) $s
+  $r = Panel-De $x.P5 'ind-reglas'
+  Comprueba 'reglas de Sonar way: reglasAqui de reglasWay (15 de 608)' ($r.Contains('15 <small>de 608</small>')) $r
+  Comprueba 'y la frase: cero incidencias aqui no es un Sonar limpio' ($r -match 'Cero incidencias aqu. no es un Sonar limpio') $r
+  Comprueba 'sin sonar.xlsx en el JSON: el indicador del .xlsx no sale, y la fila de indicadores es de tres' ($x.P5 -notmatch 'id="ind-xlsx"' -and $x.P5.Contains('class="bp-ind-fila bp-ind-n3"'))
+  $p['sonar']['xlsx'] = [ordered]@{ fichero = 'sonar-2026-11-12.xlsx'; total = 41; resueltas = 30; siguen = 11 }
+  $y = Bp2-Salida 'bp2-cifras-xlsx' $p
+  $xl = Panel-De $y.P5 'ind-xlsx'
+  Comprueba 'con sonar.xlsx en el JSON: sale el indicador, con 30 de 41 resueltas y 11 abiertas, y la fila es de cuatro' ($xl.Contains('<span class="bp-ok">30</span>') -and $xl.Contains('de 41 resueltas') -and $xl.Contains('<b class="bp-mal">11</b>') -and $y.P5.Contains('class="bp-ind-fila bp-ind-n4"')) $xl
+  Comprueba 'y el panel de como leer lo de Sonar dice las cifras del .xlsx' ((Panel-De $y.P5 'sonar') -match '41 incidencias, 30 resueltas, 11 siguen') (Panel-De $y.P5 'sonar')
+}
+
+$Pruebas['bp2 (c) cada incidencia sale una vez en cada vista, con su fichero y su linea, su origen, su texto y su regla; las rutas llevan <wbr> detras de cada /'] = {
+  $p = Bp2-Practicas
+  $x = Bp2-Salida 'bp2-lista' $p
+  $q = Bp2-Vista $x.P5 'que'
+  $a = Bp2-Vista $x.P5 'area'
+  Comprueba 'las dos vistas existen' ($q.Length -gt 0 -and $a.Length -gt 0)
+  Igual 'por que hago: 10 filas' 10 ([regex]::Matches($q, '<li class="bp-fila ').Count)
+  Igual 'por area: 10 filas' 10 ([regex]::Matches($a, '<li class="bp-fila ').Count)
+  foreach ($i in @($p.incidencias)) {
+    $donde = (($i.fichero -split '/' | ForEach-Object { Html $_ }) -join '/<wbr>')
+    if ($i.linea -gt 0) { $donde += ':' + $i.linea }
+    $cita = $i.fichero.Split('/')[-1] + ':' + $i.linea
+    foreach ($v in @(@('por que hago', $q), @('por area', $a))) {
+      Igual "$($v[0]): $cita sale una vez" 1 ([regex]::Matches($v[1], [regex]::Escape('<code class="bp-donde">' + $donde + '</code>')).Count)
+      Igual "$($v[0]): $cita lleva su texto una vez" 1 ([regex]::Matches($v[1], [regex]::Escape('<p class="bp-fb-p">' + (Html $i.texto) + '</p>')).Count)
+      Igual "$($v[0]): $cita lleva su regla una vez" 1 ([regex]::Matches($v[1], [regex]::Escape('<span class="bp-regla">' + (Html ($i.herramienta + ' ' + $i.regla)) + '</span>')).Count)
+    }
+  }
+  Comprueba 'una linea 0 no sale como :0' (-not $q.Contains('ReciboService.java:0<') -and $q.Contains('ReciboService.java</code>'))
+  $rutas = @([regex]::Matches($x.P5, '<code class="bp-donde">(.*?)</code>') | ForEach-Object { $_.Groups[1].Value })
+  Igual 'hay 20 rutas (10 por vista)' 20 $rutas.Count
+  Igual 'ninguna / sin su <wbr> detras' 0 @($rutas | Where-Object { $_ -match '/(?!<wbr>)' }).Count
+  Comprueba 'el origen: Sonar con su clave, Sonar (SpotBugs) y de la referencia' ($q.Contains('Sonar S2095') -and $q.Contains('Sonar S5738') -and $q.Contains('Sonar (SpotBugs)') -and $q.Contains('de la referencia'))
+  # los grupos: por que hago en su orden (4, 4, 1 y 1) y por area en el suyo (4, 2, 2 y 2)
+  Igual 'grupos por que hago, en orden' 'gq-mano=4 gq-paso2=4 gq-sonar=1 gq-notoca=1' ((@([regex]::Matches($q, '(?s)<section class="bp-grupo" aria-labelledby="(gq-\w+)">.*?<span class="bp-num">(\d+)</span>') | ForEach-Object { $_.Groups[1].Value + '=' + $_.Groups[2].Value })) -join ' ')
+  Igual 'grupos por area, en orden' 'ga-java21=4 ga-boot3-batch5=2 ga-lombok=2 ga-arquitectura=2' ((@([regex]::Matches($a, '(?s)<section class="bp-grupo" aria-labelledby="(ga-[\w-]+)">.*?<span class="bp-num">(\d+)</span>') | ForEach-Object { $_.Groups[1].Value + '=' + $_.Groups[2].Value })) -join ' ')
+  Comprueba 'las explicaciones de la maqueta: A mano, paso 2, -Sonar y la referencia tampoco' ($q.Contains('Esto lo haces t') -and $q.Contains('Se arregla solo al lanzar el paso 2.') -and $q.Contains('Se arregla con -Sonar, si la regla sale en tu informe de Sonar.') -and $q.Contains('No se toca: la referencia tampoco lo cumple.'))
+  Comprueba 'y las de cada area' ($a.Contains('PMD y SpotBugs sobre el c') -and $a.Contains('Sonar no tiene reglas de Lombok'))
+  Comprueba 'el selector de vista es de radios, sin JavaScript' ($x.P5.Contains('id="bp-m-que"') -and $x.P5.Contains('id="bp-m-area"') -and $x.P5 -notmatch '(?i)<script')
+}
+
+$Pruebas['bp2 (d) un detector no medido sale con su estado y su motivo y javac con corte dice 100 o mas; si todos midieron, la seccion no sale'] = {
+  $p = Bp2-Practicas
+  $x = Bp2-Salida 'bp2-detectores' $p
+  $d = Panel-De $x.P5 'detectores'
+  Comprueba 'hay seccion de detectores' ($d.Length -gt 0)
+  Comprueba 'spotbugs sale con su estado: no medido (tope)' ($d -match '<code>spotbugs</code> <b>no medido \(tope\)</b>') $d
+  Comprueba 'javac sale con corte: 100 o mas' ($d -match '<code>javac</code> <b>100 o m.s</b>') $d
+  Comprueba 'lombok-a-mano sale con su estado y su motivo, escapado' ($d.Contains('<code>lombok-a-mano</code> <b>no aplica</b>: la referencia no usa &lt;i&gt;Lombok&lt;/i&gt; &amp; su config')) $d
+  Comprueba 'los que midieron (pmd y lombok-qualifier) no salen' ($d -notmatch '<code>pmd</code>' -and $d -notmatch '<code>lombok-qualifier</code>')
+  Igual 'son tres lineas' 3 ([regex]::Matches($d, '<p class="bp-nota">').Count)
+  Comprueba 'la ficha dice los que midieron: javac, pmd y lombok-qualifier' ($x.P5 -match '(?s)<dt>Midieron</dt>.*?javac.*?pmd.*?lombok-qualifier.*?</dl>')
+  # todos midieron y javac no corta: la seccion no sale
+  $p['detectores'] = @(@($p.detectores) | ForEach-Object { [ordered]@{ id = $_.id; estado = 'ok'; motivo = ''; segundos = 1; corte = $false } })
+  $y = Bp2-Salida 'bp2-detectores-ok' $p
+  Comprueba 'con todos los detectores en ok y sin corte, no hay seccion de detectores' ($y.P5.Length -gt 0 -and $y.P5 -notmatch 'id="detectores"')
+}
+
+$Pruebas['bp2 (e) con practicas-despues.json se pinta ese y no el de antes; sin ninguno la pagina existe y dice que no se ha medido'] = {
+  $antes = Bp2-Practicas 'antes'
+  $despues = Bp2-Practicas 'despues' 'com.acme.otro'
+  $despues['incidencias'] = @($despues.incidencias | Select-Object -First 3)
+  $a = Bp2-Salida 'bp2-solo-antes' $antes
+  Comprueba 'solo el de antes: 10 incidencias, su paquete y "antes de corregir"' ((Panel-De $a.P5 'ind-areas').Contains('<p class="bp-ind-n">10</p>') -and $a.P5.Contains('com.acme.recibos') -and $a.P5 -match 'antes de corregir')
+  $b = Bp2-Salida 'bp2-los-dos' $antes $despues
+  Comprueba 'con los dos: se pinta el de despues (3 incidencias, su paquete y "despues de corregir")' ((Panel-De $b.P5 'ind-areas').Contains('<p class="bp-ind-n">3</p>') -and $b.P5.Contains('com.acme.otro') -and $b.P5 -match 'despu.s de corregir')
+  Comprueba 'y nada del de antes' ($b.P5 -notmatch 'com\.acme\.recibos' -and $b.P5 -notmatch 'antes de corregir' -and $b.P5 -notmatch 'ReciboValidator')
+  Igual 'con los dos: 3 filas por vista' 3 ([regex]::Matches((Bp2-Vista $b.P5 'que'), '<li class="bp-fila ').Count)
+  $c = Bp2-Salida 'bp2-solo-despues' $null $despues
+  Comprueba 'solo el de despues: tambien se pinta' ((Panel-De $c.P5 'ind-areas').Contains('<p class="bp-ind-n">3</p>'))
+  $n = Bp2-Salida 'bp2-ninguno'
+  Comprueba 'sin ninguno: la pagina existe' ($n.P5.Length -gt 0)
+  Comprueba 'dice que no se ha medido y por que: el diagnostico no ha llegado ahi' ($n.P5 -match 'no se han medido las buenas pr.cticas' -and $n.P5 -match 'el diagn.stico no ha llegado')
+  Comprueba 'y no pinta indicadores, ni lista, ni detectores' ($n.P5 -notmatch 'bp-ind-fila' -and $n.P5 -notmatch 'id="lista"' -and $n.P5 -notmatch 'id="detectores"')
+  Igual 'con su navegacion y un solo h1' 1 ([regex]::Matches($n.P5, '<h1').Count)
+  Comprueba 'con su navegacion: el enlace actual es el suyo' ($n.P5 -match 'href="5-buenas-practicas\.html" aria-current="page"')
+  # un JSON que no se lee equivale a no tenerlo
+  $m = Bp2-Salida 'bp2-roto' $antes
+  Escribe $m.Dir 'datos/practicas-despues.json' '{ esto no es json'
+  $g = Genera-Informes $m.Dir
+  Comprueba 'con un practicas-despues.json roto se sigue con el de antes' ($g.Codigo -eq 0 -and (Panel-De (Pagina $m.Dir '5-buenas-practicas.html') 'ind-areas').Contains('<p class="bp-ind-n">10</p>')) (Cola $g.Salida)
+}
+
+$Pruebas['bp2 (f) el texto de las herramientas sale escapado: un <b>, un <u> y un & no se pintan como HTML'] = {
+  $x = Bp2-Salida 'bp2-escapa' (Bp2-Practicas)
+  Comprueba 'el texto de una incidencia, escapado' ($x.P5.Contains('Cierra &lt;u&gt;antes&lt;/u&gt; &amp; &lt;b&gt;despues&lt;/b&gt;: puede ser null.'))
+  Comprueba 'la regla de una incidencia, escapada' ($x.P5.Contains('pmd Unused&lt;i&gt;Local&lt;/i&gt;Variable'))
+  Comprueba 'el motivo de un detector, escapado' ($x.P5.Contains('no usa &lt;i&gt;Lombok&lt;/i&gt; &amp; su config'))
+  Comprueba 'ninguna etiqueta <u> ni <i> que no sea de la pagina' ($x.P5 -notmatch '<u>' -and $x.P5 -notmatch '<i>')
+  Comprueba 'ni un & suelto' ($x.P5 -notmatch '&(?!amp;|lt;|gt;|quot;|#39;)')
+}
+
+$Pruebas['bp2 (g) la pagina 5 no lleva nada externo: ni http, ni script, ni import, ni emojis, y un solo h1 y lang es'] = {
+  $x = Bp2-Salida 'bp2-limpia' (Bp2-Practicas)
+  $h = $x.P5
+  Comprueba 'ni http:// ni https://' ($h -notmatch 'https?://')
+  Comprueba 'ni <script ni @import ni <link ni <img ni <iframe' ($h -notmatch '(?i)<script|@import|<link|<img|<iframe')
+  Comprueba 'ninguna url() externa' ($h -notmatch '(?i)url\(\s*[''"]?(https?:|//)')
+  Comprueba 'ningun src ni href que no sea del propio informe' (@([regex]::Matches($h, '(?i)\b(?:src|href)\s*=\s*"(?!#)([^"]*)"') | Where-Object { -not (Test-Path -LiteralPath (Get-Ruta $x.Dir $_.Groups[1].Value)) }).Count -eq 0)
+  $dentro = @([regex]::Matches($h, '(?i)href="#([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Where-Object { $h -notmatch ('id="' + [regex]::Escape($_) + '"') })
+  Comprueba 'los iconos y enlaces #ancla llevan a un id que existe' ($dentro.Count -eq 0) ($dentro -join ' ')
+  Igual 'un solo h1' 1 ([regex]::Matches($h, '<h1[ >]').Count)
+  Comprueba 'lang="es"' ($h -match '<html lang="es">')
+  $emoji = '[' + [char]0x2600 + '-' + [char]0x27BF + ']|[' + [char]0xD83C + '-' + [char]0xD83E + '][' + [char]0xDC00 + '-' + [char]0xDFFF + ']'
+  Comprueba 'sin emojis' ($h -notmatch $emoji)
+  Comprueba 'sin saltos de nivel: tras el h1 vienen h2 y despues h3' ($h -notmatch '<h4' -and $h.IndexOf('<h1') -lt $h.IndexOf('<h2') -and $h.IndexOf('<h2') -lt $h.IndexOf('<h3'))
+}
+
+$Pruebas['bp2 (h) la pagina 2 sigue igual: los mismos bytes que antes de la pagina 5, salvo el enlace nuevo de la navegacion y el CSS de la pagina 5'] = {
+  $x = Bp2-Salida 'bp2-pagina2' (Bp2-Practicas)
+  $h = Pagina $x.Dir '2-problemas.html'
+  $h = [regex]::Replace($h, '(?m)^ *<li><a href="5-buenas-practicas\.html"[^>]*>[^<]*</a></li>\r?\n', '')
+  $h = [regex]::Replace($h, '(?s)/\* pagina 5: [^\n]*\n.*(?=\n</style>)', '')
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { $hash = (($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($h)) | ForEach-Object { $_.ToString('X2') }) -join '') } finally { $sha.Dispose() }
+  # el SHA-256 de la pagina 2 de estos datos montada con 2a5e279 (antes de la pagina 5). Si cambia a proposito la pagina 2 o su CSS, hay que recalcularlo.
+  Igual 'SHA-256 de la pagina 2' '300C5530C4ACB6AB733AB9CBB471B6E922E289440F58B7EAF0631C8DBE74D677' $hash
+  Comprueba 'la pagina 2 sigue con sus cinco enlaces de siempre' ((@([regex]::Matches($h, '<li><a href="[^"]+\.html"') | ForEach-Object { $_.Value }).Count) -eq 5)
+}
+
+$Pruebas['bp2 integracion: una corrida real deja la pagina 5 con las incidencias del practicas-antes.json que escribe el diagnostico'] = {
+  $e = Nuevo-Escenario 'bp2-integra' @('Clase1') @{ MvnExe = (Join-Path $falsos 'analisis-mvn.ps1') }
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $p = Lee-Json (Get-Ruta $e.Out 'datos/practicas-antes.json')
+  Comprueba 'hay practicas-antes.json con incidencias' ($null -ne $p -and @($p.incidencias).Count -gt 0) (Cola $r.Salida)
+  if ($null -eq $p) { return }
+  $h = Pagina $e.Out '5-buenas-practicas.html'
+  Comprueba 'la pagina 5 existe' ($h.Length -gt 0) (Cola $r.Salida)
+  $n = @($p.incidencias).Count
+  Comprueba "y dice $n incidencias, las del JSON" ((Panel-De $h 'ind-areas').Contains("<p class=`"bp-ind-n`">$n</p>")) (Panel-De $h 'ind-areas')
+  Igual 'cada incidencia sale una vez en la vista por area' $n ([regex]::Matches((Bp2-Vista $h 'area'), '<li class="bp-fila ').Count)
+  Comprueba 'y la consola no dice que no pudo escribir las paginas' ($r.Salida -notmatch 'No he podido escribir las paginas')
 }
 
 # ================================ LANZADOR ================================
