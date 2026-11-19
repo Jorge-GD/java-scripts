@@ -557,8 +557,14 @@ $Pruebas['8 c) lombok-qualifier: sale sin lombok.config y no sale con copyableAn
   $q = Qualifier-De (Mide $E @{} $Rapido).Json
   Igual 'con copyableAnnotations de Qualifier en la carpeta: solo queda @Value' 1 $q.Count
   Igual 'y es la de Value' 13 $q[0].linea
-  # el de la raiz cubre las dos
+  # uno en una carpeta intermedia (ni la del fichero ni la raiz) tambien cuenta: com/acme cubre a com/acme/demo
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java/com/acme/demo/lombok.config') -Force
+  Escribe $E.Repo 'src/main/java/com/acme/lombok.config' "lombok.copyableAnnotations += org.springframework.beans.factory.annotation.Qualifier`n"
+  $q = Qualifier-De (Mide $E @{} $Rapido).Json
+  Igual 'con copyableAnnotations de Qualifier en una carpeta intermedia (com/acme): solo queda @Value' 1 $q.Count
+  Igual 'y es la de Value, en la linea del campo' 13 $q[0].linea
+  Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java/com/acme/lombok.config') -Force
+  # el de la raiz cubre las dos
   Escribe $E.Repo 'lombok.config' "config.stopBubbling = true`nlombok.copyableAnnotations += org.springframework.beans.factory.annotation.Qualifier`nlombok.copyableAnnotations += org.springframework.beans.factory.annotation.Value`n"
   Igual 'lombok.config de la raiz del repo con las dos: ninguna incidencia' 0 (Qualifier-De (Mide $E @{} $Rapido).Json).Count
   # uno de otra carpeta, o de otra anotacion, no cuenta
