@@ -1,5 +1,6 @@
 <#
-probar-practicas.ps1 - Banco de pruebas de practicas.ps1 (BP-0: las buenas practicas dentro del diagnostico, sin IA).
+probar-practicas.ps1 - Banco de pruebas de practicas.ps1 (BP-0: las buenas practicas dentro del diagnostico, sin IA) y de arreglo-practicas.ps1
+(BP-4: pasar a Lombok los getters y setters escritos a mano, con el Maven de mentira bp4-mvn.ps1 y el Copilot de mentira bp4-copilot.ps1).
 No necesita Maven ni Java: usa el Maven de mentira tests/falsos/bp0-mvn.ps1 (el javac sale de un fichero con lineas como las de Maven; SpotBugs y
 PMD, de los XML reales de tests/datos/analisis) y el javap de mentira tests/falsos/bp0-javap.ps1, cuyos .class de mentira llevan el texto que dio
 un javap real (JDK 21, -c -l -p) sobre dos clases de juguete. Nunca llama al Maven ni al JDK reales.
@@ -26,6 +27,8 @@ $datos = Join-Path (Join-Path $aqui 'datos') 'analisis'
 . (Join-Path $raiz 'tareas.ps1')
 . (Join-Path $raiz 'analisis.ps1')
 . (Join-Path $raiz 'practicas.ps1')
+. (Join-Path $raiz 'huella.ps1')
+. (Join-Path $raiz 'arreglo-practicas.ps1')
 
 # ================================ DATOS ================================
 # Lo que dio javap -c -l -p (JDK 21) sobre estas dos clases. Remesa lleva sus getters y setters escritos a mano (3 getters triviales: getId,
@@ -806,7 +809,7 @@ $Pruebas['16 g) un detector que falla no para a los demas ni a la medida; nada l
 $Pruebas['17 ficheros y ajustes: ASCII, nada de PowerShell 7 y los ajustes en $Cfg'] = {
   Igual 'SegundosPracticas' 300 $Cfg.SegundosPracticas
   Igual 'SegundosMinAnalisis' 30 $Cfg.SegundosMinAnalisis
-  foreach ($f in @('practicas.ps1', 'tests/probar-practicas.ps1', 'tests/falsos/bp0-mvn.ps1', 'tests/falsos/bp0-javap.ps1')) {
+  foreach ($f in @('practicas.ps1', 'arreglo-practicas.ps1', 'tests/probar-practicas.ps1', 'tests/falsos/bp0-mvn.ps1', 'tests/falsos/bp0-javap.ps1', 'tests/falsos/bp4-mvn.ps1', 'tests/falsos/bp4-copilot.ps1')) {
     $t = [System.IO.File]::ReadAllText((Get-Ruta $raiz $f))
     Comprueba "$f`: solo ASCII" ($t -notmatch '[^\x09\x0A\x0D\x20-\x7E]')
   }
@@ -815,6 +818,473 @@ $Pruebas['17 ficheros y ajustes: ASCII, nada de PowerShell 7 y los ajustes en $C
   Comprueba 'practicas.ps1: sin -AsHashtable ni ConvertFrom-Json -Depth' ($codigo -notmatch 'AsHashtable|ConvertFrom-Json[^|\r\n]*-Depth')
   Comprueba 'practicas.ps1: empieza con su cabecera de ayuda' ($codigo.TrimStart().StartsWith('<#'))
   Comprueba 'practicas.ps1: solo funciones (ni una llamada suelta fuera del $Cfg)' (-not ($codigo -match '(?m)^Invoke-Practicas'))
+}
+
+# ================================ BP-4: arreglo-practicas.ps1 ================================
+# Maven (bp4-mvn.ps1), javap (bp3-javap.ps1: imprime el texto de cada .class) y Copilot (bp4-copilot.ps1) de mentira. El migrado de cada escenario
+# lleva Alfa, Beta, Gama y Delta (com.acme.p4); las incidencias de datos/practicas-antes.json se escriben a mano, sin pasar por el detector.
+$Aj4 = @{
+  MvnExe = (Join-Path $falsos 'bp4-mvn.ps1'); JavapExe = (Join-Path $falsos 'bp3-javap.ps1'); CopilotExe = (Join-Path $falsos 'bp4-copilot.ps1')
+  FallosSeguidos = 3; SegundosPorLlamada = 60
+}
+$Ruta4 = 'src/main/java/com/acme/p4/'
+$Commit4 = 'practica(lombok): '
+
+function Fuente-P4([string]$Clase) {
+  return @"
+package com.acme.p4;
+
+import java.util.List;
+
+public class $Clase {
+    private String id;
+    private long importe;
+
+    // el identificador
+    public String getId() { return id; }
+
+    public void setId(String id) { this.id = id; }
+
+    /* el importe, en centimos */
+    public long getImporte() { return importe; }
+}
+"@
+}
+
+# Lo que pone el script que carga arreglo-practicas.ps1 (migracion.ps1) y aqui se simula: el estado, su guardado y la parada.
+$Estado = [ordered]@{ fase = '' }
+$script:Paradas = @()
+function Save-Estado { }
+function Save-Informes { }
+function Set-Parada([string]$Motivo, [string]$Detalle, [string]$Registro) { $script:Paradas += , @($Motivo, $Detalle, $Registro) }
+
+function Nuevo-Escenario4([string]$Nombre, [string[]]$Incidencias, [bool]$Lombok = $true, [string[]]$Rotas = @()) {
+  $r = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
+  $mig = Join-Path $r 'migrado'
+  $dep = ''
+  if ($Lombok) { $dep = '<dependencies><dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>1.18.34</version></dependency></dependencies>' }
+  Escribe $mig 'pom.xml' "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme</groupId><artifactId>p4</artifactId><version>1</version>$dep</project>`n"
+  foreach ($c in @('Alfa', 'Beta', 'Gama', 'Delta')) {
+    $fuente = Fuente-P4 $c
+    if ($Rotas -contains $c) { $fuente = $fuente.Replace('private long importe;', 'private long importe = NO-COMPILA;') }
+    Escribe $mig "$Ruta4$c.java" $fuente
+  }
+  Inicia-Repo $mig
+  Set-Excluidos $mig
+  foreach ($d in @('datos', 'registros')) { [void](New-Item -ItemType Directory -Path (Join-Path $r $d) -Force) }
+  $inc = @($Incidencias | ForEach-Object { New-Incidencia 'lombok' "$Ruta4$_.java" 10 'lombok' 'getter-setter-a-mano' 'referencia' '' '2 getters y 1 setters escritos a mano: con Lombok son @Getter y @Setter' })
+  Write-Json (Join-Path (Join-Path $r 'datos') 'practicas-antes.json') ([ordered]@{ version = 1; cuando = ''; detectores = @(); incidencias = $inc })
+  return [pscustomobject]@{
+    Raiz = $r; Repo = $mig; Datos = (Join-Path $r 'datos'); Registros = (Join-Path $r 'registros')
+    Mvn = (Join-Path $r 'mvn-llamadas.txt'); Copilot = (Join-Path $r 'copilot-llamadas.txt')
+  }
+}
+
+# Invoke-FasePracticas sobre el escenario, con los falsos y las variables del script que la carga. Devuelve lo que dijo (Sigue), la consola
+# (Texto y Avisos), el JSON de resultados, las tareas guardadas y los commits del migrado (el asunto de cada uno, el ultimo primero).
+function Fase4($E, [hashtable]$Entorno = @{}, [hashtable]$Cambios = @{}, [bool]$Mantener = $true) {
+  $Entorno['BP4_LLAMADAS'] = $E.Mvn
+  $Entorno['BP4_COPILOT'] = $E.Copilot
+  $ajustes4 = @{}
+  foreach ($k in $Aj4.Keys) { $ajustes4[$k] = $Aj4[$k] }
+  foreach ($k in $Cambios.Keys) { $ajustes4[$k] = $Cambios[$k] }
+  $RepoRoot = $E.Repo
+  $Datos = $E.Datos
+  $Registros = $E.Registros
+  $ModeloElegido = 'modelo-x'
+  $script:Parada = $false
+  $script:Paradas = @()
+  $script:Todas = @()
+  $salida = @(Con-Falso $Entorno $ajustes4 { Invoke-FasePracticas $Mantener } 6>&1)
+  $info = @($salida | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
+  $tareas = @()
+  if (Test-Path -LiteralPath (Join-Path $E.Datos 'tareas')) { $tareas = @(Get-ChildItem -LiteralPath (Join-Path $E.Datos 'tareas') -Filter '*.json' | ForEach-Object { Lee-Json $_.FullName }) }
+  return [pscustomobject]@{
+    Sigue = (@($salida | Where-Object { $_ -is [bool] })[0])
+    Texto = (@($info | ForEach-Object { "$_" }) -join "`n")
+    Avisos = @($info | Where-Object { "$($_.MessageData.ForegroundColor)" -ceq 'Yellow' } | ForEach-Object { "$_" })
+    Json = (Lee-Json (Join-Path $E.Datos 'practicas-arreglos.json'))
+    Tareas = $tareas
+    Commits = @((GitEn $E.Repo @('log', '--format=%s')) -split "`n")
+  }
+}
+
+function Tarea4($X, [string]$Clase) { return @($X.Tareas | Where-Object { $_.entradas.fichero -ceq "$Ruta4$Clase.java" })[0] }
+function Compilaciones4($E) { return @(Llamadas-De $E.Mvn | Where-Object { $_ -match '\|-B compile$' }) }
+function Estado-Git4($E) { return (GitEn $E.Repo @('status', '--short')) }
+function Quedan-Cambios4($E, [string]$Clase) { return ((Lee $E.Repo "$Ruta4$Clase.java") -cne (Fuente-P4 $Clase)) }
+
+$Pruebas['18 bp4 a) dos ficheros con solo comentarios nuevos: un commit por fichero y las dos tareas hechas'] = {
+  $E = Nuevo-Escenario4 'p4a' @('Alfa', 'Beta')
+  $x = Fase4 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'ninguna parada' 0 $script:Paradas.Count
+  Igual 'los commits: uno por fichero, en orden' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  foreach ($c in @('Alfa', 'Beta')) {
+    $t = Tarea4 $x $c
+    Igual "$c`: tarea hecha" 'hecha' $t.estado
+    Igual "$c`: con un solo intento" 1 $t.intentos
+    Comprueba "$c`: el fichero lleva el cambio de la IA" ((Lee $E.Repo "$Ruta4$c.java") -match '// pasado a Lombok')
+  }
+  $quien = @((GitEn $E.Repo @('show', '--name-only', '--format=', 'HEAD')) -split "`n")
+  Igual 'el ultimo commit solo toca su fichero' "${Ruta4}Beta.java" ($quien -join '|')
+  $quien = @((GitEn $E.Repo @('show', '--name-only', '--format=', 'HEAD~1')) -split "`n")
+  Igual 'el anterior, el suyo' "${Ruta4}Alfa.java" ($quien -join '|')
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  Igual 'dos llamadas a Copilot' 2 (Llamadas-De $E.Copilot).Count
+  Igual 'Maven: la foto y una compilacion de la ronda' 2 (Compilaciones4 $E).Count
+  Comprueba 'la foto de antes esta en .rescate/practicas/antes' (Test-Path -LiteralPath (Get-Ruta $E.Repo '.rescate/practicas/antes/com/acme/p4/Alfa.class'))
+}
+
+$Pruebas['19 bp4 b) codigo cambiado en uno: vuelve atras, se reintenta con el motivo y al segundo fallo queda atascado; el otro se commitea'] = {
+  $E = Nuevo-Escenario4 'p4b' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'codigo:Alfa' }
+  Igual 'la fase deja seguir (una atascada no para)' $true $x.Sigue
+  Igual 'ninguna parada' 0 $script:Paradas.Count
+  Igual 'solo se commitea Beta' ("$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Alfa vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Alfa'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: atascada' 'atascada' $t.estado
+  Igual 'Alfa: dos intentos' 2 $t.intentos
+  Comprueba 'Alfa: el motivo dice las partes de la huella que cambian' ($t.motivo -match 'metodos:') $t.motivo
+  Igual 'Beta: hecha' 'hecha' (Tarea4 $x 'Beta').estado
+  $log = Lee $E.Registros ($t.id + '-2.log')
+  Comprueba 'el segundo prompt lleva la correccion con el motivo' ($log -match 'CORRECCI' -and $log.Contains($t.motivo)) 
+  Comprueba 'el primer prompt no la lleva' ((Lee $E.Registros ($t.id + '-1.log')) -notmatch 'CORRECCI')
+  $ll = Llamadas-De $E.Copilot
+  Igual 'tres llamadas: Alfa, Beta y el reintento de Alfa' 3 $ll.Count
+  Igual 'dos de ellas son de Alfa (una con correccion)' 2 @($ll | Where-Object { $_ -match 'Alfa\.java\|codigo\|' }).Count
+  Igual 'una es el reintento' 1 @($ll | Where-Object { $_ -match '\|1$' }).Count
+  Comprueba 'avisa de la atascada con su fichero' (@($x.Avisos | Where-Object { $_ -match ('Atascada: ' + [regex]::Escape("${Ruta4}Alfa.java")) }).Count -eq 1) ($x.Avisos -join ' / ')
+}
+
+$Pruebas['20 bp4 b2) el primer intento cambia el codigo y el reintento, con el motivo, lo hace bien: hecha con dos intentos'] = {
+  $E = Nuevo-Escenario4 'p4b2' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'codigo1:Alfa' }
+  Igual 'los dos commits: el de Beta en la primera ronda y el de Alfa en el reintento' ("$Commit4${Ruta4}Alfa.java|$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: hecha' 'hecha' $t.estado
+  Igual 'Alfa: dos intentos' 2 $t.intentos
+  Igual 'sin avisos de atascadas' 0 @($x.Avisos | Where-Object { $_ -match 'Atascada' }).Count
+}
+
+$Pruebas['21 bp4 c) la IA toca ademas otro fichero: se deshace ese y el suyo se acepta'] = {
+  $E = Nuevo-Escenario4 'p4c' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'otro:Alfa' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'los dos commits' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Delta vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Delta'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  Igual 'el commit de Alfa solo lleva Alfa' "${Ruta4}Alfa.java" ((GitEn $E.Repo @('show', '--name-only', '--format=', 'HEAD~1')) -split "`n" -join '|')
+  Comprueba 'lo dice con Info y la ruta deshecha' ($x.Texto.Contains("Deshago lo que la IA ha tocado fuera de lo suyo: ${Ruta4}Delta.java")) $x.Texto
+  Igual 'Alfa: hecha' 'hecha' (Tarea4 $x 'Alfa').estado
+}
+
+$Pruebas['21b bp4 c2) la IA deja sus cambios en el indice con git add: se ven igual, se deshace lo ajeno y lo suyo se acepta'] = {
+  $E = Nuevo-Escenario4 'p4c2' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'otro-add:Alfa' }
+  Igual 'los dos commits' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Delta vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Delta'))
+  Igual 'ni el indice ni el worktree llevan nada' '' (Estado-Git4 $E)
+  Igual 'el commit de Alfa solo lleva Alfa' "${Ruta4}Alfa.java" ((GitEn $E.Repo @('show', '--name-only', '--format=', 'HEAD~1')) -split "`n" -join '|')
+  Igual 'Alfa: hecha' 'hecha' (Tarea4 $x 'Alfa').estado
+}
+
+$Pruebas['22 bp4 d) un fichero no compila: la ronda se deshace, se prueban de uno en uno y el que compila se acepta'] = {
+  $E = Nuevo-Escenario4 'p4d' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'no-compila:Alfa' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'solo se commitea Beta' ("$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Alfa vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Alfa'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  Comprueba 'lo dice: la ronda no compila y se prueba de uno en uno' ($x.Texto -match 'de uno en uno') $x.Texto
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: atascada tras dos intentos' 'atascada' $t.estado
+  Comprueba 'Alfa: el motivo es que no compila, con la linea de Maven' ($t.motivo -match 'no compila' -and $t.motivo -match 'Alfa\.java') $t.motivo
+  Igual 'Beta: hecha' 'hecha' (Tarea4 $x 'Beta').estado
+  # foto (1) + la ronda entera (1) + Alfa sola (1) y Beta sola (1) + el reintento de Alfa, que va sola (1)
+  Igual 'Maven: 5 compilaciones' 5 (Compilaciones4 $E).Count
+}
+
+$Pruebas['23 bp4 e) sin Lombok en el pom: ninguna llamada, ni Maven ni Copilot, y un aviso'] = {
+  $E = Nuevo-Escenario4 'p4e' @('Alfa', 'Beta') $false
+  $x = Fase4 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+  Igual 'ninguna llamada a Maven' 0 (Llamadas-De $E.Mvn).Count
+  Igual 'ningun commit nuevo' 'inicial' ($x.Commits -join '|')
+  Comprueba 'el aviso dice que el migrado no usa Lombok y como arreglarlo' (@($x.Avisos | Where-Object { $_ -match 'El migrado no usa Lombok: anadelo al pom\.xml y vuelve a lanzar' }).Count -eq 1) ($x.Avisos -join ' / ')
+  Igual 'ninguna parada' 0 $script:Paradas.Count
+}
+
+$Pruebas['24 bp4 f) relanzar no repite las tareas hechas ni rehace la foto'] = {
+  $E = Nuevo-Escenario4 'p4f' @('Alfa', 'Beta')
+  [void](Fase4 $E)
+  $copias = (Llamadas-De $E.Copilot).Count
+  $mvn = (Llamadas-De $E.Mvn).Count
+  $hash = (GitEn $E.Repo @('rev-parse', 'HEAD'))
+  $foto = Get-Ruta $E.Repo '.rescate/practicas/antes/com/acme/p4/Alfa.class'
+  $antes = (Get-Item -LiteralPath $foto).LastWriteTimeUtc.Ticks
+  $x = Fase4 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'ninguna llamada nueva a Copilot' $copias (Llamadas-De $E.Copilot).Count
+  Igual 'ninguna llamada nueva a Maven (ni foto ni ronda)' $mvn (Llamadas-De $E.Mvn).Count
+  Igual 'ningun commit nuevo' $hash (GitEn $E.Repo @('rev-parse', 'HEAD'))
+  Igual 'la foto no se toca' $antes (Get-Item -LiteralPath $foto).LastWriteTimeUtc.Ticks
+  Igual 'las dos tareas siguen hechas' 2 @($x.Tareas | Where-Object { $_.estado -ceq 'hecha' }).Count
+  Comprueba 'la consola sigue diciendo los dos pasados' ($x.Texto -match 'Buenas practicas: 2 ficheros pasados a Lombok, 0 atascados, 0 sin cambios') $x.Texto
+}
+
+$Pruebas['24b bp4 f2) relanzar con una atascada: se conserva sin repetir; con -Reintentar vuelve a intentarse y reutiliza la foto'] = {
+  $E = Nuevo-Escenario4 'p4f2' @('Alfa', 'Beta')
+  [void](Fase4 $E @{ RESCATE_FALSO = 'codigo:Alfa' })
+  $copias = (Llamadas-De $E.Copilot).Count
+  $mvn = (Compilaciones4 $E).Count
+  $x = Fase4 $E @{ RESCATE_FALSO = 'bien' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'Alfa sigue atascada' 'atascada' (Tarea4 $x 'Alfa').estado
+  Igual 'ninguna llamada nueva a Copilot' $copias (Llamadas-De $E.Copilot).Count
+  Igual 'ninguna compilacion nueva' $mvn (Compilaciones4 $E).Count
+  $x = Fase4 $E @{ RESCATE_FALSO = 'bien' } @{} $false
+  Igual 'con -Reintentar: Alfa, hecha' 'hecha' (Tarea4 $x 'Alfa').estado
+  Igual 'una llamada nueva a Copilot' ($copias + 1) (Llamadas-De $E.Copilot).Count
+  Igual 'una sola compilacion nueva: la de la ronda, sin rehacer la foto' ($mvn + 1) (Compilaciones4 $E).Count
+  Igual 'los dos commits' ("$Commit4${Ruta4}Alfa.java|$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+}
+
+$Pruebas['25 bp4 g) migracion.ps1: -Practicas es un switch y la fase solo se llama con el, despues de la correccion y antes de la prueba en local'] = {
+  $t = [System.IO.File]::ReadAllText((Join-Path $raiz 'migracion.ps1'))
+  Comprueba 'parametro [switch]$Practicas' ($t -match '(?m)^\s*\[switch\]\$Practicas\b')
+  Comprueba 'carga huella.ps1 y arreglo-practicas.ps1 junto a los demas' ($t -match "(?m)^\. \(Join-Path \`$PSScriptRoot 'huella\.ps1'\)" -and $t -match "(?m)^\. \(Join-Path \`$PSScriptRoot 'arreglo-practicas\.ps1'\)")
+  Comprueba 'la ayuda lo dice en el USO' ($t -match '(?m)^\s+\.\\migracion\.ps1 \.\.\. -Practicas\b')
+  $llamadas = @([regex]::Matches($t, '(?m)^.*Invoke-FasePracticas.*$'))
+  Igual 'la fase se llama en un solo sitio' 1 $llamadas.Count
+  if ($llamadas.Count -ne 1) { return }
+  Comprueba 'esa llamada solo vale con $Practicas' ($llamadas[0].Value -match 'if \(\$sigue -and \$Practicas\)') $llamadas[0].Value
+  $corr = $t.LastIndexOf('Invoke-FaseCorreccion')
+  $prueba = $t.LastIndexOf('Invoke-FasePruebaLocal')
+  Comprueba 'va despues de la correccion y antes de la prueba en local' ($corr -ge 0 -and $corr -lt $llamadas[0].Index -and $llamadas[0].Index -lt $prueba)
+}
+
+$Pruebas['26 bp4 h) el JSON de resultados y la consola llevan los mismos numeros: pasados, atascados y sin cambios'] = {
+  $E = Nuevo-Escenario4 'p4h' @('Alfa', 'Beta', 'Gama')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'codigo:Beta;nada:Gama' }
+  Comprueba 'la consola dice los tres numeros' ($x.Texto -match '(?m)^Buenas practicas: 1 ficheros pasados a Lombok, 1 atascados, 1 sin cambios\s*$') $x.Texto
+  $j = $x.Json
+  Comprueba 'existe datos/practicas-arreglos.json' ($null -ne $j)
+  if ($null -eq $j) { return }
+  Igual 'JSON: pasados' 1 $j.pasados
+  Igual 'JSON: atascados' 1 $j.atascados
+  Igual 'JSON: sinCambios' 1 $j.sinCambios
+  Igual 'JSON: una entrada por tarea' 3 @($j.tareas).Count
+  $a = @($j.tareas | Where-Object { $_.fichero -ceq "${Ruta4}Alfa.java" })[0]
+  Igual 'Alfa: hecha' 'hecha' $a.estado
+  Igual 'Alfa: su commit' (GitEn $E.Repo @('rev-parse', 'HEAD')) $a.commit
+  Igual 'Alfa: sin motivo' '' $a.motivo
+  $b = @($j.tareas | Where-Object { $_.fichero -ceq "${Ruta4}Beta.java" })[0]
+  Igual 'Beta: atascada' 'atascada' $b.estado
+  Igual 'Beta: sin commit' '' $b.commit
+  Comprueba 'Beta: con su motivo' ($b.motivo -match 'metodos:') $b.motivo
+  $g = @($j.tareas | Where-Object { $_.fichero -ceq "${Ruta4}Gama.java" })[0]
+  Igual 'Gama: hecha' 'hecha' $g.estado
+  Igual 'Gama: sin commit' '' $g.commit
+  Igual 'Gama: sin cambios' 'sin cambios' $g.motivo
+}
+
+$Pruebas['27 bp4 i) sin incidencias de Lombok: ninguna llamada y una linea'] = {
+  $E = Nuevo-Escenario4 'p4i' @()
+  $x = Fase4 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+  Igual 'ninguna llamada a Maven' 0 (Llamadas-De $E.Mvn).Count
+  Comprueba 'una linea con los tres numeros a cero' ($x.Texto -match '(?m)^Buenas practicas: 0 ficheros pasados a Lombok, 0 atascados, 0 sin cambios') $x.Texto
+  Igual 'el JSON, sin tareas' 0 @($x.Json.tareas).Count
+}
+
+$Pruebas['28 bp4 j) un migrado que no compila: parada con el fallo de Maven y sin llamadas a Copilot'] = {
+  $E = Nuevo-Escenario4 'p4j' @('Alfa') $true @('Gama')
+  $x = Fase4 $E
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo no-compila' 'no-compila' $script:Paradas[0][0]
+  Comprueba 'el detalle lleva el error de Maven' ($script:Paradas[0][1] -match 'COMPILATION ERROR' -and $script:Paradas[0][1] -match 'Gama\.java') $script:Paradas[0][1]
+  Comprueba 'el registro es el de Maven y existe' (Test-Path -LiteralPath $script:Paradas[0][2])
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+}
+
+$Pruebas['29 bp4 k) Copilot que falla varias veces seguidas: parada copilot-no-responde y las tareas vuelven a empezar'] = {
+  $E = Nuevo-Escenario4 'p4k' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'falla' }
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo copilot-no-responde' 'copilot-no-responde' $script:Paradas[0][0]
+  Igual 'ningun commit' 'inicial' ($x.Commits -join '|')
+  Igual 'las tareas vuelven a pendiente y sin intentos' 2 @($x.Tareas | Where-Object { $_.estado -ceq 'pendiente' -and $_.intentos -eq 0 }).Count
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+}
+
+$Pruebas['29b bp4 k2) una llamada que falla despues de cambiar el fichero: se deshace su cambio y se atasca con el codigo de Copilot, sin parar a las demas'] = {
+  $E = Nuevo-Escenario4 'p4k2' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'falla-cambia:Alfa' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'solo se commitea Beta' ("$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Alfa vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Alfa'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: atascada' 'atascada' $t.estado
+  Comprueba 'Alfa: el motivo es el codigo de Copilot' ($t.motivo -match 'Copilot salio con codigo 1') $t.motivo
+  Igual 'Alfa: el reintento va sin correccion (fue un fallo de Copilot, no del arreglo)' 0 @((Llamadas-De $E.Copilot) | Where-Object { $_ -match '\|1$' }).Count
+}
+
+$Pruebas['30 bp4 l) Test-ClaseDeFichero: X.class y X$Interna.class son del fichero X.java; XY.class y X2.class, no'] = {
+  $f = "${Ruta4}Alfa.java"
+  Igual 'la clase' $true (Test-ClaseDeFichero 'com/acme/p4/Alfa.class' $f)
+  Igual 'una interna' $true (Test-ClaseDeFichero 'com/acme/p4/Alfa$Interna.class' $f)
+  Igual 'una interna de una interna' $true (Test-ClaseDeFichero 'com/acme/p4/Alfa$Interna$Mas.class' $f)
+  Igual 'otra clase que empieza igual' $false (Test-ClaseDeFichero 'com/acme/p4/AlfaBeta.class' $f)
+  Igual 'otra con numero' $false (Test-ClaseDeFichero 'com/acme/p4/Alfa2.class' $f)
+  Igual 'otro paquete' $false (Test-ClaseDeFichero 'com/acme/otro/Alfa.class' $f)
+  Igual 'no es una clase' $false (Test-ClaseDeFichero 'com/acme/p4/Alfa.properties' $f)
+  Igual 'un modulo: la ruta del fichero lleva carpeta delante' $true (Test-ClaseDeFichero 'com/acme/p4/Alfa.class' "modulo/$f")
+}
+
+$Pruebas['31 bp4 n) Test-PomLombok: lo encuentra en el pom de un modulo y no mira target ni .git ni src'] = {
+  $E = Nuevo-Escenario4 'p4n' @('Alfa') $false
+  $RepoRoot = $E.Repo
+  $dep = '<project><dependencies><dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId></dependency></dependencies></project>'
+  Igual 'sin Lombok en ningun pom' $false (Test-PomLombok)
+  foreach ($d in @('target/x', 'src/main/java/y', '.git/z', '.rescate/w')) { Escribe $E.Repo "$d/pom.xml" $dep }
+  Igual 'con un pom suyo en target, src, .git y .rescate, tampoco' $false (Test-PomLombok)
+  Escribe $E.Repo 'modulo-a/pom.xml' $dep
+  Igual 'con Lombok en el pom de un modulo' $true (Test-PomLombok)
+}
+
+$Pruebas['32 bp4 o) una diferencia en una clase que no es de ningun fichero de la ronda: no se da por buena en bloque y se prueba de uno en uno'] = {
+  $E = Nuevo-Escenario4 'p4o' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ BP4_SUELTA = '1' }
+  Igual 'los dos commits' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  Comprueba 'lo dice, con la clase suelta' ($x.Texto -match 'de uno en uno' -and $x.Texto -match 'Suelta\.class') $x.Texto
+  # foto (1) + la ronda entera (1) + cada fichero solo (2)
+  Igual 'Maven: 4 compilaciones' 4 (Compilaciones4 $E).Count
+}
+
+$Pruebas['33 bp4 p) la IA hace un commit: se deshace, se avisa con el motivo y el reintento tambien se deshace'] = {
+  $E = Nuevo-Escenario4 'p4p' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'commit:Alfa' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'ningun commit de la IA ni de la fase: el commit de la IA lleva a repetir tambien a Beta, que solo comenta' 'inicial' (($x.Commits | Where-Object { $_ -notmatch 'practica\(lombok\)' }) -join '|')
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: atascada' 'atascada' $t.estado
+  Comprueba 'Alfa: el motivo dice que ha hecho un commit' ($t.motivo -match 'commit') $t.motivo
+}
+
+$Pruebas['34 bp4 q) la IA borra el fichero: vuelve atras y se reintenta con el motivo'] = {
+  $E = Nuevo-Escenario4 'p4q' @('Alfa', 'Beta')
+  $x = Fase4 $E @{ RESCATE_FALSO = 'borra:Alfa' }
+  Igual 'solo se commitea Beta' ("$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+  Comprueba 'Alfa esta como estaba' (-not (Quedan-Cambios4 $E 'Alfa'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: atascada' 'atascada' $t.estado
+  Comprueba 'Alfa: el motivo dice que ha borrado el fichero' ($t.motivo -match 'borrado') $t.motivo
+}
+
+$Pruebas['35 bp4 r) un commit que git rechaza (un hook): parada git con su salida, el fichero como estaba y la tarea sin gastar el intento'] = {
+  $E = Nuevo-Escenario4 'p4r' @('Alfa')
+  [void](GitEn $E.Repo @('config', 'core.hooksPath', '.git/hooks'))   # el global del usuario, si lo hay, no cuenta aqui
+  Escribe $E.Repo '.git/hooks/pre-commit' "#!/bin/sh`necho 'hook de mentira: no se commitea'`nexit 1`n"
+  if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x (Get-Ruta $E.Repo '.git/hooks/pre-commit') }
+  $x = Fase4 $E
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo git' 'git' $script:Paradas[0][0]
+  Comprueba 'el detalle lleva el fichero y lo que dijo git' ($script:Paradas[0][1] -match 'Alfa\.java' -and $script:Paradas[0][1] -match 'hook de mentira') $script:Paradas[0][1]
+  Comprueba 'Alfa vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Alfa'))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  $t = Tarea4 $x 'Alfa'
+  Igual 'Alfa: sigue pendiente, sin intentos gastados' 'pendiente' $t.estado
+  Igual 'Alfa: cero intentos' 0 $t.intentos
+}
+
+$Pruebas['36 bp4 s) lo que habia sin confirmar en el worktree se deshace al empezar, con su aviso'] = {
+  $E = Nuevo-Escenario4 'p4s' @('Alfa')
+  Escribe $E.Repo "${Ruta4}Delta.java" ((Fuente-P4 'Delta') + "// resto de una pasada que se corto`n")
+  Escribe $E.Repo "${Ruta4}Suelto.java" "class Suelto { }`n"
+  $x = Fase4 $E
+  Comprueba 'lo dice, con los dos ficheros' ($x.Texto -match 'Deshago lo que habia sin confirmar' -and $x.Texto.Contains("${Ruta4}Delta.java") -and $x.Texto.Contains("${Ruta4}Suelto.java")) $x.Texto
+  Comprueba 'Delta vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Delta'))
+  Comprueba 'el fichero nuevo ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $E.Repo "${Ruta4}Suelto.java")))
+  Igual 'el commit de Alfa y nada mas' ("$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+}
+
+$Pruebas['37 bp4 t) sin javap no se puede comparar: parada otro, sin llamadas'] = {
+  $E = Nuevo-Escenario4 'p4t' @('Alfa')
+  $x = Fase4 $E @{ JAVA_HOME = '' } @{ JavapExe = '' }
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo otro' 'otro' $script:Paradas[0][0]
+  Comprueba 'el detalle dice lo de javap' ($script:Paradas[0][1] -match 'JAVA_HOME') $script:Paradas[0][1]
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+  Igual 'ninguna llamada a Maven' 0 (Llamadas-De $E.Mvn).Count
+}
+
+$Pruebas['38 bp4 u) -MaxHoras: pasado el tiempo no empieza una ronda nueva y para con tope-de-tiempo'] = {
+  $E = Nuevo-Escenario4 'p4u' @('Alfa', 'Beta')
+  $MaxHoras = 0.00000001
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  Start-Sleep -Milliseconds 50
+  $x = Fase4 $E @{ RESCATE_FALSO = 'codigo:Alfa' }
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo tope-de-tiempo' 'tope-de-tiempo' $script:Paradas[0][0]
+  Igual 'la primera ronda si se hizo: Beta commiteada' ("$Commit4${Ruta4}Beta.java|inicial") ($x.Commits -join '|')
+  Igual 'Alfa, pendiente con su primer intento' 'pendiente' (Tarea4 $x 'Alfa').estado
+}
+
+$Pruebas['39 bp4 v) sin datos/practicas-antes.json: un aviso y ninguna llamada'] = {
+  $E = Nuevo-Escenario4 'p4v' @('Alfa')
+  Remove-Item -LiteralPath (Join-Path $E.Datos 'practicas-antes.json') -Force
+  $x = Fase4 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Comprueba 'el aviso dice que falta el JSON' (@($x.Avisos | Where-Object { $_ -match 'practicas-antes\.json' }).Count -eq 1) ($x.Avisos -join ' / ')
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+}
+
+$Pruebas['39b bp4 v2) practicas-despues.json manda sobre practicas-antes.json'] = {
+  $E = Nuevo-Escenario4 'p4v2' @('Alfa', 'Beta')
+  $inc = @(New-Incidencia 'lombok' "${Ruta4}Beta.java" 10 'lombok' 'getter-setter-a-mano' 'referencia' '' '2 getters y 1 setters escritos a mano: con Lombok son @Getter y @Setter')
+  Write-Json (Join-Path $E.Datos 'practicas-despues.json') ([ordered]@{ version = 1; cuando = ''; detectores = @(); incidencias = $inc })
+  $x = Fase4 $E
+  Igual 'una sola tarea' 1 $x.Tareas.Count
+  Igual 'la de Beta, que es lo que queda segun el despues' "$Commit4${Ruta4}Beta.java|inicial" ($x.Commits -join '|')
+}
+
+$Pruebas['32 bp4 m) arreglo-practicas.ps1: solo funciones, cabecera, ASCII y nada de PowerShell 7'] = {
+  $ruta = Join-Path $raiz 'arreglo-practicas.ps1'
+  Comprueba 'existe junto a migracion.ps1' (Test-Path -LiteralPath $ruta)
+  if (-not (Test-Path -LiteralPath $ruta)) { return }
+  $codigo = [System.IO.File]::ReadAllText($ruta)
+  Comprueba 'empieza con su cabecera de ayuda' ($codigo.TrimStart().StartsWith('<#'))
+  Comprueba 'nada de PowerShell 7 (??, ?. ni ?[)' ($codigo -notmatch '\?\?|[\w\)\]]\?\.\w|\w\?\[')
+  Comprueba 'sin -AsHashtable ni ConvertFrom-Json -Depth' ($codigo -notmatch 'AsHashtable|ConvertFrom-Json[^|\r\n]*-Depth')
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($codigo, [ref]$null, [ref]$null)
+  $sueltas = @($ast.EndBlock.Statements | Where-Object { $_ -isnot [System.Management.Automation.Language.FunctionDefinitionAst] })
+  Igual 'nada fuera de las funciones' 0 $sueltas.Count
+  $otras = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+  $deMas = @(@('practicas.ps1', 'huella.ps1', 'comun.ps1', 'tareas.ps1', 'analisis.ps1', 'informe.ps1', 'lanzadores.ps1', 'migracion.ps1', 'prueba-local.ps1') | ForEach-Object {
+      $f = Join-Path $raiz $_
+      if (Test-Path -LiteralPath $f) { [regex]::Matches([System.IO.File]::ReadAllText($f), '(?m)^function ([\w-]+)') | ForEach-Object { $_.Groups[1].Value } }
+    })
+  $repetidas = @($otras | Where-Object { $deMas -contains $_ })
+  Comprueba 'ninguna de sus funciones esta definida en otro script' ($repetidas.Count -eq 0) ($repetidas -join ', ')
 }
 
 # ================================ LANZADOR ================================
