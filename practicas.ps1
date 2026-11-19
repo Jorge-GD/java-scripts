@@ -420,54 +420,57 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     $fallo = $_.Exception.Message
     Aviso "Buenas practicas ($Cuando): la medida se ha cortado: $fallo"
   }
-  $detectores = @()
-  $incidencias = @()
-  foreach ($id in $ids) {
-    if (-not $res.ContainsKey($id)) {
-      $res[$id] = [pscustomobject]@{ Detector = [ordered]@{ id = $id; estado = 'no se pudo medir'; motivo = "no se llego a medir: $fallo"; segundos = 0; corte = $false }; Incidencias = @() }
+  try {
+    $detectores = @()
+    $incidencias = @()
+    foreach ($id in $ids) {
+      if (-not $res.ContainsKey($id)) {
+        $res[$id] = [pscustomobject]@{ Detector = [ordered]@{ id = $id; estado = 'no se pudo medir'; motivo = "no se llego a medir: $fallo"; segundos = 0; corte = $false }; Incidencias = @() }
+      }
+      $detectores += , $res[$id].Detector
+      $incidencias += @($res[$id].Incidencias)
     }
-    $detectores += , $res[$id].Detector
-    $incidencias += @($res[$id].Incidencias)
-  }
-  Set-QueHago $incidencias $HallazgosMotor
-  $nombreReferencia = ''
-  if ($Referencia) { $nombreReferencia = Split-Path ($Referencia.TrimEnd('\', '/')) -Leaf }
-  $claves = @{}
-  try { $claves = Get-ClavesSonar } catch { $claves = @{} }
-  $segundos = [Math]::Round($reloj.Elapsed.TotalSeconds, 1)
-  $datosJson = [ordered]@{
-    version      = 1
-    cuando       = $Cuando
-    clave        = $clave
-    medido       = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
-    segundos     = $segundos
-    paquete      = (Get-PaqueteBase $Repo)
-    referencia   = $nombreReferencia
-    detectores   = @($detectores)
-    sonar        = [ordered]@{ reglasWay = [int]$Cfg.SonarReglasWay; reglasAqui = @(@($claves.Values) + 'S5738' | Select-Object -Unique).Count }
-    incidencias  = @($incidencias)
-    arquitectura = $null
-  }
-  try { Write-Json $json $datosJson }
-  catch { Aviso "Buenas practicas ($Cuando): no he podido escribir ${json}: $($_.Exception.Message)" }
-  $resumen = @('', "== Buenas practicas ($Cuando): $($incidencias.Count) incidencias en $segundos s (clave $clave) ==")
-  foreach ($d in $detectores) { $resumen += ("$($d.id): $($d.estado) $($d.motivo) ($($d.segundos) s)").Replace('  ', ' ') }
-  try { [System.IO.File]::AppendAllText($registro, ($resumen -join "`n") + "`n", $Utf8) } catch { $null = $_ }
+    Set-QueHago $incidencias $HallazgosMotor
+    $nombreReferencia = ''
+    if ($Referencia) { $nombreReferencia = Split-Path ($Referencia.TrimEnd('\', '/')) -Leaf }
+    $claves = @{}
+    try { $claves = Get-ClavesSonar } catch { $claves = @{} }
+    $segundos = [Math]::Round($reloj.Elapsed.TotalSeconds, 1)
+    $datosJson = [ordered]@{
+      version      = 1
+      cuando       = $Cuando
+      clave        = $clave
+      medido       = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
+      segundos     = $segundos
+      paquete      = (Get-PaqueteBase $Repo)
+      referencia   = $nombreReferencia
+      detectores   = @($detectores)
+      sonar        = [ordered]@{ reglasWay = [int]$Cfg.SonarReglasWay; reglasAqui = @(@($claves.Values) + 'S5738' | Select-Object -Unique).Count }
+      incidencias  = @($incidencias)
+      arquitectura = $null
+    }
+    try { Write-Json $json $datosJson }
+    catch { Aviso "Buenas practicas ($Cuando): no he podido escribir ${json}: $($_.Exception.Message)" }
+    $resumen = @('', "== Buenas practicas ($Cuando): $($incidencias.Count) incidencias en $segundos s (clave $clave) ==")
+    foreach ($d in $detectores) { $resumen += ("$($d.id): $($d.estado) $($d.motivo) ($($d.segundos) s)").Replace('  ', ' ') }
+    try { [System.IO.File]::AppendAllText($registro, ($resumen -join "`n") + "`n", $Utf8) } catch { $null = $_ }
 
-  $porArea = @()
-  foreach ($a in @('java21', 'boot3-batch5', 'lombok', 'arquitectura')) {
-    $n = @($incidencias | Where-Object { $_.area -ceq $a }).Count
-    if ($n -gt 0) { $porArea += "${a}: $n" }
-  }
-  $detalle = ''
-  if ($porArea.Count -gt 0) { $detalle = ' (' + ($porArea -join ', ') + ')' }
-  $textoSegundos = $segundos.ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture).Replace('.', ',')
-  Info "Buenas practicas ($Cuando): $($incidencias.Count) incidencias$detalle en $textoSegundos s."
-  foreach ($d in $detectores) {
-    if ($d.estado -cne 'ok' -and $d.estado -cne 'no aplica') {
-      $porque = ''
-      if ($d.motivo) { $porque = ': ' + $d.motivo }
-      Aviso "Buenas practicas ($Cuando): $($d.id): $($d.estado)$porque"
+    $porArea = @()
+    foreach ($a in @('java21', 'boot3-batch5', 'lombok', 'arquitectura')) {
+      $n = @($incidencias | Where-Object { $_.area -ceq $a }).Count
+      if ($n -gt 0) { $porArea += "${a}: $n" }
+    }
+    $detalle = ''
+    if ($porArea.Count -gt 0) { $detalle = ' (' + ($porArea -join ', ') + ')' }
+    $textoSegundos = $segundos.ToString('0.0', [System.Globalization.CultureInfo]::InvariantCulture).Replace('.', ',')
+    Info "Buenas practicas ($Cuando): $($incidencias.Count) incidencias$detalle en $textoSegundos s."
+    foreach ($d in $detectores) {
+      if ($d.estado -cne 'ok' -and $d.estado -cne 'no aplica') {
+        $porque = ''
+        if ($d.motivo) { $porque = ': ' + $d.motivo }
+        Aviso "Buenas practicas ($Cuando): $($d.id): $($d.estado)$porque"
+      }
     }
   }
+  catch { Aviso "Buenas practicas ($Cuando): no he podido dejar el resultado: $($_.Exception.Message)" }
 }
