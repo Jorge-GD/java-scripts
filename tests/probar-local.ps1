@@ -1248,5 +1248,14 @@ $Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale si
   Igual 'una llamada: el arnes del original' ($n + 1) @(Llamadas $e).Count
 }
 
+$Pruebas['m24 config.json del migrado: las claves de rescate.ps1 (PalabrasConfigAntigua, PasosSoloCompila) no avisan de desconocidas en la consola'] = {
+  $e = Nuevo-Escenario 'm24-claves-de-rescate' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Escribe $e.Migrado '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{ PalabrasConfigAntigua = @('inventory'); PasosSoloCompila = @('sonar'); PasosTestsElegidos = @('sonar') }))
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola no dice clave desconocida' ($r.Salida -notmatch 'clave desconocida') (Cola $r.Salida)
+  Igual 'el caso sale igual (la prueba corrio entera)' 'igual' ((Resultados $e) -join ',')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
