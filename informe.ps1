@@ -858,7 +858,7 @@ function Get-PruebaLocalHtml($D, $T) {
     $cuerpo = Format-Trozo $T 'pl-sin-fallo' @{ CODIGO = "$($e.codigo)"; DETALLE = $e.detalle; REGISTRO = $e.registro }
   }
   elseif ($r -ceq 'saltada') { $cuerpo = Format-Trozo $T 'pl-saltada' @{ ETIQUETA = (Format-Trozo $T 'et-sin') } }
-  return (Format-Trozo $T 'pl-seccion' @{ CUERPO = $cuerpo })
+  return (Format-Trozo $T 'pl-seccion' @{ CASOS = (Get-CajaRecorren $D $T); CUERPO = $cuerpo })
 }
 
 # El trozo en singular ($Base-uno) si la cuenta es 1 y el plural ($Base-varios) si no.
@@ -868,9 +868,15 @@ function Get-TrozoPorCuenta($T, [string]$Base, [int]$N, $Valores) {
   return (Format-Trozo $T "$Base-$sufijo" $Valores)
 }
 
-# El resumen de arriba de la pagina 3: cuanto del original recorren los casos y, de los datos que la IA no pudo dar por iguales, cuantos ejecuto un caso que
-# salio igual y cuantos no recorre ninguno. Con los casos sin medir, una frase con el motivo; sin JSON, nada.
-function Get-ResumenCasos($D, $T) {
+# La caja de la pagina 3 con lo que dicen los casos: una o mas frases; sin frases, nada.
+function Get-CajaCasos($T, [string]$Id, $Frases) {
+  if (@($Frases).Count -eq 0) { return '' }
+  return (Format-Trozo $T 'm34-resumen' @{ ID = $Id; FRASES = (@($Frases) -join "`n") })
+}
+
+# La caja de Probado ejecutando los dos: cuanto del original recorren los casos (las lineas de la union de igual y distinto entre lineasTotal) o, con los casos
+# sin medir, el motivo. Sin JSON, nada.
+function Get-CajaRecorren($D, $T) {
   $frases = @()
   if ($D.CoberturaCasos -and [string]$D.CoberturaCasos.estado -ceq 'no medido') {
     $motivo = ([string]$D.CoberturaCasos.motivo).Trim().TrimEnd('.')
@@ -886,21 +892,27 @@ function Get-ResumenCasos($D, $T) {
     }
     $pct = "$(Get-PorcentajePractica $recorridas $D.CoberturaCasos.lineasTotal)".Replace('.', ',')
     $frases += Format-Trozo $T 'm34-recorren' @{ PCT = $pct }
-    if ($D.Mapa -and $D.Comparacion.Count -gt 0) {
-      $dudosos = @(foreach ($j in @($D.Mapa.jobs)) { @(Get-DatosComparar $D $j | Where-Object { @('distinto', 'falta', 'no-lo-se') -ccontains $_.Estado }) })
-      if ($dudosos.Count -eq 0) { $frases += Format-Trozo $T 'm34-sin-dudosos' }
-      else {
-        $igual = @($dudosos | Where-Object { $_.Ejecucion -ceq 'ejecutado-igual' }).Count
-        $ninguno = @($dudosos | Where-Object { $_.Ejecucion -ceq 'sin-ejecutar' }).Count
-        $frases += Format-Trozo $T 'm34-dudosos' @{
-          DATOS = (Get-TrozoPorCuenta $T 'm34-datos' $dudosos.Count @{ N = "$($dudosos.Count)" }); IGUAL = (Get-TrozoPorCuenta $T 'm34-igual' $igual @{ N = "$igual" })
-          NINGUNO = (Get-TrozoPorCuenta $T 'm34-ninguno' $ninguno @{ N = "$ninguno" })
-        }
+  }
+  return (Get-CajaCasos $T 'm34-recorren' $frases)
+}
+
+# La caja de Leido por la IA: de los datos que la IA no pudo dar por iguales, cuantos ejecuto un caso que salio igual y cuantos no recorre ninguno. Solo con los casos
+# medidos y la comparacion hecha.
+function Get-CajaDudosos($D, $T) {
+  $frases = @()
+  if ($null -ne $D.LineasCasos -and $D.Mapa -and $D.Comparacion.Count -gt 0) {
+    $dudosos = @(foreach ($j in @($D.Mapa.jobs)) { @(Get-DatosComparar $D $j | Where-Object { @('distinto', 'falta', 'no-lo-se') -ccontains $_.Estado }) })
+    if ($dudosos.Count -eq 0) { $frases += Format-Trozo $T 'm34-sin-dudosos' }
+    else {
+      $igual = @($dudosos | Where-Object { $_.Ejecucion -ceq 'ejecutado-igual' }).Count
+      $ninguno = @($dudosos | Where-Object { $_.Ejecucion -ceq 'sin-ejecutar' }).Count
+      $frases += Format-Trozo $T 'm34-dudosos' @{
+        DATOS = (Get-TrozoPorCuenta $T 'm34-datos' $dudosos.Count @{ N = "$($dudosos.Count)" }); IGUAL = (Get-TrozoPorCuenta $T 'm34-igual' $igual @{ N = "$igual" })
+        NINGUNO = (Get-TrozoPorCuenta $T 'm34-ninguno' $ninguno @{ N = "$ninguno" })
       }
     }
   }
-  if ($frases.Count -eq 0) { return '' }
-  return (Format-Trozo $T 'm34-resumen' @{ FRASES = ($frases -join "`n") })
+  return (Get-CajaCasos $T 'm34-dudosos' $frases)
 }
 
 function Get-CuerpoComparar($D, $T, [string]$Cuerpo) {
@@ -908,7 +920,7 @@ function Get-CuerpoComparar($D, $T, [string]$Cuerpo) {
   if (-not $D.Mapa) { $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'mapa'; ETIQUETA = (Format-Trozo $T 'et-sin') } }
   elseif ($D.Comparacion.Count -gt 0) { $jobs = (@($D.Mapa.jobs | ForEach-Object { Get-GrupoComparar $D $T $_ }) -join "`n") }
   return (Expand-Plantilla $Cuerpo @{
-      RESUMENCASOS = (Get-ResumenCasos $D $T); PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs; LANZADORES = (Get-LanzadoresComparar $D $T)
+      DUDOSOS = (Get-CajaDudosos $D $T); PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs; LANZADORES = (Get-LanzadoresComparar $D $T)
     })
 }
 
