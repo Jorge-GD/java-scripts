@@ -353,7 +353,8 @@ $Pruebas['14 un caso por JVM: un original con estado static entre ejecuciones no
 }
 
 # Pasados MinutosMaven minutos se para Maven con sus procesos hijos y la llamada cuenta como fallida. Estas pruebas lo cuelgan con
-# tests/falsos/mvn-dormido.ps1 (escribe una linea, lanza un hijo que duerme y duerme 40 s) y un tope de 0.05 min (3 s).
+# tests/falsos/mvn-dormido.ps1 (escribe una linea, lanza un hijo que duerme y duerme 120 s) y un tope de 0.05 min (3 s). Si el tope
+# no parase a Maven, el lanzamiento duraria mas de 120 s: el limite de 90 s deja margen al resto del lanzamiento con la maquina cargada.
 
 # Lanza prueba-local.ps1 con el Maven que se cuelga (mvn-dormido, que pasa el resto al mvn-local) y un tope de 0.05 min en el
 # ajustes.json del escenario. Se cuelgan las llamadas cuya '<carpeta>|<argumentos>' casa con $Cuelga. Devuelve lo de Prueba, mas
@@ -365,9 +366,10 @@ function Prueba-Con-Tope($E, [string]$Cuelga) {
   $env:RESCATE_MVN_FALSO = 'mvn-local.ps1'
   $env:RESCATE_MVN_CUELGA = $Cuelga
   $env:RESCATE_MVN_PIDS = $pids
+  $env:RESCATE_MVN_SEGUNDOS = '120'
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
   try { $r = Prueba $E }
-  finally { $env:RESCATE_MVN_FALSO = ''; $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = '' }
+  finally { $env:RESCATE_MVN_FALSO = ''; $env:RESCATE_MVN_CUELGA = ''; $env:RESCATE_MVN_PIDS = ''; $env:RESCATE_MVN_SEGUNDOS = '' }
   return [pscustomobject]@{ Codigo = $r.Codigo; Salida = $r.Salida; Segundos = $reloj.Elapsed.TotalSeconds; Pids = $pids }
 }
 
@@ -385,7 +387,7 @@ $Pruebas['15 tope de Maven: prueba-local: el caso del migrado que se cuelga sale
   $reg = Registro-Del-Tope $motivo
   Comprueba 'con su registro' ($reg -and (Test-Path -LiteralPath $reg)) $motivo
   Igual 'el otro caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
-  Comprueba-Tope $r.Pids $r.Segundos 30 $reg
+  Comprueba-Tope $r.Pids $r.Segundos 90 $reg
 }
 
 $Pruebas['16 tope de Maven: prueba-local: un caso que se cuelga en el original no se da por bueno y su motivo lleva el mensaje'] = {
@@ -396,7 +398,7 @@ $Pruebas['16 tope de Maven: prueba-local: un caso que se cuelga en el original n
   Igual 'el caso que se cuelga: no se pudo preparar' 'no se pudo preparar' $c.resultado
   Comprueba 'y su motivo lleva el mensaje del tope' ($motivo -match [regex]::Escape('Maven se ha pasado del tope de 0.05 min')) $motivo
   Igual 'el otro caso sale igual' 'igual' (Caso $e 'cargaJob' 'caso-02').resultado
-  Comprueba-Tope $r.Pids $r.Segundos 30 (Registro-Del-Tope $motivo)
+  Comprueba-Tope $r.Pids $r.Segundos 90 (Registro-Del-Tope $motivo)
 }
 
 $Pruebas['17 tope de Maven: cobertura (tareas.ps1): pasado el tope, sin medida y el motivo es el mensaje'] = {
