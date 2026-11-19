@@ -1257,5 +1257,197 @@ $Pruebas['m24 config.json del migrado: las claves de rescate.ps1 (PalabrasConfig
   Igual 'el caso sale igual (la prueba corrio entera)' 'igual' ((Resultados $e) -join ',')
 }
 
+# ===================== REPARAR: -Reparar (m25) =====================
+# Con -Reparar, de los casos distintos la IA escribe arreglos en la copia del migrado y el script solo da por bueno el que pasa las
+# puertas: el caso, los demas casos y la suite de tests unitarios. Estos escenarios usan m25-copilot.ps1 y m25-mvn.ps1: el migrado (su
+# rama de rescate) lleva minimo=5.01 en src/main/resources/regla.txt, el original 5.00, y el 'arreglo' es dejar 5.00 ahi. Con -Test,
+# la rama lleva un test unitario que espera lo de ahora (minimo=5.01). El caso del limite (importe=5.00) sale distinto.
+
+function Escenario-M25([string]$Nombre, $Casos, [switch]$Test, [hashtable]$Ajustes = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm25-copilot.ps1'); MvnExe = (Join-Path $falsos 'm25-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  [void](Commit-En $e.Wt 'src/main/resources/regla.txt' "minimo=5.01`n" 'migra el limite')
+  if ($Test) { [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" 'test del limite') }
+  return $e
+}
+
+function Reparaciones($E) { return @((Lee-Json $E.Json).reparaciones | Where-Object { $_ }) }
+
+function Llamadas-Reparar($E) { return @(Llamadas $E | Where-Object { $_.tipo -eq 'reparar' }) }
+
+# El asunto del commit de un arreglo del caso $Job/$Caso con la clave de siempre (el fichero de salida de hoy).
+function Asunto-M25([string]$Job, [string]$Caso) { return "rescate(local): $Job/$Caso ficheros/salida/resultado_<hoy:yyyyMMdd>.txt" }
+
+# Los registros (prompt y respuesta) de la llamada $N de las tareas de reparar, en orden.
+function Registros-Reparar($E, [int]$N) {
+  return @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local 'registros') -File -Filter "reparar-*-$N.log" | Sort-Object Name | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) })
+}
+
+$Pruebas['m25 (a) -Reparar: dos casos distintos por la misma causa: una llamada, un commit en la rama de rescate, los tres iguales y reparaciones con arreglado; la rama del usuario no se mueve'] = {
+  $e = Escenario-M25 'm25-a' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=5.00') }) -Test
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $usuario = Estado-Git $e.Migrado
+  $original = Foto $e.Legacy
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Igual 'una sola llamada para arreglar' 1 (Llamadas-Reparar $e).Count
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  Igual 'con el asunto del caso y la clave' (Asunto-M25 'cargaJob' 'caso-01') (GitEn $e.Wt @('log', '-1', '--format=%s'))
+  Igual 'que lleva el arreglo' "minimo=5.00`n" (Lee $e.Wt 'src/main/resources/regla.txt')
+  Igual 'y solo ese fichero' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Igual 'la carpeta de rescate queda sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'la rama y la carpeta del usuario no se mueven' $usuario (Estado-Git $e.Migrado)
+  Igual 'el original queda como estaba' $original (Foto $e.Legacy)
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones lleva una entrada' 1 $rep.Count
+  Igual 'que dice arreglado' 'arreglado' $rep[0].resultado
+  Igual 'con el job, el caso y la clave' "cargaJob caso-01 ficheros/salida/resultado_<hoy:yyyyMMdd>.txt" "$($rep[0].job) $($rep[0].caso) $($rep[0].clave)"
+  Igual 'los casos que tenian esa clave' 2 $rep[0].casos
+  Igual 'el commit entero' (GitEn $e.Wt @('rev-parse', 'HEAD')) $rep[0].commit
+  Igual 'su asunto' (Asunto-M25 'cargaJob' 'caso-01') $rep[0].asunto
+  Igual 'y un intento' 1 $rep[0].intentos
+  Igual 'el json guarda el commit de ahora del migrado' (GitEn $e.Wt @('rev-parse', 'HEAD')) (Lee-Json $e.Json).commitMigrado
+  Comprueba 'la consola dice que lo ha arreglado, con el commit' ($r.Salida -match 'arreglado' -and $r.Salida.Contains((Corto $rep[0].commit))) (Cola $r.Salida)
+  Comprueba 'las salidas del migrado son las del arreglo' ((Lee $e.Local "salidas/migrado/remesaJob/caso-01/ficheros/salida/resultado_$(Hoy).txt") -match 'importe=5\.00 -> aceptado') ''
+  Comprueba 'el parche queda en prueba-local' (@(Get-ChildItem -LiteralPath $e.Local -File -Filter '*.patch').Count -ge 1) ''
+}
+
+$Pruebas['m25 (b) -Reparar: la IA toca un test: rechazado con ese motivo, reintento y, al final, no arreglado; la rama de rescate no se mueve'] = {
+  $e = Escenario-M25 'm25-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-test'
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
+  Igual 'dos llamadas: el intento y el reintento' 2 (Llamadas-Reparar $e).Count
+  Igual 'la rama de rescate no se mueve' $antes (Estado-Git $e.Wt)
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones: una entrada, no arreglado' 'no arreglado' $rep[0].resultado
+  Igual 'con dos intentos' 2 $rep[0].intentos
+  Comprueba 'el motivo nombra el test que ha tocado' ($rep[0].motivo -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') $rep[0].motivo
+  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'la copia del migrado queda como estaba: regla.txt con el limite de antes' "minimo=5.01`n" (Lee $e.CopiaMig 'src/main/resources/regla.txt')
+  Igual 'y el test, sin lo que le anadio la IA' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" (Lee $e.CopiaMig 'src/test/java/com/acme/nuevo/ReglaTest.java')
+  Comprueba 'las salidas del intento rechazado se borran' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/reparar/1')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/reparar/2'))) ''
+  Comprueba 'la consola dice que no se ha arreglado' ($r.Salida -match 'no arreglado') (Cola $r.Salida)
+  Igual 'la tarea queda atascada' 'atascada' (@(Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'tareas') -File -Filter 'reparar-*.json' | ForEach-Object { (Lee-Json $_.FullName).estado }))[0]
+}
+
+$Pruebas['m25 (c) -Reparar: el arreglo iguala el caso de la tarea pero otro caso que era igual sale distinto: rechazado, nombrando ese caso'] = {
+  $e = Escenario-M25 'm25-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00 LATIN') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-rompe'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso del limite sigue distinto y el otro igual' 'distinto,igual' ((Resultados $e) -join ',')
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo nombra el caso que ha empeorado' ($rep[0].motivo -match 'cargaJob/caso-02') $rep[0].motivo
+  Comprueba 'y dice como: antes igual y ahora distinto' ($rep[0].motivo -match 'igual' -and $rep[0].motivo -match 'distinto') $rep[0].motivo
+  Igual 'la rama de rescate no se mueve' $antes (Estado-Git $e.Wt)
+  Comprueba 'el reintento recibe el caso que ha empeorado en su prompt' ((@(Registros-Reparar $e 2)[0]) -match 'cargaJob/caso-02') ''
+}
+
+$Pruebas['m25 (d) -Reparar: el arreglo iguala los casos pero fallan mas tests unitarios: rechazado, con los tests en el motivo'] = {
+  $e = Escenario-M25 'm25-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo dice que arregla el caso pero rompe tests' ($rep[0].motivo -match 'arregla el caso, pero rompe estos tests') $rep[0].motivo
+  Comprueba 'y nombra el test que falla' ($rep[0].motivo -match 'com\.acme\.nuevo\.ReglaTest') $rep[0].motivo
+  Igual 'la rama de rescate no se mueve' $antes (Estado-Git $e.Wt)
+  Igual 'se reintento una vez (dos llamadas)' 2 (Llamadas-Reparar $e).Count
+  $e2 = Escenario-M25 'm25-d2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $antes2 = Estado-Git $e2.Wt
+  $r = Prueba $e2 @('-Reparar') 'reparar-sin-tests'
+  Igual 'si el arreglo hace que se ejecuten menos tests, sale con 2' 2 $r.Codigo
+  Comprueba 'lo dice con las cifras (1 antes, 0 ahora)' ((@(Reparaciones $e2)[0]).motivo -match 'menos tests' -and (@(Reparaciones $e2)[0]).motivo -match '0' -and (@(Reparaciones $e2)[0]).motivo -match '1') (@(Reparaciones $e2)[0]).motivo
+  Igual 'y la rama de rescate no se mueve' $antes2 (Estado-Git $e2.Wt)
+}
+
+$Pruebas['m25 (e) -Reparar: reparar-no.txt: no se arregla, con su motivo, sin reintento y sin commit'] = {
+  $e = Escenario-M25 'm25-e' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Igual 'una sola llamada' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'la clave queda no se arregla' 'no se arregla' $rep[0].resultado
+  Igual 'con el motivo de la IA' 'La prueba local simula el correo y en el entorno real ya esta bien.' $rep[0].motivo
+  Igual 'sin commit nuevo' $antes (Estado-Git $e.Wt)
+  Comprueba 'la consola lo dice con el motivo' ($r.Salida -match 'no se arregla' -and $r.Salida -match 'simula el correo') (Cola $r.Salida)
+  Comprueba 'el fichero de la IA no se queda en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig '.rescate/reparar-no.txt'))) ''
+  Igual 'la copia queda como estaba: regla.txt con el limite de antes' "minimo=5.01`n" (Lee $e.CopiaMig 'src/main/resources/regla.txt')
+}
+
+$Pruebas['m25 (f) -Reparar: con -Desde o -Deshacer, sin worktree de rescate o con la carpeta de rescate sucia: error de arranque claro y ninguna llamada'] = {
+  $e = Escenario-M25 'm25-f1' ([ordered]@{ cargaJob = @('importe=5.00') })
+  $desde = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Reparar', '-Desde', $desde)
+  Igual 'con -Desde sale con 1' 1 $r.Codigo
+  Comprueba 'dice que no se combina' ($r.Salida -match '-Reparar' -and $r.Salida -match '-Desde') (Cola $r.Salida)
+  Igual 'sin llamadas' 0 @(Llamadas $e).Count
+  Comprueba 'ni copias' (-not (Test-Path -LiteralPath $e.CopiaOrig)) ''
+  $r = Prueba $e @('-Reparar', '-Desde', $desde, '-Deshacer')
+  Igual 'con -Deshacer tambien sale con 1' 1 $r.Codigo
+  Comprueba 'y lo dice' ($r.Salida -match '-Reparar' -and $r.Salida -match '-Deshacer') (Cola $r.Salida)
+  $r = Prueba $e @('-Reparar', '-Deshacer')
+  Igual '-Reparar con -Deshacer solo tambien sale con 1' 1 $r.Codigo
+  Comprueba 'dice lo de -Reparar y no lo de -Desde' ($r.Salida -match '-Reparar' -and $r.Salida -match '-Deshacer') (Cola $r.Salida)
+  Igual 'sin llamadas' 0 @(Llamadas $e).Count
+  $e = Escenario-M25 'm25-f2' ([ordered]@{ cargaJob = @('importe=5.00') })
+  [void](GitEn $e.Migrado @('worktree', 'remove', '--force', $e.Wt))
+  $r = Prueba $e @('-Reparar')
+  Igual 'sin worktree de rescate sale con 1' 1 $r.Codigo
+  Comprueba 'dice que se lance migracion.ps1 primero y que crea la carpeta de rescate' ($r.Salida -match 'lanza migracion\.ps1 primero' -and $r.Salida.Contains($e.Wt)) (Cola $r.Salida)
+  Igual 'sin llamadas' 0 @(Llamadas $e).Count
+  Comprueba 'ni copias' (-not (Test-Path -LiteralPath $e.CopiaOrig)) ''
+  $e = Escenario-M25 'm25-f3' ([ordered]@{ cargaJob = @('importe=5.00') })
+  Escribe $e.Wt 'sucio.txt' "sin commit`n"
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar')
+  Igual 'con la carpeta de rescate sucia sale con 1' 1 $r.Codigo
+  Comprueba 'dice que tiene cambios sin commit y de que carpeta' ($r.Salida -match 'cambios sin commit' -and $r.Salida.Contains($e.Wt)) (Cola $r.Salida)
+  Igual 'sin llamadas' 0 @(Llamadas $e).Count
+  Igual 'y no la toca' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['m25 (g) -Reparar: el reintento lleva en su prompt el motivo y el diff rechazado, y arregla; el primer intento no lleva la correccion'] = {
+  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Reparar') 'reparar-test1'
+  Igual 'sale con 0 (el reintento arregla)' 0 $r.Codigo
+  Igual 'dos llamadas' 2 (Llamadas-Reparar $e).Count
+  $uno = @(Registros-Reparar $e 1)[0]
+  $dos = @(Registros-Reparar $e 2)[0]
+  Comprueba 'el primer prompt no lleva la correccion' ($uno -notmatch 'CORRECCI') ''
+  Comprueba 'el segundo si, con el test que toco' ($dos -match 'CORRECCI' -and $dos -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') ''
+  Comprueba 'y con el diff que se rechazo (el cambio de regla.txt y el del test)' ($dos -match 'diff --git a/src/main/resources/regla\.txt' -and $dos -match '\+minimo=5\.00' -and $dos -match 'diff --git a/src/test/java/com/acme/nuevo/ReglaTest\.java') ''
+  Igual 'un commit nuevo' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  Igual 'sin tocar el test' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" (Lee $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java')
+  Igual 'la entrada dice arreglado con dos intentos' 'arreglado 2' ((@(Reparaciones $e)[0]).resultado + ' ' + (@(Reparaciones $e)[0]).intentos)
+}
+
+$Pruebas['m25 (h) -Reparar: relanzar con el mismo HEAD y la tarea atascada no llama a Copilot y lo dice'] = {
+  $e = Escenario-M25 'm25-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e @('-Reparar') 'reparar-test'
+  Igual 'la primera vez sale con 2' 2 $r.Codigo
+  $n = (Llamadas-Reparar $e).Count
+  Igual 'con dos llamadas' 2 $n
+  $motivo = (@(Reparaciones $e)[0]).motivo
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'al relanzar sale con 2' 2 $r.Codigo
+  Igual 'sin ninguna llamada nueva a reparar' $n (Llamadas-Reparar $e).Count
+  Comprueba 'la consola dice que ya esta probado en este commit' ($r.Salida -match 'ya probado en este commit') (Cola $r.Salida)
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones sigue con una entrada, no arreglada' 'no arreglado' $rep[0].resultado
+  Comprueba 'con el motivo de antes tras lo de ya probado' ($rep[0].motivo -match '^ya probado en este commit: ' -and $rep[0].motivo.Contains(($motivo -split "`n")[0])) $rep[0].motivo
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
