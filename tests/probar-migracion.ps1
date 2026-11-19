@@ -6065,7 +6065,8 @@ function M34b-Filas([string]$Html) {
   return $r
 }
 
-function M34b-Resumen([string]$Html) { return [regex]::Match((M34b-SinCss $Html), '(?s)<div class="m34-resumen".*?</div>').Value }
+# Las cajas del resumen (una en Probado ejecutando los dos, otra en Leido por la IA), una detras de otra.
+function M34b-Resumen([string]$Html) { return (@([regex]::Matches((M34b-SinCss $Html), '(?s)<div class="m34-resumen".*?</div>') | ForEach-Object { $_.Value }) -join "`n") }
 
 $Pruebas['m34b (a) con la cobertura de los casos cada fila lleva su etiqueta (salio distinto, salio igual o ningun caso lo recorre) y las primeras filas van, dentro de cada estado, ejecutado-distinto, sin-ejecutar, las sin etiqueta y ejecutado-igual'] = {
   $x = M34b-Salida 'm34b-a' (M34b-Cobertura)
@@ -6102,13 +6103,12 @@ $Pruebas['m34b (b) una linea que esta en igual y en distinto sale ejecutado-dist
   Comprueba 'lo mismo con la linea 12, que es un rango de un solo numero en las dos listas' ($f2.Count -eq 1 -and $f2[0].Html -match 'm34-ejec-distinto' -and $f2[0].Html -notmatch 'm34-ejec-igual') ($f2.Html -join ' ')
 }
 
-$Pruebas['m34b (c) el resumen de arriba: el porcentaje de lineas que recorren los casos (cada linea una vez) y, de los datos que la IA no dio por iguales, cuantos ejecuto un caso que salio igual y cuantos no recorre ninguno'] = {
+$Pruebas['m34b (c) el resumen: el porcentaje de lineas que recorren los casos (cada linea una vez) y, de los datos que la IA no dio por iguales, cuantos ejecuto un caso que salio igual y cuantos no recorre ninguno'] = {
   $x = M34b-Salida 'm34b-c' (M34b-Cobertura)
   $r = M34b-Resumen $x.P3
   Comprueba 'hay un resumen' ($r.Length -gt 0)
   Comprueba 'dice que los casos recorren el 25 % de las lineas del original (16 de 64)' ($r -match 'Los casos recorren el 25 % de las l.neas del original\.') $r
   Comprueba 'de los 8 datos sin dar por iguales, 3 los ejecuto un caso que salio igual y 2 no los recorre ninguno (la 15 no cuenta en ninguno)' ($r -match 'De los 8 datos que la IA no ha podido dar por iguales \(distinto, falta o no lo s.\), 3 los ejecut. un caso que sali. igual en los dos; 2 no los recorre ning.n caso: empieza por esos\.') $r
-  Comprueba 'el resumen va arriba, antes de la prueba en local y de la lectura de la IA' ((M34b-SinCss $x.P3).IndexOf('m34-resumen') -gt 0 -and (M34b-SinCss $x.P3).IndexOf('m34-resumen') -lt (M34b-SinCss $x.P3).IndexOf('id="prueba-local"'))
   $g = M34b-Cobertura
   $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].igual = '12,40,70-71'
   $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].distinto = ''
@@ -6138,6 +6138,8 @@ $Pruebas['m34b (e) con estado no medido la pagina dice el motivo (escapado), no 
   Comprueba 'hay una frase con el motivo, con el HTML escapado y sin un punto de mas al final' ($r.Length -gt 0 -and $r.Contains((Html 'no hay .exec: <script>alert(1)</script> & "x"') + '.</p>')) $r
   Comprueba 'y no dice cuanto recorren los casos ni da numeros' ($r -notmatch ' % ' -and $r -notmatch 'empieza por esos') $r
   Comprueba 'sin <script> en la pagina' ((M34b-SinCss $x.P3) -notmatch '(?i)<script')
+  Igual 'una sola caja, la de Probado ejecutando los dos, y ninguna en Leido por la IA' 1 ([regex]::Matches((M34b-SinCss $x.P3), '<div class="m34-resumen"').Count)
+  Comprueba 'justo despues del titulo de Probado ejecutando los dos' ((M34b-SinCss $x.P3) -match '(?s)<section class="panel" id="prueba-local"[^>]*>\s*<h2 id="t-prueba-local">[^<]*</h2>\s*<div class="m34-resumen"[^>]*>\s*<p>No se ha medido')
   Comprueba 'ninguna fila lleva etiqueta' ((M34b-SinCss $x.P3) -notmatch 'm34-ejec|Ejecutado:|Ning.n caso lo recorre')
   Igual 'y las filas son las de sin JSON, las mismas y en el mismo orden' ((@(M34b-Filas $sin.P3) | ForEach-Object { $_.Html }) -join "`n") ((@(M34b-Filas $x.P3) | ForEach-Object { $_.Html }) -join "`n")
   $y = M34b-Resumen (M34b-Salida 'm34b-e-vacio' (M34b-Cobertura 'no medido' '')).P3
@@ -6184,6 +6186,21 @@ $Pruebas['m34b (i) portada, Que es cada fichero: datos/prueba-local-cobertura.js
   $x = M34b-Salida 'm34b-i' (M34b-Cobertura)
   $f = [regex]::Match($x.I, '(?s)<ul class="ficheros">.*?</ul>').Value
   Comprueba 'con el JSON sale con su frase, que dice de donde salen las etiquetas y el resumen de la pagina 3' ($f -match '(?s)<li>(?:(?!</li>).)*<code>datos/prueba-local-cobertura\.json</code></p><p>[^<]{20,}</p>' -and $f -match 'prueba-local-cobertura\.json</code></p><p>[^<]*Ejecutado[^<]*p.gina 3') $f
+}
+
+$Pruebas['m34b (j) el sitio de las cajas: lo que recorren los casos, al principio de Probado ejecutando los dos y justo tras su titulo; los datos que la IA no dio por iguales, en Leido por la IA tras su parrafo de explicacion y antes del primer job; ninguna en la cabecera'] = {
+  $x = M34b-Salida 'm34b-j' (M34b-Cobertura)
+  $p = M34b-SinCss $x.P3
+  Igual 'dos cajas, ni mas ni menos' 2 ([regex]::Matches($p, '<div class="m34-resumen"').Count)
+  $c1 = [regex]::Match($p, '(?s)<section class="panel" id="prueba-local"[^>]*>\s*<h2 id="t-prueba-local">[^<]*</h2>\s*(<div class="m34-resumen".*?</div>)').Groups[1].Value
+  Comprueba 'la primera, dentro de Probado ejecutando los dos y justo tras su titulo, dice lo que recorren los casos y nada mas' ($c1 -match 'Los casos recorren el 25 %' -and $c1 -notmatch 'De los ') $c1
+  $c2 = [regex]::Match($p, '(?s)id="t-leido-ia".*?citas existen en los ficheros\.</p>\s*(<div class="m34-resumen".*?</div>)\s*<section class="prob-grupo comp-grupo" id="comp-').Groups[1].Value
+  Comprueba 'la segunda, en Leido por la IA tras su parrafo de explicacion y antes del primer job, dice los datos y nada mas' ($c2 -match 'De los 8 datos' -and $c2 -notmatch 'Los casos recorren') $c2
+  Comprueba 'la cabecera de la pagina no lleva ninguna' ($p -notmatch '(?s)<header class="cab-prob">(?:(?!</header>).)*m34-resumen')
+  Comprueba 'las dos son la misma caja, cada una con su id' ($c1 -match 'class="m34-resumen" id="m34-recorren"' -and $c2 -match 'class="m34-resumen" id="m34-dudosos"')
+  $todos = @{ V = @('igual', 'igual', 'igual', 'igual', 'igual', 'igual', 'igual'); L = @('igual', 'igual', 'igual') }
+  $z = M34b-SinCss (M34b-Salida 'm34b-j-igual' (M34b-Cobertura) $null $todos).P3
+  Comprueba 'si la IA dio todo por igual, "no ha dejado ningun dato" va en la caja de Leido por la IA' ($z -match '(?s)id="t-leido-ia".*?<div class="m34-resumen"[^>]*>\s*<p>La IA no ha dejado ning.n dato')
 }
 
 # ================================ LANZADOR ================================
