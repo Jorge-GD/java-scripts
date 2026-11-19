@@ -1,18 +1,18 @@
 <#
 informe.ps1 - Las paginas HTML del informe de migracion: la portada (index.html), que hace el batch original
-(1-batch-original.html), los problemas del migrado (2-problemas.html), el original frente al migrado (3-original-vs-migrado.html)
-y que se ha corregido (4-correcciones.html). Las monta el script con los datos de datos\ (sin IA,
+(1-batch-original.html), los problemas del migrado (2-problemas.html), el original frente al migrado (3-original-vs-migrado.html),
+lo que se ha corregido (4-correcciones.html) y las buenas practicas del migrado (5-buenas-practicas.html). Las monta el script con los datos de datos\ (sin IA,
 sin JavaScript y sin nada externo: se abren con doble clic). Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito: todo el texto
 que ve la persona (con sus acentos) esta en las plantillas de informe\ (marco.html, index.html,
-1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html; estilo.css se incrusta dentro de cada pagina).
+1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html, 4-correcciones.html y 5-buenas-practicas.html; estilo.css se incrusta dentro de cada pagina).
 Se carga con '. (Join-Path $PSScriptRoot 'informe.ps1')' despues de comun.ps1 y tareas.ps1, desde migracion.ps1 o
 desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
     Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, lanzadores.json, fichas-sh\, comparacion-sh\, jobs\, resumen.json, pruebas\, comparacion\, variables.json,
-    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md, correcciones.json y prueba-local.json) y escribe
-    <Salida>\index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html con lo que haya. Un dato que falta (una fase sin hacer)
+    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md, correcciones.json, prueba-local.json y practicas-<Cuando>.json) y escribe
+    <Salida>\index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html, 4-correcciones.html y 5-buenas-practicas.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
 
@@ -52,11 +52,12 @@ $TextosBuild = @(
 # Los ficheros de la carpeta del informe: ruta, trozo que lo explica, icono y si es una pagina del informe
 $FicherosInforme = @(
   @('index.html', 'f-index', 'f-fichero', $true), @('1-batch-original.html', 'f-original', 'f-fichero', $true), @('2-problemas.html', 'f-problemas', 'f-fichero', $true),
-  @('3-original-vs-migrado.html', 'f-comparar', 'f-fichero', $true), @('4-correcciones.html', 'f-correcciones', 'f-fichero', $true),
+  @('3-original-vs-migrado.html', 'f-comparar', 'f-fichero', $true), @('4-correcciones.html', 'f-correcciones', 'f-fichero', $true), @('5-buenas-practicas.html', 'f-practicas', 'f-fichero', $true),
   @('datos', 'f-datos', 'f-carpeta', $false), @('datos/estado.json', 'f-estado', 'f-fichero', $false),
   @('datos/hallazgos-antes.json', 'f-hallazgos', 'f-fichero', $false), @('datos/diagnostico-antes.md', 'f-diagnostico', 'f-fichero', $false),
   @('datos/hallazgos-despues.json', 'f-hallazgos-despues', 'f-fichero', $false), @('datos/diagnostico-despues.md', 'f-diagnostico-despues', 'f-fichero', $false),
   @('datos/cobertura-antes.json', 'f-cobertura-antes', 'f-fichero', $false), @('datos/cobertura-despues.json', 'f-cobertura-despues', 'f-fichero', $false),
+  @('datos/practicas-antes.json', 'f-practicas-antes-json', 'f-fichero', $false), @('datos/practicas-despues.json', 'f-practicas-despues-json', 'f-fichero', $false),
   @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false), @('datos/prueba-local.json', 'f-prueba-local-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
   @('datos/variables.json', 'f-variables', 'f-fichero', $false), @('datos/jobs', 'f-jobs', 'f-carpeta', $false),
@@ -66,7 +67,8 @@ $FicherosInforme = @(
   @('datos/tareas', 'f-tareas', 'f-carpeta', $false), @('registros', 'f-registros', 'f-carpeta', $false),
   @('registros/correccion.log', 'f-correccion-log', 'f-fichero', $false), @('prueba-local', 'f-prueba-local', 'f-carpeta', $false),
   @('registros/prueba-local.log', 'f-prueba-local-log', 'f-fichero', $false),
-  @('registros/cobertura-antes.log', 'f-cobertura-antes-log', 'f-fichero', $false), @('registros/cobertura-despues.log', 'f-cobertura-despues-log', 'f-fichero', $false)
+  @('registros/cobertura-antes.log', 'f-cobertura-antes-log', 'f-fichero', $false), @('registros/cobertura-despues.log', 'f-cobertura-despues-log', 'f-fichero', $false),
+  @('registros/practicas-antes.log', 'f-practicas-antes-log', 'f-fichero', $false), @('registros/practicas-despues.log', 'f-practicas-despues-log', 'f-fichero', $false)
 )
 
 # ================================ PLANTILLAS ================================
@@ -286,6 +288,7 @@ function Read-DatosInforme([string]$Salida) {
     Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos); Despues = (Read-Diagnostico $datos 'despues')
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json')); PruebaLocal = (Read-JsonSuave (Join-Path $datos 'prueba-local.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
+    Practicas = (Read-Practicas $datos)
     Comparacion = (Read-Comparaciones $datos)
     Lanzadores = @(); LanzadoresLeidos = $false
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
@@ -1315,6 +1318,221 @@ function Get-CuerpoCorrecciones($D, $T, [string]$Cuerpo) {
   return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); CORRECCION = $pagina })
 }
 
+# ============================== LAS BUENAS PRACTICAS (PAGINA 5) ==============================
+# El orden de las areas y de los "que hago" es el de la maqueta: primero lo que tiene que hacer la persona.
+$AreasPractica = @('java21', 'boot3-batch5', 'lombok', 'arquitectura')
+$QueHagoPractica = @('mano', 'paso2', 'sonar', 'notoca')
+
+# datos\practicas-despues.json si existe y se lee y, si no, datos\practicas-antes.json (otro que falte o este roto equivale a no tenerlo). $null si no hay ninguno.
+function Read-Practicas([string]$Datos) {
+  foreach ($cuando in @('despues', 'antes')) {
+    $p = Read-JsonSuave (Join-Path $Datos "practicas-$cuando.json")
+    if ($p) { return $p }
+  }
+  return $null
+}
+
+# Las incidencias del JSON con lo que las vistas necesitan: Area, Que (un queHago que no se conoce es "mano": todo lo demas), ConSonar
+# (origen sonar o spotbugs: el Sonar del equipo tambien lanza SpotBugs) e I, la incidencia tal cual.
+function Get-IncidenciasPractica($P) {
+  $r = @()
+  foreach ($i in @($P.incidencias)) {
+    if ($null -eq $i) { continue }
+    $que = [string]$i.queHago
+    if ($QueHagoPractica -cnotcontains $que) { $que = 'mano' }
+    $r += [pscustomobject]@{ Area = [string]$i.area; Que = $que; ConSonar = (@('sonar', 'spotbugs') -ccontains [string]$i.origen); I = $i }
+  }
+  return $r
+}
+
+# Las areas conocidas y, al final, las que traiga el JSON y la pagina no conozca.
+function Get-AreasPractica($Incs) {
+  $r = @($AreasPractica)
+  foreach ($x in @($Incs)) { if ($r -cnotcontains $x.Area) { $r += $x.Area } }
+  return $r
+}
+
+# El nombre o la explicacion de un area ($Trozo = 'bp-area' o 'bp-area-expl'): el de la plantilla o, si no lo tiene, el identificador (o nada).
+function Get-TextoAreaPractica($T, [string]$Id, [bool]$Explicacion) {
+  if ($Explicacion) {
+    if ($T.ContainsKey("bp-area-$Id-expl")) { return (Format-Trozo $T "bp-area-$Id-expl") }
+    return ''
+  }
+  if ($T.ContainsKey("bp-area-$Id")) { return (Format-Trozo $T "bp-area-$Id") }
+  return (ConvertTo-TextoHtml $Id)
+}
+
+# fichero:linea con un <wbr> detras de cada / (la ruta no se parte a mitad de palabra); sin linea, solo el fichero.
+function Get-DondePractica($T, $I) {
+  $d = ((([string]$I.fichero).Split('/') | ForEach-Object { ConvertTo-TextoHtml $_ }) -join (Format-Trozo $T 'bp-barra'))
+  if ([int]$I.linea -gt 0) { $d += ':' + [int]$I.linea }
+  return $d
+}
+
+function Get-OrigenPractica($T, $I) {
+  if ($I.origen -ceq 'sonar') { return (Format-Trozo $T 'bp-origen-sonar' @{ CLAVE = [string]$I.sonar }) }
+  if ($I.origen -ceq 'spotbugs') { return (Format-Trozo $T 'bp-origen-spotbugs') }
+  return (Format-Trozo $T 'bp-origen-referencia')
+}
+
+# Una incidencia: donde esta, de donde sale, la regla, lo que dice y, aparte, $Extra (en la vista por "que hago", el area; en la otra, el "que hago").
+function Get-FilaPractica($T, $X, [string]$Extra) {
+  return (Format-Trozo $T 'bp-fila' @{
+      QUE = $X.Que; DONDE = (Get-DondePractica $T $X.I); ORIGEN = (Get-OrigenPractica $T $X.I)
+      REGLA = ([string]$X.I.herramienta + ' ' + [string]$X.I.regla); TEXTO = [string]$X.I.texto; EXTRA = $Extra
+    })
+}
+
+function Get-GrupoPractica($T, [string]$Id, [string]$Titulo, [string]$Explicacion, $Filas) {
+  return (Format-Trozo $T 'bp-grupo' @{ ID = $Id; TITULO = $Titulo; N = "$(@($Filas).Count)"; EXPLICACION = $Explicacion; FILAS = (@($Filas) -join "`n") })
+}
+
+# Las dos vistas de la misma lista: por "que hago" (el area va aparte en cada fila) y por area (el "que hago" va aparte). Un grupo sin incidencias no sale.
+function Get-VistaQuePractica($T, $Incs) {
+  $grupos = @()
+  foreach ($q in $QueHagoPractica) {
+    $filas = @()
+    foreach ($a in (Get-AreasPractica $Incs)) {
+      foreach ($x in @($Incs | Where-Object { $_.Que -ceq $q -and $_.Area -ceq $a })) { $filas += (Get-FilaPractica $T $x (Get-TextoAreaPractica $T $a $false)) }
+    }
+    if ($filas.Count -gt 0) { $grupos += (Get-GrupoPractica $T "gq-$q" (Format-Trozo $T "bp-queHago-$q") (Format-Trozo $T "bp-queHago-$q-expl") $filas) }
+  }
+  return ($grupos -join "`n")
+}
+
+function Get-VistaAreaPractica($T, $Incs) {
+  $grupos = @()
+  foreach ($a in (Get-AreasPractica $Incs)) {
+    $filas = @()
+    foreach ($q in $QueHagoPractica) {
+      foreach ($x in @($Incs | Where-Object { $_.Que -ceq $q -and $_.Area -ceq $a })) { $filas += (Get-FilaPractica $T $x (Format-Trozo $T "bp-queHago-$q")) }
+    }
+    if ($filas.Count -gt 0) { $grupos += (Get-GrupoPractica $T "ga-$a" (Get-TextoAreaPractica $T $a $false) (Get-TextoAreaPractica $T $a $true) $filas) }
+  }
+  return ($grupos -join "`n")
+}
+
+function Get-ListaPractica($T, $Incs) {
+  $et = Format-Trozo $T 'et-medido'
+  if (@($Incs).Count -eq 0) { return (Format-Trozo $T 'bp-lista-vacia' @{ ETIQUETA = $et }) }
+  $titulo = 'bp-lista-titulo-otros'
+  if (@($Incs).Count -eq 1) { $titulo = 'bp-lista-titulo-uno' }
+  return (Format-Trozo $T 'bp-lista' @{
+      TITULO = (Format-Trozo $T $titulo @{ N = "$(@($Incs).Count)" }); ETIQUETA = $et; QUE = (Get-VistaQuePractica $T $Incs); AREA = (Get-VistaAreaPractica $T $Incs)
+    })
+}
+
+# Un porcentaje de $Parte sobre $Todo con una cifra decimal (0 si no hay todo), con punto: va dentro de un estilo.
+function Get-PorcentajePractica($Parte, $Todo) {
+  if ([double]$Todo -le 0) { return 0 }
+  return [math]::Round([double]$Parte / [double]$Todo * 100, 1)
+}
+
+# Los cuatro indicadores de la maqueta; cada uno se dibuja distinto. El del .xlsx solo sale si el JSON trae sonar.xlsx.
+function Get-IndAreasPractica($T, $Incs) {
+  $areas = @(Get-AreasPractica $Incs)
+  $segmentos = @()
+  $ley = @()
+  $resumen = @()
+  foreach ($a in $areas) {
+    $n = @($Incs | Where-Object { $_.Area -ceq $a }).Count
+    $nombre = Get-TextoAreaPractica $T $a $false
+    if ($n -gt 0) { $segmentos += (Format-Trozo $T 'bp-ind-seg' @{ ID = $a; N = "$n" }) }
+    $ley += (Format-Trozo $T 'bp-ind-ley' @{ ID = $a; NOMBRE = $nombre; N = "$n" })
+    $resumen += (Format-Trozo $T 'bp-ind-resumen' @{ NOMBRE = $nombre; N = "$n" })
+  }
+  return (Format-Trozo $T 'bp-ind-areas' @{ TOTAL = "$(@($Incs).Count)"; RESUMEN = ($resumen -join ', '); SEGMENTOS = ($segmentos -join ''); LEYENDA = ($ley -join "`n") })
+}
+
+function Get-IndSonarPractica($T, $Incs) {
+  $total = @($Incs).Count
+  $s = @($Incs | Where-Object { $_.ConSonar }).Count
+  $c = 2 * [math]::PI * 42
+  $arco = 0
+  if ($total -gt 0) { $arco = [math]::Round($s / $total * $c, 1) }
+  return (Format-Trozo $T 'bp-ind-sonar' @{ TOTAL = "$total"; S = "$s"; R = "$($total - $s)"; C = "$([math]::Round($c, 1))"; ARCO = "$arco"; RESTO = "$([math]::Round($c - $arco, 1))" })
+}
+
+function Get-IndReglasPractica($T, $S) {
+  $pct = Get-PorcentajePractica $S.reglasAqui $S.reglasWay
+  return (Format-Trozo $T 'bp-ind-reglas' @{ AQUI = "$([int]$S.reglasAqui)"; WAY = "$([int]$S.reglasWay)"; PCT = "$pct"; PCT_TXT = "$pct".Replace('.', ',') })
+}
+
+function Get-IndXlsxPractica($T, $S) {
+  if (-not $S.xlsx) { return '' }
+  $x = $S.xlsx
+  return (Format-Trozo $T 'bp-ind-xlsx' @{ TOTAL = "$([int]$x.total)"; RESUELTAS = "$([int]$x.resueltas)"; SIGUEN = "$([int]$x.siguen)"; PCT = "$(Get-PorcentajePractica $x.resueltas $x.total)" })
+}
+
+function Get-IndicadoresPractica($T, $P, $Incs) {
+  $inds = @((Get-IndAreasPractica $T $Incs), (Get-IndSonarPractica $T $Incs), (Get-IndReglasPractica $T $P.sonar), (Get-IndXlsxPractica $T $P.sonar)) | Where-Object { $_ }
+  return @{ Html = (@($inds) -join "`n"); N = @($inds).Count }
+}
+
+# Una linea por cada detector que no midio (su estado y su motivo) y, si javac paro en 100 avisos, otra que dice "100 o mas". Sin ninguna, no hay seccion.
+function Get-DetectoresPractica($T, $P) {
+  $notas = @()
+  foreach ($d in @($P.detectores)) {
+    if ($null -eq $d) { continue }
+    $sin = Format-Trozo $T 'et-sin'
+    if ($d.corte -eq $true) { $notas += (Format-Trozo $T 'bp-det-corte' @{ ETIQUETA = $sin; ID = [string]$d.id }) }
+    if ([string]$d.estado -cne 'ok') {
+      $motivo = ''
+      if ($d.motivo) { $motivo = Format-Trozo $T 'bp-det-motivo' @{ MOTIVO = [string]$d.motivo } }
+      $notas += (Format-Trozo $T 'bp-det-estado' @{ ETIQUETA = $sin; ID = [string]$d.id; ESTADO = [string]$d.estado; MOTIVO = $motivo })
+    }
+  }
+  if ($notas.Count -eq 0) { return '' }
+  return (Format-Trozo $T 'bp-detectores' @{ NOTAS = ($notas -join "`n") })
+}
+
+# "Como leer lo de Sonar": las frases de la maqueta con las cifras del JSON.
+function Get-PanelSonarPractica($T, $P, $Incs) {
+  $total = @($Incs).Count
+  $con = @($Incs | Where-Object { $_.ConSonar }).Count
+  $ref = $total - $con
+  $frase = ''
+  foreach ($par in @(@('total', $total), @('con', $con), @('ref', $ref))) {
+    $forma = 'otros'
+    if ($par[1] -eq 1) { $forma = 'uno' }
+    $frase += Format-Trozo $T ('bp-sonar-' + $par[0] + '-' + $forma) @{ N = "$($par[1])" }
+  }
+  $xlsx = ''
+  if ($P.sonar.xlsx) { $xlsx = Format-Trozo $T 'bp-sonar-xlsx' @{ TOTAL = "$([int]$P.sonar.xlsx.total)"; RESUELTAS = "$([int]$P.sonar.xlsx.resueltas)"; SIGUEN = "$([int]$P.sonar.xlsx.siguen)" } }
+  return (Format-Trozo $T 'bp-sonar' @{ FRASE = $frase; ETIQUETA = (Format-Trozo $T 'et-sin'); AQUI = "$([int]$P.sonar.reglasAqui)"; WAY = "$([int]$P.sonar.reglasWay)"; XLSX = $xlsx })
+}
+
+# La cabecera de la pagina: que se midio, con que y cuando. Los detectores que midieron (ok) son "las herramientas".
+function Get-CabeceraPractica($D, $T, $P) {
+  $midieron = @(@($P.detectores) | Where-Object { $_ -and [string]$_.estado -ceq 'ok' } | ForEach-Object { Format-Trozo $T 'bp-herramienta' @{ ID = [string]$_.id } })
+  $herramientas = Format-Trozo $T 'bp-ninguno'
+  if ($midieron.Count -gt 0) { $herramientas = Format-Trozo $T 'bp-herramientas' @{ ITEMS = ($midieron -join "`n") } }
+  $cuando = 'bp-cuando-antes'
+  if ($P.cuando -ceq 'despues') { $cuando = 'bp-cuando-despues' }
+  return (Format-Trozo $T 'bp-cabecera' @{
+      SEGUNDOS = "$([math]::Round([double]$P.segundos, 1))".Replace('.', ','); CUANDO = (Format-Trozo $T $cuando); ETIQUETA = (Format-Trozo $T 'et-medido')
+      BATCH = (Get-BatchInforme $D); REFERENCIA = [string]$P.referencia; MEDIDO = (Get-TextoFecha $T $P.medido); PAQUETE = [string]$P.paquete; MIDIERON = $herramientas
+    })
+}
+
+function Get-CuerpoPracticas($D, $T, [string]$Cuerpo) {
+  $P = $D.Practicas
+  $cabecera = ''
+  $practicas = Format-Trozo $T 'bp-sin-datos' @{ ETIQUETA = (Format-Trozo $T 'et-sin') }
+  if ($P) {
+    $incs = @(Get-IncidenciasPractica $P)
+    $ind = Get-IndicadoresPractica $T $P $incs
+    $arq = ''
+    if ($null -eq $P.arquitectura) { $arq = Format-Trozo $T 'bp-arquitectura-sin' @{ ETIQUETA = (Format-Trozo $T 'et-sin') } }
+    $cabecera = Get-CabeceraPractica $D $T $P
+    $practicas = Format-Trozo $T 'bp-datos' @{
+      N_IND = "$($ind.N)"; INDICADORES = $ind.Html; DETECTORES = (Get-DetectoresPractica $T $P); SONAR = (Get-PanelSonarPractica $T $P $incs)
+      ARQUITECTURA = $arq; LISTA = (Get-ListaPractica $T $incs)
+    }
+  }
+  return (Expand-Plantilla $Cuerpo @{ BATCH = (Get-BatchInforme $D); CABECERA = $cabecera; PRACTICAS = $practicas })
+}
+
 # ============================== EL SIGUIENTE PASO ==============================
 # Un valor en la linea de comandos: tal cual si es una palabra sencilla (un modelo, una rama) y, si no, entre comillas.
 function Format-ArgComando([string]$Valor) {
@@ -1462,12 +1680,13 @@ function Write-Informes {
     @{ Fichero = '1-batch-original.html'; Actual = 'ACTUAL_ORIGINAL'; Titulo = 'titulo-original'; Cuerpo = { param($D, $T, $C) Get-CuerpoOriginal $D $T $C } },
     @{ Fichero = '2-problemas.html'; Actual = 'ACTUAL_PROBLEMAS'; Titulo = 'titulo-problemas'; Cuerpo = { param($D, $T, $C) Get-CuerpoProblemas $D $T $C } },
     @{ Fichero = '3-original-vs-migrado.html'; Actual = 'ACTUAL_COMPARAR'; Titulo = 'titulo-comparar'; Cuerpo = { param($D, $T, $C) Get-CuerpoComparar $D $T $C } },
-    @{ Fichero = '4-correcciones.html'; Actual = 'ACTUAL_CORRECCIONES'; Titulo = 'titulo-correcciones'; Cuerpo = { param($D, $T, $C) Get-CuerpoCorrecciones $D $T $C } }
+    @{ Fichero = '4-correcciones.html'; Actual = 'ACTUAL_CORRECCIONES'; Titulo = 'titulo-correcciones'; Cuerpo = { param($D, $T, $C) Get-CuerpoCorrecciones $D $T $C } },
+    @{ Fichero = '5-buenas-practicas.html'; Actual = 'ACTUAL_PRACTICAS'; Titulo = 'titulo-practicas'; Cuerpo = { param($D, $T, $C) Get-CuerpoPracticas $D $T $C } }
   )
   foreach ($p in $paginas) {
     $plantilla = Split-Plantilla (Read-PlantillaInforme $p.Fichero)
     $T = Merge-Trozos $marco.Trozos $plantilla.Trozos
-    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = ''; ACTUAL_COMPARAR = ''; ACTUAL_CORRECCIONES = '' }
+    $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = ''; ACTUAL_COMPARAR = ''; ACTUAL_CORRECCIONES = ''; ACTUAL_PRACTICAS = '' }
     $v[$p.Actual] = Format-Trozo $T 'actual'
     Save-PaginaInforme (Join-Path $Salida $p.Fichero) (Expand-Plantilla $marco.Cuerpo $v)
   }

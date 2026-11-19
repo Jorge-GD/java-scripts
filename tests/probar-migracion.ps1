@@ -5782,7 +5782,7 @@ $Pruebas['bp2 (e) con practicas-despues.json se pinta ese y no el de antes; sin 
   $n = Bp2-Salida 'bp2-ninguno'
   Comprueba 'sin ninguno: la pagina existe' ($n.P5.Length -gt 0)
   Comprueba 'dice que no se ha medido y por que: el diagnostico no ha llegado ahi' ($n.P5 -match 'no se han medido las buenas pr.cticas' -and $n.P5 -match 'el diagn.stico no ha llegado')
-  Comprueba 'y no pinta indicadores, ni lista, ni detectores' ($n.P5 -notmatch 'bp-ind-fila' -and $n.P5 -notmatch 'id="lista"' -and $n.P5 -notmatch 'id="detectores"')
+  Comprueba 'y no pinta indicadores, ni lista, ni detectores' ($n.P5 -notmatch 'class="bp-ind-fila' -and $n.P5 -notmatch 'id="lista"' -and $n.P5 -notmatch 'id="detectores"')
   Igual 'con su navegacion y un solo h1' 1 ([regex]::Matches($n.P5, '<h1').Count)
   Comprueba 'con su navegacion: el enlace actual es el suyo' ($n.P5 -match 'href="5-buenas-practicas\.html" aria-current="page"')
   # un JSON que no se lee equivale a no tenerlo
