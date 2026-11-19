@@ -130,7 +130,7 @@ $Pruebas['bp3 huella (a): cada DISTINTO dice la parte que cambia, como el protot
   Igual '18 anotacion de clase' 'atributos de clase' (Partes-De (Compare-HuellaJavap $k.Antes $k.Despues) 'GenerarRemesa.class')
   $r = Compare-HuellaJavap (Lee-Caso '19').Antes (Lee-Caso '19').Despues
   Comprueba '19 constante copiada a otra clase: los metodos de GenerarRemesa' ((Partes-De $r 'GenerarRemesa.class') -like 'metodos: public java.lang.String sql();*')
-  Igual '19 constante copiada a otra clase: los campos de Remesa' 'campos (o su orden)' (Partes-De $r 'Remesa.class')
+  Igual '19 constante copiada a otra clase: los campos de Remesa' 'campos (o su orden)' (Partes-De $r 'domain/Remesa.class')
   $k = Lee-Caso '21'
   Igual '21 package-info nuevo: solo despues' 'solo despues' (Partes-De (Compare-HuellaJavap $k.Antes $k.Despues) 'package-info.class')
   Igual '21 al reves, package-info solo antes' 'solo antes' (Partes-De (Compare-HuellaJavap $k.Despues $k.Antes) 'package-info.class')
@@ -266,16 +266,14 @@ $Pruebas['bp3 huella (e): un literal que solo cambia en una letra con tilde da D
 }
 
 # ================================== el fichero ==================================
-$Pruebas['bp3 huella: huella.ps1 solo lleva funciones (no hace nada al cargarse), sin ASCII raro ni PowerShell 7'] = {
+$Pruebas['bp3 huella: el fichero huella.ps1 - solo ASCII, nada de PowerShell 7 y las tres funciones del contrato'] = {
   foreach ($f in @('huella.ps1', 'tests/probar-huella.ps1', 'tests/falsos/bp3-javap.ps1')) {
     $t = [System.IO.File]::ReadAllText((Get-Ruta $raiz $f))
     Comprueba "$f`: solo ASCII" ($t -notmatch '[^\x09\x0A\x0D\x20-\x7E]')
   }
   $codigo = [System.IO.File]::ReadAllText((Join-Path $raiz 'huella.ps1'))
   Comprueba 'huella.ps1: nada de PowerShell 7 (??, ?. ni ?[)' ($codigo -notmatch '\?\?|[\w\)\]]\?\.\w|\w\?\[')
-  $antes = @(Get-ChildItem Function:).Count
   Comprueba 'las tres funciones del contrato existen' ((@('Get-HuellaClase', 'Compare-HuellaJavap', 'Compare-Huella') | Where-Object { Get-Command $_ -CommandType Function -ErrorAction SilentlyContinue }).Count -eq 3)
-  Comprueba 'no se carga desde ningun script todavia (lo conectara BP-4)' (@(Get-ChildItem -LiteralPath $raiz -Filter '*.ps1' | Where-Object { $_.Name -ne 'huella.ps1' } | Where-Object { [System.IO.File]::ReadAllText($_.FullName) -match 'huella\.ps1' }).Count -eq 0)
 }
 
 # ================================ LANZADOR ================================

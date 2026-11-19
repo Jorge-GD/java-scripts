@@ -2,14 +2,13 @@
 # cuyo contenido ES el texto de 'javap -v -p'. Por cada uno escribe 'Classfile <ruta>' y ese texto, como el javap real (los bytes tal cual,
 # sin recodificar). Lo que lee del entorno:
 #   BP3_JAVAP_LOG  un fichero: cada llamada deja una linea '<clases>|<largo de la linea de comandos>|<opciones>'
-#   BP3_JAVAP_RC   el codigo de salida (y no escribe nada); con 0, o sin ella, escribe todas las clases
+#   BP3_JAVAP_RC   el codigo de salida, despues de escribir las clases (un javap que falla pero ha escrito algo); sin ella, 0
 #   BP3_JAVAP_SALTA  un numero: no escribe la clase de ese orden (la 1.a es la 1), como un javap que se salta una
 $clases = @($args | Where-Object { $_ -and -not "$_".StartsWith('-') })
 $opciones = @($args | Where-Object { $_ -and "$_".StartsWith('-') })
 if ($env:BP3_JAVAP_LOG) {
   [System.IO.File]::AppendAllText($env:BP3_JAVAP_LOG, ("$($clases.Count)|$([Environment]::CommandLine.Length)|$($opciones -join ' ')`n"))
 }
-if ($env:BP3_JAVAP_RC) { exit [int]$env:BP3_JAVAP_RC }
 $salida = [Console]::OpenStandardOutput()
 $n = 0
 foreach ($c in $clases) {
@@ -21,4 +20,4 @@ foreach ($c in $clases) {
   $salida.Write($cuerpo, 0, $cuerpo.Length)
 }
 $salida.Flush()
-exit 0
+exit [int]$env:BP3_JAVAP_RC
