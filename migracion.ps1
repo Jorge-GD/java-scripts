@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, analisis.ps1, practicas.ps1, huella.ps1, arreglo-practicas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\, informe\ y analisis\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, analisis.ps1, practicas.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\, informe\ y analisis\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -61,6 +61,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 queda con el cambio de un fichero si lo compilado queda igual que antes (arreglo-practicas.ps1): un commit por
                 fichero; datos\practicas-arreglos.json. Sin -Practicas la fase no existe. Si el pom no usa Lombok, avisa y no
                 llama a nadie
+    reglas      solo con -Reglas, despues de practicas y antes de prueba-local: un test unitario por clase con un caso por cada regla de
+                negocio que la comparacion da por igual (tests-reglas.ps1). El script cambia la linea de cada regla (un operador) y solo
+                se queda con el test si falla con el cambio: un commit por test; datos\tests-reglas.json. Sin -Reglas la fase no existe
     prueba-local  prueba-local.ps1 -Si (con el mismo modelo, y -JavaLegacy si lo das) ejecuta el original y el migrado con las
                 mismas entradas: datos\prueba-local.json y registros\prueba-local.log; su salida sale por la consola mientras
                 corre. Siempre se lanza (al relanzar reutiliza lo hecho) salvo con -SinPruebaLocal. Un fallo se avisa y la
@@ -88,6 +91,7 @@ USO
   .\migracion.ps1 ... -Limite 5        # ensayo corto: solo las 5 primeras tareas pendientes
   .\migracion.ps1 ... -Reintentar      # vuelve a llamar a las tareas atascadas de antes
   .\migracion.ps1 ... -Practicas       # antes de la prueba en local, pasa a Lombok los getters y setters escritos a mano (un commit por fichero)
+  .\migracion.ps1 ... -Reglas          # antes de la prueba en local, un test unitario por regla de negocio, comprobado cambiando su linea (un commit por test)
   .\migracion.ps1 ... -SinPruebaLocal # no hace la ultima fase (ejecutar el original y el migrado)
   .\migracion.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original para prueba-local.ps1, si no compila con el de Maven
   .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
@@ -109,6 +113,7 @@ param(
   [int]$Limite = 0,           # 0 = sin limite; N = en este lanzamiento solo las N primeras tareas pendientes
   [switch]$Reintentar,        # volver a intentar las tareas atascadas de un lanzamiento anterior
   [switch]$Practicas,         # antes de la prueba en local, pasar a Lombok los getters y setters escritos a mano (la fase practicas)
+  [switch]$Reglas,            # antes de la prueba en local, escribir un test unitario por cada regla de negocio (la fase reglas)
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
   [string]$JavaLegacy = '',   # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
   [string]$Lanzadores = ''    # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
@@ -122,6 +127,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'practicas.ps1')
 . (Join-Path $PSScriptRoot 'huella.ps1')
 . (Join-Path $PSScriptRoot 'arreglo-practicas.ps1')
+. (Join-Path $PSScriptRoot 'tests-reglas.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -735,6 +741,7 @@ try {
     if ($sigue -and $respuesta -eq 'corregir') { $sigue = Invoke-FaseTareas 'comparar' }
   }
   if ($sigue -and $Practicas) { $sigue = Invoke-FasePracticas $conservar }
+  if ($sigue -and $Reglas) { $sigue = Invoke-FaseReglas $conservar }
   if ($sigue) {
     Invoke-FasePruebaLocal
     $Estado['fase'] = 'hecha'
