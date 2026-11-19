@@ -1715,7 +1715,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1947,7 +1947,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
@@ -5582,6 +5582,38 @@ $Pruebas['m27 pagina 4: las tres ordenes de git, cada una en su linea con git -C
   Comprueba 'borrar: worktree remove del worktree, al acabar con prueba-local.ps1, y la rama se conserva' ($lineas[2] -match ('^git -C "[^"]+" worktree remove "' + [regex]::Escape((Html $st.worktree)) + '"\s+# borrar el worktree cuando acabes con prueba-local\.ps1 \(la rama se conserva\)$')) $lineas[2]
   Comprueba 'antes de ellas, la frase que dice que se copia cada linea entera' ($co -match 'Copia cada l.nea entera; lo que va detr.s de <code>#</code> es solo la explicaci.n') $co
   Comprueba 'sigue sin JavaScript ni nada externo' ($x.P4 -notmatch '(?i)<script' -and $x.P4 -notmatch 'https?://')
+}
+
+$Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus cinco detectores; relanzar no lo repite y una medida que falla no para la migracion'] = {
+  $e = Nuevo-Escenario 'bp0-prac' @('Clase1') @{ MvnExe = (Join-Path $falsos 'analisis-mvn.ps1') }
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $ruta = Get-Ruta $e.Out 'datos/practicas-antes.json'
+  $p = Lee-Json $ruta
+  Comprueba 'existe datos/practicas-antes.json' ($null -ne $p) (Cola $r.Salida)
+  if ($null -eq $p) { return }
+  Igual 'version y cuando' '1 antes' "$($p.version) $($p.cuando)"
+  Igual 'los cinco detectores, en el orden del formato' 'javac pmd spotbugs lombok-a-mano lombok-qualifier' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
+  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok ok ok no aplica ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
+  Igual 'las 9 incidencias de PMD y SpotBugs (los XML de mentira), todas java21' 9 @($p.incidencias | Where-Object { $_.area -ceq 'java21' }).Count
+  Comprueba 'su registro esta en registros/practicas-antes.log' (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/practicas-antes.log'))
+  Comprueba 'la consola dice las buenas practicas' ($r.Salida -match 'Buenas practicas \(antes\): 9 incidencias \(java21: 9\)') (Cola $r.Salida)
+  Comprueba 'hallazgos-antes.json sigue siendo lo ultimo del diagnostico: esta' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json'))
+  Comprueba 'no hay practicas de despues (no se corrigio)' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/practicas-despues.json')))
+  # relanzar no repite el diagnostico y, con el, tampoco la medida
+  $h = Hash-De $ruta
+  $r2 = Migra $e (Basicos $e)
+  Igual 'el segundo lanzamiento sale con 0' 0 $r2.Codigo
+  Igual 'practicas-antes.json no cambia' $h (Hash-De $ruta)
+  # una medida que falla (no se puede escribir el JSON) no para la migracion
+  $f = Nuevo-Escenario 'bp0-falla' @('Clase1') @{ MvnExe = (Join-Path $falsos 'analisis-mvn.ps1') }
+  [void](New-Item -ItemType Directory -Path (Get-Ruta $f.Out 'datos/practicas-antes.json.tmp') -Force)
+  $rf = Migra $f (Basicos $f)
+  Igual 'con la medida rota, la migracion sale con 0' 0 $rf.Codigo
+  Comprueba 'dice que no ha podido escribir practicas-antes.json' ($rf.Salida -match 'no he podido escribir .*practicas-antes\.json') (Cola $rf.Salida)
+  Comprueba 'no hay practicas-antes.json' (-not (Test-Path -LiteralPath (Get-Ruta $f.Out 'datos/practicas-antes.json') -PathType Leaf))
+  Comprueba 'el diagnostico sigue: hay hallazgos-antes.json y cobertura-antes.json' ((Test-Path -LiteralPath (Get-Ruta $f.Out 'datos/hallazgos-antes.json')) -and (Test-Path -LiteralPath (Get-Ruta $f.Out 'datos/cobertura-antes.json')))
+  Comprueba 'y la portada se hizo' (Test-Path -LiteralPath (Get-Ruta $f.Out 'index.html'))
 }
 
 # ================================ LANZADOR ================================

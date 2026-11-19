@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, analisis.ps1, practicas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\, informe\ y analisis\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -110,6 +110,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'tareas.ps1')
 . (Join-Path $PSScriptRoot 'informe.ps1')
 . (Join-Path $PSScriptRoot 'lanzadores.ps1')
+. (Join-Path $PSScriptRoot 'analisis.ps1')
+. (Join-Path $PSScriptRoot 'practicas.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -188,7 +190,9 @@ function Select-Modelo {
 # ================================= FASES =================================
 # El diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y sus hallazgos se copian a datos\ como
 # hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
-# tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile). Si el motor falla, parada 'motor'
+# tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile) y las buenas practicas
+# (datos\practicas-<Cuando>.json y su registro, con Invoke-Practicas de practicas.ps1: javac, Lombok, PMD y SpotBugs, hasta
+# $Cfg.SegundosPracticas s; nunca para el diagnostico: lo que no se pueda medir lo dice el JSON). Si el motor falla, parada 'motor'
 # y devuelve $false.
 function Invoke-DiagnosticoMotor([string]$Cuando) {
   $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
@@ -211,6 +215,8 @@ function Invoke-DiagnosticoMotor([string]$Cuando) {
   Write-Json (Join-Path $Datos "cobertura-$Cuando.json") $cob
   if ($cob.medida) { Info "Cobertura ($Cuando): $("$($cob.porcentaje)".Replace('.', ',')) % de las lineas ($($cob.cubiertas) de $($cob.total))." }
   else { Aviso "Cobertura ($Cuando): no se ha podido medir: $($cob.motivo)" }
+  # las buenas practicas van despues de la cobertura y antes de los hallazgos (el motor aun los tiene en .rescate\: paso2 los lee de ahi)
+  Invoke-Practicas $RepoRoot $PlantillaRoot $Cuando $Datos $Registros $hMotor
   # el .json el ultimo: es el que dice que la fase esta hecha
   foreach ($par in @(@($mMotor, "diagnostico-$Cuando.md"), @($hMotor, "hallazgos-$Cuando.json"))) {
     $destino = Join-Path $Datos $par[1]
