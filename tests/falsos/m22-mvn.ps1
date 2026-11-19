@@ -75,7 +75,7 @@ foreach ($f in @(Get-ChildItem -LiteralPath $base -Recurse -File -Filter '*.java
   if ($m.Success -and $suite -gt 0 -and $suite -ge [int]$m.Groups[1].Value) { $falla = $true }
 
   $metodos = @([regex]::Matches($texto, '@Test\b[^{;]*?\bvoid\s+(\w+)\s*\(') | ForEach-Object { $_.Groups[1].Value })
-  if ($metodos.Count -eq 0) { $metodos = @('test') }
+  if ($metodos.Count -eq 0) { continue }   # una clase sin @Test (un ayudante) no es un test: Surefire no la informa
   $rotos = 0; if ($falla) { $rotos = 1 }
   $xml = New-Object System.Collections.Generic.List[string]
   $xml.Add('<?xml version="1.0" encoding="UTF-8"?>')

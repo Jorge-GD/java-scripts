@@ -5645,6 +5645,26 @@ $Pruebas['m22 (h): una pasada que se corta tras 3 lotes sin control dice cuantos
   Igual 'la suite entera, dos veces: el diagnostico (que hace de control) y el del final' 2 (Cuenta-M22 @(Llamadas-M22 $log2) 'suite')
 }
 
+$Pruebas['m22 (l): todos los tests con @Test son de contexto y hay un ayudante sin @Test: los lotes pasan sin el hallazgo de "ninguno ejecutado" y el control final pasa la suite entera'] = {
+  $ayudante = "package com.acme.plantillabatch;`n`nclass TestDataFactory {`n    static int numero() {`n        return 1;`n    }`n}`n"
+  $totalCtx = "package com.acme.plantillabatch.service;`n`nimport org.junit.jupiter.api.Test;`n`n@SpringBootTest`nclass TotalServiceTest {`n`n    @Test`n    void suma() {`n        int base = 1;`n    }`n}`n"
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' '' '@SpringBootTest'); 'service/TotalServiceTest' = $totalCtx; TestDataFactory = $ayudante }
+  $e = Escenario-M22 'm22-l' @('service/TotalService', 'service/ReciboService') $t
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos lotes pasan' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  Comprueba 'no sale el hallazgo de que Maven no ha ejecutado ninguno' ($r.Salida -notmatch 'no ha ejecutado ninguno') (Cola $r.Salida)
+  Comprueba 'ni el de un test que fallaba' ($r.Salida -notmatch 'Falla un test que no fallaba') (Cola $r.Salida)
+  $c = @(Llamadas-M22 $log)
+  Igual 'cada lote deja fuera todos los tests: 2 Maven parciales' 2 (Cuenta-M22 $c 'parcial')
+  Igual 'la suite entera, dos veces: el diagnostico y el control del final' 2 (Cuenta-M22 $c 'suite')
+  $k = @(Controles-M22 $e)
+  Igual 'una linea de control, en verde y tras el lote 2' 'verde 2' ((@($k | ForEach-Object { $_.resultado + ' ' + $_.lote })) -join ' ')
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+}
+
 $Pruebas['m22 (i): sin tests de contexto no hay control ni lista, y la marca se mueve con cada lote; con -SinTests, nada de esto'] = {
   $e = Escenario-M22 'm22-i' @('service/TotalService', 'service/ReciboService', 'service/PagoService')
   $log = Join-Path $e.Raiz 'mvn-m22.log'

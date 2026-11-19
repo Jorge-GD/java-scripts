@@ -2015,7 +2015,8 @@ function Invoke-Build([bool]$ConTests) {
       # Maven con 0 no dice que los tests pasen (testFailureIgnore, skipTests en la configuracion del plugin): se miran los informes
       $inf = Read-InformesTests $rep
       $b.TestsEjecutados = $true; $b.TestsN = $inf.Ejecutados; $b.TestsOk = ($inf.Fallan -eq 0)
-      if ($inf.Fallan -eq 0 -and $inf.Ejecutados -eq 0 -and @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java')).Count -gt 0) {
+      # con TestsExtra el lote ha dejado fuera tests a proposito (los de contexto): que no ejecute ninguno lo cubre el control, que pasa la suite entera
+      if ($inf.Fallan -eq 0 -and $inf.Ejecutados -eq 0 -and @($script:TestsExtra | Where-Object { $_ }).Count -eq 0 -and @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java')).Count -gt 0) {
         $b.TestsOk = $false
         Add-Hallazgo 'tests' 'error' 'pom.xml' 0 'Hay tests en src/test/java, pero Maven no ha ejecutado ninguno: mira skipTests, testFailureIgnore, excludes o el perfil del pom'
       }
@@ -3740,7 +3741,7 @@ function Invoke-Fix {
   $reflexiones = @()   # las reflexiones del paso (Titulo, Texto, Ficheros)
   $segInicial = $script:SegMaven
   $script:TiemposPaso = @{ Intentos = 0; SegCopilot = 0.0; SegMaven = 0.0 }   # lo que suman los intentos de esta pasada (Add-Intento)
-  # tests elegidos: con tests de contexto y tests ligeros, cada lote pasa solo los ligeros y la suite entera va en un control. Sin tests de contexto cada lote
+  # tests elegidos: con tests de contexto, cada lote pasa solo los ligeros (si todos son de contexto, ninguno) y la suite entera va en un control. Sin tests de contexto cada lote
   # ya pasa la suite entera: no hay control y la marca se mueve con cada lote bueno. El diagnostico de arriba es la suite entera del HEAD: hace de control.
   $script:TestsExtra = @(); $script:NoReintentar = @()
   $marcaActiva = (($Cfg.PasosTestsElegidos -contains $paso) -and $conTests)
@@ -3751,7 +3752,7 @@ function Invoke-Fix {
   if ($marcaActiva) {
     $clasesTest = @(Get-TestsDeContexto)
     $nCtx = @($clasesTest | Where-Object { $_.Ctx }).Count
-    $elegidos = ($nCtx -gt 0 -and $nCtx -lt $clasesTest.Count)
+    $elegidos = ($nCtx -gt 0)
     $marca = Get-MarcaControl
     $previo = Read-Control
     $vigente = [bool]($marca -and $previo -and $previo.commit -eq $marca -and (Test-MarcaVigente $marca $paso))
