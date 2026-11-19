@@ -6204,5 +6204,119 @@ $Pruebas['m34b (j) el sitio de las cajas: lo que recorren los casos, al principi
   Comprueba 'si la IA dio todo por igual, "no ha dejado ningun dato" va en la caja de Leido por la IA' ($z -match '(?s)id="t-leido-ia".*?<div class="m34-resumen"[^>]*>\s*<p>La IA no ha dejado ning.n dato')
 }
 
+# ============ M35b: EL INFORME CONOCE LA FASE reglas ============
+# El nombre de la fase en la portada. Va despues de las buenas practicas (si la pasada las tiene) y antes de la prueba en local.
+$M35bFase = 'Tests de las reglas de negocio'
+# Los nombres de las fases de la portada, en su orden, con la fase reglas y sin la de las buenas practicas, con corregir y con parar.
+$M35bFases = @($Bp5Fases[0..9] + @($M35bFase) + @($Bp5Fases[10]))
+$M35bFasesParar = @($Bp5FasesParar[0..9] + @($M35bFase) + @($Bp5FasesParar[10]))
+# La portada de la salida de Bp5-Salida en la fase hecha, sin practicas-arreglos.json ni tests-reglas.json, sin el CSS, medida con el codigo de antes de M35b (35973df).
+$M35bHashSinJson = 'CEB94C1CC174B9D6BF2EE788FE1567CA953010C58CF414B0376B4108C4C0B58C'
+
+# El tests-reglas.json que deja M35 (tests-reglas.ps1, Save-ResultadoReglas): 2 clases con test (Pedido con 2 reglas vigiladas y Remesa con 1), 1 atascada (Cliente) y 0 saltadas.
+function M35b-Reglas {
+  $d = 'src/main/java/com/acme/recibos/domain/model/'
+  $t = 'src/test/java/com/acme/recibos/domain/model/'
+  return [ordered]@{
+    version = 1; cuando = '2026-11-19T20:00:00'; conTest = 2; reglasVigiladas = 3; atascadas = 1; saltadas = 0
+    tareas = @(
+      [ordered]@{ clase = 'Pedido'; fichero = ($d + 'Pedido.java'); test = ($t + 'PedidoReglasTest.java'); estado = 'hecha'; commit = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'; motivo = ''
+        reglas = @([ordered]@{ texto = 'Un pedido sin lineas no se factura'; linea = 20; resultado = 'vigilada'; motivo = '' }, [ordered]@{ texto = 'El importe no puede ser negativo'; linea = 31; resultado = 'vigilada'; motivo = '' }) },
+      [ordered]@{ clase = 'Remesa'; fichero = ($d + 'Remesa.java'); test = ($t + 'RemesaReglasTest.java'); estado = 'hecha'; commit = '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432'; motivo = ''
+        reglas = @([ordered]@{ texto = 'La remesa cierra el ultimo dia habil'; linea = 15; resultado = 'vigilada'; motivo = '' }) },
+      [ordered]@{ clase = 'Cliente'; fichero = ($d + 'Cliente.java'); test = ($t + 'ClienteReglasTest.java'); estado = 'atascada'; commit = ''; motivo = 'el test no compila'; reglas = @() }
+    )
+  }
+}
+
+# Una salida de Bp5-Salida (estado en $Fase, correccion completa) a la que se le anade tests-reglas.json si se da y se vuelve a montar la portada.
+function M35b-Salida([string]$Nombre, [string]$Fase, $Reglas = $null, $Arreglos = $null, [string]$Respuesta = 'corregir') {
+  $x = Bp5-Salida $Nombre $Fase $null $Arreglos $Respuesta
+  if ($null -eq $Reglas) { return $x }
+  Guarda-Json (Join-Path $x.Dir 'datos/tests-reglas.json') $Reglas
+  $g = Genera-Informes $x.Dir
+  Comprueba "$Nombre : Write-Informes con tests-reglas.json sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  return [pscustomobject]@{ Dir = $x.Dir; I = (Pagina $x.Dir 'index.html'); P5 = (Pagina $x.Dir '5-buenas-practicas.html') }
+}
+
+# Sin la fase de las buenas practicas, con la de las reglas la portada lista 12 fases y la de las reglas va entre la comparacion y la prueba en local.
+function M35b-Comprueba-Sitio([string]$Nombre, $L, [string]$Antes) {
+  $r = @($L | Where-Object { $_.Nombre -match $M35bFase })
+  Igual "$Nombre : una linea de la fase de las reglas" 1 $r.Count
+  if ($r.Count -ne 1) { return $null }
+  $n = [array]::IndexOf(@($L | ForEach-Object { $_.Nombre }), $r[0].Nombre)
+  Comprueba "$Nombre : justo despues de $Antes y justo antes de la prueba en local" ($n -ge 1 -and $n + 1 -lt @($L).Count -and $L[$n - 1].Nombre -match $Antes -and $L[$n + 1].Nombre -match 'Prueba en local') (($L | ForEach-Object { $_.Nombre }) -join ' / ')
+  return $r[0]
+}
+
+$Pruebas['m35b (a) con tests-reglas.json la portada pone la fase de las reglas despues de las buenas practicas (o de la comparacion) y antes de prueba-local, con la cuenta del JSON'] = {
+  $x = M35b-Salida 'm35b-a' 'hecha' (M35b-Reglas) (Bp5-Arreglos)
+  $l = @(Bp5-Lineas $x.I)
+  Igual 'con las buenas practicas, la portada lista 13 fases' 13 $l.Count
+  $r = M35b-Comprueba-Sitio 'con practicas' $l 'Buenas pr.cticas'
+  if ($r) {
+    Igual 'su cuenta, con los numeros del JSON' '2 clases con test (3 reglas vigiladas), 1 atascadas, 0 saltadas' $r.Cuenta
+    Igual 'su estado: hecha (la pasada acabo)' 'hecha' $r.E
+  }
+  $y = M35b-Salida 'm35b-a-sin-practicas' 'hecha' (M35b-Reglas)
+  $m = @(Bp5-Lineas $y.I)
+  Igual 'sin las buenas practicas, la portada lista 12 fases' 12 $m.Count
+  Comprueba 'las 12 en su orden: la de las reglas despues de la correccion y de la comparacion' (Bp5-Orden $m $M35bFases) (($m | ForEach-Object { $_.Nombre }) -join ' / ')
+  [void](M35b-Comprueba-Sitio 'sin practicas' $m 'Comparaci.n con el original')
+  $z = M35b-Salida 'm35b-a-parar' 'hecha' (M35b-Reglas) $null 'parar'
+  Comprueba 'con la respuesta parar: ... Comparacion, Correccion, Tests de las reglas, Prueba en local' (Bp5-Orden (Bp5-Lineas $z.I) $M35bFasesParar) ((Bp5-Lineas $z.I | ForEach-Object { $_.Nombre }) -join ' / ')
+  $h = M35b-Salida 'm35b-a-cero' 'hecha' ([ordered]@{ version = 1; cuando = '2026-11-19T20:00:00'; conTest = 0; reglasVigiladas = 0; atascadas = 0; saltadas = 4; tareas = @() })
+  $c = @(Bp5-Lineas $h.I | Where-Object { $_.Nombre -match $M35bFase })
+  Igual 'con 0 clases con test y 4 saltadas: la cuenta sigue al JSON' '0 clases con test (0 reglas vigiladas), 0 atascadas, 4 saltadas' ($c | ForEach-Object { $_.Cuenta })
+}
+
+$Pruebas['m35b (b) con el estado de la pasada en reglas y sin tests-reglas.json la fase sale en curso, con las de antes hechas y prueba-local en espera'] = {
+  $x = M35b-Salida 'm35b-b' 'reglas' $null (Bp5-Arreglos)
+  $l = @(Bp5-Lineas $x.I)
+  Igual 'con las buenas practicas, la portada lista 13 fases' 13 $l.Count
+  $r = M35b-Comprueba-Sitio 'curso' $l 'Buenas pr.cticas'
+  if ($r) {
+    Igual 'su estado: en curso' 'curso' $r.E
+    Comprueba 'su cuenta no inventa numeros' ($r.Cuenta -notmatch 'clases con test') $r.Cuenta
+    $n = [array]::IndexOf(@($l | ForEach-Object { $_.Nombre }), $r.Nombre)
+    Igual 'las fases de antes salen hechas' ((@('hecha') * $n) -join ' ') ((@($l | Select-Object -First $n | ForEach-Object { $_.E })) -join ' ')
+    Igual 'la prueba en local esta en espera' 'espera' $l[$n + 1].E
+  }
+  $y = M35b-Salida 'm35b-b-sin-practicas' 'reglas'
+  $m = @(Bp5-Lineas $y.I)
+  Comprueba 'sin las buenas practicas: las 12 fases con la de las reglas en su sitio' (Bp5-Orden $m $M35bFases) (($m | ForEach-Object { $_.Nombre }) -join ' / ')
+  $e = @($m | Where-Object { $_.Nombre -match $M35bFase })
+  Comprueba 'y en curso' ($e.Count -eq 1 -and $e[0].E -ceq 'curso') (($m | ForEach-Object { "$($_.Nombre)=$($_.E)" }) -join ' / ')
+  $z = M35b-Salida 'm35b-b-parar' 'reglas' $null $null 'parar'
+  Comprueba 'con la respuesta parar tambien: ... Correccion, Tests de las reglas, Prueba en local' (Bp5-Orden (Bp5-Lineas $z.I) $M35bFasesParar) ((Bp5-Lineas $z.I | ForEach-Object { $_.Nombre }) -join ' / ')
+}
+
+$Pruebas['m35b (c) sin tests-reglas.json y con el estado en otra fase la portada es la de antes, byte a byte (SHA-256 sin el CSS); con un JSON roto, las fases son las de antes'] = {
+  $x = M35b-Salida 'm35b-c' 'hecha'
+  $h = Bp5-HashPagina $x.I
+  if ($M35bHashSinJson -ceq 'PENDIENTE') { Write-Host "  HASH $h" }
+  Igual 'sin el JSON: el mismo SHA-256 (sin el CSS) que la portada de antes del cambio' $M35bHashSinJson $h
+  Comprueba 'y no nombra la fase ni el JSON' ($x.I -notmatch 'Tests de las reglas' -and -not $x.I.Contains('tests-reglas.json'))
+  foreach ($fase in @('prueba-local', 'correccion', 'practicas')) {
+    $y = M35b-Salida "m35b-c-$fase" $fase
+    $esperado = if ($fase -ceq 'practicas') { @($Bp5Fases[0..9] + @('Buenas pr.cticas con Lombok') + @($Bp5Fases[10])) } else { $Bp5Fases }
+    Comprueba "fase $fase : las fases de siempre, sin la de las reglas" (Bp5-Orden (Bp5-Lineas $y.I) $esperado) ((Bp5-Lineas $y.I | ForEach-Object { $_.Nombre }) -join ' / ')
+  }
+  $z = M35b-Salida 'm35b-c-roto' 'hecha'
+  Escribe $z.Dir 'datos/tests-reglas.json' '{ esto no es json'
+  $g = Genera-Informes $z.Dir
+  $t = Pagina $z.Dir 'index.html'
+  Comprueba 'con un tests-reglas.json roto se monta igual y la lista de fases es la de siempre' ($g.Salida -match 'INFORMES-OK' -and (Bp5-Orden (Bp5-Lineas $t) $Bp5Fases)) (Cola $g.Salida)
+}
+
+$Pruebas['m35b (d) portada, Que es cada fichero: datos/tests-reglas.json sale con su frase y solo si existe'] = {
+  $sin = M35b-Salida 'm35b-d-sin' 'hecha'
+  $f = [regex]::Match($sin.I, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'sin el JSON no sale' ($f.Length -gt 0 -and $f -notmatch 'tests-reglas') $f
+  $x = M35b-Salida 'm35b-d' 'hecha' (M35b-Reglas)
+  $f = [regex]::Match($x.I, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'con el JSON sale con su frase, que dice que son los tests de las reglas' ($f -match '(?s)<li>(?:(?!</li>).)*<code>datos/tests-reglas\.json</code></p><p>[^<]{20,}</p>' -and $f -match 'tests-reglas\.json</code></p><p>[^<]*tests[^<]*reglas') $f
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
