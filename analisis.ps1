@@ -146,7 +146,7 @@ function Read-PmdXml([string]$Ruta, [string]$Repo) {
 
 # ============================== COMPARAR ==============================
 # Herramienta, regla y fichero, y el metodo (o la clase si no hay metodo). La linea no entra: las lineas se mueven.
-function Get-ClaveHallazgo($H) {
+function Get-ClaveAnalisis($H) {
   $donde = "$($H.Metodo)"
   if (-not $donde) { $donde = "$($H.Clase)" }
   return ((@("$($H.Herramienta)", "$($H.Regla)", "$($H.Fichero)", $donde)) -join '|')
@@ -157,7 +157,7 @@ function Group-Hallazgos($Lista) {
   $g = [ordered]@{}
   foreach ($h in @($Lista)) {
     if ($null -eq $h) { continue }
-    $k = Get-ClaveHallazgo $h
+    $k = Get-ClaveAnalisis $h
     if (-not $g.Contains($k)) { $g[$k] = @() }
     $g[$k] = @($g[$k]) + , $h
   }
