@@ -66,7 +66,8 @@ QUE HACE
      dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); algo cambia en src\main\
      (lo que cambie fuera se deshace y se sigue con lo que quede); el caso de la tarea mejora; la suite de tests unitarios, sin
      el arnes, no falla mas ni se ejecuta menos que al empezar; y ningun otro caso empeora (ni claves nuevas, ni mas lineas distintas, ni
-     deja de ejecutarse). Los tests van antes que los demas casos porque tardan mucho menos. Un arreglo que pasa va a la
+     deja de ejecutarse). Los tests van antes que los demas casos porque tardan mucho menos. Si tras el arreglo la clave sigue
+     distinta en el caso (con menos lineas, pero no igual), la reparacion es 'mejorado' y no 'arreglado'. Un arreglo que pasa va a la
      rama de rescate (un commit por arreglo: 'rescate(local): <job>/<caso> <clave>'); uno que no pasa se deshace y se
      reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
      rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice. Una clave
@@ -80,6 +81,8 @@ QUE HACE
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
+  Con -Job, el JSON lleva ademas lo de los demas jobs tal como estaba (casos, jobs, reparaciones y culpables) si se probo con el mismo
+  commit del migrado y del original; con otro commit se descarta y lo dice. La consola solo ensena los jobs de ahora.
 
 USO
   .\prueba-local.ps1 -Legacy C:\ruta\life-java8 -Migrado C:\ruta\batch-life
@@ -1589,7 +1592,8 @@ function Save-Arreglo([string]$Asunto, [int]$N) {
 # Arregla la clave $C: llama a la IA (con reintento) hasta que un arreglo pasa las puertas, hasta que dice que no se arregla o hasta que
 # se acaban los intentos. Devuelve la entrada de reparaciones de prueba-local.json.
 function Repair-Clave($C, $S) {
-  $r = $S.Res[(Get-IndiceCaso $S.Res $C.job $C.caso)]
+  $i = Get-IndiceCaso $S.Res $C.job $C.caso
+  $r = $S.Res[$i]
   $t = Get-TareaReparar $C $r $S
   $o = [ordered]@{ clave = $C.clave; job = $C.job; caso = $C.caso; casos = $C.casos; resultado = 'no arreglado'; commit = ''; asunto = ''; intentos = 0; motivo = '' }
   if ($t.estado -eq 'atascada') {
@@ -1619,7 +1623,9 @@ function Repair-Clave($C, $S) {
         $S.Salidas = "reparar/$n"
         Set-Intento $t ''
         $o.resultado = 'arreglado'; $o.commit = $script:headMig; $o.asunto = $asunto; $o.intentos = $t.intentos
-        Bien "Arreglado $($C.job)/$($C.caso) $($C.clave) en el commit $($o.commit.Substring(0, 7))."
+        $donde = "$($C.job)/$($C.caso) $($C.clave) en el commit $($o.commit.Substring(0, 7))"
+        if (@(Get-Claves $S.Res[$i]) -ccontains $C.clave) { $o.resultado = 'mejorado'; Aviso "Mejorado ${donde}: sigue distinta, con menos lineas." }
+        else { Bien "Arreglado $donde." }
         return $o
       }
       $v.Tipo = 'rechazado'; $v.Motivo = $m
@@ -1688,6 +1694,7 @@ function Show-Reparaciones($Reps) {
     $donde = "$($r.job)/$($r.caso) $($r.clave) ($($r.casos) casos)"
     $motivo = ($r.motivo -split "`n")[0]
     if ($r.resultado -eq 'arreglado') { Bien "  arreglado: $donde en $($r.commit.Substring(0, 7)) ($($r.asunto))" }
+    elseif ($r.resultado -eq 'mejorado') { Aviso "  mejorado: $donde en $($r.commit.Substring(0, 7)) ($($r.asunto))" }
     elseif ($r.resultado -eq 'no se arregla') { Aviso "  no se arregla: ${donde}: $motivo" }
     else { Fallo "  no arreglado: ${donde}: $motivo" }
   }
@@ -1733,7 +1740,39 @@ function Get-PorJob($Res) {
   return $porJob
 }
 
-# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo escrito.
+# Las entradas de $Nuevas para el job de -Job y las de $Viejas para los demas, en el orden de $todosJobs.
+function Join-PorJob($Nuevas, $Viejas) {
+  $r = @()
+  foreach ($j in $todosJobs) {
+    $de = $Viejas
+    if ($j -ceq $Job) { $de = $Nuevas }
+    $r += @(@($de) | Where-Object { $null -ne $_ -and $_.job -ceq $j })
+  }
+  return $r
+}
+
+# Con -Job: $O (lo de este lanzamiento) mas lo de los otros jobs del prueba-local.json de antes (casos, jobs, reparaciones y culpables),
+# si se probaron con el mismo commit del migrado y del original. Con otro, se descartan y se dice: se probaron con otro codigo.
+function Merge-OtrosJobs($O) {
+  $json = Join-Path $DatosMig 'prueba-local.json'
+  $antes = $null
+  if (Test-Path -LiteralPath $json) { try { $antes = Read-Json $json } catch { $antes = $null } }
+  if (-not $antes -or @($antes.jobs | Where-Object { $null -ne $_ -and $_.job -cne $Job }).Count -eq 0) { return $O }
+  if ($antes.commitMigrado -cne $O.commitMigrado -or $antes.commitOriginal -cne $O.commitOriginal) {
+    Info 'Los otros jobs se probaron con otro commit: no los guardo. Lanza sin -Job para probarlos todos.'
+    return $O
+  }
+  $f = [ordered]@{}
+  foreach ($k in $O.Keys) { $f[$k] = $O[$k] }
+  foreach ($k in @('casos', 'jobs', 'reparaciones', 'culpables')) {
+    $m = @(Join-PorJob $O[$k] $antes.$k)
+    if ($m.Count -gt 0 -or $O.Contains($k)) { $f[$k] = $m }
+  }
+  return $f
+}
+
+# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo de este lanzamiento.
+# Con -Job, el fichero lleva ademas lo de los otros jobs (Merge-OtrosJobs); lo devuelto, solo lo de ahora: es lo que ensena la consola.
 function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   $o = [ordered]@{
     version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig
@@ -1742,7 +1781,9 @@ function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   }
   if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
   if ($Reparar) { $o.reparaciones = @($Reparaciones) }
-  Write-Json (Join-Path $DatosMig 'prueba-local.json') $o
+  $f = $o
+  if ($Job) { $f = Merge-OtrosJobs $o }
+  Write-Json (Join-Path $DatosMig 'prueba-local.json') $f
   return $o
 }
 
@@ -1930,7 +1971,7 @@ try {
     else { Info ''; Info 'No se repara nada.' }
     $o = Save-Resultado $res @() $reparaciones
     if ($reparaciones.Count -gt 0) {
-      if (@($reparaciones | Where-Object { $_.resultado -eq 'arreglado' }).Count -gt 0) { Info ''; Info 'Despues de reparar:'; Show-Resultado $res $o.jobs }
+      if (@($reparaciones | Where-Object { $_.commit }).Count -gt 0) { Info ''; Info 'Despues de reparar:'; Show-Resultado $res $o.jobs }
       Show-Reparaciones $reparaciones
       if (@($reparaciones | Where-Object { $_.resultado -eq 'no se arregla' }).Count -gt 0) { Info 'Si la IA dice que la diferencia es del test del migrado y no del codigo, relanza con -RehacerArnes.' }
     }
