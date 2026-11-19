@@ -17,7 +17,9 @@ QUE HACE
      tambien dependencias de test en el pom.xml). Primero se escribe el del original y, cuando esta hecho, el del migrado,
      que lo traduce: lleva en su prompt la ruta del test del original ya guardado, para simular lo mismo y al mismo nivel.
      El script deshace lo que toque fuera de eso (lo dice) y, del pom.xml, deja el del original con solo las dependencias nuevas
-     de la IA, todas con <scope>test</scope>; despues comprueba que compila y que, con un caso vacio, cada job deja su estado.txt.
+     de la IA, todas con <scope>test</scope>; despues comprueba que compila y que, con un caso vacio, cada job deja su estado.txt
+     y que su base de prueba tiene las tablas que usa el codigo (las de src\main, sacadas con regex: Get-TablasBatch). Un intento sin ellas se
+     rechaza con la tabla y su fichero:linea; el ultimo, o un arnes guardado, se acepta con un aviso: el inventario es aproximado.
      Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
      Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
      vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
@@ -33,6 +35,8 @@ QUE HACE
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
      Si el job ni arranca en el original (estado=EXCEPCION), se lo dice a la IA una vez (si el caso no busca justo eso, que
      corrija las entradas) y despues lo acepta; igual con un caso hecho de antes cuya salida guardada del original dice eso.
+     Si el caso no corre en el original porque su base no tiene una tabla o una columna (H2: Tabla "X" no encontrada), una tabla del codigo
+     queda sin preparar y sin mas intentos (la IA no ve la base del test); una inventada o una columna se le dicen en el reintento.
   4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
@@ -40,7 +44,8 @@ QUE HACE
      acabar, dice cuanto es test y cuanto Maven.
   5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
-     fecha de hoy: igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
+     fecha de hoy (un caso cuyo migrado no deja ni estado.txt sale distinto, con el motivo de que no lo corrio): igual, distinto,
+     no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
      o sin probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
      diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
@@ -426,14 +431,14 @@ function Get-MotivoLlamada($C) {
 }
 
 # Apunta un intento: sin motivo, la tarea queda hecha; con motivo, pendiente (para el reintento) o atascada si ya no
-# quedan intentos.
-function Set-Intento($T, [string]$Motivo) {
+# quedan intentos o si $SinReintento (un motivo que la IA no puede arreglar: otro intento gastaria una llamada sin arreglar nada).
+function Set-Intento($T, [string]$Motivo, [bool]$SinReintento = $false) {
   $T.intentos++
   $T.motivo = $Motivo
   if (-not $Motivo) { $T.estado = 'hecha'; $T.ultimoEstado = 'ok' }
   else {
     $T.ultimoEstado = 'invalida'
-    if ($T.intentos -ge [int]$Cfg.Intentos) { $T.estado = 'atascada' }
+    if ($SinReintento -or $T.intentos -ge [int]$Cfg.Intentos) { $T.estado = 'atascada' }
   }
   Save-Tarea $T
 }
@@ -687,11 +692,86 @@ function Repair-PomSoloTest([string]$Antes, [string]$Ruta) {
   return $deshecho
 }
 
+# El nombre de tabla de $Token (lo que sigue a FROM, JOIN, INTO, UPDATE o TABLE en el SQL): sin esquema ni comillas y en mayusculas. '' si no
+# vale como tabla: lleva ?, : o $; empieza por BATCH_ o TASK_ (Spring Batch y Spring Cloud Task); tiene menos de 3 caracteres; es DUAL o es una
+# palabra de SQL (o de las que siguen a un FROM en una frase: the, this, that).
+function Get-NombreTabla([string]$Token) {
+  if ($Token -match '[?:$]') { return '' }
+  $n = (($Token -split '\.')[-1] -replace '^["`''\[\\]+|["`''\]\\]+$', '').ToUpperInvariant()
+  if ($n.Length -lt 3 -or $n -notmatch '^[A-Z_][A-Z0-9_#]*$' -or $n -match '^(BATCH_|TASK_)') { return '' }
+  if ($n -match '^(SELECT|WHERE|SET|VALUES|AND|OR|NOT|NULL|AS|ON|IF|EXISTS|IN|BY|ORDER|GROUP|HAVING|LEFT|RIGHT|INNER|OUTER|CROSS|FULL|NATURAL|UNION|ALL|DISTINCT|ONLY|TABLE|INTO|FROM|JOIN|UPDATE|DELETE|INSERT|MERGE|USING|WITH|CASE|WHEN|THEN|ELSE|END|LIKE|BETWEEN|LIMIT|OFFSET|FETCH|FOR|DUAL|CASCADE|RESTRICT|CURRENT_TIMESTAMP|THE|THIS|THAT)$') { return '' }
+  return $n
+}
+
+# Las tablas que nombra el SQL de $Texto, cada una con el indice donde empieza su nombre: lo que sigue a FROM, JOIN, INTO (tambien MERGE INTO,
+# INSERT INTO), UPDATE o TABLE (con o sin IF [NOT] EXISTS), sin distinguir mayusculas. DELETE FROM sale por FROM.
+function Get-TablasSql([string]$Texto) {
+  $r = @()
+  foreach ($m in [regex]::Matches($Texto, '(?i)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?>([^\s(),;=<>\\]+))(?!=)')) {
+    $n = Get-NombreTabla $m.Groups[1].Value
+    if ($n) { $r += [pscustomobject]@{ tabla = $n; indice = $m.Groups[1].Index } }
+  }
+  return $r
+}
+
+# El inventario de tablas del batch de $Dir (una copia): las que su codigo nombra en SQL, cada una con su primer sitio (fichero:linea, el fichero
+# ordenado por su ruta), por orden de nombre. Se buscan en src/main: dentro de las cadenas entre comillas dobles de los .java (no en sus
+# comentarios) y en @Table(name = "X"), y en el texto de los .sql, .xml, .properties y .yml/.yaml (sin sus lineas de comentario). Es aproximado,
+# con regex y sin Java: puede dar alguna que no es y no ve las que se arman con + o con variables.
+function Get-TablasBatch([string]$Dir) {
+  $raiz = Join-Ruta $Dir 'src/main'
+  if (-not (Test-Path -LiteralPath $raiz)) { return @() }
+  $ficheros = @{}
+  foreach ($f in @(Get-ChildItem -LiteralPath $raiz -Recurse -File | Where-Object { $_.Extension -match '^\.(java|sql|xml|properties|ya?ml)$' })) { $ficheros[(Get-Rel $Dir $f.FullName)] = $f.FullName }
+  $sitios = @{}
+  foreach ($rel in (Sort-Ordinal @($ficheros.Keys))) {
+    $texto = [System.IO.File]::ReadAllText($ficheros[$rel])
+    $hay = @()
+    if ($rel -match '(?i)\.java$') {
+      # Los comentarios y los caracteres ('"') se leen enteros para que lo que llevan no cuente como cadena
+      foreach ($m in [regex]::Matches($texto, '(?s)//[^\r\n]*|/\*.*?\*/|''(?:[^''\\\r\n]|\\.)+''|""".*?"""|"(?:[^"\\\r\n]|\\.)*"')) {
+        if ($m.Value.StartsWith('"')) { foreach ($h in @(Get-TablasSql $m.Value)) { $hay += [pscustomobject]@{ tabla = $h.tabla; indice = $m.Index + $h.indice } } }
+      }
+      foreach ($m in [regex]::Matches($texto, '@Table\s*\(\s*name\s*=\s*"([^"]+)"')) {
+        $n = Get-NombreTabla $m.Groups[1].Value
+        if ($n) { $hay += [pscustomobject]@{ tabla = $n; indice = $m.Groups[1].Index } }
+      }
+    }
+    else {
+      # Sin los comentarios (<!-- --> y las lineas que empiezan por # o --), pero con sus saltos de linea: las lineas siguen contando igual
+      $texto = [regex]::Replace($texto, '<!--[\s\S]*?-->|^[ \t]*(?:#|--).*$', [System.Text.RegularExpressions.MatchEvaluator]{ param($c) $c.Value -replace '[^\r\n]', '' }, [System.Text.RegularExpressions.RegexOptions]::Multiline)
+      $hay = @(Get-TablasSql $texto)
+    }
+    foreach ($h in @($hay | Sort-Object indice)) {
+      if (-not $sitios.ContainsKey($h.tabla)) { $sitios[$h.tabla] = $rel + ':' + @($texto.Substring(0, $h.indice) -split "`n").Count }
+    }
+  }
+  return @(Sort-Ordinal @($sitios.Keys) | ForEach-Object { [pscustomobject]@{ tabla = $_; sitio = $sitios[$_] } })
+}
+
+# Las tablas de $Tablas (las de Get-TablasBatch) para un motivo: 'T_A (fichero:linea), T_B (fichero:linea)' y, pasadas las 10 primeras, ' y N mas'.
+function Get-ListaTablas($Tablas) {
+  $l = (@($Tablas | Select-Object -First 10 | ForEach-Object { "$($_.tabla) ($($_.sitio))" }) -join ', ')
+  if (@($Tablas).Count -gt 10) { $l += " y $(@($Tablas).Count - 10) mas" }
+  return $l
+}
+
+# Las tablas que usa el codigo de $Dir (Get-TablasBatch) y la base de prueba no tiene: las que no son ningun tablas\<TABLA>.csv de la salida del
+# caso vacio (target\prueba-local\<job>\vacio, ya ejecutado) de ninguno de los $Jobs. El arnes deja uno por cada tabla de su base.
+function Get-TablasFaltan([string]$Dir, [string[]]$Jobs) {
+  $hay = @{}
+  foreach ($j in $Jobs) {
+    $d = Join-Ruta $Dir "target/prueba-local/$j/vacio/tablas"
+    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $hay[$f.BaseName.ToUpperInvariant()] = $true } }
+  }
+  return @(Get-TablasBatch $Dir | Where-Object { -not $hay.ContainsKey($_.tabla) })
+}
+
 # Comprueba el arnes que acaba de escribir la IA en su copia. Antes lo deja en lo que se puede probar: lo que cambio fuera de lo que
 # puede escribir (Get-Permitidos) se deshace (Undo-Fuera) y el pom.xml del original queda como estaba con sus dependencias nuevas de test
 # (Repair-PomSoloTest), y cada cosa se dice. Despues, Test-ArnesEscrito. Devuelve '' o el motivo; si hubo algo que deshacer, el motivo
 # empieza por ello: la IA tiene que saber que lo que tocaste ya no esta.
-function Test-Arnes($T, [string[]]$Jobs) {
+function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $dir = $T.entradas.copia
   Remove-Carpeta (Join-Ruta $dir $Casos)
   $avisos = @()
@@ -705,14 +785,16 @@ function Test-Arnes($T, [string[]]$Jobs) {
       $avisos += $a
     }
   }
-  $m = Test-ArnesEscrito $T $Jobs
+  $m = Test-ArnesEscrito $T $Jobs $SoloAviso
   if ($m -and $avisos.Count -gt 0) { return (($avisos -join ' ') + " $m") }
   return $m
 }
 
 # '' si el arnes de la copia, ya sin lo de fuera, vale; si no, el motivo: escrito el test, compila y, con un caso vacio por job, cada job
-# deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso).
-function Test-ArnesEscrito($T, [string[]]$Jobs) {
+# deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso) y la base de prueba tiene las
+# tablas que usa el codigo (Get-TablasFaltan). Esa ultima puerta rechaza el intento mientras queden otros, y no el ultimo ni uno guardado
+# ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
+function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $dir = $T.entradas.copia
   $esOrig = ($T.entradas.repo -eq 'original')
   if (-not (Test-Path -LiteralPath (Join-Ruta $dir $T.entradas.test))) { return "No has escrito el test $($T.entradas.test)." }
@@ -731,10 +813,15 @@ function Test-ArnesEscrito($T, [string[]]$Jobs) {
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
     if (Test-Path -LiteralPath (Join-Ruta $dir "target/prueba-local/$j/otro")) { return "Con -Dprueba.local.caso=vacio, el test ha ejecutado tambien $Casos/$j/otro. Si la propiedad prueba.local.caso tiene valor, ejecuta solo los casos con ese nombre: cada caso se lanza en su propio Maven." }
   }
+  $faltan = @(Get-TablasFaltan $dir $Jobs)
+  if ($faltan.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
+    return "La base de prueba no tiene estas tablas que usa el batch: $(Get-ListaTablas $faltan). Crealas en el paso de la base limpia con las columnas que usa el codigo."
+  }
   if ($esOrig) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
     foreach ($j in $Jobs) { Copy-Carpeta (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") }
   }
+  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original." }
   return ''
 }
 
@@ -751,11 +838,12 @@ function Save-Arnes($T) {
 # Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
 # otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
 # atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
-# hecha vuelve a empezar (y se avisa), una que ya estaba por hacer sigue como estaba.
+# hecha vuelve a empezar (y se avisa), una que ya estaba por hacer sigue como estaba. Que le falten tablas a su base de prueba no lo
+# invalida (un arnes que ya sale todo igual no se rehace por eso): solo se avisa.
 function Use-ArnesGuardado($T, [string[]]$Jobs) {
   $estabaHecha = ($T.estado -eq 'hecha')
   Copy-Carpeta (Join-Ruta $Local "arnes/$($T.entradas.repo)") $T.entradas.copia
-  $m = Test-Arnes $T $Jobs
+  $m = Test-Arnes $T $Jobs $true
   if (-not $m) {
     Save-Copia $T.entradas.copia
     if (-not $estabaHecha) {
@@ -893,6 +981,38 @@ function Save-Caso($T) {
   if (Test-Path -LiteralPath (Join-Path $dirCaso 'no-aplica.txt')) { Remove-Carpeta $dirCaso }
 }
 
+# Lo que se le dice a la IA de un caso que no corre en el original por la base de prueba: $Texto es su motivo (con el error de Maven o de su
+# error.txt) y lleva 'Table "X" not found', 'Tabla "X" no encontrada' o lo mismo con Column o Columna (H2 acaba esa linea con 42102, 42S02,
+# 42122 o 42S22, pero sin el nombre no hay nada que decir). $null si no es eso. Si no, un objeto con el Motivo y si es Definitivo (otro intento
+# no lo arregla):
+#  - una tabla del inventario del original (Get-TablasBatch): el test no la crea y la IA no lo ve ni puede crearla; definitivo;
+#  - una tabla que el codigo no usa: inventada; la IA la corrige;
+#  - una columna: la tabla es la primera del SQL del error que tiene su tablas\<TABLA>.csv en el caso vacio del job (o la primera) y, si esta, se
+#    dicen las columnas de su primera linea.
+function Get-MotivoBase([string]$Texto, [string]$Job) {
+  $m = [regex]::Match($Texto, '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)')
+  if (-not $m.Success) { return $null }
+  $nombre = ($m.Groups[2].Value -split '\.')[-1]
+  if ($m.Groups[1].Value -match '(?i)^(table|tabla)$') {
+    $tabla = $nombre.ToUpperInvariant()
+    if ($null -eq $script:InventarioOrig) { $script:InventarioOrig = @(Get-TablasBatch $CopiaOrig) }   # una vez por lanzamiento: recorre src/main
+    $sitio = @($script:InventarioOrig | Where-Object { $_.tabla -ceq $tabla })
+    if ($sitio.Count -gt 0) { return [pscustomobject]@{ Motivo = "La base de prueba no tiene la tabla $tabla (el test no la crea; la usa $($sitio[0].sitio))."; Definitivo = $true } }
+    return [pscustomobject]@{ Motivo = "La tabla $tabla no existe en el batch: usa solo tablas que use su codigo."; Definitivo = $false }
+  }
+  $tablas = @(Get-TablasSql $Texto | ForEach-Object { $_.tabla })
+  if ($tablas.Count -eq 0) { return [pscustomobject]@{ Motivo = "La columna $nombre no existe en la base de prueba."; Definitivo = $false } }
+  $tabla = $tablas[0]
+  foreach ($t in $tablas) { if (Test-Path -LiteralPath (Join-Ruta $Local "salidas/vacio/$Job/tablas/$t.csv")) { $tabla = $t; break } }
+  $frase = "La tabla $tabla no tiene la columna $nombre."
+  $csv = Join-Ruta $Local "salidas/vacio/$Job/tablas/$tabla.csv"
+  if (Test-Path -LiteralPath $csv) {
+    $cabecera = @([System.IO.File]::ReadAllLines($csv))
+    if ($cabecera.Count -gt 0) { $frase += ' Sus columnas en la base de prueba son: ' + ((@($cabecera[0] -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) -join ', ') + '.' }
+  }
+  return [pscustomobject]@{ Motivo = $frase; Definitivo = $false }
+}
+
 # Las tareas de los casos pendientes, en rondas de hasta Paralelo llamadas sobre la copia del original. Tras cada ronda:
 # si algo se ha escrito fuera de las carpetas de sus casos, se deshace todo y esas tareas se repiten de una en una (sin
 # gastar intento: asi se sabe cual fue); si no, cada caso tiene que haber escrito algo y correr en el original, o traer
@@ -920,6 +1040,7 @@ function Invoke-Casos($Tareas) {
       continue
     }
     $motivos = @{}
+    $sinReintento = @{}   # los casos cuyo motivo la IA no puede arreglar (Get-MotivoBase)
     for ($i = 0; $i -lt $lote.Count; $i++) {
       $t = $lote[$i]
       $dirCaso = Join-Ruta $CopiaOrig $t.entradas.carpeta
@@ -935,7 +1056,11 @@ function Invoke-Casos($Tareas) {
       $c = $t.entradas.caso
       $r = Invoke-Job $CopiaOrig $true $j $c "caso $j/$c en el original"
       $sal = Join-Ruta $CopiaOrig "target/prueba-local/$j/$c"
-      if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { $motivos[$t.id] = 'El caso no corre en el original: ' + (Get-Porque $sal $r) }
+      if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) {
+        $motivos[$t.id] = 'El caso no corre en el original: ' + (Get-Porque $sal $r)
+        $base = Get-MotivoBase $motivos[$t.id] $j
+        if ($base) { $motivos[$t.id] = $base.Motivo; $sinReintento[$t.id] = $base.Definitivo }
+      }
       else {
         # Un job que no arranca en el original no prueba nada, salvo que sea justo lo que busca el caso: se lo digo una vez (si queda un reintento)
         # y despues se acepta tal cual.
@@ -949,7 +1074,7 @@ function Invoke-Casos($Tareas) {
     foreach ($t in $lote) {
       $m = $motivos[$t.id]
       if ($m) { Remove-Carpeta (Join-Ruta $CopiaOrig $t.entradas.carpeta); Aviso "$($t.id) rechazado: $(($m -split "`n")[0])" } else { Save-Caso $t }
-      Set-Intento $t $m
+      Set-Intento $t $m ([bool]$sinReintento[$t.id])
     }
     Save-Copia $CopiaOrig   # los casos buenos de la ronda, por buenos en la copia
   }
@@ -1133,7 +1258,13 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   $sinContar = @($azar | ForEach-Object { Get-Normal $_.fichero })
   if ($azar.Count -gt 0) { $o.motivo = 'No se comparan, porque el original da dos salidas distintas: ' + (@($azar | Select-Object -First 3 | ForEach-Object { $_.fichero }) -join ', ') + '.' }
   $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") | Where-Object { $sinContar -notcontains (Get-Normal $_.fichero) })
-  if ($d.Count -gt 0) { $o.resultado = 'distinto'; $o.diferencias = $d; return $o }
+  if ($d.Count -gt 0) {
+    $o.resultado = 'distinto'; $o.diferencias = $d
+    # Un migrado que no ha dejado ni estado.txt no ha corrido el caso: la consola lo dice antes de las diferencias, que son todas (no esta)
+    $salidaMig = Join-Ruta $Local "salidas/$Nombre/$j/$c"
+    if (-not (Test-Path -LiteralPath (Join-Path $salidaMig 'estado.txt'))) { $o.motivo = 'El migrado no corrio este caso: ' + (Get-Porque $salidaMig $script:Maven["$Nombre|$j|$c"]) }
+    return $o
+  }
   if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
   $o.resultado = 'igual'
   $vacio = Join-Ruta $Local "salidas/vacio/$j"
@@ -1816,6 +1947,7 @@ $script:Mavens = 0
 $script:Maven = @{}
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
 $script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
+$script:InventarioOrig = $null   # las tablas que usa el codigo del original (Get-TablasBatch), la primera vez que hacen falta (Get-MotivoBase)
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 try {

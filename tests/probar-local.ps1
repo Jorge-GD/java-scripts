@@ -3125,6 +3125,11 @@ public class Dao {
   static final String T = "CREATE TABLE IF NOT EXISTS T_CREADA (ID INT)";
   static final char C = '"';
   static final String L = "http://x?q=1 UPDATE T_URL SET a = 1" + C;
+  static final String N = "SELECT * FROM T_NL\n WHERE 1 = 1";
+  static final String TB = """
+      SELECT *
+        FROM T_TB
+      """;
 }
 '@
   Escribe $raiz 'src/main/resources/schema.sql' "-- insert into T_SQL_COMENTADA`nUPDATE T_D SET x = 1;`n`nselect * from`n  T_D2;`n"
@@ -3145,7 +3150,7 @@ foreach ($t in @(Get-TablasBatch $Raiz)) { 'T|' + $t.tabla + '|' + $t.sitio }
   $t = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^T\|' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   $c = 'src/main/java/com/acme/Dao.java'
   $s = 'src/main/resources'
-  $esperado = @("T_A|${c}:7", "T_B|${c}:8", "T_C|${c}:5", "T_CREADA|${c}:17", "T_D|$s/schema.sql:2", "T_D2|$s/schema.sql:5", "T_DEL|${c}:15", "T_E|$s/mapper.xml:3", "T_F|$s/batch.properties:2", "T_G|$s/application.yml:1", "T_J|${c}:16", "T_M|${c}:9", "T_URL|${c}:19")
+  $esperado = @("T_A|${c}:7", "T_B|${c}:8", "T_C|${c}:5", "T_CREADA|${c}:17", "T_D|$s/schema.sql:2", "T_D2|$s/schema.sql:5", "T_DEL|${c}:15", "T_E|$s/mapper.xml:3", "T_F|$s/batch.properties:2", "T_G|$s/application.yml:1", "T_J|${c}:16", "T_M|${c}:9", "T_NL|${c}:20", "T_TB|${c}:23", "T_URL|${c}:19")
   Igual 'las tablas con su primer sitio, en orden' ($esperado -join ',') ($t -join ',')
   Comprueba 'ni una de las que no son' (@($t | Where-Object { $_ -match 'COMENTADA|THE|CACHE|BATCH_|TASK_|DUAL|T_Z|TABLA|T_TEST|T_TXT|^AB\|' }).Count -eq 0) ($t -join ',')
   $l = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^L\|' })[0]
