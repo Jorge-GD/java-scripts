@@ -6265,6 +6265,9 @@ $Pruebas['m35b (a) con tests-reglas.json la portada pone la fase de las reglas d
   [void](M35b-Comprueba-Sitio 'sin practicas' $m 'Comparaci.n con el original')
   $z = M35b-Salida 'm35b-a-parar' 'hecha' (M35b-Reglas) $null 'parar'
   Comprueba 'con la respuesta parar: ... Comparacion, Correccion, Tests de las reglas, Prueba en local' (Bp5-Orden (Bp5-Lineas $z.I) $M35bFasesParar) ((Bp5-Lineas $z.I | ForEach-Object { $_.Nombre }) -join ' / ')
+  $w = M35b-Salida 'm35b-a-parar-practicas' 'hecha' (M35b-Reglas) (Bp5-Arreglos) 'parar'
+  $o = @($Bp5FasesParar[0..9] + @('Buenas pr.cticas con Lombok') + @($M35bFase) + @($Bp5FasesParar[10]))
+  Comprueba 'con parar, practicas-arreglos.json y tests-reglas.json a la vez: ... Correccion, Buenas practicas, Tests de las reglas, Prueba en local' (Bp5-Orden (Bp5-Lineas $w.I) $o) ((Bp5-Lineas $w.I | ForEach-Object { $_.Nombre }) -join ' / ')
   $h = M35b-Salida 'm35b-a-cero' 'hecha' ([ordered]@{ version = 1; cuando = '2026-11-19T20:00:00'; conTest = 0; reglasVigiladas = 0; atascadas = 0; saltadas = 4; tareas = @() })
   $c = @(Bp5-Lineas $h.I | Where-Object { $_.Nombre -match $M35bFase })
   Igual 'con 0 clases con test y 4 saltadas: la cuenta sigue al JSON' '0 clases con test (0 reglas vigiladas), 0 atascadas, 4 saltadas' ($c | ForEach-Object { $_.Cuenta })
