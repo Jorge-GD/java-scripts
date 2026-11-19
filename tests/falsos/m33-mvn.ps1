@@ -6,6 +6,8 @@
 #   framework  cada caso deja ademas tablas/BATCH_JOB_INSTANCE.csv y tablas/TASK_EXECUTION.csv, con otro contenido en cada lado (el original es
 #              la carpeta batch-viejo)
 #   sordo      el test de regresion no compara nada: pasa siempre
+# La suite de tests unitarios (un 'test' sin -Dtest, la de Measure-Tests de -Reparar) la hace m25-mvn.ps1, que deja un TEST-<clase>.xml por cada
+# *Test.java menos PruebaLocalTest; aqui se quitan, como Surefire, los de las clases que casan con las lineas '**/<Nombre>*' del excludesFile.
 # Un 'test' con -Dtest=...RegresionLocalTest... (los casos ya se han ejecutado todos, en una sola JVM, con lo de mvn-local.ps1) hace lo que haria el
 # RegresionLocalTest de verdad: por cada src/test/resources/prueba-local-esperado/<job>/<caso>/ compara cada fichero con el de target/prueba-local/<job>/<caso>/
 # (sin las tablas BATCH_ ni TASK_ y sin contar los saltos de linea) y, si algo no coincide, falla (sale con 1) y deja en target/regresion-fallos.txt una
@@ -15,6 +17,17 @@ $modo = @("$env:RESCATE_M33" -split ',' | ForEach-Object { $_.Trim() } | Where-O
 & (Join-Path $PSScriptRoot 'm25-mvn.ps1') @args
 $codigo = $LASTEXITCODE
 $prueba = @($args | Where-Object { "$_" -like '-Dtest=*' })
+if ($codigo -eq 0 -and $args -contains 'test' -and $prueba.Count -eq 0) {
+  $excluye = ''
+  foreach ($a in $args) { if ("$a" -match '^-Dsurefire\.excludesFile=(.+)$') { $excluye = $Matches[1] } }
+  if ($excluye -and (Test-Path -LiteralPath $excluye)) {
+    foreach ($l in @([System.IO.File]::ReadAllLines($excluye))) {
+      $m = [regex]::Match($l.Trim(), '^\*\*/(\w+)\*$')
+      if ($m.Success) { Get-ChildItem -LiteralPath (Join-Path $raiz 'target/surefire-reports') -File -Filter ('TEST-*' + $m.Groups[1].Value + '*.xml') -ErrorAction SilentlyContinue | Remove-Item -Force }
+    }
+  }
+  exit $codigo
+}
 $salidas = Join-Path $raiz 'target/prueba-local'
 if ($codigo -ne 0 -or $args -notcontains 'test' -or $prueba.Count -eq 0 -or -not (Test-Path -LiteralPath $salidas)) { exit $codigo }
 

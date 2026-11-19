@@ -229,6 +229,18 @@ $Pruebas['m33 (n) lanzarlo dos veces: la segunda no hace otro commit y lo dice; 
   Igual 'la carpeta de la rama de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
 }
 
+$Pruebas['m33 (p) la suite de tests unitarios de -Reparar no lleva RegresionLocalTest (que solo vale tras PruebaLocalTest), pero si los otros tests'] = {
+  $e = Escenario-M33 'm33-p' ([ordered]@{ cargaJob = @('importe=5.00') }) 'minimo=5.00' 'minimo=5.00' -Limite
+  Commit-En $e.Wt 'src/test/java/com/acme/nuevo/RegresionLocalTest.java' "package com.acme.nuevo;`nclass RegresionLocalTest {}`n" 'regresion'
+  Commit-En $e.Wt 'src/test/java/com/acme/nuevo/OtroTest.java' "package com.acme.nuevo;`nclass OtroTest {}`n" 'otro test'
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0 (el caso distinto se arregla)' 0 $r.Codigo
+  Igual 'la reparacion sale arreglada' 'arreglado' ((@((Lee-Json $e.Json).reparaciones | Where-Object { $_ })[0]).resultado)
+  $informes = Get-Ruta ($e.Migrado + '-prueba-local') 'target/surefire-reports'
+  Comprueba 'la suite se ha ejecutado: lleva el informe de OtroTest' (Test-Path -LiteralPath (Join-Path $informes 'TEST-com.acme.nuevo.OtroTest.xml')) ((@(Get-ChildItem -LiteralPath $informes -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })) -join ' ')
+  Comprueba 'y no lleva el de RegresionLocalTest' (-not (Test-Path -LiteralPath (Join-Path $informes 'TEST-com.acme.nuevo.RegresionLocalTest.xml'))) ((@(Get-ChildItem -LiteralPath $informes -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })) -join ' ')
+}
+
 $Pruebas['m33 (f) sin -Regresion no cambia nada: ni commit ni regresion.json'] = {
   $e = Escenario-M33 'm33-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   $antes = Estado-Git $e.Wt

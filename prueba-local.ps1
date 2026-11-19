@@ -1294,12 +1294,13 @@ function Get-TareaReparar($C, $R, $S) {
   return $t
 }
 
-# Ejecuta en la copia la suite de tests unitarios, sin el arnes (Surefire sin **/PruebaLocalTest*, y sin parar por los fallos), y cuenta lo
+# Ejecuta en la copia la suite de tests unitarios, sin el arnes ni la regresion (Surefire sin **/PruebaLocalTest* ni **/RegresionLocalTest*,
+# que solo valen tras el arnes, y sin parar por los fallos), y cuenta lo
 # que dicen sus TEST-*.xml: Fallos (failures + errors), Ejecutados (tests - skipped) y Nombres (los tests que fallan). Con Motivo, Maven
 # no ha podido (no compila, se paso del tope...).
 function Measure-Tests([string]$Que) {
   $excluir = Join-Path $Local 'reparar-excluir.txt'
-  [System.IO.File]::WriteAllText($excluir, "**/PruebaLocalTest*`n", $Utf8)
+  [System.IO.File]::WriteAllText($excluir, "**/PruebaLocalTest*`n**/RegresionLocalTest*`n", $Utf8)
   $informes = Join-Ruta $CopiaMig 'target/surefire-reports'
   Remove-Carpeta $informes
   $r = Invoke-Maven $CopiaMig $false @('test', "-Dsurefire.excludesFile=$excluir", '-Dmaven.test.failure.ignore=true') $Que
