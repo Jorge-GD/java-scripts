@@ -31,17 +31,25 @@ En los ejemplos:
 
 ## Si todavía no hay migrado: empezar desde cero
 
-Si el batch aún no se ha migrado, el migrado empieza siendo una copia del original en una rama nueva:
+Estos scripts **terminan** una migración: arreglan fichero a fichero y cada arreglo tiene que compilar. No hacen la subida de versión. Pasar a Java 21 y Spring Boot 3 cambia el `pom`, `javax` por `jakarta` en todos los ficheros y la API de Spring Batch a la vez, y hasta que no está todo no compila nada. Con un batch real, lanzar el paso 2 sobre el original da un resultado malo.
 
-```powershell
-git clone C:\ruta\original C:\ruta\migrado
-git -C C:\ruta\migrado switch -c migracion-java21
-```
+Por eso, de cero va en dos fases:
 
-Después, los pasos de siempre. El paso 2 lo acerca a la referencia: Java 21, Spring Boot 3, `jakarta`, la API nueva de Spring Batch, la estructura de carpetas, el SFTP y la configuración. El paso 3 comprueba que sigue haciendo lo mismo que el original.
+1. **La subida de versión, con GitHub Copilot modernization**, en una copia del original en una rama nueva:
 
-- Ojo: así solo se ha probado con un batch inventado. Con uno real, espera más ficheros atascados que en un batch ya migrado.
-- Si tu equipo crea los repos de otra forma (un repo nuevo, otro `artifactId`), créalo así y copia dentro el código del original antes del paso 1.
+   ```powershell
+   git clone C:\ruta\original C:\ruta\migrado
+   git -C C:\ruta\migrado switch -c migracion-java21
+   copilot plugin marketplace add microsoft/modernize-java
+   copilot plugin install modernize-java@modernize-java
+   cd C:\ruta\migrado
+   copilot --agent modernize-java:modernize-java
+   ```
+
+   Pídele: `upgrade to Java 21 + Spring Boot 3.x`, con la versión de Spring Boot de tu referencia. Revisa lo que cambia y haz commit cuando compile y pasen los tests. Comandos del [quickstart de Microsoft](https://learn.microsoft.com/en-us/azure/developer/github-copilot-app-modernization/quickstart-upgrade), comprobados el 19-11-2026. Si el plugin no se instala, la otra página de Microsoft usa `microsoft/github-copilot-modernization` y `--agent=github-copilot-modernization:modernize`.
+2. **Después, los pasos de siempre.** El paso 2 lo acerca a la referencia: estructura de carpetas, SFTP y configuración. El paso 3 comprueba que sigue haciendo lo mismo que el original.
+
+- Si tu equipo crea los repos de otra forma (un repo nuevo, otro `artifactId`), créalo así y copia dentro el código del original antes de la fase 1.
 
 ## Paso 0. Preflight, una vez por equipo
 
