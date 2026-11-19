@@ -1209,7 +1209,7 @@ $Pruebas['62 m20b (i): la huella del arnes cambia (la plantilla) y el test guard
   Comprueba 'no dice que lo vuelve a escribir' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
 }
 
-$Pruebas['63 m20b (j): la huella cambia y el test guardado ya no compila: se llama a la IA como hoy, solo para ese arnes y sin el aviso de volver a escribir'] = {
+$Pruebas['63 m20b (j): la huella cambia y el test guardado del original ya no compila: se llama a la IA para el original y, como el del migrado lo traduce, tambien para el migrado; sin el aviso de volver a escribir'] = {
   $e = Nuevo-Escenario 'm20b-huella-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $r = Prueba $e
   Igual 'la primera vez sale con 0' 0 $r.Codigo
@@ -1218,8 +1218,8 @@ $Pruebas['63 m20b (j): la huella cambia y el test guardado ya no compila: se lla
   Rompe-Arnes-Guardado $e 'original'
   $r = Prueba $e
   Igual 'sale con 0' 0 $r.Codigo
-  Igual 'una sola llamada: el arnes del original (el del migrado sigue valiendo)' ($n + 1) @(Llamadas $e).Count
-  Comprueba 'el del migrado se usa sin llamar' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'dos llamadas: el arnes del original y el del migrado (que traduce el nuevo, aunque el suyo siga valiendo)' ($n + 2) @(Llamadas $e).Count
+  Comprueba 'el del migrado no se usa sin llamar' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
   Comprueba 'el del original no dice que se use el de antes' ($r.Salida -notmatch 'Arnes del original: bien \(el test de otro lanzamiento') (Cola $r.Salida)
   Comprueba 'ni lo de volver a escribir (la tarea ya era nueva)' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
   Igual 'la tarea del original queda hecha, con la IA' 'hecha' (Tarea-Arnes $e 'original').estado
@@ -1238,7 +1238,7 @@ $Pruebas['64 m20b (k): la tarea del arnes quedo atascada en otro lanzamiento y e
   foreach ($lado in @('original', 'migrado')) { Igual "la tarea del $lado queda hecha" 'hecha' (Tarea-Arnes $e $lado).estado }
 }
 
-$Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale sigue como hoy: se avisa de que se vuelve a escribir'] = {
+$Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale: se avisa de que se vuelve a escribir (y el del migrado, que lo traduce, tambien)'] = {
   $e = Nuevo-Escenario 'm20b-hecha-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $r = Prueba $e
   Igual 'la primera vez sale con 0' 0 $r.Codigo
@@ -1247,7 +1247,7 @@ $Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale si
   $r = Prueba $e
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'dice que el test del original ya no vale y que se vuelve a escribir' ($r.Salida -match 'Arnes|test PruebaLocalTest del original de otro lanzamiento ya no vale' -and $r.Salida -match 'se vuelve a escribir') (Cola $r.Salida)
-  Igual 'una llamada: el arnes del original' ($n + 1) @(Llamadas $e).Count
+  Igual 'dos llamadas: el arnes del original y el del migrado' ($n + 2) @(Llamadas $e).Count
 }
 
 $Pruebas['m24 config.json del migrado: las claves de rescate.ps1 (PalabrasConfigAntigua, PasosSoloCompila) no avisan de desconocidas en la consola'] = {

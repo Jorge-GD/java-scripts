@@ -25,8 +25,9 @@ QUE HACE
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
      se borra y se escribe otra vez (el del original no se toca). Lo mismo, sin pedirlo, si el guardado se escribio con otra
-     plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara: si es el del original, se
-     escriben otra vez los dos (el del migrado traduce el nuevo); con -RehacerArnes y el del original viejo, tambien los dos.
+     plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
+     escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
+     tambien con -RehacerArnes.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -1848,18 +1849,20 @@ try {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs $testOriginal
-    # El test guardado se escribio con otra plantilla: se escribe otra vez, como con -RehacerArnes pero sin que lo pida nadie. Si es el del
-    # original, tambien el del migrado (que lo traduce: Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Una sola Info:
+    # El test guardado se escribio con otra plantilla: se escribe otra vez, como con -RehacerArnes pero sin que lo pida nadie. Una sola Info:
     # ninguna si ya se rehace el del migrado (-RehacerArnes) y, con el original viejo, la del original y no la del migrado.
     if (-not $rehacer[$x[0]] -and (Test-PlantillaVieja $t)) {
       if (-not $rehacer.migrado -and $x[0] -eq 'original') { Info 'La plantilla del test ha cambiado desde que se escribio el del original: escribo otra vez los dos (el del migrado traduce el nuevo).' }
       if (-not $rehacer.migrado -and $x[0] -eq 'migrado') { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.' }
       $rehacer[$x[0]] = $true
-      if ($x[0] -eq 'original') { $rehacer.migrado = $true }
     }
     # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
     if ($rehacer[$x[0]]) { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
     elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
+    # Si el del original no queda hecho (la plantilla, o ya no vale en este commit), se escribe otra vez y el del migrado guardado tambien: lo
+    # traduce (Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Sin migrado guardado no hay que dejar de fiarse de nada:
+    # su tarea sigue por su intento y su motivo, como hoy.
+    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) { $rehacer.migrado = $true }
     $arneses += , $t
     if ($x[0] -eq 'original') { $testOriginal = $test }
   }
