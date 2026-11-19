@@ -208,10 +208,14 @@ function Main-Igual35($E) {
   }
   return $true
 }
-function Compilaciones35($E) { return @(Llamadas-De $E.Mvn | Where-Object { $_ -match '\|-B test-compile\|' }) }
+function Compilaciones35($E) {
+  $todas = Llamadas-De $E.Mvn
+  return @($todas | Where-Object { $_ -match '\|-B test-compile\|' })
+}
 # Las llamadas 'test' de una clase de test: de cada una, las lineas de src/main que habia cambiadas (vacio si la llamada va sin mutante).
 function Corridas35($E, [string]$Clase) {
-  return @(Llamadas-De $E.Mvn | Where-Object { $_ -match ('\|-B test -Dtest=' + $Clase + 'ReglasTest ') } | ForEach-Object { ($_ -split '\|', 3)[2].Trim() })
+  $todas = Llamadas-De $E.Mvn
+  return @($todas | Where-Object { $_ -match ('\|-B test -Dtest=' + $Clase + 'ReglasTest ') } | ForEach-Object { ($_ -split '\|', 3)[2].Trim() })
 }
 
 # ================================ PRUEBAS ================================
