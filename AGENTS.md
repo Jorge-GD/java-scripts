@@ -15,7 +15,7 @@ En esta carpeta hay scripts de PowerShell que terminan la migración de un batch
 3. Copia cada comando tal cual: sin cambiar parámetros ni rutas. No inventes comandos. Si el script no da ninguno, dilo.
 4. Si te pregunta qué hace un paso, la explicación está en `FLUJO.md`. Lee solo la sección de ese paso.
 
-Cuando el script habla de «la página 1, 2, 3 o 4», se refiere al informe del batch, en `<migrado>\migracion-<batch>\`:
+Cuando el script habla de «la página 1, 2, 3, 4 o 5», se refiere al informe del batch, en `<migrado>\migracion-<batch>\`:
 
 | Página | Fichero | Qué tiene |
 |---|---|---|
@@ -24,6 +24,7 @@ Cuando el script habla de «la página 1, 2, 3 o 4», se refiere al informe del 
 | 2 | `2-problemas.html` | Los problemas del migrado |
 | 3 | `3-original-vs-migrado.html` | El original frente al migrado: la prueba en local y la lectura de la IA |
 | 4 | `4-correcciones.html` | Lo corregido y lo que queda |
+| 5 | `5-buenas-practicas.html` | Las buenas prácticas del migrado y qué hacer con cada una |
 
 ## Si algo ha fallado
 
