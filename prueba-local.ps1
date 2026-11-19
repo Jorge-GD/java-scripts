@@ -28,6 +28,8 @@ QUE HACE
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
+     Si el job ni arranca en el original (estado=EXCEPCION), se lo dice a la IA una vez (si el caso no busca justo eso, que
+     corrija las entradas) y despues lo acepta; igual con un caso hecho de antes cuya salida guardada del original dice eso.
   4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
@@ -40,7 +42,8 @@ QUE HACE
      diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
      prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
-     lanzamiento los escriba otra vez con ese motivo.
+     lanzamiento los escriba otra vez con ese motivo. Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
+     un solo lado es lo mismo que una tabla que no esta.
   6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
      <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
      cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
@@ -64,7 +67,8 @@ QUE HACE
      rama de rescate (un commit por arreglo: 'rescate(local): <job>/<caso> <clave>'); uno que no pasa se deshace y se
      reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
      rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice. Una clave
-     que sale 'no se arregla' no se vuelve a probar con el mismo test del migrado: con -RehacerArnes (otro test), si.
+     que sale 'no se arregla' no se vuelve a probar con el mismo test del migrado: con -RehacerArnes (otro test), si. Un caso
+     cuyo original da estado=EXCEPCION no se repara (se dice cuantos se saltan) y su resultado no cambia.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -350,6 +354,28 @@ function Get-Porque([string]$Sal, $Maven) {
   if (Test-Path -LiteralPath $err) { return ('error.txt: ' + (@([System.IO.File]::ReadAllLines($err) | Select-Object -First ([int]$Cfg.LineasError)) -join "`n")) }
   if ($null -eq $Maven) { return 'no ha dejado estado.txt.' }
   return ("no ha dejado estado.txt. Maven dice:`n" + (Get-FalloMaven $Maven))
+}
+
+# '' si el job arranco en $Sal; si su estado.txt dice estado=EXCEPCION (lanzarlo lanzo una excepcion antes de tener ejecucion), la clase de la
+# excepcion (la linea salida=) o 'una excepcion' si no la dice.
+function Get-Excepcion([string]$Sal) {
+  $ruta = Join-Path $Sal 'estado.txt'
+  if (-not (Test-Path -LiteralPath $ruta)) { return '' }
+  $l = @([System.IO.File]::ReadAllLines($ruta) | ForEach-Object { $_.Trim() })
+  if ($l -cnotcontains 'estado=EXCEPCION') { return '' }
+  $clase = ((@($l | Where-Object { $_ -cmatch '^salida=' } | Select-Object -First 1) -join '') -replace '^salida=', '')
+  if ($clase) { return $clase }
+  return 'una excepcion'
+}
+
+# Lo que se le dice a la IA de un caso cuyo original no arranca ($Clase es lo de Get-Excepcion de $Sal): la primera linea de la causa (error.txt), si hay.
+function Get-MotivoExcepcion([string]$Sal, [string]$Clase) {
+  $causa = ''
+  if (Test-Path -LiteralPath (Join-Path $Sal 'error.txt')) {
+    $p = (((Get-Porque $Sal $null) -split "`n")[0]).TrimEnd()
+    if ($p -cne 'error.txt:') { $causa = " ($p)" }
+  }
+  return "En el original el job no llega a arrancar: lanzarlo da $Clase$causa. Si el caso no busca justo eso, corrige las entradas (parametros, datos.sql...) para que el job arranque y haga lo que dice el titulo."
 }
 
 # ================================ TAREAS ================================
@@ -806,9 +832,27 @@ function Get-TareasCasos($Prueba, $JobMapa) {
     $e = [pscustomobject]@{ job = $Prueba.job; caso = $caso; titulo = [string]$c.titulo; carpeta = $carpeta; copia = $CopiaOrig; dirs = @(); huella = $huella; prompt = $prompt }
     $t = Restore-Tarea (New-TareaTipo 'caso-local' ('caso-' + (Get-NombreJob $Prueba.job) + '-' + $n.ToString('00')) '' "prueba-local/casos/$($Prueba.job)/$caso" $e) $false
     $t.entradas.copia = $CopiaOrig   # la de ahora, aunque la tarea venga de otro lanzamiento
+    # excepcionPedida: ya se le ha dicho a la IA que el job no arrancaba en el original (Invoke-Casos); las tareas de antes no la llevan
+    if ($null -eq $t.entradas.PSObject.Properties['excepcionPedida']) { Add-Member -InputObject $t.entradas -NotePropertyName excepcionPedida -NotePropertyValue $false }
     $tareas += , (Test-Guardada $t (Join-Ruta $Local "casos/$($Prueba.job)/$caso"))
   }
   return $tareas
+}
+
+# Un caso hecho en otro lanzamiento cuyo original dejo estado=EXCEPCION (su salida guardada) y al que nunca se le ha pedido que el job
+# arranque vuelve a pendiente con ese motivo: se rehace una vez (Invoke-Casos acepta la segunda). Dice cuantos son.
+function Reset-CasosExcepcion($Tareas) {
+  $n = 0
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' -and -not $_.entradas.excepcionPedida })) {
+    $sal = Join-Ruta $Local "salidas/original/$($t.entradas.job)/$($t.entradas.caso)"
+    $clase = Get-Excepcion $sal
+    if (-not $clase) { continue }
+    $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = Get-MotivoExcepcion $sal $clase
+    $t.entradas.excepcionPedida = $true
+    Save-Tarea $t
+    $n++
+  }
+  if ($n -gt 0) { Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
 }
 
 # Guarda un caso que ha pasado la comprobacion (en prueba-local\casos\<job>\<caso>); si es no-aplica, lo quita de la
@@ -864,6 +908,15 @@ function Invoke-Casos($Tareas) {
       $r = Invoke-Job $CopiaOrig $true $j $c "caso $j/$c en el original"
       $sal = Join-Ruta $CopiaOrig "target/prueba-local/$j/$c"
       if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { $motivos[$t.id] = 'El caso no corre en el original: ' + (Get-Porque $sal $r) }
+      else {
+        # Un job que no arranca en el original no prueba nada, salvo que sea justo lo que busca el caso: se lo digo una vez (si queda un reintento)
+        # y despues se acepta tal cual.
+        $clase = Get-Excepcion $sal
+        if ($clase) {
+          if (-not $t.entradas.excepcionPedida -and ($t.intentos + 1) -lt [int]$Cfg.Intentos) { $motivos[$t.id] = Get-MotivoExcepcion $sal $clase }
+          $t.entradas.excepcionPedida = $true
+        }
+      }
     }
     foreach ($t in $lote) {
       $m = $motivos[$t.id]
@@ -1004,7 +1057,8 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false) {
 # Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
 # mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
 # Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
-# .csv de tablas\ se comparan sin orden de columnas ni de filas (Get-LineasNormales).
+# .csv de tablas\ se comparan sin orden de columnas ni de filas (Get-LineasNormales), y uno que esta en un solo lado y no tiene ninguna fila
+# de datos no es una diferencia.
 function Compare-Caso([string]$A, [string]$B) {
   $pares = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
   foreach ($lado in @(@('A', $A), @('B', $B))) {
@@ -1020,7 +1074,10 @@ function Compare-Caso([string]$A, [string]$B) {
   $dif = @()
   foreach ($k in @($pares.Keys | Sort-Object)) {
     $p = $pares[$k]
-    $c = Compare-Fichero $p.A $p.B ($p.Rel -cmatch '^tablas/.+\.csv$')
+    $tabla = ($p.Rel -cmatch '^tablas/.+\.csv$')
+    # Una tabla en un solo lado sin ninguna fila de datos (vacia, solo la cabecera o lineas en blanco) es como una tabla que no esta.
+    if ($tabla -and -not ($p.A -and $p.B) -and @(Get-LineasNormales ($p.A + $p.B) | Where-Object { $_.Trim() }).Count -le 1) { continue }
+    $c = Compare-Fichero $p.A $p.B $tabla
     if ($c) { $dif += [ordered]@{ fichero = $p.Rel; lineas = $c.Lineas; linea = $c.Linea; original = $c.Original; migrado = $c.Migrado; nota = $c.Nota } }
   }
   return $dif
@@ -1560,25 +1617,32 @@ function Repair-Clave($C, $S) {
   return $o
 }
 
+# Los resultados de $S.Res que -Reparar puede arreglar: todos menos los de los casos de $S.Saltar ('job<tab>caso': su original no arranca).
+function Get-Reparables($S) { return @($S.Res | Where-Object { $S.Saltar -cnotcontains "$($_.job)`t$($_.caso)" }) }
+
 # Con -Reparar y casos distintos: arregla las claves, de la que tiene mas casos a la que menos, hasta MaxReparaciones, y deja en $Res (en su
 # sitio) lo medido tras el ultimo arreglo bueno, cuyas salidas pasan a ser las del migrado. Devuelve las entradas de reparaciones.
 function Invoke-Reparaciones($Res) {
   Info ''
   Info "Reparando en la rama de rescate ($(Get-Rama $DirRama)): hasta $($Cfg.MaxReparaciones) claves de diferencia, con $($Cfg.Intentos) intentos cada una..."
+  # Con estado=EXCEPCION en el original el job ni arranca: no hay salida que copiar. Esos casos no se reparan y su resultado no cambia.
+  $saltar = @($Res | Where-Object { $_.resultado -eq 'distinto' -and (Get-Excepcion (Join-Ruta $Local "salidas/original/$($_.job)/$($_.caso)")) } | ForEach-Object { "$($_.job)`t$($_.caso)" })
+  if ($saltar.Count -gt 0) { Info "Salto $($saltar.Count) caso(s) distinto(s) cuyo original da estado=EXCEPCION: el job no arranca en el original y no hay salida que copiar." }
+  if (@($Res | Where-Object { $_.resultado -eq 'distinto' }).Count -eq $saltar.Count) { return @() }
   Remove-Carpeta (Join-Ruta $Local 'salidas/reparar')
   Save-Copia $CopiaMig   # la copia ya lleva el arnes y los casos que dejo Invoke-Migrado: son su base
   $base = Measure-Tests 'tests unitarios de partida'
   if ($base.Motivo) { Aviso "No reparo nada: no he podido medir los tests unitarios de partida. $($base.Motivo)"; return @() }
   Info "Tests unitarios de partida: $($base.Ejecutados) ejecutados, $($base.Fallos) fallan."
-  $s = [pscustomobject]@{ Res = $Res; Salidas = 'migrado'; N = 0; Base = $base; Probadas = @{} }
+  $s = [pscustomobject]@{ Res = $Res; Salidas = 'migrado'; N = 0; Base = $base; Probadas = @{}; Saltar = $saltar }
   $reps = @()
   while ($s.Probadas.Count -lt [int]$Cfg.MaxReparaciones) {
-    $c = Find-Clave $s.Res $s.Probadas
+    $c = Find-Clave (Get-Reparables $s) $s.Probadas
     if (-not $c) { break }
     $s.Probadas[$c.clave] = $true
     $reps += , (Repair-Clave $c $s)
   }
-  $quedan = @(@($s.Res | Where-Object { $_.resultado -eq 'distinto' } | ForEach-Object { Get-Claves $_ }) | Where-Object { -not $s.Probadas.ContainsKey($_) } | Select-Object -Unique)
+  $quedan = @(@(Get-Reparables $s | Where-Object { $_.resultado -eq 'distinto' } | ForEach-Object { Get-Claves $_ }) | Where-Object { -not $s.Probadas.ContainsKey($_) } | Select-Object -Unique)
   if ($quedan.Count -gt 0) { Aviso "Tope de MaxReparaciones ($($Cfg.MaxReparaciones)) claves por lanzamiento: quedan sin probar: $($quedan -join ', '). Vuelve a lanzar con -Reparar." }
   if ($s.Salidas -ne 'migrado') {
     Remove-Carpeta (Join-Ruta $Local 'salidas/migrado')
@@ -1779,6 +1843,7 @@ try {
     if (-not $jm) { $jm = [pscustomobject]@{ job = $p.job; clases = @() } }
     $tareasCasos += @(Get-TareasCasos $p $jm)
   }
+  Reset-CasosExcepcion $tareasCasos
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }

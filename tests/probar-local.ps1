@@ -2474,5 +2474,259 @@ $Pruebas['m32 (f) un prueba-local-tiempos.json de antes que no se puede leer no 
   Igual 'y el fichero de antes sigue como estaba' "esto no es json {`n" (Lee $datos 'prueba-local-tiempos.json')
 }
 
+# ===================== M36: una tabla vacia es una tabla que no esta, y un original que no arranca no prueba nada =====================
+# m36-mvn.ps1 deja, segun el guion de RESCATE_M36 ('guion:regex sobre job/caso', separados por ';'), tablas vacias o con filas en un solo
+# lado y un original que no arranca (estado=EXCEPCION) o que acaba mal (estado=FAILED).
+
+# Un escenario normal con el Maven de mentira de m36.
+function Escenario-M36([string]$Nombre, $Casos) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza -Si con los guiones $Guion de m36-mvn.ps1 y devuelve lo de Prueba.
+function Prueba-M36($E, [string]$Guion, [string[]]$A = @(), [string]$GuionCopilot = '') {
+  $env:RESCATE_M36 = $Guion
+  try { return (Prueba $E $A $GuionCopilot) }
+  finally { $env:RESCATE_M36 = '' }
+}
+
+function Llamadas-Casos($E) { return @(Llamadas $E | Where-Object { $_.tipo -eq 'caso-local' }) }
+
+# La tarea del caso $Caso (de dos digitos) del job $Job.
+function Tarea-Caso-M36($E, [string]$Job, [string]$Caso) { return (Lee-Json (Get-Ruta $E.Local "tareas/caso-$Job-$Caso.json")) }
+
+# El prompt y la respuesta de la llamada $N de la tarea del caso $Caso del job $Job.
+function Registro-Caso-M36($E, [string]$Job, [string]$Caso, [int]$N) {
+  $f = Get-Ruta $E.Local "registros/caso-$Job-$Caso-$N.log"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return [System.IO.File]::ReadAllText($f)
+}
+
+$Pruebas['m36 (a, b) tablas: una tabla vacia (sin filas, con la cabecera sola o con lineas en blanco) en un solo lado sale igual que una que no esta; con una fila, distinta'] = {
+  $e = Escenario-M36 'm36-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=10.00') })
+  $r = Prueba-M36 $e 'tabla-cabecera:/caso-01;tabla-fila:/caso-02;tabla-cabecera-mig:/caso-03;tabla-fila-mig:/caso-04;tabla-blancos:/caso-05'
+  Igual 'sale con 2 (hay distintos)' 2 $r.Codigo
+  Igual 'iguales los de tabla vacia, distintos los de una fila' 'igual,distinto,igual,distinto,igual' ((Resultados $e) -join ',')
+  Comprueba 'las tablas estan en las salidas (es la comparacion la que las deja pasar)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/tablas/T.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-03/tablas/T.csv'))) ''
+  $d = @((Caso $e 'cargaJob' 'caso-02').diferencias)
+  Igual 'con una fila solo en el original: esa tabla y solo ella' 'tablas/T.csv' ($d | ForEach-Object { $_.fichero })
+  Igual 'la cabecera del original frente a (no esta)' 'ID;NOMBRE|(no esta)' "$($d[0].original)|$($d[0].migrado)"
+  $d = @((Caso $e 'cargaJob' 'caso-04').diferencias)
+  Igual 'con una fila solo en el migrado: esa tabla y solo ella' 'tablas/T.csv' ($d | ForEach-Object { $_.fichero })
+  Igual 'y (no esta) frente a la cabecera del migrado' '(no esta)|ID;NOMBRE' "$($d[0].original)|$($d[0].migrado)"
+}
+
+$Pruebas['m36 (a2) Compare-Caso: la tabla vacia de un solo lado no cuenta; con una fila, con las dos del mismo lado o fuera de tablas/ si cuenta'] = {
+  $f = Join-Path $Dir 'm36-comparar.ps1'
+  $raizCmp = Join-Path $Dir 'm36-comparar'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @()
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
+  $dirs = @{}
+  foreach ($x in @(@('A', $A), @('B', $B))) {
+    $d = Join-Path (Join-Path $Raiz $Id) $x[0]
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    foreach ($k in $x[1].Keys) {
+      $p = Join-Path $d $k
+      [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      [System.IO.File]::WriteAllText($p, $x[1][$k])
+    }
+    $dirs[$x[0]] = $d
+  }
+  'R ' + $Id + ' ' + (@(Compare-Caso $dirs.A $dirs.B | ForEach-Object { $_.fichero }) -join ',')
+}
+$t = 'tablas/T.csv'
+Caso 'cabecera' @{ $t = "ID;NOMBRE`n" } @{}
+Caso 'cabecera-mig' @{} @{ $t = "ID;NOMBRE`r`n" }
+Caso 'vacio-0' @{ $t = '' } @{}
+Caso 'blancos' @{ $t = "ID;NOMBRE`n`n   `n`n" } @{}
+Caso 'fila' @{ $t = "ID;NOMBRE`n1;ana`n" } @{}
+Caso 'fila-tras-blancos' @{} @{ $t = "ID;NOMBRE`n`n1;ana`n" }
+Caso 'dos-lados' @{ $t = "ID;NOMBRE`n" } @{ $t = "ID;NOMBRE`n1;ana`n" }
+Caso 'dos-lados-iguales' @{ $t = "ID;NOMBRE`n" } @{ $t = "ID;NOMBRE`n" }
+Caso 'dos-cabeceras' @{ $t = "ID;NOMBRE`n" } @{ $t = "NOMBRE;ID`n" }
+Caso 'fuera-de-tablas' @{ 'ficheros/salida/x.csv' = "ID;NOMBRE`n" } @{}
+Caso 'tablas-no-csv' @{ 'tablas/nota.txt' = "ID;NOMBRE`n" } @{}
+Caso 'vacia-y-otra' @{ $t = "ID;NOMBRE`n"; 'tablas/U.csv' = "ID;NOMBRE`n1;ana`n" } @{}
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  $r = Lanzar $f @($raizCmp)
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  Igual 'la cabecera sola en el original y nada en el migrado: sin diferencias' '' $v['cabecera']
+  Igual 'al reves, con saltos de linea de Windows: sin diferencias' '' $v['cabecera-mig']
+  Igual 'un fichero de 0 bytes: sin diferencias' '' $v['vacio-0']
+  Igual 'la cabecera y lineas en blanco: sin diferencias' '' $v['blancos']
+  Igual 'con una fila: distinta' 'tablas/T.csv' $v['fila']
+  Igual 'con una fila tras lineas en blanco, en el migrado: distinta' 'tablas/T.csv' $v['fila-tras-blancos']
+  Igual 'en los dos lados, la cabecera frente a la cabecera y una fila: distinta, como siempre' 'tablas/T.csv' $v['dos-lados']
+  Igual 'en los dos lados y la misma cabecera: igual' '' $v['dos-lados-iguales']
+  Igual 'en los dos lados con otra cabecera: se ordenan las columnas y sale igual, como siempre' '' $v['dos-cabeceras']
+  Igual 'un .csv fuera de tablas/ con la cabecera sola en un lado: distinto' 'ficheros/salida/x.csv' $v['fuera-de-tablas']
+  Igual 'un fichero de tablas/ que no es .csv: distinto' 'tablas/nota.txt' $v['tablas-no-csv']
+  Igual 'una tabla vacia no tapa a otra con filas del mismo caso' 'tablas/U.csv' $v['vacia-y-otra']
+}
+
+$Pruebas['m36 (c, f) un caso cuyo original no arranca (estado=EXCEPCION): se rechaza con el motivo una vez y en el reintento se acepta; con FAILED, no cambia'] = {
+  $e = Escenario-M36 'm36-c' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00'); tarifaJob = @('importe=10.00') })
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/;excepcion-sin-error:^remesaJob/;failed:^tarifaJob/'
+  Igual 'sale con 2 (los tres salen distintos del migrado)' 2 $r.Codigo
+  $ll = @(Llamadas-Casos $e)
+  Igual 'dos llamadas por cada job con EXCEPCION y una por el de FAILED' 5 $ll.Count
+  Igual 'cargaJob: dos llamadas' 2 @($ll | Where-Object { $_.id -like 'caso-cargaJob-*' }).Count
+  Igual 'remesaJob: dos llamadas' 2 @($ll | Where-Object { $_.id -like 'caso-remesaJob-*' }).Count
+  Igual 'tarifaJob (FAILED): una llamada, como hoy' 1 @($ll | Where-Object { $_.id -like 'caso-tarifaJob-*' }).Count
+  Comprueba 'la consola dice que el caso se rechaza porque el job no arranca' ($r.Salida -match 'caso-cargaJob-01 rechazado: En el original el job no llega a arrancar') (Cola $r.Salida)
+  Comprueba 'y no rechaza el de FAILED' ($r.Salida -notmatch 'caso-tarifaJob-01 rechazado') (Cola $r.Salida)
+  $p = Registro-Caso-M36 $e 'cargaJob' '01' 2
+  Comprueba 'el reintento recibe el motivo con la salida y la primera linea de la causa' ($p.Contains("En el original el job no llega a arrancar: lanzarlo da IllegalStateException (error.txt: Could not resolve placeholder 'acme.entrada.ruta'). Si el caso no busca justo eso, corrige las entradas (parametros, datos.sql...) para que el job arranque y haga lo que dice el titulo.")) (Cola $p)
+  Comprueba 'sin la segunda linea de la causa' (-not $p.Contains('at com.acme.viejo.Lector.lee')) ''
+  $p = Registro-Caso-M36 $e 'remesaJob' '01' 2
+  Comprueba 'sin error.txt, el motivo dice la salida y no la causa' ($p.Contains('lanzarlo da IllegalStateException. Si el caso no busca justo eso') -and -not $p.Contains('error.txt:')) (Cola $p)
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'cargaJob: la tarea queda hecha tras el reintento' 'hecha' $t.estado
+  Igual 'con dos intentos' 2 $t.intentos
+  Igual 'apuntado en la tarea que ya se pidio' $true $t.entradas.excepcionPedida
+  Igual 'el original sigue dando EXCEPCION y el caso se prueba' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+  Comprueba 'la salida guardada del original dice EXCEPCION' ((Lee $e.Local 'salidas/original/cargaJob/caso-01/estado.txt') -match 'estado=EXCEPCION') ''
+  $t = Tarea-Caso-M36 $e 'tarifaJob' '01'
+  Igual 'tarifaJob: hecha con un intento' 'hecha' $t.estado
+  Igual 'sin pedir nada de EXCEPCION' 1 $t.intentos
+  Comprueba 'y sin apuntarlo en la tarea' (-not $t.entradas.excepcionPedida) ''
+}
+
+$Pruebas['m36 (c2) un caso rechazado antes por otro motivo y que luego deja un original que no arranca: no queda atascado, se acepta en su ultimo intento'] = {
+  $e = Escenario-M36 'm36-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm36-copilot.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M36 $e 'excepcion' @() 'primera-nada'
+  Igual 'sale con 2 (el caso sale distinto del migrado)' 2 $r.Codigo
+  Igual 'dos llamadas, sin una tercera para lo de EXCEPCION' 2 (Llamadas-Casos $e).Count
+  Comprueba 'el primer rechazo es por no escribir nada' ($r.Salida -match 'caso-cargaJob-01 rechazado: No has escrito ningun fichero') (Cola $r.Salida)
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'con dos intentos' 2 $t.intentos
+  Igual 'apuntado que ya se vio' $true $t.entradas.excepcionPedida
+  Igual 'el caso se prueba' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+$Pruebas['m36 (c3) con Intentos = 3, un caso nuevo cuyo original no arranca se rechaza en el primer intento y se acepta en el segundo: no hay una tercera llamada'] = {
+  $e = Escenario-M36 'm36-c3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60; Intentos = 3 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M36 $e 'excepcion'
+  Igual 'sale con 2 (el caso sale distinto del migrado)' 2 $r.Codigo
+  Igual 'dos llamadas, no tres' 2 (Llamadas-Casos $e).Count
+  Comprueba 'el primer intento se rechaza porque el job no arranca' ($r.Salida -match 'caso-cargaJob-01 rechazado: En el original el job no llega a arrancar') (Cola $r.Salida)
+  Igual 'y solo se rechaza una vez' 1 @([regex]::Matches($r.Salida, 'caso-cargaJob-01 rechazado')).Count
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'con dos intentos' 2 $t.intentos
+  Igual 'apuntado que ya se pidio' $true $t.entradas.excepcionPedida
+}
+
+$Pruebas['m36 (d) un caso hecho en otro lanzamiento con EXCEPCION guardada vuelve a pendiente una vez, con la Info; en el siguiente lanzamiento no se repite'] = {
+  $e = Escenario-M36 'm36-d' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
+  $r = Prueba-M36 $e ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'dos llamadas de casos' 2 (Llamadas-Casos $e).Count
+  Comprueba 'sin nada que rehacer, ninguna Info de eso' ($r.Salida -notmatch 'Se rehacen') (Cola $r.Salida)
+  # el original de cargaJob dejo EXCEPCION en aquel lanzamiento (remesaJob, no)
+  Escribe $e.Local 'salidas/original/cargaJob/caso-01/estado.txt' "estado=EXCEPCION`nsalida=IllegalStateException`n"
+  Escribe $e.Local 'salidas/original/cargaJob/caso-01/error.txt' "Could not resolve placeholder 'acme.entrada.ruta'`n"
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/'
+  Comprueba 'la Info dice que se rehace 1 caso' ($r.Salida -match 'Se rehacen 1 caso') (Cola $r.Salida)
+  Igual 'una llamada mas, solo la de ese caso' 3 (Llamadas-Casos $e).Count
+  $p = Registro-Caso-M36 $e 'cargaJob' '01' 2
+  Comprueba 'la IA recibe el motivo, con la causa guardada' ($p.Contains("En el original el job no llega a arrancar: lanzarlo da IllegalStateException (error.txt: Could not resolve placeholder 'acme.entrada.ruta')")) ''
+  Comprueba 'remesaJob no se toca: sigue con su unico registro' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'registros/caso-remesaJob-01-2.log'))) ''
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'apuntado que ya se pidio' $true $t.entradas.excepcionPedida
+  Comprueba 'el original sigue sin arrancar y se acepta (la salida guardada ahora es la del segundo lanzamiento)' ((Lee $e.Local 'salidas/original/cargaJob/caso-01/estado.txt') -match 'estado=EXCEPCION') ''
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/'
+  Comprueba 'el tercer lanzamiento no rehace nada' ($r.Salida -notmatch 'Se rehacen') (Cola $r.Salida)
+  Igual 'ni llama a la IA' 3 (Llamadas-Casos $e).Count
+}
+
+$Pruebas['m36 (d2) sin salida guardada del original, un caso hecho no cambia'] = {
+  $e = Escenario-M36 'm36-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  [void](Prueba-M36 $e '')
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas') -Recurse -Force
+  $r = Prueba-M36 $e ''
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas' 1 (Llamadas-Casos $e).Count
+  Comprueba 'ni Info de rehacer' ($r.Salida -notmatch 'Se rehacen') (Cola $r.Salida)
+}
+
+$Pruebas['m36 (e) -Reparar se salta el caso cuyo original da EXCEPCION y lo dice; el otro se arregla y el resultado del primero no cambia'] = {
+  $e = Escenario-M25 'm36-e' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=5.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm36-mvn.ps1') }
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/caso-01$' @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2 (el de EXCEPCION sigue distinto)' 2 $r.Codigo
+  Comprueba 'la Info dice que salta 1 caso' ($r.Salida -match 'salto 1 caso') (Cola $r.Salida)
+  Igual 'el caso con EXCEPCION sigue distinto y el otro queda igual' 'distinto,igual' ((Resultados $e) -join ',')
+  Igual 'una sola llamada de reparar' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'una reparacion, arreglada' 'arreglado' $rep[0].resultado
+  Igual 'del caso que si arranca' 'caso-02' $rep[0].caso
+  Igual 'y solo cuenta ese caso para la clave' 1 $rep[0].casos
+}
+
+$Pruebas['m36 (e2) -Reparar: si todos los distintos son de un original que no arranca, no llama a la IA ni mide los tests'] = {
+  $e = Escenario-M25 'm36-e2' ([ordered]@{ cargaJob = @('importe=5.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm36-mvn.ps1') }
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba-M36 $e 'excepcion' @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'la Info dice que salta 1 caso' ($r.Salida -match 'salto 1 caso') (Cola $r.Salida)
+  Igual 'ninguna llamada de reparar' 0 (Llamadas-Reparar $e).Count
+  Igual 'el caso sigue distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'la rama de rescate no se mueve' $wt0 (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Comprueba 'los tests unitarios de partida no se miden' ($r.Salida -notmatch 'Tests unitarios de partida') (Cola $r.Salida)
+}
+
+$Pruebas['m36 (e3) -Reparar: un caso igual cuyo original da EXCEPCION (y el migrado tambien) no se salta ni se cuenta: el distinto de al lado se repara'] = {
+  $e = Escenario-M25 'm36-e3' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm36-mvn.ps1') }
+  $r = Prueba-M36 $e 'excepcion-ambos:^cargaJob/caso-02$' @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0 (el distinto se arregla y el otro era igual)' 0 $r.Codigo
+  Igual 'los dos salen iguales al final' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'una llamada de reparar' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'arreglado, el caso que salia distinto' 'arreglado caso-01' "$($rep[0].resultado) $($rep[0].caso)"
+  Comprueba 'la Info del salto no sale: no hay ningun distinto con EXCEPCION' ($r.Salida -notmatch 'Salto \d') (Cola $r.Salida)
+}
+
+$Pruebas['m36 (d3) con Intentos = 3, un caso hecho que se rehace por EXCEPCION se acepta en su reintento: no se le pide otra vez ni hay una llamada de mas'] = {
+  $e = Escenario-M36 'm36-d3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60; Intentos = 3 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M36 $e ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'una llamada de caso' 1 (Llamadas-Casos $e).Count
+  Escribe $e.Local 'salidas/original/cargaJob/caso-01/estado.txt' "estado=EXCEPCION`nsalida=IllegalStateException`n"
+  $r = Prueba-M36 $e 'excepcion'
+  Comprueba 'la Info dice que se rehace 1 caso' ($r.Salida -match 'Se rehacen 1 caso') (Cola $r.Salida)
+  Igual 'una llamada mas y ninguna otra: el reintento se acepta' 2 (Llamadas-Casos $e).Count
+  Comprueba 'sin rechazo en el reintento' ($r.Salida -notmatch 'caso-cargaJob-01 rechazado') (Cola $r.Salida)
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'con dos intentos (el de antes y el de ahora)' 2 $t.intentos
+  Igual 'apuntado que ya se pidio' $true $t.entradas.excepcionPedida
+}
+
+$Pruebas['m36 (e4) -Reparar con MaxReparaciones = 1: el aviso de lo que queda sin probar no nombra las claves de un caso que se salta'] = {
+  $e = Escenario-M25 'm36-e4' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); MaxReparaciones = 1 }
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/caso-02$;tabla-fila:^cargaJob/caso-03$' @('-Reparar') 'reparar-arregla'
+  Comprueba 'salta 1 caso' ($r.Salida -match 'Salto 1 caso') (Cola $r.Salida)
+  Igual 'una sola reparacion, la del caso 01' 'caso-01' (@(Reparaciones $e)[0]).caso
+  Comprueba 'el aviso de tope dice que queda sin probar la tabla del caso 03 y solo esa' ($r.Salida -match 'quedan sin probar: tablas/T\.csv\. Vuelve a lanzar') (Cola $r.Salida)
+  Comprueba 'sin nombrar el estado ni el error del caso que se salta' ($r.Salida -notmatch 'quedan sin probar:[^\r\n]*(estado|error)\.txt') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
