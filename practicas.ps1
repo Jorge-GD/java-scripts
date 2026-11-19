@@ -352,7 +352,7 @@ function Get-JavaSinComentarios([string]$Texto, [switch]$SinCadenas) {
 
 # Los argumentos de primer nivel (sin los espacios de los lados) de la llamada cuyo '(' esta en $Abre, sobre un texto sin comentarios. @() si no
 # lleva ninguno y $null si el parentesis no se cierra.
-function Get-ArgumentosJava([string]$Texto, [int]$Abre) {
+function Get-ArgumentosLlamada([string]$Texto, [int]$Abre) {
   $lista = @()
   $nivel = 0
   $ini = $Abre + 1
@@ -396,7 +396,7 @@ function Get-ResultadoJava21Texto([string]$Repo) {
     $b = Get-JavaSinComentarios $crudo -SinCadenas    # sin ellas: donde se busca
     $hallados = @()   # { Indice; Regla }
     foreach ($m in [regex]::Matches($b, '\bnew\s+(?:java\.io\.)?(?<c>FileReader|FileWriter|InputStreamReader|OutputStreamWriter|PrintWriter|PrintStream)\s*\(')) {
-      $a = Get-ArgumentosJava $t ($m.Index + $m.Length - 1)
+      $a = Get-ArgumentosLlamada $t ($m.Index + $m.Length - 1)
       if ($null -eq $a) { continue }
       $clase = $m.Groups['c'].Value
       if ($clase -ceq 'FileWriter') { $sin = (@($a | Where-Object { $_ -match $rxCharset }).Count -eq 0) }
@@ -409,7 +409,7 @@ function Get-ResultadoJava21Texto([string]$Repo) {
       foreach ($m in [regex]::Matches($b, '\bnew\s+FlatFileItem(?:Reader|Writer)(?:Builder)?\b')) { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'charset-por-defecto' } }
     }
     foreach ($m in [regex]::Matches($b, '\b(?:new\s+(?:java\.text\.)?SimpleDateFormat|DateTimeFormatter\s*\.\s*ofPattern)\s*\(')) {
-      $a = Get-ArgumentosJava $t ($m.Index + $m.Length - 1)
+      $a = Get-ArgumentosLlamada $t ($m.Index + $m.Length - 1)
       if ($null -ne $a -and $a.Count -gt 0 -and $a[0] -cmatch '^"(?:[^"\\]|\\.)*(?:MMM|EEE)') { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'formato-cldr' } }
     }
     foreach ($m in [regex]::Matches($b, '\bNumberFormat\s*\.\s*get|\bnew\s+(?:java\.text\.)?DecimalFormat\s*\(')) { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'formato-cldr' } }

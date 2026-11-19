@@ -1627,5 +1627,16 @@ $Pruebas['48 bp6 i) una llamada sin cerrar no para el detector: los demas ficher
   Igual 'el que no cierra el parentesis no da incidencia' '' (Lineas6 $x.Json "${Dir6}Roto.java" 'charset-por-defecto')
 }
 
+$Pruebas['49 bp6 j) ninguna funcion de practicas.ps1 esta definida tambien en otro script de la raiz (migracion.ps1 los carga todos juntos y la ultima pisaria a la otra)'] = {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $raiz 'practicas.ps1'), [ref]$null, [ref]$null)
+  $suyas = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+  $deMas = @(Get-ChildItem -LiteralPath $raiz -File -Filter '*.ps1' | Where-Object { $_.Name -cne 'practicas.ps1' } | ForEach-Object {
+      [regex]::Matches([System.IO.File]::ReadAllText($_.FullName), '(?m)^function ([\w-]+)') | ForEach-Object { $_.Groups[1].Value }
+    })
+  $repetidas = @($suyas | Where-Object { $deMas -contains $_ })
+  Comprueba 'practicas.ps1 define funciones' ($suyas.Count -gt 0)
+  Comprueba 'ninguna esta repetida en otro .ps1 de la raiz' ($repetidas.Count -eq 0) ($repetidas -join ', ')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas 'tests/probar-practicas.ps1'
