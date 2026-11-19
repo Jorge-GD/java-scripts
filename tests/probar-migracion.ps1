@@ -5998,5 +5998,211 @@ $Pruebas['bp5 (d) sin practicas-arreglos.json la pagina 5 es la de antes de BP-5
   Igual 'con un JSON sin ninguna hecha con commit: la misma pagina, byte a byte' $x.P5 $y.P5
 }
 
+# ============================ M34b: LO QUE EJECUTARON LOS CASOS, EN LA PAGINA 3 ============================
+# Una salida hecha a mano (sin migracion.ps1: sus datos no cambian de una corrida a otra, para poder fijar un SHA-256): un job con dos clases del
+# original y datos en todos los estados. Las lineas de Validador.java son 12 20 30 40 50 60 70 y las de Lector.java 5, 9 y 15 (la 15 es una anotacion:
+# no es codigo para JaCoCo y no esta en ninguna de las tres listas del JSON).
+$M34bValidador = 'src/main/java/com/acme/recibos/Validador.java'
+$M34bLector = 'src/main/java/com/acme/recibos/Lector.java'
+$M34bEstados = @{ V = @('distinto', 'distinto', 'distinto', 'falta', 'falta', 'no-lo-se', 'igual'); L = @('no-lo-se', 'sin-pieza', 'no-lo-se') }
+$M34bHashSinJson = '308DEE0ED2B35DEAAD3D61E9A7C460B3E999579648A80AB4C58C9F673F7E279A'
+
+function M34b-Comparacion([string]$Id, [string]$Clase, [string]$Fichero, [int[]]$Lineas, [string[]]$Estados) {
+  $ficha = [ordered]@{ id = $Id; fichero = $Fichero; clase = $Clase; papel = 'otro'; queHace = "Ficha de $Clase."; datos = @() }
+  $comp = [ordered]@{ ficha = $Id; clase = $Clase; ficheroOriginal = $Fichero; migrado = @("src/main/java/com/acme/batch/$Clase.java"); datos = @() }
+  for ($i = 0; $i -lt $Lineas.Count; $i++) {
+    $ficha.datos += [ordered]@{ tipo = 'regla'; texto = "Regla de la linea $($Lineas[$i])"; linea = $Lineas[$i]; cita = "cita $($Lineas[$i])"; probado = $true }
+    $d = [ordered]@{ dato = $i; estado = $Estados[$i]; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false }
+    if ($Estados[$i] -ceq 'igual' -or $Estados[$i] -ceq 'distinto') { $d.fichero = "src/main/java/com/acme/batch/$Clase.java"; $d.linea = 5 + $i; $d.cita = "migrado $i"; $d.probado = $true }
+    if ($Estados[$i] -ceq 'distinto' -or $Estados[$i] -ceq 'no-lo-se') { $d.nota = "nota $i" }
+    $comp.datos += $d
+  }
+  return @{ Ficha = $ficha; Comp = $comp }
+}
+
+# El JSON de cobertura de los casos (punto 1 del encargo M34): Validador recorrido por los casos iguales en 10-14, 30, 40 y 70 y por los distintos en 30 y 48-52,
+# sin recorrer en 1-9, 20, 60 y 100-125; Lector, por los iguales en 5-7 y sin recorrer en 9 y 100-109. De 64 lineas con codigo se recorren 16 (la 30 esta en las
+# dos listas y cuenta una vez): el 25 %.
+function M34b-Cobertura([string]$Estado = 'ok', [string]$Motivo = '') {
+  return [ordered]@{
+    version = 1; cuando = '2026-11-19T18:00:00'; estado = $Estado; motivo = $Motivo; lineasTotal = 64; lineasIgual = 11; lineasDistinto = 6
+    ficheros = [ordered]@{
+      'src/main/java/com/acme/recibos/Validador.java' = [ordered]@{ total = 50; igual = '10-14,30,40,70'; distinto = '30,48-52'; sinCubrir = '1-9,20,60,100-125' }
+      'src/main/java/com/acme/recibos/Lector.java' = [ordered]@{ total = 14; igual = '5-7'; distinto = ''; sinCubrir = '9,100-109' }
+    }
+  }
+}
+
+function M34b-Salida([string]$Nombre, $Cobertura = $null, [string]$Texto = '', $Estados = $null) {
+  if ($null -eq $Estados) { $Estados = $M34bEstados }
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $s = Join-Path $raiz 'migracion-batch-recibos'
+  foreach ($sub in @('fichas', 'comparacion')) { [void](New-Item -ItemType Directory -Path (Join-Path (Join-Path $s 'datos') $sub) -Force) }
+  Guarda-Json (Join-Path $s 'datos/estado.json') ([ordered]@{ batch = 'batch-recibos'; legacy = 'acme/recibos-java8'; migrado = 'acme/batch-recibos'; plantilla = 'acme/batch-referencia'; modelo = 'modelo-x'; creado = '2026-11-19T10:00:00'; actualizado = '2026-11-19T11:00:00'; fase = 'hecha'; respuesta = 'parar' })
+  $v = M34b-Comparacion 'clase-aaaa1111' 'Validador' $M34bValidador @(12, 20, 30, 40, 50, 60, 70) $Estados.V
+  $l = M34b-Comparacion 'clase-bbbb2222' 'Lector' $M34bLector @(5, 9, 15) $Estados.L
+  Guarda-Json (Join-Path $s 'datos/mapa.json') ([ordered]@{ jobs = @([ordered]@{ job = 'cargaJob'; clases = @([ordered]@{ ficha = 'clase-aaaa1111'; clase = 'Validador' }, [ordered]@{ ficha = 'clase-bbbb2222'; clase = 'Lector' }) }); sinJob = @() })
+  foreach ($x in @($v, $l)) {
+    Guarda-Json (Join-Path $s ('datos/fichas/' + $x.Ficha.id + '.json')) $x.Ficha
+    Guarda-Json (Join-Path $s ('datos/comparacion/' + $x.Ficha.id + '.json')) $x.Comp
+  }
+  if ($null -ne $Cobertura) { Guarda-Json (Join-Path $s 'datos/prueba-local-cobertura.json') $Cobertura }
+  if ($Texto) { Escribe $s 'datos/prueba-local-cobertura.json' $Texto }
+  $g = Genera-Informes $s
+  Comprueba "$Nombre : Write-Informes sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  return [pscustomobject]@{ Dir = $s; P3 = (Pagina $s '3-original-vs-migrado.html'); I = (Pagina $s 'index.html') }
+}
+
+function M34b-SinCss([string]$Html) { return [regex]::Replace($Html, '(?s)<style>.*?</style>', '') }
+
+# Las filas de la pagina, en su orden, con la clave Clase:linea del dato del original (el primer fichero:linea de la fila) y su HTML.
+function M34b-Filas([string]$Html) {
+  $r = @()
+  foreach ($m in [regex]::Matches((M34b-SinCss $Html), '(?s)<li class="fila[^"]*">.*?</li>')) {
+    $d = [regex]::Match($m.Value, 'Original:</b> <code>[^<]*</code><code class="donde">[^<]*?(\w+)\.java:(\d+)</code>')
+    $r += [pscustomobject]@{ Clave = ($d.Groups[1].Value + ':' + $d.Groups[2].Value); Html = $m.Value }
+  }
+  return $r
+}
+
+# Las cajas del resumen (una en Probado ejecutando los dos, otra en Leido por la IA), una detras de otra.
+function M34b-Resumen([string]$Html) { return (@([regex]::Matches((M34b-SinCss $Html), '(?s)<div class="m34-resumen".*?</div>') | ForEach-Object { $_.Value }) -join "`n") }
+
+$Pruebas['m34b (a) con la cobertura de los casos cada fila lleva su etiqueta (salio distinto, salio igual o ningun caso lo recorre) y las primeras filas van, dentro de cada estado, ejecutado-distinto, sin-ejecutar, las sin etiqueta y ejecutado-igual'] = {
+  $x = M34b-Salida 'm34b-a' (M34b-Cobertura)
+  $filas = @(M34b-Filas $x.P3)
+  Igual 'diez filas, las de los diez datos' 10 $filas.Count
+  $ant = @(M34b-Filas (M34b-Salida 'm34b-a-antes' $null).P3)
+  Igual 'sin JSON, el orden de siempre: por estado y, dentro, el del dato' 'Validador:12 Validador:20 Validador:30 Validador:40 Validador:50 Validador:60 Lector:5 Lector:15 Lector:9 Validador:70' (($ant | ForEach-Object { $_.Clave }) -join ' ')
+  Igual 'con JSON, dentro de cada estado: lo que salio distinto, lo que ningun caso recorre y lo que salio igual; los iguales plegados, al final' 'Validador:30 Validador:20 Validador:12 Validador:50 Validador:40 Validador:60 Lector:15 Lector:5 Lector:9 Validador:70' (($filas | ForEach-Object { $_.Clave }) -join ' ')
+  $esperado = @{ 'Validador:12' = 'igual'; 'Validador:20' = 'ninguno'; 'Validador:30' = 'distinto'; 'Validador:40' = 'igual'; 'Validador:50' = 'distinto'; 'Validador:60' = 'ninguno'; 'Lector:5' = 'igual'; 'Lector:9' = 'ninguno'; 'Lector:15' = 'sin'; 'Validador:70' = 'igual' }
+  $texto = @{ distinto = 'Ejecutado: sali. distinto'; igual = 'Ejecutado: sali. igual'; ninguno = 'Ning.n caso lo recorre' }
+  foreach ($f in @($filas | Where-Object { $esperado[$_.Clave] -ceq 'sin' })) {
+    Comprueba "$($f.Clave) : una linea que no esta en ninguna de las tres listas no lleva etiqueta" ($f.Html -notmatch 'm34-ejec|Ejecutado:|Ning.n caso lo recorre') $f.Html
+  }
+  foreach ($f in @($filas | Where-Object { $esperado[$_.Clave] -cne 'sin' })) {
+    $e = $esperado[$f.Clave]
+    $otras = @($texto.Keys | Where-Object { $_ -cne $e })
+    Comprueba "$($f.Clave) : lleva la etiqueta de $e y ninguna de las otras" ($f.Html -match ('<span class="m34-ejec m34-ejec-' + $e + '">' + $texto[$e] + '</span>') -and @($otras | Where-Object { $f.Html -match $texto[$_] }).Count -eq 0 -and [regex]::Matches($f.Html, 'm34-ejec ').Count -eq 1) $f.Html
+  }
+  $p = M34b-SinCss $x.P3
+  Comprueba 'el CSS de la etiqueta va en la pagina, con su prefijo' ($x.P3 -match '\.m34-ejec' -and $p -notmatch '(?i)<script|https?://| style=')
+  Igual 'y sigue con un solo h1' 1 ([regex]::Matches($p, '<h1[ >]').Count)
+}
+
+$Pruebas['m34b (b) una linea que esta en igual y en distinto sale ejecutado-distinto'] = {
+  $x = M34b-Salida 'm34b-b' (M34b-Cobertura)
+  $f = @(M34b-Filas $x.P3 | Where-Object { $_.Clave -ceq 'Validador:30' })
+  Igual 'la linea 30 de Validador sale una vez' 1 $f.Count
+  Comprueba 'con Ejecutado: salio distinto y sin salio igual' ($f.Count -eq 1 -and $f[0].Html -match 'm34-ejec-distinto' -and $f[0].Html -notmatch 'm34-ejec-igual') ($f.Html -join ' ')
+  $g = M34b-Cobertura
+  $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].igual = '12'
+  $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].distinto = '12'
+  $y = M34b-Salida 'm34b-b2' $g
+  $f2 = @(M34b-Filas $y.P3 | Where-Object { $_.Clave -ceq 'Validador:12' })
+  Comprueba 'lo mismo con la linea 12, que es un rango de un solo numero en las dos listas' ($f2.Count -eq 1 -and $f2[0].Html -match 'm34-ejec-distinto' -and $f2[0].Html -notmatch 'm34-ejec-igual') ($f2.Html -join ' ')
+}
+
+$Pruebas['m34b (c) el resumen: el porcentaje de lineas que recorren los casos (cada linea una vez) y, de los datos que la IA no dio por iguales, cuantos ejecuto un caso que salio igual y cuantos no recorre ninguno'] = {
+  $x = M34b-Salida 'm34b-c' (M34b-Cobertura)
+  $r = M34b-Resumen $x.P3
+  Comprueba 'hay un resumen' ($r.Length -gt 0)
+  Comprueba 'dice que los casos recorren el 25 % de las lineas del original (16 de 64)' ($r -match 'Los casos recorren el 25 % de las l.neas del original\.') $r
+  Comprueba 'de los 8 datos sin dar por iguales, 3 los ejecuto un caso que salio igual y 2 no los recorre ninguno (la 15 no cuenta en ninguno)' ($r -match 'De los 8 datos que la IA no ha podido dar por iguales \(distinto, falta o no lo s.\), 3 los ejecut. un caso que sali. igual en los dos; 2 no los recorre ning.n caso: empieza por esos\.') $r
+  $g = M34b-Cobertura
+  $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].igual = '12,40,70-71'
+  $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].distinto = ''
+  $g.ficheros['src/main/java/com/acme/recibos/Lector.java'].igual = '5'
+  $y = M34b-Resumen (M34b-Salida 'm34b-c2' $g).P3
+  Comprueba 'con otros rangos, los numeros cambian: 5 lineas de 64 son el 7,8 %; 3 ejecutados igual y 2 sin recorrer; ninguno distinto' ($y -match 'recorren el 7,8 % de' -and $y -match 'De los 8 datos .* 3 los ejecut. .* 2 no los recorre') $y
+  $todos = @{ V = @('igual', 'igual', 'igual', 'igual', 'igual', 'igual', 'igual'); L = @('igual', 'igual', 'igual') }
+  $z = M34b-Resumen (M34b-Salida 'm34b-c3' (M34b-Cobertura) $null $todos).P3
+  Comprueba 'si la IA dio todo por igual no se habla de datos que revisar' ($z -match 'Los casos recorren el 25 %' -and $z -match 'no ha dejado ning.n dato' -and $z -notmatch 'empieza por esos') $z
+}
+
+$Pruebas['m34b (d) sin datos/prueba-local-cobertura.json la pagina 3 es la de antes, byte a byte (SHA-256 sin el CSS); con un JSON roto o de un estado que no se conoce, tambien'] = {
+  $x = M34b-Salida 'm34b-d' $null
+  $h = Bp5-HashPagina $x.P3
+  Igual 'sin el JSON: el mismo SHA-256 (sin el CSS) que la pagina de antes del cambio' $M34bHashSinJson $h
+  Comprueba 'y ni etiqueta ni resumen' ((M34b-SinCss $x.P3) -notmatch 'm34-|Ejecutado:')
+  $roto = M34b-Salida 'm34b-d-roto' $null '{ "estado": "ok", "ficheros": '
+  Igual 'con un JSON que no se puede leer: la misma pagina, byte a byte' $x.P3 $roto.P3
+  $raro = M34b-Cobertura 'a medias'
+  Igual 'con un estado que no es ok ni no medido: la misma pagina, byte a byte' $x.P3 (M34b-Salida 'm34b-d-raro' $raro).P3
+}
+
+$Pruebas['m34b (e) con estado no medido la pagina dice el motivo (escapado), no lleva ninguna etiqueta y las filas salen como sin JSON'] = {
+  $sin = M34b-Salida 'm34b-e-sin' $null
+  $x = M34b-Salida 'm34b-e' (M34b-Cobertura 'no medido' 'no hay .exec: <script>alert(1)</script> & "x".')
+  $r = M34b-Resumen $x.P3
+  Comprueba 'hay una frase con el motivo, con el HTML escapado y sin un punto de mas al final' ($r.Length -gt 0 -and $r.Contains((Html 'no hay .exec: <script>alert(1)</script> & "x"') + '.</p>')) $r
+  Comprueba 'y no dice cuanto recorren los casos ni da numeros' ($r -notmatch ' % ' -and $r -notmatch 'empieza por esos') $r
+  Comprueba 'sin <script> en la pagina' ((M34b-SinCss $x.P3) -notmatch '(?i)<script')
+  Igual 'una sola caja, la de Probado ejecutando los dos, y ninguna en Leido por la IA' 1 ([regex]::Matches((M34b-SinCss $x.P3), '<div class="m34-resumen"').Count)
+  Comprueba 'justo despues del titulo de Probado ejecutando los dos' ((M34b-SinCss $x.P3) -match '(?s)<section class="panel" id="prueba-local"[^>]*>\s*<h2 id="t-prueba-local">[^<]*</h2>\s*<div class="m34-resumen"[^>]*>\s*<p>No se ha medido')
+  Comprueba 'ninguna fila lleva etiqueta' ((M34b-SinCss $x.P3) -notmatch 'm34-ejec|Ejecutado:|Ning.n caso lo recorre')
+  Igual 'y las filas son las de sin JSON, las mismas y en el mismo orden' ((@(M34b-Filas $sin.P3) | ForEach-Object { $_.Html }) -join "`n") ((@(M34b-Filas $x.P3) | ForEach-Object { $_.Html }) -join "`n")
+  $y = M34b-Resumen (M34b-Salida 'm34b-e-vacio' (M34b-Cobertura 'no medido' '')).P3
+  Comprueba 'sin motivo, la frase sale igual y dice que no se dijo por que' ($y -match 'no se ha dicho por qu.') $y
+}
+
+$Pruebas['m34b (f) un fichero que el JSON no trae sale sin etiqueta y no cuenta ni entre los que ejecuto un caso ni entre los que ninguno recorre'] = {
+  $g = M34b-Cobertura
+  $g.ficheros.Remove('src/main/java/com/acme/recibos/Lector.java')
+  $x = M34b-Salida 'm34b-f' $g
+  $f = @(M34b-Filas $x.P3 | Where-Object { $_.Clave -ceq 'Lector:5' })
+  Comprueba 'Lector:5, que antes salia igual, ya no lleva etiqueta' ($f.Count -eq 1 -and $f[0].Html -notmatch 'm34-ejec') ($f.Html -join ' ')
+  $r = M34b-Resumen $x.P3
+  Comprueba 'el resumen cuenta 8 datos, 2 ejecutados igual y 2 sin recorrer' ($r -match 'De los 8 datos .* 2 los ejecut. .* 2 no los recorre') $r
+}
+
+$Pruebas['m34b (g) una linea que no esta en igual, distinto ni sinCubrir sale sin etiqueta, no cuenta como ejecutada ni como sin recorrer y queda entre las sin recorrer y las ejecutadas iguales'] = {
+  $x = M34b-Salida 'm34b-g' (M34b-Cobertura)
+  $f = @(M34b-Filas $x.P3 | Where-Object { $_.Clave -ceq 'Lector:15' })
+  Comprueba 'Lector:15 (no-lo-se de una anotacion) sale una vez y sin etiqueta' ($f.Count -eq 1 -and $f[0].Html -notmatch 'm34-ejec') ($f.Html -join ' ')
+  $r = M34b-Resumen $x.P3
+  Comprueba 'pero cuenta entre los 8 datos que la IA no dio por iguales y no en los 3 ni en los 2' ($r -match 'De los 8 datos .* 3 los ejecut. .* 2 no los recorre') $r
+  $g = M34b-Cobertura
+  $g.ficheros['src/main/java/com/acme/recibos/Validador.java'].Remove('sinCubrir')
+  $y = M34b-Salida 'm34b-g2' $g
+  Comprueba 'con un JSON sin sinCubrir ninguna fila sale como sin recorrer' (@(M34b-Filas $y.P3 | Where-Object { $_.Html -match 'm34-ejec-ninguno' -and $_.Clave -like 'Validador:*' }).Count -eq 0)
+}
+
+$Pruebas['m34b (h) el resumen en singular: con 1 dato que la IA no dio por igual, con 1 ejecutado igual y con 1 sin recorrer'] = {
+  $solo = @{ V = @('distinto', 'igual', 'igual', 'igual', 'igual', 'igual', 'igual'); L = @('igual', 'igual', 'igual') }
+  $r = M34b-Resumen (M34b-Salida 'm34b-h1' (M34b-Cobertura) $null $solo).P3
+  Comprueba 'un dato y 1 lo ejecuto un caso que salio igual (la 12), 0 sin recorrer' ($r -match 'De 1 dato que la IA no ha podido dar por igual \(distinto, falta o no lo s.\), 1 lo ejecut. un caso que sali. igual en los dos; 0 no los recorre ning.n caso: empieza por esos\.') $r
+  $solo.V[0] = 'igual'; $solo.V[1] = 'distinto'
+  $r = M34b-Resumen (M34b-Salida 'm34b-h2' (M34b-Cobertura) $null $solo).P3
+  Comprueba 'un dato que ningun caso recorre (la 20): 0 los ejecuto, 1 no lo recorre, empieza por ese' ($r -match 'De 1 dato que la IA no ha podido dar por igual \(distinto, falta o no lo s.\), 0 los ejecut. un caso que sali. igual en los dos; 1 no lo recorre ning.n caso: empieza por ese\.') $r
+  $r = M34b-Resumen (M34b-Salida 'm34b-h3' (M34b-Cobertura)).P3
+  Comprueba 'con varios, el plural de siempre' ($r -match 'De los 8 datos que la IA no ha podido dar por iguales' -and $r -match '3 los ejecut. un caso' -and $r -match '2 no los recorre ning.n caso: empieza por esos\.') $r
+}
+
+$Pruebas['m34b (i) portada, Que es cada fichero: datos/prueba-local-cobertura.json sale con su frase y solo si existe'] = {
+  $sin = M34b-Salida 'm34b-i-sin' $null
+  $f = [regex]::Match($sin.I, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'sin el JSON no sale' ($f.Length -gt 0 -and $f -notmatch 'prueba-local-cobertura') $f
+  $x = M34b-Salida 'm34b-i' (M34b-Cobertura)
+  $f = [regex]::Match($x.I, '(?s)<ul class="ficheros">.*?</ul>').Value
+  Comprueba 'con el JSON sale con su frase, que dice de donde salen las etiquetas y el resumen de la pagina 3' ($f -match '(?s)<li>(?:(?!</li>).)*<code>datos/prueba-local-cobertura\.json</code></p><p>[^<]{20,}</p>' -and $f -match 'prueba-local-cobertura\.json</code></p><p>[^<]*Ejecutado[^<]*p.gina 3') $f
+}
+
+$Pruebas['m34b (j) el sitio de las cajas: lo que recorren los casos, al principio de Probado ejecutando los dos y justo tras su titulo; los datos que la IA no dio por iguales, en Leido por la IA tras su parrafo de explicacion y antes del primer job; ninguna en la cabecera'] = {
+  $x = M34b-Salida 'm34b-j' (M34b-Cobertura)
+  $p = M34b-SinCss $x.P3
+  Igual 'dos cajas, ni mas ni menos' 2 ([regex]::Matches($p, '<div class="m34-resumen"').Count)
+  $c1 = [regex]::Match($p, '(?s)<section class="panel" id="prueba-local"[^>]*>\s*<h2 id="t-prueba-local">[^<]*</h2>\s*(<div class="m34-resumen".*?</div>)').Groups[1].Value
+  Comprueba 'la primera, dentro de Probado ejecutando los dos y justo tras su titulo, dice lo que recorren los casos y nada mas' ($c1 -match 'Los casos recorren el 25 %' -and $c1 -notmatch 'De los ') $c1
+  $c2 = [regex]::Match($p, '(?s)id="t-leido-ia".*?citas existen en los ficheros\.</p>\s*(<div class="m34-resumen".*?</div>)\s*<section class="prob-grupo comp-grupo" id="comp-').Groups[1].Value
+  Comprueba 'la segunda, en Leido por la IA tras su parrafo de explicacion y antes del primer job, dice los datos y nada mas' ($c2 -match 'De los 8 datos' -and $c2 -notmatch 'Los casos recorren') $c2
+  Comprueba 'la cabecera de la pagina no lleva ninguna' ($p -notmatch '(?s)<header class="cab-prob">(?:(?!</header>).)*m34-resumen')
+  Comprueba 'las dos son la misma caja, cada una con su id' ($c1 -match 'class="m34-resumen" id="m34-recorren"' -and $c2 -match 'class="m34-resumen" id="m34-dudosos"')
+  $todos = @{ V = @('igual', 'igual', 'igual', 'igual', 'igual', 'igual', 'igual'); L = @('igual', 'igual', 'igual') }
+  $z = M34b-SinCss (M34b-Salida 'm34b-j-igual' (M34b-Cobertura) $null $todos).P3
+  Comprueba 'si la IA dio todo por igual, "no ha dejado ningun dato" va en la caja de Leido por la IA' ($z -match '(?s)id="t-leido-ia".*?<div class="m34-resumen"[^>]*>\s*<p>La IA no ha dejado ning.n dato')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

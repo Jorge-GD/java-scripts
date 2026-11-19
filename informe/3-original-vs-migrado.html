@@ -9,7 +9,7 @@
   <h2 id="t-leido-ia">Leído por la IA</h2>
   <p>{{{ETIQUETA}}}</p>
   {{{MOMENTO}}}
-  <p>Para cada dato que se leyó del original, dice si el migrado lo hace igual, distinto o no lo hace. El script comprueba que las citas existen en los ficheros.</p>
+  <p>Para cada dato que se leyó del original, dice si el migrado lo hace igual, distinto o no lo hace. El script comprueba que las citas existen en los ficheros.</p>{{{DUDOSOS}}}
 {{{JOBS}}}
 </section>
 
@@ -23,7 +23,7 @@
 <!--TROZO comp-filas-->  <ul class="filas">
 {{{FILAS}}}
   </ul><!--FIN-->
-<!--TROZO comp-fila-->    <li class="fila {{CLASE}}">{{{ESTADO}}}<span class="d">{{TEXTO}}{{{MARCA}}}</span><span class="q"><b>Original:</b> <code>{{NOMBRE}}</code><code class="donde">{{ORIGINAL}}</code><span class="cita">{{CITA}}</span>{{{MIGRADO}}}{{{NOTA}}}</span></li><!--FIN-->
+<!--TROZO comp-fila-->    <li class="fila {{CLASE}}">{{{ESTADO}}}<span class="d">{{TEXTO}}{{{MARCA}}}{{{EJECUCION}}}</span><span class="q"><b>Original:</b> <code>{{NOMBRE}}</code><code class="donde">{{ORIGINAL}}</code><span class="cita">{{CITA}}</span>{{{MIGRADO}}}{{{NOTA}}}</span></li><!--FIN-->
 <!--TROZO comp-migrado--><b>Migrado:</b> <code class="donde">{{DONDE}}</code><span class="cita">{{CITA}}</span><!--FIN-->
 <!--TROZO comp-nota--><b>Nota:</b> {{NOTA}}<!--FIN-->
 <!--TROZO comp-iguales--><div class="pg-l"><details>
@@ -35,10 +35,28 @@
 <!--TROZO comp-iguales-uno-->1 dato igual<!--FIN-->
 <!--TROZO comp-iguales-otros-->{{N}} datos iguales<!--FIN-->
 <!--TROZO comp-job-vacio--><p class="pg-como">Ningún dato de las clases de este job se ha comparado.</p><!--FIN-->
+<!--TROZO comp-ejecutado-distinto--><span class="m34-ejec m34-ejec-distinto">Ejecutado: salió distinto</span><!--FIN-->
+<!--TROZO comp-ejecutado-igual--><span class="m34-ejec m34-ejec-igual">Ejecutado: salió igual</span><!--FIN-->
+<!--TROZO comp-sin-ejecutar--><span class="m34-ejec m34-ejec-ninguno">Ningún caso lo recorre</span><!--FIN-->
+<!--TROZO m34-resumen-->
+  <div class="m34-resumen" id="{{ID}}">
+{{{FRASES}}}
+  </div><!--FIN-->
+<!--TROZO m34-recorren-->    <p>Los casos recorren el {{PCT}} % de las líneas del original.</p><!--FIN-->
+<!--TROZO m34-dudosos-->    <p>{{{DATOS}}}, {{{IGUAL}}}; {{{NINGUNO}}}.</p><!--FIN-->
+<!--TROZO m34-datos-varios-->De los {{N}} datos que la IA no ha podido dar por iguales (distinto, falta o no lo sé)<!--FIN-->
+<!--TROZO m34-datos-uno-->De 1 dato que la IA no ha podido dar por igual (distinto, falta o no lo sé)<!--FIN-->
+<!--TROZO m34-igual-varios-->{{N}} los ejecutó un caso que salió igual en los dos<!--FIN-->
+<!--TROZO m34-igual-uno-->1 lo ejecutó un caso que salió igual en los dos<!--FIN-->
+<!--TROZO m34-ninguno-varios-->{{N}} no los recorre ningún caso: empieza por esos<!--FIN-->
+<!--TROZO m34-ninguno-uno-->1 no lo recorre ningún caso: empieza por ese<!--FIN-->
+<!--TROZO m34-sin-dudosos-->    <p>La IA no ha dejado ningún dato sin dar por igual.</p><!--FIN-->
+<!--TROZO m34-no-medido-->    <p>No se ha medido qué líneas del original recorren los casos: {{MOTIVO}}.</p><!--FIN-->
+<!--TROZO m34-sin-motivo-->no se ha dicho por qué<!--FIN-->
 <!--TROZO comp-momento-antes--><p>Sobre el migrado tal como llegó, antes de corregir (commit {{COMMIT}}).</p><!--FIN-->
 <!--TROZO comp-momento-despues--><p>Sobre el migrado ya corregido (commit {{COMMIT}} de la rama de rescate).</p><!--FIN-->
 <!--TROZO pl-seccion--><section class="panel" id="prueba-local" aria-labelledby="t-prueba-local">
-  <h2 id="t-prueba-local">Probado ejecutando los dos</h2>
+  <h2 id="t-prueba-local">Probado ejecutando los dos</h2>{{{CASOS}}}
 {{{CUERPO}}}
 </section><!--FIN-->
 <!--TROZO pl-datos--><p>{{{ETIQUETA}}}</p>
