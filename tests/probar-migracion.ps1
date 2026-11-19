@@ -6321,5 +6321,227 @@ $Pruebas['m35b (d) portada, Que es cada fichero: datos/tests-reglas.json sale co
   Comprueba 'con el JSON sale con su frase, que dice que son los tests de las reglas' ($f -match '(?s)<li>(?:(?!</li>).)*<code>datos/tests-reglas\.json</code></p><p>[^<]{20,}</p>' -and $f -match 'tests-reglas\.json</code></p><p>[^<]*tests[^<]*reglas') $f
 }
 
+# ============================ M38: RELANZAR MIDE EL ESTADO DE AHORA DEL MIGRADO ============================
+# El diagnostico de antes guarda el commit del migrado que midio (datos/diagnostico-antes.json); al relanzar con otro commit (o sin el dato)
+# se hace otra vez y lo de la correccion anterior se aparta en datos/anterior-<commit7>/. Con -Reintentar, una correccion con atascados se lanza otra vez.
+
+# Un commit nuevo en el migrado: una clase mas con un getBytes() sin juego de caracteres (una incidencia mas de java21). Devuelve su sha.
+function M38-Commit($E, [string]$Nombre) {
+  $rel = "src/main/java/com/acme/life/$Nombre.java"
+  $texto = @'
+package com.acme.life;
+
+/** {{N}}. */
+public class {{N}} {
+    byte[] datos() {
+        return "x".getBytes();
+    }
+}
+'@
+  Escribe $E.Migrado $rel $texto.Replace('{{N}}', $Nombre)
+  [void](GitEn $E.Migrado @('add', '--', $rel))
+  [void](GitEn $E.Migrado @('commit', '-q', '-m', "m38: $Nombre"))
+  return (M38-Head $E.Migrado)
+}
+
+function M38-Head([string]$Carpeta) { return (GitEn $Carpeta @('rev-parse', 'HEAD')).Trim() }
+
+# Lo que dejo el diagnostico de antes: la cobertura (porcentaje, cubiertas, total) y las incidencias de java21 de las buenas practicas.
+function M38-Cifras($E) {
+  $c = Cobertura-De $E 'antes'
+  $p = Lee-Json (Get-Ruta $E.Out 'datos/practicas-antes.json')
+  return ("$($c.porcentaje) $($c.cubiertas) $($c.total) java21=" + @($p.incidencias | Where-Object { $_.area -ceq 'java21' }).Count)
+}
+
+# Un CSV de JaCoCo de mentira con una fila por clase ('nombre', faltan, cubiertas).
+function M38-Csv($E, [string]$Nombre, $Filas) { return (Csv-Cobertura (Get-Ruta $E.Raiz $Nombre) $Filas) }
+
+# Un escenario contado que ya hizo su primer lanzamiento hasta el informe (cobertura de 5 de 8 lineas).
+function M38-Primera([string]$Nombre) {
+  $e = Nuevo-Escenario-Contado $Nombre @('Clase1')
+  $csv = M38-Csv $e 'jacoco1.csv' @(@('A', 3, 1), @('B', 0, 4))
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $csv } { Migra $e (Basicos $e) }
+  Igual "$Nombre : el primer lanzamiento sale con 0" 0 $r.Codigo
+  return [pscustomobject]@{ E = $e; R = $r; Head = (M38-Head $e.Migrado); Csv2 = (M38-Csv $e 'jacoco2.csv' @(@('A', 1, 3), @('B', 0, 4))) }
+}
+
+# El mismo sistema con el motor de mentira de m38: el de siempre y, ademas, apunta si la correccion se lanzo con -Reintentar.
+function M38-Sistema {
+  $sis = Join-Path $Dir 'sistema-motor-m38'
+  if (-not (Test-Path -LiteralPath $sis)) {
+    Copy-Item -LiteralPath (Split-Path -Parent (Sistema-Motor)) -Destination $sis -Recurse
+    Move-Item -LiteralPath (Join-Path $sis 'rescate.ps1') -Destination (Join-Path $sis 'rescate-motor.ps1')
+    Copy-Item -LiteralPath (Join-Path $falsos 'm38-rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
+  }
+  return (Join-Path $sis 'migracion.ps1')
+}
+
+# Las llamadas del motor de mentira de m38 a un modo, con lo que valia -Reintentar: 'fix|False' (una por llamada).
+function M38-Reintentar($E, [string]$Modo) {
+  $f = Get-Ruta $E.Raiz 'motor-falso.json.reintentar'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ -like ($Modo + '|*') })
+}
+
+$Pruebas['m38 (a) con un commit nuevo en el migrado, relanzar repite el diagnostico (un Maven mas) con las cifras nuevas, dice la Info y deja lo de antes en datos/anterior-<viejo7>'] = {
+  $x = M38-Primera 'm38-a'
+  $e = $x.E
+  Igual 'cifras de la primera vez: 62,5 % (5 de 8) y ninguna incidencia de java21' '62.5 5 8 java21=0' (M38-Cifras $e)
+  Igual 'un Maven con JaCoCo' 1 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+  $d = Lee-Json (Get-Ruta $e.Out 'datos/diagnostico-antes.json')
+  Igual 'datos/diagnostico-antes.json guarda el commit entero que midio' $x.Head "$($d.commit)"
+  $hallViejo = Lee $e.Out 'datos/hallazgos-antes.json'
+  $nuevo = M38-Commit $e 'Nueva'
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'el Maven de la cobertura cuenta una llamada mas' 2 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+  Igual 'cobertura y buenas practicas tienen las cifras nuevas: 87,5 % (7 de 8) y una incidencia de java21' '87.5 7 8 java21=1' (M38-Cifras $e)
+  $v = $x.Head.Substring(0, 7)
+  $info = "Tu rama ha cambiado desde el ultimo diagnostico ($v -> $($nuevo.Substring(0, 7))): lo hago otra vez y lo de la correccion anterior queda en datos\anterior-$v."
+  Comprueba 'sale la Info con los dos commits' ($r.Salida.Contains($info)) (Cola $r.Salida)
+  Igual 'diagnostico-antes.json lleva ahora el commit nuevo' $nuevo "$((Lee-Json (Get-Ruta $e.Out 'datos/diagnostico-antes.json')).commit)"
+  $ant = Get-Ruta $e.Out "datos/anterior-$v"
+  Comprueba 'lo de antes esta en datos/anterior-<viejo7>: hallazgos, cobertura, practicas y el commit' ((Test-Path -LiteralPath $ant -PathType Container) -and @('hallazgos-antes.json', 'diagnostico-antes.md', 'cobertura-antes.json', 'practicas-antes.json', 'diagnostico-antes.json' | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ant $_)) }).Count -eq 0) ((Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos') | ForEach-Object { $_.Name }) -join ' ')
+  if (Test-Path -LiteralPath (Join-Path $ant 'cobertura-antes.json')) { Igual 'y la cobertura de alli es la vieja (62,5 %)' '62.5' "$((Lee-Json (Join-Path $ant 'cobertura-antes.json')).porcentaje)" }
+  if (Test-Path -LiteralPath (Join-Path $ant 'hallazgos-antes.json')) { Igual 'y los hallazgos de alli son los viejos' $hallViejo ([System.IO.File]::ReadAllText((Join-Path $ant 'hallazgos-antes.json'))) }
+  Igual 'el worktree de rescate esta ya en el commit nuevo (la rama de rescate avanza hasta el)' $nuevo (M38-Head $e.Wt)
+}
+
+$Pruebas['m38 (i) si datos/anterior-<viejo7> ya existe (se volvio a un commit de antes), lo de ahora va a anterior-<viejo7>-2 y no pisa lo que habia'] = {
+  $x = M38-Primera 'm38-i'
+  $e = $x.E
+  $v = $x.Head.Substring(0, 7)
+  $ant = Get-Ruta $e.Out "datos/anterior-$v"
+  [void](New-Item -ItemType Directory -Path $ant)
+  Escribe $ant 'cobertura-antes.json' '{"porcentaje": 1}'
+  [void](M38-Commit $e 'Otra')
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'lo que ya habia en anterior-<viejo7> sigue igual' '1' "$((Lee-Json (Join-Path $ant 'cobertura-antes.json')).porcentaje)"
+  Igual 'y alli no entra nada mas' 1 @(Get-ChildItem -LiteralPath $ant -File).Count
+  $dos = Get-Ruta $e.Out "datos/anterior-$v-2"
+  Comprueba 'lo de ahora esta en anterior-<viejo7>-2, con la cobertura de la primera vez (62,5 %)' ((Test-Path -LiteralPath (Join-Path $dos 'cobertura-antes.json')) -and "$((Lee-Json (Join-Path $dos 'cobertura-antes.json')).porcentaje)" -eq '62.5')
+  Comprueba 'y la Info lo dice' ($r.Salida.Contains("queda en datos\anterior-$v-2.")) (Cola $r.Salida)
+}
+
+$Pruebas['m38 (b) relanzar sin commit nuevo no repite el diagnostico: un solo Maven, mismos datos, ninguna Info ni carpeta anterior'] = {
+  $x = M38-Primera 'm38-b'
+  $e = $x.E
+  $h = Hash-De (Get-Ruta $e.Out 'datos/cobertura-antes.json')
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'el Maven de la cobertura no se lanza otra vez' 1 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+  Igual 'cobertura-antes.json no cambia' $h (Hash-De (Get-Ruta $e.Out 'datos/cobertura-antes.json'))
+  Comprueba 'la consola no dice que la rama ha cambiado' ($r.Salida -notmatch 'Tu rama ha cambiado') (Cola $r.Salida)
+  Comprueba 'ni sin commits ni cambios sin commit' ($r.Salida -notmatch 'sin commit') (Cola $r.Salida)
+  Igual 'no hay carpeta datos/anterior-*' 0 @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos') -Directory | Where-Object { $_.Name -like 'anterior-*' }).Count
+}
+
+$Pruebas['m38 (c) hallazgos-antes.json sin el commit (de antes de M38): se repite una vez y despues ya no'] = {
+  $x = M38-Primera 'm38-c'
+  $e = $x.E
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'datos/diagnostico-antes.json') -Force
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'el diagnostico se repite: el Maven cuenta una llamada mas' 2 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+  Igual 'con las cifras nuevas' '87.5 7 8 java21=0' (M38-Cifras $e)
+  Comprueba 'la consola dice que el ultimo diagnostico no decia su commit y donde queda lo de antes' ($r.Salida -match 'no dice con que commit' -and $r.Salida.Contains('datos\anterior-sin-commit')) (Cola $r.Salida)
+  Comprueba 'lo de antes esta en datos/anterior-sin-commit' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/anterior-sin-commit/cobertura-antes.json'))
+  Igual 'ahora diagnostico-antes.json lleva el commit' $x.Head "$((Lee-Json (Get-Ruta $e.Out 'datos/diagnostico-antes.json')).commit)"
+  $r2 = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar otra vez sale con 0' 0 $r2.Codigo
+  Igual 'y ya no se repite: el Maven sigue en 2' 2 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+  Comprueba 'ni lo dice' ($r2.Salida -notmatch 'no dice con que commit') (Cola $r2.Salida)
+}
+
+$Pruebas['m38 (d) la correccion acabo con atascados: relanzar sin -Reintentar no corrige y lo dice; con -Reintentar se lanza rescate con -Reintentar'] = {
+  $e = Nuevo-Escenario 'm38-d' @('Clase1')
+  $o = Orden-Base
+  $o.codigo = 2
+  $o.atascados = @('- [estructura] B.java: no pasa (registro: x)')
+  $sis = M38-Sistema
+  $r = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'la primera corrida sale con 0 (completa, con un atascado)' 0 $r.Codigo
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  Comprueba 'correcciones.json: completa y con 1 atascado' ($null -ne $c -and $c.completa -eq $true -and @($c.atascados).Count -eq 1) (Cola $r.Salida)
+  Igual 'un fix, sin -Reintentar' 'fix|False' ((M38-Reintentar $e 'fix') -join ' ')
+  $r2 = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'relanzar sin -Reintentar sale con 0' 0 $r2.Codigo
+  Igual 'no corrige: sigue un solo fix' 1 @(Llamadas-Motor $e 'fix').Count
+  Comprueba 'y la consola dice que quedan atascados y que se repiten con -Reintentar' ($r2.Salida -match 'ficheros atascados \(1\)' -and $r2.Salida -match 'Para volver a intentarlos: -Reintentar') (Cola $r2.Salida)
+  $r3 = Migra-Motor $e $o ((Corrige $e) + '-Reintentar') $sis
+  Igual 'relanzar con -Reintentar sale con 0' 0 $r3.Codigo
+  Igual 'se lanza otro fix' 2 @(Llamadas-Motor $e 'fix').Count
+  Igual 'y rescate recibe -Reintentar (la primera vez no)' 'fix|False fix|True' ((M38-Reintentar $e 'fix') -join ' ')
+  $limpia = Nuevo-Escenario 'm38-d-limpia' @('Clase1')
+  $q = Orden-Base
+  [void](Migra-Motor $limpia $q (Corrige $limpia) $sis)
+  [void](Migra-Motor $limpia $q ((Corrige $limpia) + '-Reintentar') $sis)
+  Igual 'con -Reintentar y sin atascados no se corrige otra vez' 1 @(Llamadas-Motor $limpia 'fix').Count
+}
+
+$Pruebas['m38 (e) la ayuda: la frase de -Reintentar nombra tambien la correccion y sus ficheros atascados'] = {
+  $txt = [System.IO.File]::ReadAllText($Script)
+  $uso = @([regex]::Matches($txt, '(?m)^\s*\.\\migracion\.ps1 \.\.\. -Reintentar\b.*$') | ForEach-Object { $_.Value })
+  Igual 'hay una linea de uso de -Reintentar' 1 $uso.Count
+  Comprueba 'la linea de uso nombra la correccion y los ficheros atascados' ($uso.Count -eq 1 -and $uso[0] -match '(?i)correccion' -and $uso[0] -match '(?i)atascados') ($uso -join ' ')
+  $p = ([regex]::Match($txt, '(?s)Si algo se atasca.*?(?=\r?\n\s*\r?\nUSO)').Value) -replace '\s+', ' '
+  Comprueba 'el parrafo de las atascadas dice que -Reintentar repite tambien los ficheros de la correccion' ($p -match '(?i)-Reintentar[^.]*correccion|correccion[^.]*-Reintentar') $p
+}
+
+$Pruebas['m38 (f) con cambios sin commit en el migrado se mide igual (no se repite sobre el mismo commit) y sale un Aviso de que no cuentan'] = {
+  $x = M38-Primera 'm38-f'
+  $e = $x.E
+  Escribe $e.Migrado 'src/main/java/com/acme/life/App.java' "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int cambiado;`n}`n"
+  Escribe $e.Migrado 'notas.txt' 'sin seguimiento'
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Comprueba 'el Aviso dice 2 cambios sin commit, el commit que se mide y que no los cuenta' ($r.Salida -match 'Tienes 2 cambios sin commit' -and $r.Salida.Contains($x.Head.Substring(0, 7)) -and $r.Salida -match 'no los cuenta') (Cola $r.Salida)
+  Igual 'sobre el mismo commit no se repite: un solo Maven' 1 (@(Con-JaCoCo (Llamadas-Mvn $e))).Count
+}
+
+$Pruebas['m38 (g) con la correccion hecha y un commit nuevo (el usuario une la rama de rescate a la suya): la correccion anterior se aparta, se corrige otra vez y el worktree avanza'] = {
+  $e = Nuevo-Escenario 'm38-g' @('Clase1')
+  $o = Orden-Base
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  $sis = M38-Sistema
+  $r = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'la primera corrida sale con 0' 0 $r.Codigo
+  $viejo = M38-Head $e.Migrado
+  $rama = (GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')).Trim()
+  $antes = Lee $e.Out 'datos/correcciones.json'
+  [void](GitEn $e.Migrado @('merge', '--ff-only', '-q', $rama))
+  $nuevo = M38-Commit $e 'Propia'
+  Remove-Item -LiteralPath (Get-Ruta $e.Raiz 'motor-falso.json.llamadas') -Force
+  $r2 = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'relanzar sale con 0' 0 $r2.Codigo
+  $v = $viejo.Substring(0, 7)
+  Comprueba 'sale la Info con el commit viejo (el de antes de unir) y el nuevo' ($r2.Salida.Contains("($v -> $($nuevo.Substring(0, 7)))")) (Cola $r2.Salida)
+  $ant = Get-Ruta $e.Out "datos/anterior-$v"
+  Comprueba 'la correccion anterior esta en datos/anterior-<viejo7>: correcciones.json y lo de despues' ((@('correcciones.json', 'hallazgos-despues.json', 'diagnostico-despues.md') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ant $_)) }).Count -eq 0)
+  if (Test-Path -LiteralPath (Join-Path $ant 'correcciones.json')) { Igual 'y es la de antes, tal cual' $antes ([System.IO.File]::ReadAllText((Join-Path $ant 'correcciones.json'))) }
+  Igual 'se corrige otra vez: un fix desde el diagnostico nuevo' 1 @(Llamadas-Motor $e 'fix').Count
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  Comprueba 'correcciones.json es el nuevo: completa y solo con el commit de arreglo nuevo' ($null -ne $c -and $c.completa -eq $true -and @($c.commits).Count -eq 1 -and $antes -ne (Lee $e.Out 'datos/correcciones.json')) ($c | ConvertTo-Json -Compress -Depth 5)
+  $lleva = $true
+  try { [void](GitEn $e.Wt @('merge-base', '--is-ancestor', $nuevo, 'HEAD')) } catch { $lleva = $false }
+  Comprueba 'el worktree lleva el commit propio del usuario' $lleva
+}
+
+$Pruebas['m38 (h) si el worktree no puede avanzar hasta el commit nuevo (lleva arreglos que el usuario no ha unido) se queda donde esta y sale un Aviso'] = {
+  $e = Nuevo-Escenario 'm38-h' @('Clase1')
+  $o = Orden-Base
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  $sis = M38-Sistema
+  $r = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'la primera corrida sale con 0' 0 $r.Codigo
+  $wt = M38-Head $e.Wt
+  $nuevo = M38-Commit $e 'Propia'
+  $r2 = Migra-Motor $e $o (Basicos $e) $sis
+  Igual 'relanzar sale con 0' 0 $r2.Codigo
+  Igual 'el worktree no se mueve' $wt (M38-Head $e.Wt)
+  Comprueba 'el Aviso dice que el worktree no esta en tu commit y que lo que se mide es el worktree' ($r2.Salida -match 'worktree de rescate no esta en tu commit' -and $r2.Salida.Contains($nuevo.Substring(0, 7)) -and $r2.Salida.Contains($wt.Substring(0, 7))) (Cola $r2.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
