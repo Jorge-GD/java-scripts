@@ -681,7 +681,7 @@ if ($SoloInforme -and $Si) { Stop-Arranque 'Usa -SoloInforme o -Si, no los dos.'
 $respondeSi = [bool]$Si
 
 # 1. Herramientas y repos (antes, los ajustes: pueden cambiar donde estan)
-$ajustes = Read-CfgFile (Get-RutaAjustes) @('Plantilla')
+$ajustes = Read-CfgFile (Get-RutaAjustes) (Get-ClavesAjustes $PSScriptRoot)   # ajustes.json es de todos los scripts: solo avisa de lo que no es de ninguno
 foreach ($x in @(@('git', 'git'), @('java', $Cfg.JavaExe), @('Copilot', $Cfg.CopilotExe))) {
   if (-not (Get-Command $x[1] -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro $($x[0]) ('$($x[1])') en el PATH." }
 }

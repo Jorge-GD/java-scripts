@@ -854,7 +854,7 @@ $rutaAjustes = Get-RutaAjustes
 if (Test-Path -LiteralPath $rutaAjustes) {
   try {
     $null = ([System.IO.File]::ReadAllText($rutaAjustes) | ConvertFrom-Json)
-    [void](Read-CfgFile $rutaAjustes @('Plantilla'))
+    [void](Read-CfgFile $rutaAjustes (Get-ClavesAjustes $PSScriptRoot))
     $AjustesEstado = 'leidos'
   }
   catch { $AjustesEstado = 'ilegibles' }
