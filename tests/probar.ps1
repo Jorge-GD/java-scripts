@@ -5792,15 +5792,15 @@ function Escenario-M23([string]$Nombre, [string[]]$SinDoc, [hashtable]$Tests = @
   $cfg = @{ MvnExe = $M22Mvn; CopilotExe = (Join-Path $falsos 'm23-copilot.ps1') }
   foreach ($k in $M23Config.Keys) { $cfg[$k] = $M23Config[$k] }
   foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
-  $extra = @{}
-  foreach ($k in $Tests.Keys) { $extra['/' + $M22Dir + $k + '.java'] = $Tests[$k] }
-  foreach ($k in $Extra.Keys) { $extra[$k] = $Extra[$k] }
-  return (Escenario-Sonar $Nombre @('service/TotalService') $cfg $SinDoc $extra)
+  $ficheros = @{}
+  foreach ($k in $Tests.Keys) { $ficheros['/' + $M22Dir + $k + '.java'] = $Tests[$k] }
+  foreach ($k in $Extra.Keys) { $ficheros[$k] = $Extra[$k] }
+  return (Escenario-Sonar $Nombre @('service/TotalService') $cfg $SinDoc $ficheros)
 }
 
-# Lanza el paso calidad del escenario (lotes de un fichero, sin -Sonar), con el registro de Maven de M22. $Env: variables de entorno mientras dura.
-function Lanza-M23($E, [string]$Registro, [string[]]$Mas = @(), [hashtable]$Env = @{}) {
-  $a = @('-Modo', 'fix', '-Paso', 'calidad', '-Si', '-MaxIntentos', '1', '-Lote', '1') + $Mas
+# Lanza el fix del escenario (lotes de un fichero, sin -Sonar), con el registro de Maven de M22. $Mas: -Paso calidad o -Todo. $Env: variables de entorno mientras dura.
+function Lanza-M23($E, [string]$Registro, [string[]]$Mas, [hashtable]$Env = @{}) {
+  $a = @('-Modo', 'fix', '-Si', '-MaxIntentos', '1', '-Lote', '1') + $Mas
   $env:RESCATE_M22_LOG = $Registro
   $env:RESCATE_M22_ESTADO = Join-Path $E.Raiz 'estado'
   foreach ($k in $Env.Keys) { Set-Item -Path ('Env:' + $k) -Value $Env[$k] }
@@ -5816,7 +5816,7 @@ function Sin-Sonar-M23($E) {
 $Pruebas['m23 (a): con calidad en las dos listas de config.json, dos lotes buenos: el prompt solo compila, las puertas llevan el excludesFile y un control cierra la pasada'] = {
   $e = Escenario-M23 'm23-a' @('service/SinDoc1', 'service/SinDoc2') $CtxM22
   $log = Join-Path $e.Raiz 'mvn-m22.log'
-  $r = Lanza-M23 $e $log
+  $r = Lanza-M23 $e $log @('-Paso', 'calidad')
   if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'dos lotes buenos de calidad' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'calidad'")).Count
@@ -5840,7 +5840,7 @@ $Pruebas['m23 (b): un lote de calidad rompe un test de contexto: el control sale
   $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_CON:SinDoc2' '@SpringBootTest') }
   $e = Escenario-M23 'm23-b' @('service/SinDoc1', 'service/SinDoc2', 'service/SinDoc3') $t
   $log = Join-Path $e.Raiz 'mvn-m22.log'
-  $r = Lanza-M23 $e $log @() @{ RESCATE_M23_ROMPE = 'SinDoc2' }
+  $r = Lanza-M23 $e $log @('-Paso', 'calidad') @{ RESCATE_M23_ROMPE = 'SinDoc2' }
   if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
   Igual 'sale con 0: la pasada no falla' 0 $r.Codigo
   Igual 'los tres lotes pasan sus puertas (el test de contexto no se ejecuta en el lote)' 3 @([regex]::Matches($r.Salida, "Lote \d OK: 'calidad'")).Count
@@ -5857,14 +5857,15 @@ $Pruebas['m23 (b): un lote de calidad rompe un test de contexto: el control sale
   Igual 'intentos.tsv: un control, revertido 1' 'revertido 1' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
   Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
   $solas = @(Llamadas-M22 $log | Where-Object { $_.Tipo -eq 'solas' })
-  Igual 'dos pasadas con -Dtest: en el HEAD y la de la biseccion' 2 $solas.Count
+  Igual 'tres pasadas con -Dtest: en el HEAD y las dos de la biseccion entre tres lotes' 3 $solas.Count
   Comprueba 'nada de lo de Sonar: ni base, ni faltan, ni familias' (Sin-Sonar-M23 $e) (Cola $r.Salida)
 }
 
 $Pruebas['m23 (c): con -Todo, el paso anterior a calidad (build) pasa la suite entera en cada lote y calidad solo los ligeros'] = {
   $roto = 'src/main/java/com/acme/plantillabatch/service/Roto.java'
   $texto = "package com.acme.plantillabatch.service;`n`n/** Roto. */`npublic class Roto {`n    // NO_COMPILA`n}`n"
-  $e = Escenario-M23 'm23-c' @('service/SinDoc1', 'service/SinDoc2') $CtxM22 @{} @{ ('/' + $roto) = $texto }
+  # Orden reducido a build y calidad (como m10 -Todo): el paso anterior a calidad es build
+  $e = Escenario-M23 'm23-c' @('service/SinDoc1', 'service/SinDoc2') $CtxM22 @{ Orden = @('build', 'calidad') } @{ ('/' + $roto) = $texto }
   $log = Join-Path $e.Raiz 'mvn-m22.log'
   $r = Lanza-M23 $e $log @('-Todo', '-SinPlan')
   if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
@@ -5872,8 +5873,8 @@ $Pruebas['m23 (c): con -Todo, el paso anterior a calidad (build) pasa la suite e
   Comprueba 'el lote de build pasa' ($r.Salida -match "Lote 1 OK: 'build'") (Cola $r.Salida)
   Igual 'y los dos de calidad' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'calidad'")).Count
   $c = @(Llamadas-M22 $log)
-  Igual 'build: la suite entera, sin excludesFile, en su lote; calidad: dos Maven parciales' 'suite parcial parcial' ((@($c | Select-Object -First 3 | ForEach-Object { $_.Tipo })) -join ' ')
-  Igual 'ningun Maven parcial fuera de los lotes de calidad' 2 (Cuenta-M22 $c 'parcial')
+  Igual 'Maven con tests, en orden: el diagnostico (no compila), el lote de build, los dos de calidad y el control final' 'suite suite parcial parcial suite' ((@($c | ForEach-Object { $_.Tipo })) -join ' ')
+  Igual 'el lote de build pasa la suite entera, la de contexto tambien' 'AppContextTest,TotalServiceTest' ((@($c[1].Clases -split ',') | Sort-Object) -join ',')
   Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
 }
 
