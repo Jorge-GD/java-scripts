@@ -11,8 +11,9 @@ QUE PONE (en la carpeta de la rama de rescate, $DirRama)
   - src/test/java/<paquete del arnes>/RegresionLocalTest.java, de la plantilla regresion\RegresionLocalTest.java.txt, que compara lo que sale
     con el esperado con las reglas de la prueba en local;
   - src/test/resources/junit-platform.properties con el orden de las clases (RegresionLocalTest, despues de PruebaLocalTest).
-  La rama refleja solo los casos que salen iguales en este lanzamiento, probados juntos: los que ya estaban en ella y ahora salen distintos (o ya
-  no estan, o se han quitado) se borran de las dos carpetas en el mismo commit y se cuentan (regresion.json: retirados). Si no hay commit, no se retira nada.
+  La rama refleja, para los jobs probados en este lanzamiento, solo los casos que salen iguales, probados juntos: los de esos jobs que ya estaban en
+  ella y ahora salen distintos (o ya no estan, o se han quitado) se borran de las dos carpetas en el mismo commit y se cuentan (regresion.json:
+  retirados). Con -Job, los casos de los demas jobs se quedan como estaban. Si no hay commit, no se retira nada.
   Antes del commit, todo se prueba en una copia desechable de la rama (<Migrado>-regresion): el Maven de la copia ejecuta los dos tests y tiene que
   pasar (lo que falla en esa JVM se quita, una vez) y, cambiando un byte del esperado, tiene que fallar (sensibilidad).
 Lo que usan, del main de prueba-local.ps1: $DirRama, $MigradoRoot, $Local, $DatosMig, $Casos, $ArnesMig, $Propios, $Latin, $Utf8 y $Cfg.
@@ -156,11 +157,11 @@ function Get-CasosDeRama {
   return @($h.Values)
 }
 
-# Borra de la carpeta de la rama los casos que ya estaban en ella y no estan entre los de este lanzamiento (y la carpeta del job si se queda vacia).
-# Devuelve los casos retirados, con sus carpetas.
-function Remove-CasosDeRama($Actuales) {
+# Borra de la carpeta de la rama los casos que ya estaban en ella, son de un job probado en este lanzamiento ($Jobs) y no estan entre los de
+# este lanzamiento (y la carpeta del job si se queda vacia). Devuelve los casos retirados, con sus carpetas.
+function Remove-CasosDeRama($Actuales, [string[]]$Jobs) {
   $ahora = @($Actuales | ForEach-Object { "$($_.job)/$($_.caso)" })
-  $retirados = @(Get-CasosDeRama | Where-Object { $ahora -notcontains "$($_.job)/$($_.caso)" })
+  $retirados = @(Get-CasosDeRama | Where-Object { $Jobs -ccontains $_.job -and $ahora -notcontains "$($_.job)/$($_.caso)" })
   foreach ($c in $retirados) {
     foreach ($d in $c.dirs) {
       Remove-Carpeta (Join-Ruta $DirRama $d)
@@ -172,11 +173,11 @@ function Remove-CasosDeRama($Actuales) {
 }
 
 # Lleva a la carpeta de la rama de rescate lo probado en la copia y lo commitea (un commit, con pathspec explicito): los casos iguales de este
-# lanzamiento entran y los que ya estaban y ya no valen salen ($S.Retirados). Devuelve '' o el porque no hay commit; si git falla, deja la rama
+# lanzamiento entran y los que ya estaban, son de un job probado ($S.Jobs) y ya no valen salen ($S.Retirados). Devuelve '' o el porque no hay commit; si git falla, deja la rama
 # como estaba. Si ya estaba todo igual en la rama, no hay commit nuevo: $S.SinCambios.
 function Save-Regresion([string]$Copia, $S) {
   $rutas = @($S.Rutas)
-  $S.Retirados = @(Remove-CasosDeRama $S.Casos)
+  $S.Retirados = @(Remove-CasosDeRama $S.Casos $S.Jobs)
   foreach ($c in $S.Retirados) { $rutas += $c.dirs }
   foreach ($c in $S.Casos) {
     foreach ($d in @("$Casos/$($c.job)/$($c.caso)", "$Casos-esperado/$($c.job)/$($c.caso)")) {
@@ -205,7 +206,7 @@ function Save-Regresion([string]$Copia, $S) {
 # -Regresion, despues de lo demas (tras -Reparar): los casos de $Res que salen iguales se quedan como tests en la rama de rescate. Deja
 # datos\regresion.json y una linea. No cambia el codigo de salida de prueba-local.ps1.
 function Invoke-Regresion($Res) {
-  $s = [pscustomobject]@{ Casos = @(); Quitados = @(); Retirados = @(); Rutas = @(); Motivo = ''; Commit = ''; SinCambios = $false }
+  $s = [pscustomobject]@{ Casos = @(); Quitados = @(); Retirados = @(); Jobs = @($Res | ForEach-Object { [string]$_.job } | Select-Object -Unique); Rutas = @(); Motivo = ''; Commit = ''; SinCambios = $false }
   $iguales = @($Res | Where-Object { $_.resultado -eq 'igual' })
   foreach ($r in $iguales) {
     $esperado = Join-Ruta $Local "salidas/original/$($r.job)/$($r.caso)"

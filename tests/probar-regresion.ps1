@@ -291,6 +291,26 @@ $Pruebas['m33 (q) la rama refleja solo los casos iguales de este lanzamiento: un
   Igual 'la carpeta de la rama de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
 }
 
+$Pruebas['m33 (q2) con -Job solo se retiran de la rama casos de ese job: los de otro job que ya estaban en ella se quedan y no cuentan en retirados'] = {
+  $e = Escenario-M33 'm33-q2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=5.00', 'importe=20.00') })
+  $r = Prueba $e @('-Regresion')
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'y deja los cuatro casos en la rama' 4 @((GitEn $e.Wt @('ls-files', '--', "$Esp") ) -split "`n" | Where-Object { $_ -like '*/estado.txt' }).Count
+  Commit-En $e.Wt 'src/main/resources/regla.txt' "minimo=5.01`n" 'migra el limite'
+  $antes = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Regresion', '-Job', 'cargaJob')
+  Igual 'el segundo, solo de cargaJob, sale con 2 (cargaJob/caso-01 ya sale distinto)' 2 $r.Codigo
+  $j = Lee-Json $e.Regresion
+  Igual 'regresion.json: solo el caso de cargaJob que sigue igual' 'cargaJob/caso-02' ((@($j.casos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Igual 'retirados: solo el de cargaJob que ya salia distinto' 'cargaJob/caso-01' ((@($j.retirados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Igual 'un solo commit nuevo' 1 (GitEn $e.Wt @('rev-list', '--count', "$antes..HEAD"))
+  Igual 'que solo lleva lo que se retira de cargaJob' (((@("$Esp/cargaJob/caso-01/estado.txt", "$Esp/cargaJob/caso-01/ficheros/salida/resultado.txt", "$Ent/cargaJob/caso-01/ficheros/entrada/datos.txt")) | Sort-Object { $_ } -CaseSensitive) -join '|') (Ficheros-Del-Commit $e.Wt)
+  Comprueba 'los dos casos de remesaJob siguen en la rama, con su esperado y sus entradas' ((Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/remesaJob/caso-01/estado.txt")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/remesaJob/caso-02/estado.txt")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Ent/remesaJob/caso-01/ficheros/entrada/datos.txt")) -and (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Ent/remesaJob/caso-02/ficheros/entrada/datos.txt"))) ''
+  Comprueba 'y el caso-02 de cargaJob tambien' (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-02/estado.txt")) ''
+  Comprueba 'la consola cuenta un solo retirado' ($r.Salida -match 'Retirados de la rama: 1 \(ahora salen distintos o ya no estan\)') (Cola $r.Salida)
+  Igual 'la carpeta de la rama de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
 $Pruebas['m33 (r) un caso con la fecha, la hora o la ruta de hoy no se commitea, este en el nombre, en el texto o en los dos; si no vale ninguno, no hay commit ni copia'] = {
   $n = 0
   foreach ($x in @(@('', 'en el nombre y en el texto'), @('estable-nombre', 'solo en el texto'), @('estable-texto', 'solo en el nombre'))) {
