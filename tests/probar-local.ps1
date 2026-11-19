@@ -2135,5 +2135,93 @@ $Pruebas['m30 (f) plantillas: la del arnes lleva las tres vinetas nuevas y lo qu
   Comprueba 'reparar.md: lo de fuera de src/main/ se deja como estaba y se prueba el arreglo sin ello' ($reparar -match 'el script lo deja como estaba y prueba tu arreglo sin ese cambio' -and $reparar -notmatch 'rechaza todo tu arreglo') ''
 }
 
+# ===================== M31: menos diferencias falsas y un orden de comprobacion mas barato en -Reparar =====================
+# m31-mvn.ps1 deja tablas que dice RESCATE_M31 en cada caso, segun el lado, y apunta en mvn.log cada suite de tests unitarios.
+
+# Un escenario normal con el Maven de mentira de m31.
+function Escenario-M31([string]$Nombre, $Casos) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm31-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza -Si con el guion de tablas $Guion de m31-mvn.ps1 y devuelve lo de Prueba.
+function Prueba-M31($E, [string]$Guion) {
+  $env:RESCATE_M31 = $Guion
+  try { return (Prueba $E) }
+  finally { $env:RESCATE_M31 = '' }
+}
+
+# La posicion de la ultima de las $Lineas que casa con $Patron (-1 si ninguna).
+function Ultimo-Indice([string[]]$Lineas, [string]$Patron) {
+  $u = -1
+  for ($i = 0; $i -lt $Lineas.Count; $i++) { if ($Lineas[$i] -match $Patron) { $u = $i } }
+  return $u
+}
+
+$Pruebas['m31 (a) tablas: las mismas filas con las columnas y las filas en otro orden salen iguales; con un valor cambiado salen distintas y la linea ensenada sale reordenada; con una fila rara se compara tal cual'] = {
+  $e = Escenario-M31 'm31-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'columnas'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'las mismas filas con otro orden de columnas y de filas: igual' 'igual' (Caso $e 'cargaJob' 'caso-01').resultado
+  $e = Escenario-M31 'm31-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'columnas-valor'
+  Igual 'con un valor cambiado sale con 2' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)
+  Igual 'con una sola diferencia, en la tabla' 'tablas/T.csv' ($d | ForEach-Object { $_.fichero }) 
+  Igual 'una linea distinta' 1 $d[0].lineas
+  Igual 'la tercera: la de luis, ya reordenada' 3 $d[0].linea
+  Igual 'lo del original, con las columnas en orden de nombre' '2;20;luis' $d[0].original
+  Igual 'y lo del migrado, igual' '2;25;luis' $d[0].migrado
+  $e = Escenario-M31 'm31-a3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'columnas-fila-rara'
+  Igual 'con una fila de otro numero de campos sale con 2' 2 $r.Codigo
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)
+  Igual 'se compara tal cual: la primera linea es la cabecera de cada lado' 'ID;NOMBRE|NOMBRE;ID' "$($d[0].original)|$($d[0].migrado)"
+}
+
+$Pruebas['m31 (b) tablas del framework: TASK_EXECUTION.csv solo en el migrado y BATCH_JOB_INSTANCE.csv distinto en los dos no cuentan: el caso sale igual'] = {
+  $e = Escenario-M31 'm31-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M31 $e 'framework'
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale igual' 'igual' $c.resultado
+  Igual 'sin diferencias' 0 @($c.diferencias).Count
+  Comprueba 'las tablas estan en las salidas de los dos lados (es la comparacion la que no las cuenta)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/tablas/TASK_EXECUTION.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/tablas/BATCH_JOB_INSTANCE.csv'))) ''
+}
+
+$Pruebas['m31 (c) -Reparar: un arreglo que mejora su caso pero rompe un test unitario se rechaza con el motivo de los tests y los demas casos no se ejecutan'] = {
+  $e = Escenario-M25 'm31-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test -Ajustes @{ MvnExe = (Join-Path $falsos 'm31-mvn.ps1') }
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo es el de los tests: arregla el caso pero rompe el test' ($rep[0].motivo -match 'arregla el caso, pero rompe estos tests' -and $rep[0].motivo -match 'com\.acme\.nuevo\.ReglaTest') $rep[0].motivo
+  Igual 'dos llamadas: el intento y el reintento' 2 (Llamadas-Reparar $e).Count
+  Igual 'el caso de la tarea se ejecuta en el migrado al empezar y en cada intento' 3 (Ejecuciones-Mig $e 'caso-01')
+  Igual 'el otro caso, solo al empezar: tras un arreglo que rompe un test ya no se ejecuta' 1 (Ejecuciones-Mig $e 'caso-02')
+}
+
+$Pruebas['m31 (d) -Reparar: un arreglo bueno pasa los tres pasos en el orden nuevo: el caso de la tarea, los tests unitarios y los demas casos'] = {
+  $e = Escenario-M25 'm31-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm31-mvn.ps1') }
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'reparaciones: arreglado, con un intento' 'arreglado 1' ((@(Reparaciones $e)[0]).resultado + ' ' + (@(Reparaciones $e)[0]).intentos)
+  $l = @(Mavens-Con $e ('^' + [regex]::Escape($e.CopiaMig + '|')))
+  $uno = Ultimo-Indice $l '-Dprueba\.local\.caso=caso-01( |$)'
+  $suite = Ultimo-Indice $l 'surefire\.excludesFile'
+  $dos = Ultimo-Indice $l '-Dprueba\.local\.caso=caso-02( |$)'
+  Comprueba 'los tres pasos se ejecutan' ($uno -ge 0 -and $suite -ge 0 -and $dos -ge 0) "caso-01 en $uno, suite en $suite, caso-02 en $dos"
+  Comprueba 'primero el caso de la tarea, despues la suite y al final los demas casos' ($uno -lt $suite -and $suite -lt $dos) "caso-01 en $uno, suite en $suite, caso-02 en $dos"
+}
+
+$Pruebas['m31 (e) plantilla del arnes: las tablas son las que no son de Spring Batch ni de Spring Cloud Task'] = {
+  $arnes = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Split-Path -Parent $Script) 'tareas') 'arnes-local.md'), [System.Text.Encoding]::UTF8)
+  Comprueba 'tablas/<TABLA>.csv: una por cada tabla que no es de Spring Batch ni de Spring Cloud Task (BATCH_..., TASK_...)' ($arnes.Contains('uno por cada tabla que no es de Spring Batch ni de Spring Cloud Task (`BATCH_...`, `TASK_...`), con el nombre')) ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
