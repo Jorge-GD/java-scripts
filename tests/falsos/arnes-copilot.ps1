@@ -11,7 +11,7 @@
 #   sale-mal-bueno   escribe un test que vale y sale con codigo 3
 #   sale-mal-malo    escribe un test que no compila y sale con codigo 3
 #   colgado-siempre  como colgado-malo, y tambien en el reintento (no lo arregla: escribe otra vez un test que no compila y se cuelga)
-#   colgado-toca-main  escribe un test que vale y src/main/java/Tocado.java (prohibido) y se cuelga
+#   colgado-toca-main  escribe un test que no compila (NO_COMPILA) y src/main/java/Tocado.java (prohibido: el script lo deshace) y se cuelga
 # En un reintento de arnes deja en RESCATE_LLAMADAS (si esta) <id>.reintento con lo que encontro en la copia: test=<True|False>
 # (el test de ESCRIBIR) y tocado=<True|False> (src/main/java/Tocado.java).
 $texto = ''
@@ -49,6 +49,7 @@ $env:RESCATE_FALSO = ''
 if ($guion -in @('colgado-malo', 'colgado-siempre', 'sale-mal-malo')) { $env:RESCATE_FALSO = 'arnes-no-compila' }
 if ($guion -eq 'colgado-toca-main') { $env:RESCATE_FALSO = 'arnes-toca-main' }
 if ($guion -in @('colgado-bueno', 'colgado-malo', 'colgado-siempre', 'colgado-toca-main', 'sale-mal-bueno', 'sale-mal-malo')) { & $base @args | Out-Null }
+if ($guion -eq 'colgado-toca-main') { [System.IO.File]::AppendAllText($previo, "// NO_COMPILA`n") }
 $env:RESCATE_FALSO = ''
 if ($guion -in @('sale-mal-bueno', 'sale-mal-malo')) { 'Copilot se ha caido: sin red'; exit 3 }
 if ($guion -eq 'colgado-parcial') { 'salida parcial: leyendo el job cargaRecibosJob' }

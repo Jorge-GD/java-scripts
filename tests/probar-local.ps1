@@ -201,21 +201,21 @@ $Pruebas['5 fuera: un caso que escribe fuera de su carpeta se rechaza y se desha
   Igual 'la tarea queda atascada' 'atascada' $t.estado
 }
 
-$Pruebas['6 arnes prohibido: tocar src/main o meter una dependencia sin scope test se rechaza'] = {
+$Pruebas['6 arnes con extras: tocar src/main se deshace y una dependencia sin scope test recibe el scope; un arnes que no compila sigue rechazado'] = {
   $e = Nuevo-Escenario 'arnes-main' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e @() 'arnes-toca-main:arnes-original'
-  Igual 'sin arnes del original sale con 1' 1 $r.Codigo
+  Igual 'con un fichero de mas en src/main sale con 0' 0 $r.Codigo
   $t = Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')
-  Igual 'el arnes del original queda atascado' 'atascada' $t.estado
-  Comprueba 'con el fichero de src/main en el motivo' ($t.motivo -match 'src/main/java/Tocado\.java') $t.motivo
+  Igual 'el arnes del original queda hecho, a la primera' 'hecha/1' "$($t.estado)/$($t.intentos)"
+  Comprueba 'la consola dice el fichero de src/main que deshace' ($r.Salida.Contains('Deshago lo que la IA ha tocado fuera de lo suyo: src/main/java/Tocado.java')) (Cola $r.Salida)
   Comprueba 'el fichero no queda en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaOrig 'src/main/java/Tocado.java')))
-  Comprueba 'dice que esta atascado y da el texto para Copilot' ($r.Salida -match 'atascad' -and $r.Salida -match 'Copilot') (Cola $r.Salida)
-  Igual 'sin arnes del original no se prepara ningun caso' 0 @(Llamadas $e | Where-Object { $_.tipo -eq 'caso-local' }).Count
+  Comprueba 'ni en el arnes guardado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/original/src/main/java/Tocado.java')))
   $e = Nuevo-Escenario 'arnes-dep' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e @() 'arnes-dep-sin-test:arnes-original'
-  Igual 'con una dependencia sin scope test sale con 1' 1 $r.Codigo
+  Igual 'con una dependencia sin scope test sale con 0' 0 $r.Codigo
   $t = Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')
-  Comprueba 'y el motivo habla del scope test' ($t.estado -eq 'atascada' -and $t.motivo -match 'scope') $t.motivo
+  Igual 'el arnes del original queda hecho' 'hecha' $t.estado
+  Comprueba 'la dependencia nueva lleva scope test en el pom de la copia' ((Lee $e.CopiaOrig 'pom.xml') -match '(?s)<artifactId>runtime</artifactId>.*?<scope>test</scope>.*?</dependency>') (Lee $e.CopiaOrig 'pom.xml')
   $e = Nuevo-Escenario 'arnes-mig' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e @() 'arnes-no-compila:arnes-migrado'
   Igual 'sin arnes del migrado sale con 1' 1 $r.Codigo
@@ -987,13 +987,13 @@ $Pruebas['53 m18 arnes (k3): en el ULTIMO intento una llamada cortada por tiempo
   Igual 'la copia queda como su base: sin cambios' '' (GitEn $e.CopiaOrig @('status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).rescate', ':(exclude)target'))
 }
 
-$Pruebas['54 m18 arnes (k4): la llamada cortada escribio el test (permitido) y toco src/main (prohibido): en la 2.a, el test sigue en la copia y src/main esta como en la base'] = {
+$Pruebas['54 m18 arnes (k4): la llamada cortada escribio un test que no vale (permitido) y toco src/main (prohibido): el script deshace src/main al comprobar y, en la 2.a, el test sigue en la copia'] = {
   $e = Nuevo-Escenario 'm18-k4' ([ordered]@{ cargaJob = @('importe=10.00') })
   Ajustes-Arnes $e
   $r = Prueba $e @() 'colgado-toca-main:arnes-original'
   Igual 'sale con 0 (el segundo intento vale)' 0 $r.Codigo
   $p2 = Registro-Arnes $e 'original' 2
-  Comprueba 'el motivo de la 1.a nombra el fichero de src/main que toco' ($p2 -match 'Tocado\.java') $p2
+  Comprueba 'el motivo de la 1.a empieza por el fichero de src/main que deshizo' ($p2 -match 'He deshecho lo que tocaste fuera de .*: src/main/java/Tocado\.java\.') $p2
   $f = Join-Path $e.Llamadas 'arnes-original.reintento'
   $v = ''
   if (Test-Path -LiteralPath $f) { $v = ([System.IO.File]::ReadAllLines($f) -join ' ') }
@@ -1321,10 +1321,10 @@ $Pruebas['m25 (a) -Reparar: dos casos distintos por la misma causa: una llamada,
   Comprueba 'el parche queda en prueba-local' (@(Get-ChildItem -LiteralPath $e.Local -File -Filter '*.patch').Count -ge 1) ''
 }
 
-$Pruebas['m25 (b) -Reparar: la IA toca un test: rechazado con ese motivo, reintento y, al final, no arreglado; la rama de rescate no se mueve'] = {
-  $e = Escenario-M25 'm25-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+$Pruebas['m25 (b) -Reparar: la IA toca un test y su cambio de src/main/ no mejora el caso: el test se deshace y el motivo lo dice; reintento y, al final, no arreglado; la rama de rescate no se mueve'] = {
+  $e = Escenario-M25 'm25-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test -Ajustes @{ CopilotExe = (Join-Path $falsos 'm30-copilot.ps1') }
   $antes = Estado-Git $e.Wt
-  $r = Prueba $e @('-Reparar') 'reparar-test'
+  $r = Prueba $e @('-Reparar') 'reparar-test-inutil'
   Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
   Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
   Igual 'dos llamadas: el intento y el reintento' 2 (Llamadas-Reparar $e).Count
@@ -1332,8 +1332,8 @@ $Pruebas['m25 (b) -Reparar: la IA toca un test: rechazado con ese motivo, reinte
   $rep = @(Reparaciones $e)
   Igual 'reparaciones: una entrada, no arreglado' 'no arreglado' $rep[0].resultado
   Igual 'con dos intentos' 2 $rep[0].intentos
-  Comprueba 'el motivo nombra el test que ha tocado' ($rep[0].motivo -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') $rep[0].motivo
-  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
+  Comprueba 'el motivo empieza por lo que ha deshecho: el test que ha tocado, fuera de src/main/' ($rep[0].motivo -match '^He deshecho lo que tocaste fuera de src/main/: src/test/java/com/acme/nuevo/ReglaTest\.java\. ') $rep[0].motivo
+  Comprueba 'y sigue con el motivo de siempre' ($rep[0].motivo -match 'sigue igual de distinto') $rep[0].motivo
   Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
   Igual 'la copia del migrado queda como estaba: regla.txt con el limite de antes' "minimo=5.01`n" (Lee $e.CopiaMig 'src/main/resources/regla.txt')
   Igual 'y el test, sin lo que le anadio la IA' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" (Lee $e.CopiaMig 'src/test/java/com/acme/nuevo/ReglaTest.java')
@@ -1424,24 +1424,24 @@ $Pruebas['m25 (f) -Reparar: con -Desde o -Deshacer, sin worktree de rescate o co
 }
 
 $Pruebas['m25 (g) -Reparar: el reintento lleva en su prompt el motivo y el diff rechazado, y arregla; el primer intento no lleva la correccion'] = {
-  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ CopilotExe = (Join-Path $falsos 'm30-copilot.ps1') }
   $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
-  $r = Prueba $e @('-Reparar') 'reparar-test1'
+  $r = Prueba $e @('-Reparar') 'reparar-inutil1'
   Igual 'sale con 0 (el reintento arregla)' 0 $r.Codigo
   Igual 'dos llamadas' 2 (Llamadas-Reparar $e).Count
   $uno = @(Registros-Reparar $e 1)[0]
   $dos = @(Registros-Reparar $e 2)[0]
   Comprueba 'el primer prompt no lleva la correccion' ($uno -notmatch 'CORRECCI') ''
-  Comprueba 'el segundo si, con el test que toco' ($dos -match 'CORRECCI' -and $dos -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') ''
-  Comprueba 'y con el diff que se rechazo (el cambio de regla.txt y el del test)' ($dos -match 'diff --git a/src/main/resources/regla\.txt' -and $dos -match '\+minimo=5\.00' -and $dos -match 'diff --git a/src/test/java/com/acme/nuevo/ReglaTest\.java') ''
+  Comprueba 'el segundo si, con el motivo (sigue igual de distinto)' ($dos -match 'CORRECCI' -and $dos -match 'sigue igual de distinto') ''
+  Comprueba 'y con el diff que se rechazo (el cambio de nota.txt)' ($dos -match 'diff --git a/src/main/resources/nota\.txt' -and $dos -match '\+sin efecto') ''
   Igual 'un commit nuevo' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
-  Comprueba 'sin el test que la IA toco en el primer intento' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java'))) ''
+  Comprueba 'sin la nota.txt que la IA dejo en el primer intento' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/main/resources/nota.txt'))) ''
   Igual 'la entrada dice arreglado con dos intentos' 'arreglado 2' ((@(Reparaciones $e)[0]).resultado + ' ' + (@(Reparaciones $e)[0]).intentos)
 }
 
 $Pruebas['m25 (h) -Reparar: relanzar con el mismo HEAD y la tarea atascada no llama a Copilot y lo dice'] = {
   $e = Escenario-M25 'm25-h' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
-  $r = Prueba $e @('-Reparar') 'reparar-test'
+  $r = Prueba $e @('-Reparar') 'reparar-inutil'
   Igual 'la primera vez sale con 2' 2 $r.Codigo
   $n = (Llamadas-Reparar $e).Count
   Igual 'con dos llamadas' 2 $n
@@ -1556,19 +1556,18 @@ $Pruebas['m26 (a) -Reparar: la IA arregla src/main/ y la ejecucion deja logs/bat
   Comprueba 'y datos/h2.mv.db' ($r.Salida -match 'Quito lo que ha dejado la ejecucion fuera de src/: [^\r\n]*datos/h2\.mv\.db') (Cola $r.Salida)
 }
 
-$Pruebas['m26 (b) -Reparar: la IA arregla src/main/ y crea src/test/.../NuevoTest.java: rechazado nombrando ese fichero y src/main/, sin commit'] = {
-  $e = Escenario-M25 'm26-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
-  $antes = Estado-Git $e.Wt
+$Pruebas['m26 (b) -Reparar: la IA arregla src/main/ y crea src/test/.../NuevoTest.java (bajo src/, no es ruido): el script lo deshace, lo dice y el arreglo vale, con un commit que solo toca src/main/'] = {
+  $e = Escenario-M25 'm26-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $r = Prueba $e @('-Reparar') 'reparar-test-nuevo'
-  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
-  Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
-  $rep = @(Reparaciones $e)
-  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
-  Comprueba 'el motivo nombra el test nuevo' ($rep[0].motivo -match 'src/test/java/com/acme/nuevo/NuevoTest\.java') $rep[0].motivo
-  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
-  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'una sola llamada' 1 (Llamadas-Reparar $e).Count
+  Igual 'reparaciones: arreglado' 'arreglado' (@(Reparaciones $e)[0]).resultado
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  Igual 'que solo toca src/main/' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Comprueba 'la consola nombra el test nuevo en lo que deshace' ($r.Salida -match 'Deshago lo que la IA ha tocado fuera de lo suyo: src/test/java/com/acme/nuevo/NuevoTest\.java') (Cola $r.Salida)
   Comprueba 'lo nuevo bajo src/ no es ruido: la consola no dice que lo quita' ($r.Salida -notmatch 'Quito lo que ha dejado') (Cola $r.Salida)
-  Comprueba 'el test nuevo se deshace en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'src/test/java/com/acme/nuevo/NuevoTest.java'))) ''
+  Comprueba 'el test nuevo no esta en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'src/test/java/com/acme/nuevo/NuevoTest.java'))) ''
 }
 
 $Pruebas['m26 (c) -Reparar: la IA solo deja logs/batch.log: es ruido, asi que no ha cambiado src/main/: rechazado con ese motivo y el fichero ya no esta'] = {
@@ -1584,16 +1583,14 @@ $Pruebas['m26 (c) -Reparar: la IA solo deja logs/batch.log: es ruido, asi que no
   Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
 }
 
-$Pruebas['m26 (d) -Reparar: la IA arregla src/main/ y cambia pom.xml (con seguimiento): rechazado nombrando pom.xml, sin commit'] = {
-  $e = Escenario-M25 'm26-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
-  $antes = Estado-Git $e.Wt
+$Pruebas['m26 (d) -Reparar: la IA arregla src/main/ y cambia pom.xml (con seguimiento): el script lo deja como estaba, lo dice y el arreglo vale, con un commit que solo toca src/main/'] = {
+  $e = Escenario-M25 'm26-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $r = Prueba $e @('-Reparar') 'reparar-pom'
-  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
-  $rep = @(Reparaciones $e)
-  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
-  Comprueba 'el motivo nombra pom.xml' ($rep[0].motivo -match 'pom\.xml') $rep[0].motivo
-  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
-  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'reparaciones: arreglado' 'arreglado' (@(Reparaciones $e)[0]).resultado
+  Igual 'un commit nuevo que solo toca src/main/' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Comprueba 'la consola dice que deshace pom.xml' ($r.Salida -match 'Deshago lo que la IA ha tocado fuera de lo suyo: pom\.xml') (Cola $r.Salida)
   Comprueba 'el pom.xml de la copia queda como estaba' ((Lee $e.CopiaMig 'pom.xml') -notmatch 'tocado por la IA') ''
 }
 

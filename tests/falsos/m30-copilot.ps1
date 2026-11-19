@@ -12,6 +12,9 @@
 #   arnes-solo-con-main  un arnes que lleva NECESITA_MAIN y un comentario MAIN_TOCADO en src/main/**/App.java: m30-mvn.ps1 solo lo compila
 #                        con ese cambio de src/main
 #   reparar-solo-test    (tarea reparar) solo toca src/test/java/com/acme/nuevo/ReglaTest.java
+#   reparar-test-inutil  (tarea reparar) toca ReglaTest.java y deja src/main/resources/nota.txt, que no cambia ninguna salida, en todos los intentos
+#   reparar-inutil1      (tarea reparar) en el primer intento solo deja nota.txt; en el reintento (su prompt lleva la CORRECCION) arregla:
+#                        pone minimo=5.00 en src/main/resources/regla.txt
 # Un guion solo vale en su tarea (arnes-* en las de arnes, reparar-solo-test en las de reparar); en las demas se hace lo de siempre.
 # Los guiones arnes-pom-* parten del pom que escribe Pom-M30 de tests/probar-local.ps1 (con CRLF o LF: el falso respeta el del original).
 $texto = ''
@@ -28,7 +31,7 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
   if ($nombre -and -not $guion -and $id -match $solo) { $guion = $nombre }
 }
 $tipo = ([regex]::Match($prompt, '(?m)^TIPO: (.*?)\s*$')).Groups[1].Value
-$mio = ($tipo -eq 'arnes-local' -and @('arnes-de-mas', 'arnes-de-mas-muchos', 'arnes-pom-lombok', 'arnes-pom-mas', 'arnes-pom-roto', 'arnes-solo-con-main') -contains $guion) -or ($tipo -eq 'reparar' -and $guion -eq 'reparar-solo-test')
+$mio = ($tipo -eq 'arnes-local' -and @('arnes-de-mas', 'arnes-de-mas-muchos', 'arnes-pom-lombok', 'arnes-pom-mas', 'arnes-pom-roto', 'arnes-solo-con-main') -contains $guion) -or ($tipo -eq 'reparar' -and @('reparar-solo-test', 'reparar-test-inutil', 'reparar-inutil1') -contains $guion)
 if (-not $mio) {
   & (Join-Path $PSScriptRoot 'm25-copilot.ps1') @args
   exit $LASTEXITCODE
@@ -44,8 +47,13 @@ function Escribe-M30([string]$Rel, [string]$Texto) {
 }
 function App-M30 { return @(Get-ChildItem -LiteralPath (Join-Path $raiz 'src/main') -Recurse -File -Filter 'App.java')[0].FullName }
 
-if ($guion -eq 'reparar-solo-test') {
+if ($guion -in @('reparar-solo-test', 'reparar-test-inutil')) {
   [System.IO.File]::AppendAllText((Ruta-M30 'src/test/java/com/acme/nuevo/ReglaTest.java'), "// tocado por la IA`n")
+}
+if ($guion -eq 'reparar-test-inutil' -or ($guion -eq 'reparar-inutil1' -and $prompt -notmatch 'CORRECCI')) { Escribe-M30 'src/main/resources/nota.txt' "sin efecto`n" }
+if ($guion -eq 'reparar-inutil1' -and $prompt -match 'CORRECCI') {
+  $regla = Ruta-M30 'src/main/resources/regla.txt'
+  [System.IO.File]::WriteAllText($regla, [System.IO.File]::ReadAllText($regla).Replace('minimo=5.01', 'minimo=5.00'))
 }
 if ($guion -eq 'arnes-de-mas') {
   Escribe-M30 'META-INF/MANIFEST.MF' "Manifest-Version: 1.0`n"
