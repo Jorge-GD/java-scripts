@@ -6407,6 +6407,23 @@ $Pruebas['m38 (a) con un commit nuevo en el migrado, relanzar repite el diagnost
   Igual 'el worktree de rescate esta ya en el commit nuevo (la rama de rescate avanza hasta el)' $nuevo (M38-Head $e.Wt)
 }
 
+$Pruebas['m38 (i) si datos/anterior-<viejo7> ya existe (se volvio a un commit de antes), lo de ahora va a anterior-<viejo7>-2 y no pisa lo que habia'] = {
+  $x = M38-Primera 'm38-i'
+  $e = $x.E
+  $v = $x.Head.Substring(0, 7)
+  $ant = Get-Ruta $e.Out "datos/anterior-$v"
+  [void](New-Item -ItemType Directory -Path $ant)
+  Escribe $ant 'cobertura-antes.json' '{"porcentaje": 1}'
+  [void](M38-Commit $e 'Otra')
+  $r = Con-Entorno @{ RESCATE_JACOCO_CSV = $x.Csv2 } { Migra $e (Basicos $e) }
+  Igual 'relanzar sale con 0' 0 $r.Codigo
+  Igual 'lo que ya habia en anterior-<viejo7> sigue igual' '1' "$((Lee-Json (Join-Path $ant 'cobertura-antes.json')).porcentaje)"
+  Igual 'y alli no entra nada mas' 1 @(Get-ChildItem -LiteralPath $ant -File).Count
+  $dos = Get-Ruta $e.Out "datos/anterior-$v-2"
+  Comprueba 'lo de ahora esta en anterior-<viejo7>-2, con la cobertura de la primera vez (62,5 %)' ((Test-Path -LiteralPath (Join-Path $dos 'cobertura-antes.json')) -and "$((Lee-Json (Join-Path $dos 'cobertura-antes.json')).porcentaje)" -eq '62.5')
+  Comprueba 'y la Info lo dice' ($r.Salida.Contains("queda en datos\anterior-$v-2.")) (Cola $r.Salida)
+}
+
 $Pruebas['m38 (b) relanzar sin commit nuevo no repite el diagnostico: un solo Maven, mismos datos, ninguna Info ni carpeta anterior'] = {
   $x = M38-Primera 'm38-b'
   $e = $x.E
