@@ -8,8 +8,9 @@
 #   tabla-blancos        original: tablas/T.csv con la cabecera y lineas en blanco; migrado: sin esa tabla
 #   excepcion            original: el job no arranca (estado=EXCEPCION, salida=IllegalStateException, error.txt con la causa y nada mas)
 #   excepcion-sin-error  como excepcion, sin error.txt
+#   excepcion-ambos      como excepcion, en los dos lados (el caso sale igual)
 #   failed               original: estado=FAILED y salida=FAILED, con lo demas que deja el caso
-# El migrado deja lo de siempre en los guiones de excepcion y de failed.
+# El migrado deja lo de siempre en los guiones de excepcion (menos excepcion-ambos) y de failed.
 $raiz = (Get-Location).Path
 & (Join-Path $PSScriptRoot 'm31-mvn.ps1') @args
 $codigo = $LASTEXITCODE
@@ -39,10 +40,10 @@ if ($env:RESCATE_M36 -and $codigo -eq 0 -and $job -and $caso -and $caso -ne 'vac
     if ($guion -like 'tabla-fila*') { Escribe-Salida 'tablas/T.csv' "ID;NOMBRE`n1;ana`n" }
     if ($guion -eq 'tabla-blancos') { Escribe-Salida 'tablas/T.csv' "ID;NOMBRE`n`n   `n`n" }
   }
-  if ($original -and $guion -like 'excepcion*') {
+  if (($original -or $guion -eq 'excepcion-ambos') -and $guion -like 'excepcion*') {
     Get-ChildItem -LiteralPath $dir | Remove-Item -Recurse -Force
     Escribe-Salida 'estado.txt' "estado=EXCEPCION`nsalida=IllegalStateException`n"
-    if ($guion -eq 'excepcion') { Escribe-Salida 'error.txt' "Could not resolve placeholder 'acme.entrada.ruta'`n    at com.acme.viejo.Lector.lee(Lector.java:10)`n" }
+    if ($guion -eq 'excepcion' -or $guion -eq 'excepcion-ambos') { Escribe-Salida 'error.txt' "Could not resolve placeholder 'acme.entrada.ruta'`n    at com.acme.viejo.Lector.lee(Lector.java:10)`n" }
   }
   if ($original -and $guion -eq 'failed') { Escribe-Salida 'estado.txt' "estado=FAILED`nsalida=FAILED`n" }
 }

@@ -2413,6 +2413,21 @@ $Pruebas['m36 (c2) un caso rechazado antes por otro motivo y que luego deja un o
   Igual 'el caso se prueba' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
 }
 
+$Pruebas['m36 (c3) con Intentos = 3, un caso nuevo cuyo original no arranca se rechaza en el primer intento y se acepta en el segundo: no hay una tercera llamada'] = {
+  $e = Escenario-M36 'm36-c3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60; Intentos = 3 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M36 $e 'excepcion'
+  Igual 'sale con 2 (el caso sale distinto del migrado)' 2 $r.Codigo
+  Igual 'dos llamadas, no tres' 2 (Llamadas-Casos $e).Count
+  Comprueba 'el primer intento se rechaza porque el job no arranca' ($r.Salida -match 'caso-cargaJob-01 rechazado: En el original el job no llega a arrancar') (Cola $r.Salida)
+  Igual 'y solo se rechaza una vez' 1 @([regex]::Matches($r.Salida, 'caso-cargaJob-01 rechazado')).Count
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'con dos intentos' 2 $t.intentos
+  Igual 'apuntado que ya se pidio' $true $t.entradas.excepcionPedida
+}
+
 $Pruebas['m36 (d) un caso hecho en otro lanzamiento con EXCEPCION guardada vuelve a pendiente una vez, con la Info; en el siguiente lanzamiento no se repite'] = {
   $e = Escenario-M36 'm36-d' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
   $r = Prueba-M36 $e ''
@@ -2470,6 +2485,44 @@ $Pruebas['m36 (e2) -Reparar: si todos los distintos son de un original que no ar
   Igual 'el caso sigue distinto' 'distinto' ((Resultados $e) -join ',')
   Igual 'la rama de rescate no se mueve' $wt0 (GitEn $e.Wt @('rev-parse', 'HEAD'))
   Comprueba 'los tests unitarios de partida no se miden' ($r.Salida -notmatch 'Tests unitarios de partida') (Cola $r.Salida)
+}
+
+$Pruebas['m36 (e3) -Reparar: un caso igual cuyo original da EXCEPCION (y el migrado tambien) no se salta ni se cuenta: el distinto de al lado se repara'] = {
+  $e = Escenario-M25 'm36-e3' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm36-mvn.ps1') }
+  $r = Prueba-M36 $e 'excepcion-ambos:^cargaJob/caso-02$' @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0 (el distinto se arregla y el otro era igual)' 0 $r.Codigo
+  Igual 'los dos salen iguales al final' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'una llamada de reparar' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'arreglado, el caso que salia distinto' 'arreglado caso-01' "$($rep[0].resultado) $($rep[0].caso)"
+  Comprueba 'la Info del salto no sale: no hay ningun distinto con EXCEPCION' ($r.Salida -notmatch 'Salto \d') (Cola $r.Salida)
+}
+
+$Pruebas['m36 (d3) con Intentos = 3, un caso hecho que se rehace por EXCEPCION se acepta en su reintento: no se le pide otra vez ni hay una llamada de mas'] = {
+  $e = Escenario-M36 'm36-d3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60; Intentos = 3 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M36 $e ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'una llamada de caso' 1 (Llamadas-Casos $e).Count
+  Escribe $e.Local 'salidas/original/cargaJob/caso-01/estado.txt' "estado=EXCEPCION`nsalida=IllegalStateException`n"
+  $r = Prueba-M36 $e 'excepcion'
+  Comprueba 'la Info dice que se rehace 1 caso' ($r.Salida -match 'Se rehacen 1 caso') (Cola $r.Salida)
+  Igual 'una llamada mas y ninguna otra: el reintento se acepta' 2 (Llamadas-Casos $e).Count
+  Comprueba 'sin rechazo en el reintento' ($r.Salida -notmatch 'caso-cargaJob-01 rechazado') (Cola $r.Salida)
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'con dos intentos (el de antes y el de ahora)' 2 $t.intentos
+  Igual 'apuntado que ya se pidio' $true $t.entradas.excepcionPedida
+}
+
+$Pruebas['m36 (e4) -Reparar con MaxReparaciones = 1: el aviso de lo que queda sin probar no nombra las claves de un caso que se salta'] = {
+  $e = Escenario-M25 'm36-e4' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=5.00', 'importe=10.00') }) -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); MaxReparaciones = 1 }
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/caso-02$;tabla-fila:^cargaJob/caso-03$' @('-Reparar') 'reparar-arregla'
+  Comprueba 'salta 1 caso' ($r.Salida -match 'Salto 1 caso') (Cola $r.Salida)
+  Igual 'una sola reparacion, la del caso 01' 'caso-01' (@(Reparaciones $e)[0]).caso
+  Comprueba 'el aviso de tope dice que queda sin probar la tabla del caso 03 y solo esa' ($r.Salida -match 'quedan sin probar: tablas/T\.csv\. Vuelve a lanzar') (Cola $r.Salida)
+  Comprueba 'sin nombrar el estado ni el error del caso que se salta' ($r.Salida -notmatch 'quedan sin probar:[^\r\n]*(estado|error)\.txt') (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
