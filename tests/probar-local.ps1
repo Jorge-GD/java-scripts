@@ -3209,5 +3209,21 @@ $Pruebas['m39 (g) -Job con -Reparar sin commit nuevo: las reparaciones del otro 
   Comprueba 'sin Info de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
 }
 
+$Pruebas['m39 (h) -Job: lo del job de ahora es lo nuevo aunque lo guardado diga otra cosa, y los culpables del otro job se quedan'] = {
+  $e = Escenario-M39 'm39-h'
+  $r = Prueba $e
+  Igual 'el lanzamiento entero sale con 2 (remesaJob distinto)' 2 $r.Codigo
+  $o = Lee-Json $e.Json
+  foreach ($c in @($o.casos | Where-Object { $_.job -eq 'cargaJob' })) { $c.resultado = 'distinto' }
+  $cul = [pscustomobject]@{ job = 'remesaJob'; caso = 'caso-01'; commit = $o.commitMigrado; asunto = 'm39: culpable de antes'; deshecho = $false }
+  $o | Add-Member -NotePropertyName culpables -NotePropertyValue @($cul) -Force
+  [System.IO.File]::WriteAllText($e.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+  $r = Prueba $e @('-Job', 'cargaJob')
+  Igual 'con -Job sale con 0 (cargaJob igual)' 0 $r.Codigo
+  $n = Lee-Json $e.Json
+  Igual 'los casos de cargaJob son los de ahora (iguales), no los guardados' 'igual,igual' (@($n.casos | Where-Object { $_.job -eq 'cargaJob' } | ForEach-Object { $_.resultado }) -join ',')
+  Igual 'los culpables del otro job se quedan' 'remesaJob/caso-01 m39: culpable de antes' (@($n.culpables | ForEach-Object { "$($_.job)/$($_.caso) $($_.asunto)" }) -join ',')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
