@@ -5921,7 +5921,8 @@ function Bp5-HashPagina([string]$Html) {
 }
 
 # La pagina 5 de la Bp5-Practicas de despues, sin practicas-arreglos.json, medida con el codigo de antes de BP-5 (9a732e2): cada cambio de la pagina 5 o del marco la cambia.
-$Bp5HashSinArreglos = '2DCE51F6575560F9C2345D7C2293FBACBE137C3B191774A9C11B21326D1FD722'
+# BP-6 cambio la frase bp-area-java21-expl: con la frase de antes da 2DCE51F6...D722 (comprobado el 19-11).
+$Bp5HashSinArreglos = '664229772750EE8F89F4D8BCFFFB9758F2DB07E58412A752B72FE8A50A113003'
 
 $Pruebas['bp5 (a) con el estado en la fase practicas la portada la pone en curso, las de antes hechas y prueba-local en espera; va despues de la correccion y de comparar y antes de prueba-local'] = {
   $x = Bp5-Salida 'bp5-curso' 'practicas'
