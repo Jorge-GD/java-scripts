@@ -247,7 +247,7 @@ $Pruebas['8 paralelo: nunca mas de 4 llamadas a la vez'] = {
   $max = Max-Simultaneas $casos
   Comprueba 'como mucho 4 a la vez' ($max -le 4) "hubo $max"
   Comprueba 'y en paralelo de verdad (mas de 1)' ($max -gt 1) "hubo $max"
-  Igual 'los dos arneses, a la vez' 2 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }))
+  Igual 'los dos arneses, uno detras de otro (el del migrado traduce el del original, m29)' 1 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }))
 }
 
 $Pruebas['9 sin pruebas: sin datos/pruebas para y dice que se lance antes migracion.ps1'] = {
@@ -1615,7 +1615,7 @@ function Prueba-Con-JavaHome($E, [string[]]$A, [string]$Proceso) {
 # El JAVA_HOME que vieron las llamadas cuyo id casa con $Id ('arnes-original', 'caso-*'), sin repetidos y unidos con comas.
 function JavaHome-De($E, [string]$Id) { return ((@(Llamadas $E | Where-Object { $_.id -like $Id } | ForEach-Object { $_.javahome } | Select-Object -Unique)) -join ',') }
 
-$Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME = -JavaLegacy, la del migrado ve el de antes, aunque vayan en la misma tanda'] = {
+$Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME = -JavaLegacy, la del migrado ve el de antes'] = {
   $e = Nuevo-Escenario 'm27-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   $jdk = Join-Path $e.Raiz 'jdk-viejo'
   [void](New-Item -ItemType Directory -Path $jdk -Force)
@@ -1624,7 +1624,7 @@ $Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME =
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'el arnes del original ve la carpeta de -JavaLegacy' $jdk (JavaHome-De $e 'arnes-original')
   Igual 'el arnes del migrado ve el JAVA_HOME de antes' $proceso (JavaHome-De $e 'arnes-migrado')
-  Igual 'los dos fueron a la vez (la misma tanda)' 2 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.id -like 'arnes-*' }))
+  Igual 'los dos, uno detras de otro (m29: el del migrado traduce el del original)' 1 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.id -like 'arnes-*' }))
   Igual 'los casos, que se preparan en la copia del original, ven la carpeta de -JavaLegacy' $jdk (JavaHome-De $e 'caso-*')
   Igual 'cuatro llamadas en total: dos arneses y dos casos' 4 @(Llamadas $e).Count
   $e2 = Nuevo-Escenario 'm27-a-vacio' ([ordered]@{ cargaJob = @('importe=10.00') })
