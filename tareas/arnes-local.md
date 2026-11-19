@@ -9,7 +9,7 @@ POM: {{POM}}
 
 {{SI_ORIGINAL}}## El test del original
 
-{{SI_ORIGINAL}}El test del original ya está escrito y vale: `{{ORIGINAL}}`. Léelo antes de empezar y tradúcelo a este repositorio: simula las mismas cosas de fuera y al mismo nivel, carga los datos de la misma forma y escribe la salida igual. Cambia solo lo que obliga este repositorio: paquetes, nombres de clases y la versión de Spring Boot y de Java.
+{{SI_ORIGINAL}}El test del original ya está escrito y vale: `{{ORIGINAL}}`. Léelo antes de empezar y tradúcelo a este repositorio: simula las mismas cosas de fuera y al mismo nivel, carga los datos de la misma forma y escribe la salida igual. Cambia solo lo que obliga este repositorio: paquetes, nombres de clases y la versión de Spring Boot y de Java. Si el test del original hace algo de otra forma que esta tarea (por ejemplo, no apunta los adjuntos del correo), haz lo mismo que el original: lo que importa es que los dos escriban lo mismo de la misma forma.
 
 ## Qué ficheros puedes tocar
 
