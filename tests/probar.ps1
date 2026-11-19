@@ -5923,5 +5923,35 @@ $Pruebas['m27 final del fix: las tres ordenes de git salen cada una en su linea,
   Comprueba 'antes de ellas, la frase que dice que se copia cada linea entera' ($r.Salida -match 'Copia cada linea entera; lo que va detras de # es solo la explicacion') (Cola $r.Salida)
 }
 
+# ============== UNA RAMA DE RESCATE SIN UNIR IMPIDE CREAR OTRA (m41) ==============
+$Pruebas['m41 (h) -Modo fix y -Modo plan con una rama rescate/<rama>-<fecha> sin unir y sin worktree: paran igual, sin crear nada y con las tres salidas'] = {
+  $e = Nuevo-Escenario 'm41-h'
+  $nombre = 'rescate/main-20250101-0000'
+  $temporal = Join-Path (Split-Path -Parent $e.Repo) 'wt-temporal'
+  # el usuario tuvo un worktree de rescate, hizo un arreglo y lo borro sin unir la rama
+  [void](GitEn $e.Repo @('worktree', 'add', '-q', '-b', $nombre, $temporal, 'main'))
+  Escribe $temporal 'notas/arreglo.txt' 'arreglo'
+  [void](GitEn $temporal @('add', '--', 'notas/arreglo.txt'))
+  [void](GitEn $temporal @('commit', '-q', '-m', 'rescate(estructura): lote 1, hallazgos 2 a 0'))
+  [void](GitEn $e.Repo @('worktree', 'remove', '--force', $temporal))
+  $ramas = GitEn $e.Repo @('branch', '--list')
+  foreach ($modo in @('fix', 'plan')) {
+    $a = @('-Modo', $modo, '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si')
+    if ($modo -eq 'plan') { $a = @('-Modo', 'plan', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinBuild', '-Si') }
+    $r = Rescate $a
+    Igual "$modo : sale con 1" 1 $r.Codigo
+    Comprueba "$modo : nombra la rama y dice que no crea otra" ($r.Salida.Contains("Hay una rama de rescate con arreglos que no estan en tu rama: $nombre. No creo otra, para no dejarla olvidada.")) (Cola $r.Salida)
+    Comprueba "$modo : unirla, seguir en ella y borrarla, con la carpeta entre comillas" ($r.Salida.Contains("git -C `"$($e.Repo)`" merge $nombre") -and $r.Salida.Contains("git -C `"$($e.Repo)`" worktree add `"$($e.Wt)`" $nombre") -and $r.Salida.Contains("git -C `"$($e.Repo)`" branch -D $nombre")) (Cola $r.Salida)
+    Comprueba "$modo : y que despues se lance el mismo comando" ($r.Salida.Contains('Despues, lanza el mismo comando.')) (Cola $r.Salida)
+    Igual "$modo : la lista de ramas no cambia" $ramas (GitEn $e.Repo @('branch', '--list'))
+    Comprueba "$modo : no hay worktree" (-not (Test-Path -LiteralPath $e.Wt))
+  }
+  # unida a la rama del usuario, ya no impide nada
+  [void](GitEn $e.Repo @('merge', '-q', '--no-edit', $nombre))
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si')
+  Igual 'con la rama unida el fix sale con 0' 0 $r.Codigo
+  Comprueba 'y crea el worktree' (Test-Path -LiteralPath (Join-Path $e.Wt '.git')) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

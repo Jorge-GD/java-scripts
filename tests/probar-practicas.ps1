@@ -1257,15 +1257,35 @@ $Pruebas['35 bp4 r) un commit que git rechaza (un hook): parada git con su salid
   Igual 'Alfa: cero intentos' 0 $t.intentos
 }
 
-$Pruebas['36 bp4 s) lo que habia sin confirmar en el worktree se deshace al empezar, con su aviso'] = {
+$Pruebas['36 bp4 s) lo que habia sin confirmar en el worktree se aparta a un git stash al empezar, con su aviso'] = {
   $E = Nuevo-Escenario4 'p4s' @('Alfa')
   Escribe $E.Repo "${Ruta4}Delta.java" ((Fuente-P4 'Delta') + "// resto de una pasada que se corto`n")
   Escribe $E.Repo "${Ruta4}Suelto.java" "class Suelto { }`n"
   $x = Fase4 $E
-  Comprueba 'lo dice, con los dos ficheros' ($x.Texto -match 'Deshago lo que habia sin confirmar' -and $x.Texto.Contains("${Ruta4}Delta.java") -and $x.Texto.Contains("${Ruta4}Suelto.java")) $x.Texto
+  Comprueba 'lo dice, con los dos ficheros y como recuperarlo (stash pop)' ($x.Texto.Contains('Aparto lo que habia sin confirmar en el worktree (git stash): ') -and $x.Texto.Contains("${Ruta4}Delta.java") -and $x.Texto.Contains("${Ruta4}Suelto.java") -and $x.Texto.Contains('Para recuperarlo: git -C "' + $E.Repo + '" stash pop')) $x.Texto
+  Comprueba 'ya no dice que lo deshace' ($x.Texto -notmatch 'Deshago lo que habia sin confirmar') $x.Texto
+  $st = @((GitEn $E.Repo @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Igual 'hay un stash' 1 $st.Count
+  Comprueba 'con su mensaje' ($st.Count -eq 1 -and $st[0] -match 'practicas: cambios sin commit de antes') ($st -join ' / ')
+  Comprueba 'el stash lleva el cambio de Delta' ((GitEn $E.Repo @('show', 'stash@{0}')) -match 'resto de una pasada que se corto')
+  Comprueba 'y el fichero nuevo' ((GitEn $E.Repo @('show', ('stash@{0}^3:' + "${Ruta4}Suelto.java"))) -match 'class Suelto')
   Comprueba 'Delta vuelve a como estaba' (-not (Quedan-Cambios4 $E 'Delta'))
   Comprueba 'el fichero nuevo ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $E.Repo "${Ruta4}Suelto.java")))
   Igual 'el commit de Alfa y nada mas' ("$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  # si el git stash no puede guardarlo (un cerrojo en refs/stash), no se borra nada: parada git
+  $E = Nuevo-Escenario4 'p4s2' @('Alfa')
+  Escribe $E.Repo "${Ruta4}Delta.java" ((Fuente-P4 'Delta') + "// resto de una pasada que se corto`n")
+  Escribe $E.Repo '.git/refs/stash.lock' ''   # un cerrojo en refs/stash: git stash falla sin tocar nada
+  $x = Fase4 $E
+  Remove-Item -LiteralPath (Get-Ruta $E.Repo '.git/refs/stash.lock') -Force
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo git' 'git' $script:Paradas[0][0]
+  Comprueba 'el detalle dice que no ha podido apartarlo' ($script:Paradas[0][1] -match 'No he podido apartar con git stash lo que habia sin confirmar') $script:Paradas[0][1]
+  Comprueba 'Delta sigue con el cambio sin commit' (Quedan-Cambios4 $E 'Delta')
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
 }
 
 $Pruebas['37 bp4 t) sin javap no se puede comparar: parada otro, sin llamadas'] = {
