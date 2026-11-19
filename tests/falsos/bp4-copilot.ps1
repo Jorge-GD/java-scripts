@@ -14,6 +14,7 @@
 #   falla-cambia  como bien, pero sale con 1 (una llamada que falla despues de haber cambiado el fichero)
 # Variables:
 #   BP4_COPILOT   fichero: cada llamada anade '<fichero>|<guion>|<reintento: 0 o 1>'
+#   BP4_ESTADO    fichero: cada llamada anade '<fichero>|<reintento: 0 o 1>|<0 si el fichero esta como en HEAD al empezar, 1 si no>'
 $texto = ''
 for ($i = 0; $i -lt $args.Count; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
 $raiz = (Get-Location).Path
@@ -31,6 +32,10 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
 $reintento = 0
 if ($prompt -match 'CORRECCI') { $reintento = 1 }
 if ($env:BP4_COPILOT) { [System.IO.File]::AppendAllText($env:BP4_COPILOT, "$fichero|$guion|$reintento`n") }
+if ($env:BP4_ESTADO) {
+  & git -C $raiz diff --quiet HEAD -- $fichero
+  [System.IO.File]::AppendAllText($env:BP4_ESTADO, "$fichero|$reintento|$LASTEXITCODE`n")
+}
 function Ruta-Fichero([string]$Rel) { return [System.IO.Path]::Combine([string[]](@($raiz) + $Rel.Split('/'))) }
 function Anade-Comentario([string]$Rel) {
   $r = Ruta-Fichero $Rel
