@@ -704,20 +704,23 @@ function Get-NombreTabla([string]$Token) {
 }
 
 # Las tablas que nombra el SQL de $Texto, cada una con el indice donde empieza su nombre: lo que sigue a FROM, JOIN, INTO (tambien MERGE INTO,
-# INSERT INTO), UPDATE o TABLE (con o sin IF [NOT] EXISTS), sin distinguir mayusculas. DELETE FROM sale por FROM.
+# INSERT INTO), UPDATE o TABLE (con o sin IF [NOT] EXISTS), sin distinguir mayusculas. DELETE FROM sale por FROM. 'mayus' dice si el nombre, como
+# esta escrito (sin su esquema), no lleva ninguna minuscula.
 function Get-TablasSql([string]$Texto) {
   $r = @()
   foreach ($m in [regex]::Matches($Texto, '(?i)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?>([^\s(),;=<>\\]+))(?!=)')) {
     $n = Get-NombreTabla $m.Groups[1].Value
-    if ($n) { $r += [pscustomobject]@{ tabla = $n; indice = $m.Groups[1].Index } }
+    if ($n) { $r += [pscustomobject]@{ tabla = $n; indice = $m.Groups[1].Index; mayus = (($m.Groups[1].Value -split '\.')[-1] -cnotmatch '[a-z]') } }
   }
   return $r
 }
 
 # El inventario de tablas del batch de $Dir (una copia): las que su codigo nombra en SQL, cada una con su primer sitio (fichero:linea, el fichero
 # ordenado por su ruta), por orden de nombre. Se buscan en src/main: dentro de las cadenas entre comillas dobles de los .java (no en sus
-# comentarios) y en @Table(name = "X"), y en el texto de los .sql, .xml, .properties y .yml/.yaml (sin sus lineas de comentario). Es aproximado,
-# con regex y sin Java: puede dar alguna que no es y no ve las que se arman con + o con variables.
+# comentarios) y en @Table(name = "X"), y en el texto de los .sql, .xml, .properties y .yml/.yaml (sin sus lineas de comentario). Las cadenas de
+# los .java tambien son mensajes de log ("Error reading from file {}" no nombra la tabla FILE): una tabla de una cadena solo cuenta si la cadena
+# lleva otra palabra de SQL (SELECT, INSERT, DELETE, MERGE, WHERE, VALUES, SET u ORDER BY) o si su nombre va todo en mayusculas (" FROM T_X ", un
+# trozo de SQL partido con +). Es aproximado, con regex y sin Java: puede dar alguna que no es y no ve las que se arman con variables.
 function Get-TablasBatch([string]$Dir) {
   $raiz = Join-Ruta $Dir 'src/main'
   if (-not (Test-Path -LiteralPath $raiz)) { return @() }
@@ -730,7 +733,10 @@ function Get-TablasBatch([string]$Dir) {
     if ($rel -match '(?i)\.java$') {
       # Los comentarios y los caracteres ('"') se leen enteros para que lo que llevan no cuente como cadena
       foreach ($m in [regex]::Matches($texto, '(?s)//[^\r\n]*|/\*.*?\*/|''(?:[^''\\\r\n]|\\.)+''|""".*?"""|"(?:[^"\\\r\n]|\\.)*"')) {
-        if ($m.Value.StartsWith('"')) { foreach ($h in @(Get-TablasSql $m.Value)) { $hay += [pscustomobject]@{ tabla = $h.tabla; indice = $m.Index + $h.indice } } }
+        if ($m.Value.StartsWith('"')) {
+          $esSql = $m.Value -match '(?i)\b(?:SELECT|INSERT|DELETE|MERGE|WHERE|VALUES|SET)\b|\bORDER\s+BY\b'
+          foreach ($h in @(Get-TablasSql $m.Value)) { if ($esSql -or $h.mayus) { $hay += [pscustomobject]@{ tabla = $h.tabla; indice = $m.Index + $h.indice } } }
+        }
       }
       foreach ($m in [regex]::Matches($texto, '@Table\s*\(\s*name\s*=\s*"([^"]+)"')) {
         $n = Get-NombreTabla $m.Groups[1].Value
