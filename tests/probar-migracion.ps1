@@ -5553,5 +5553,17 @@ $Pruebas['m17 lanzadores: sin .sh la pagina 1 y la 3 dicen como pasar la carpeta
   Comprueba 'y no dicen que no hay lanzadores' ($t1 -notmatch 'No hay lanzadores' -and $t3 -notmatch 'No hay lanzadores') ''
 }
 
+$Pruebas['m24 config.json del repo: las claves de rescate.ps1 (PalabrasConfigAntigua, PasosSoloCompila) no avisan de desconocidas en la consola de migracion.ps1'] = {
+  $e = Nuevo-Escenario 'm24-claves-de-rescate' @('Clase1')
+  # el config.json del migrado es de rescate.ps1: lleva sus claves y la compartida CopilotExe/MvnExe que migracion.ps1 si conoce
+  $cfg = Lee-Json (Get-Ruta $e.Migrado '.rescate/config.json')
+  Escribe $e.Migrado '.rescate/config.json' (ConvertTo-Json -InputObject ([ordered]@{
+    CopilotExe = $cfg.CopilotExe; MvnExe = $cfg.MvnExe; PalabrasConfigAntigua = @('inventory'); PasosSoloCompila = @('sonar'); PasosTestsElegidos = @('sonar') }))
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola no dice clave desconocida' ($r.Salida -notmatch 'clave desconocida') (Cola $r.Salida)
+  Comprueba 'y lo que si comparte (el Maven falso del config.json) se sigue leyendo: el diagnostico llega a la pagina 2' (Test-Path -LiteralPath (Get-Ruta $e.Out '2-problemas.html')) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

@@ -1038,7 +1038,7 @@ foreach ($x in @(@('-Legacy', $Legacy), @('-Migrado', $Migrado))) {
 }
 $LegacyRoot = Resolve-Dir $Legacy
 $MigradoRoot = Resolve-Dir $Migrado
-Read-Config $MigradoRoot
+Read-Config $MigradoRoot $false    # config.json es de rescate.ps1: lleva claves que prueba-local.ps1 no conoce
 $PlantillaRoot = ''
 if ($ajustes -and $ajustes.Plantilla -and (Test-Path -LiteralPath ([string]$ajustes.Plantilla))) { $PlantillaRoot = Resolve-Dir ([string]$ajustes.Plantilla) }
 $l = Get-Lanzable $Cfg.CopilotExe

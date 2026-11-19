@@ -428,9 +428,10 @@ function Read-CfgFile([string]$Ruta, [string[]]$Aparte = @(), [bool]$Avisar = $t
   catch { Fallo ("No puedo leer $Ruta" + ': ' + $_.Exception.Message); exit 1 }
 }
 
-# Ajustes propios de un repo: su .rescate/config.json pisa las claves de $Cfg.
-function Read-Config([string]$Raiz) {
-  [void](Read-CfgFile (Join-Path (Join-Path $Raiz '.rescate') 'config.json'))
+# Ajustes propios de un repo: su .rescate/config.json pisa las claves de $Cfg. Es de rescate.ps1 (lo escribe y conoce sus claves):
+# migracion.ps1 y prueba-local.ps1 lo leen por las compartidas (CommitArgs...) y lo llaman con $Avisar en $false.
+function Read-Config([string]$Raiz, [bool]$Avisar = $true) {
+  [void](Read-CfgFile (Join-Path (Join-Path $Raiz '.rescate') 'config.json') @() $Avisar)
 }
 
 function Get-DirRescate {

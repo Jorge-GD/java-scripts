@@ -616,7 +616,7 @@ $LegacyRoot = Get-Repo $Legacy '-Legacy'
 $MigradoRoot = Get-Repo $Migrado '-Migrado'
 $RamaMigrado = Get-Rama $MigradoRoot
 if (-not $RamaMigrado -or $RamaMigrado -eq 'HEAD') { Stop-Arranque "El migrado no esta en una rama (HEAD suelto): $MigradoRoot. Cambia a una rama y vuelve a lanzar." }
-Read-Config $MigradoRoot
+Read-Config $MigradoRoot $false    # config.json es de rescate.ps1: lleva claves que migracion.ps1 no conoce
 $mvn = Get-Mvn $MigradoRoot
 if (-not (Test-Path -LiteralPath $mvn) -and -not (Get-Command $mvn -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro Maven ('$mvn'). Instalalo o pon MvnExe en los ajustes." }
 Set-Excluidos $MigradoRoot
@@ -686,7 +686,7 @@ $Worktree = ''
 $dirWt = Get-DirRescate
 if (-not (Test-WorktreeRescate $dirWt)) { New-WorktreeRescate $dirWt }
 $RepoRoot = $dirWt
-Read-Config $RepoRoot
+Read-Config $RepoRoot $false
 $Estado = [ordered]@{
   version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
   worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; lanzadores = $LanzadoresRoot; modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
