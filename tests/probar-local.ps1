@@ -2353,6 +2353,16 @@ $Pruebas['m32 (b2) si la repeticion con red tambien falla es el fallo de siempre
   Comprueba 'el original no se entera: sus casos van con -o' (@(Casos-Mvn $e $e.CopiaOrig | Where-Object { -not (Con-O $_) }).Count -eq 0) ((Casos-Mvn $e $e.CopiaOrig) -join ' / ')
 }
 
+$Pruebas['m32 (b3) un caso sin estado.txt ni error.txt cuya salida no habla de la red (el contexto de Spring no arranca) no se repite: sin Info y la copia sigue con -o'] = {
+  $e = Escenario-M32 'm32-b3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M32 $e 'contexto-roto'
+  Comprueba 'no sale la Info de repetir con red' ($r.Salida -notmatch 'Sin red Maven no ha podido') (Cola $r.Salida)
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'el migrado ejecuta caso-01 (que no llega al test) una sola vez y caso-02 una, las dos con -o' 'caso-01 True,caso-02 True' ((@($m | ForEach-Object { (Caso-De $_) + ' ' + (Con-O $_) })) -join ',')
+  Comprueba 'el caso roto no dejo estado.txt ni error.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-01/estado.txt')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-01/error.txt'))) ''
+  Igual 'una sola fila de caso-01 en el migrado, con -o' 'True' ((@(Tiempos $e | Where-Object { $_.lado -eq 'migrado' -and $_.caso -eq 'caso-01' }) | ForEach-Object { $_.offline }) -join ',')
+}
+
 $Pruebas['m32 (c) un caso que deja estado.txt (aunque sea FAILED) o error.txt no se repite, ni con -o'] = {
   $e = Escenario-M32 'm32-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
   $r = Prueba-M32 $e 'falla-migrado'

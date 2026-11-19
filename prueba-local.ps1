@@ -30,8 +30,9 @@ QUE HACE
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
   4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
-     no llega a ejecutar el test, se repite con red y esa copia sigue con red. De cada Maven de un caso apunta los segundos del Maven y los
-     del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al acabar, dice cuanto es test y cuanto Maven.
+     no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
+     de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
+     acabar, dice cuanto es test y cuanto Maven.
   5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
      fecha de hoy: igual, distinto, no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
@@ -297,18 +298,23 @@ function Invoke-MavenCaso([string]$Dir, [bool]$EsOriginal, [string]$Job, [string
 # Ha llegado Maven a ejecutar el test del caso? Si, si ha dejado su estado.txt (aunque el job acabe FAILED) o su error.txt.
 function Test-CasoEjecutado([string]$Sal) { return ((Test-Path -LiteralPath (Join-Path $Sal 'estado.txt')) -or (Test-Path -LiteralPath (Join-Path $Sal 'error.txt'))) }
 
+# Dice la salida de Maven que ha fallado por estar sin red (-o)? Lo dice con 'Cannot access <repo> in offline mode and the artifact ... has not
+# been downloaded from it before' o con 'The repository system is offline but the artifact ... is not available'. Sin esa palabra el fallo es
+# otro (por ejemplo, el contexto de Spring no arranca: el arnes solo deja error.txt si el caso no se puede preparar) y repetir con red no lo arregla.
+function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ -match '(?i)\boffline\b' }).Count -gt 0) }
+
 # Ejecuta en una copia un caso de un job (con su salida anterior borrada), en su propio Maven: cada caso en una JVM
 # nueva, como cada ejecucion en produccion. En la misma JVM, lo que el batch deja en campos static (un fichero abierto,
 # un contador) pasaria de un caso al siguiente. Va sin red (-o: no mira los repositorios remotos) y sin los plugins de
-# $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test, se repite una vez con red y, si asi si llega, esa copia
-# sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se repite; tampoco uno parado por el tope
-# de Maven (colgado, no por la red).
+# $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
+# una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
+# repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
   Remove-Carpeta $sal
   $sinRed = -not $script:ConRed.ContainsKey($Dir)
   $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
-  if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal)) {
+  if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
     Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
     Remove-Carpeta $sal
     $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que

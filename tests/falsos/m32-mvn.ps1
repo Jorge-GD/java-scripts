@@ -4,8 +4,12 @@
 #    testsuite de time = 0.2 por <n> (caso-01 = 0.2, caso-02 = 0.4);
 #  - si RESCATE_M32 trae un guion:
 #      sin-red-original   en la copia del original (batch-viejo), con -o, el caso no llega a ejecutar el test (como un Maven sin red que no tiene
-#                         en su repositorio local lo que necesita): sale con 1 sin dejar nada. Sin -o va bien. El migrado va bien con -o o sin el
-#      migrado-roto       en la copia del migrado, caso-01 no llega a ejecutar el test ni con -o ni sin el
+#                         en su repositorio local lo que necesita) y Maven lo dice con su frase: 'Cannot access central ... in offline mode ...'.
+#                         Sale con 1 sin dejar nada. Sin -o va bien. El migrado va bien con -o o sin el
+#      migrado-roto       en la copia del migrado, caso-01 no llega a ejecutar el test ni con -o ni sin el: con -o dice que el sistema esta sin red
+#                         ('The repository system is offline but the artifact ... is not available'); sin -o, que el contexto de Spring no arranca
+#      contexto-roto      en la copia del migrado, caso-01 no llega a ejecutar el test, con o sin -o, y la salida no habla de la red: el contexto de
+#                         Spring no arranca. No deja estado.txt ni error.txt
 #      falla-migrado      en la copia del migrado, caso-01 deja estado=FAILED y caso-02 deja error.txt (sin estado.txt): Maven sale con 1
 #      xml-viejo          el XML solo lo escribe el primer caso de cada copia: los demas Maven dejan el que ya habia, de antes de ese Maven
 $raiz = (Get-Location).Path
@@ -17,13 +21,22 @@ foreach ($a in $args) {
   if ("$a" -match '^-Dprueba\.local\.job=(.+)$') { $job = $Matches[1] }
   if ("$a" -match '^-Dprueba\.local\.caso=(caso-\d+)$') { $caso = $Matches[1] }
 }
-$noEjecuta = ($caso -and (($guion -eq 'sin-red-original' -and $original -and ($args -contains '-o')) -or ($guion -eq 'migrado-roto' -and -not $original -and $caso -eq 'caso-01')))
-if ($noEjecuta) {
+$sinRed = ($args -contains '-o')
+$frase = ''
+if ($caso -and $guion -eq 'sin-red-original' -and $original -and $sinRed) {
+  $frase = '[ERROR] Failed to execute goal on project batch-viejo: Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact com.acme:lib:jar:1.0 has not been downloaded from it before.'
+}
+if ($caso -eq 'caso-01' -and $guion -eq 'migrado-roto' -and -not $original) {
+  if ($sinRed) { $frase = '[ERROR] Failed to execute goal on project batch-nuevo: The repository system is offline but the artifact com.acme:lib:jar:1.0 is not available in the local repository.' }
+  else { $frase = '[ERROR] java.lang.IllegalStateException: Failed to load ApplicationContext' }
+}
+if ($caso -eq 'caso-01' -and $guion -eq 'contexto-roto' -and -not $original) { $frase = '[ERROR] java.lang.IllegalStateException: Failed to load ApplicationContext' }
+if ($frase) {
   if ($env:RESCATE_LLAMADAS) {
     [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
     [System.IO.File]::AppendAllText((Join-Path $env:RESCATE_LLAMADAS 'mvn.log'), ($raiz + '|' + $env:JAVA_HOME + '|' + ($args -join ' ') + "`n"))
   }
-  '[ERROR] Failed to execute goal on project batch: Could not resolve dependencies (modo sin red)'
+  $frase
   exit 1
 }
 & (Join-Path $PSScriptRoot 'mvn-local.ps1') @args
