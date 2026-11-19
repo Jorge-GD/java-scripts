@@ -5593,8 +5593,8 @@ $Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus c
   Comprueba 'existe datos/practicas-antes.json' ($null -ne $p) (Cola $r.Salida)
   if ($null -eq $p) { return }
   Igual 'version y cuando' '1 antes' "$($p.version) $($p.cuando)"
-  Igual 'los cinco detectores, en el orden del formato' 'javac pmd spotbugs lombok-a-mano lombok-qualifier' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
-  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok ok ok no aplica ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
+  Igual 'los seis detectores, en el orden del formato' 'javac pmd spotbugs lombok-a-mano lombok-qualifier java21-texto' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
+  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok ok ok no aplica ok ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
   Igual 'las 9 incidencias de PMD y SpotBugs (los XML de mentira), todas java21' 9 @($p.incidencias | Where-Object { $_.area -ceq 'java21' }).Count
   Comprueba 'su registro esta en registros/practicas-antes.log' (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/practicas-antes.log'))
   Comprueba 'la consola dice las buenas practicas' ($r.Salida -match 'Buenas practicas \(antes\): 9 incidencias \(java21: 9\)') (Cola $r.Salida)

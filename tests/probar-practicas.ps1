@@ -1604,6 +1604,7 @@ $Pruebas['46 bp6 g) la pagina 5 con ese JSON lleva las incidencias de java21-tex
   Igual 'cada incidencia sale en las dos vistas: formato-cldr' (2 * @($mias | Where-Object { $_.regla -ceq 'formato-cldr' }).Count) ([regex]::Matches($h, 'java21-texto formato-cldr').Count)
   Comprueba 'lleva el texto de charset' ($h.Contains('Usa el juego de caracteres por defecto.'))
   Comprueba 'lleva el area Java 21' ($h.Contains('Java 21'))
+  Comprueba 'la explicacion del area Java 21 nombra el detector de texto' ($h.Contains('un detector de texto que avisa de lo que cambia en Java 21'))
   Comprueba 'y no esta entre las notas de los que no midieron' ($h -notmatch '<code>java21-texto</code> <b>')
 }
 
