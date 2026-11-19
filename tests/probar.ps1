@@ -5325,5 +5325,461 @@ $Pruebas['m20a (i): un test saltado (@DisabledOnOs) no cuenta como ejecutado: el
   Comprueba 'con el .txt antiguo (Skipped: 1) tambien' ($rs.Salida -match 'Se ejecutan menos tests que antes \(5 -> 4\)') (Cola $rs.Salida)
 }
 
+# ===== M22: EN SONAR CADA LOTE PASA SOLO LOS TESTS LIGEROS, Y LA SUITE ENTERA VA EN UN CONTROL =====
+# El Maven de mentira es m22-mvn.ps1: lee -Dsurefire.excludesFile y -Dtest, deja un TEST-<clase>.xml por clase y hace fallar una clase segun lo que
+# dice su texto (M22_FALLA, M22_FALLA_CON:<Clase>, M22_FALLA_SI_CAMBIA, M22_INESTABLE:<n>, M22_FALLA_DESDE:<n>; mas en su cabecera). Con
+# RESCATE_M22_LOG deja una linea por llamada: las pruebas cuentan suites (sin excludesFile ni -Dtest), parciales (con excludesFile) y solas (-Dtest).
+$M22Mvn = Join-Path $falsos 'm22-mvn.ps1'
+$M22Dir = 'src/test/java/com/acme/plantillabatch/'
+
+# Un test de src/test/java/com/acme/plantillabatch: $Marcas va en un comentario (lo que lee el Maven de mentira), $Anotacion antes de la clase.
+function Test-Java-M22([string]$Clase, [string]$Marcas = '', [string]$Anotacion = '', [string]$Hereda = '') {
+  $ext = ''
+  if ($Hereda) { $ext = " extends $Hereda" }
+  return @"
+package com.acme.plantillabatch;
+
+import org.junit.jupiter.api.Test;
+
+// $Marcas
+$Anotacion
+class $Clase$ext {
+
+    @Test
+    void ${Clase}Metodo() {
+        int base = 1;
+    }
+}
+"@
+}
+
+# Un repo de Sonar con el Maven de las pruebas m22. $Tests: nombre de clase de test -> su texto (Test-Java-M22). $Mas: ajustes del repo.
+function Escenario-M22([string]$Nombre, [string[]]$Clases, [hashtable]$Tests = @{}, [hashtable]$Mas = @{}) {
+  $extra = @{}
+  foreach ($k in $Tests.Keys) { $extra['/' + $M22Dir + $k + '.java'] = $Tests[$k] }
+  $cfg = @{ MvnExe = $M22Mvn; CopilotExe = (Join-Path $falsos 'm22-copilot.ps1') }
+  foreach ($k in $Mas.Keys) { $cfg[$k] = $Mas[$k] }
+  $e = Escenario-Sonar $Nombre $Clases $cfg @() $extra
+  Informe-Sonar $e.Xlsx @($Clases | ForEach-Object { Inc-M21 $e ($_ -split '/')[1] "Fix this bug in $_." })
+  return $e
+}
+
+# Lanza el paso sonar del escenario (con -Sonar el script no para entre lotes). $Registro: el fichero donde el Maven de mentira apunta sus llamadas;
+# $Mas: argumentos de mas; $Env: variables de entorno de las pruebas (RESCATE_M22_*, RESCATE_MVN_ESPERA) mientras dura.
+function Lanza-M22($E, [string]$Registro, [string[]]$Mas = @(), [hashtable]$Env = @{}) {
+  $a = @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $E.Xlsx, '-Si', '-MaxIntentos', '1', '-Lote', '1') + $Mas
+  $env:RESCATE_M22_LOG = $Registro
+  $env:RESCATE_M22_ESTADO = Join-Path $E.Raiz 'estado'
+  foreach ($k in $Env.Keys) { Set-Item -Path ('Env:' + $k) -Value $Env[$k] }
+  try { return (Sonar-Lanza $E $a) }
+  finally { Remove-Item (@('Env:RESCATE_M22_LOG', 'Env:RESCATE_M22_ESTADO') + @($Env.Keys | ForEach-Object { 'Env:' + $_ })) -ErrorAction SilentlyContinue }
+}
+
+# Las llamadas de Maven con tests del registro: Donde (carpeta), Clases (las que ejecuta), Args y Tipo (suite, parcial o solas).
+function Llamadas-M22([string]$Registro) {
+  $r = @()
+  if (-not (Test-Path -LiteralPath $Registro)) { return $r }
+  foreach ($l in [System.IO.File]::ReadAllLines($Registro)) {
+    $p = @($l -split ' \| ', 3)
+    if ($p[2] -notmatch 'DskipTests=false') { continue }
+    $tipo = 'suite'
+    if ($p[2] -match '-Dtest=') { $tipo = 'solas' } elseif ($p[2] -match '-Dsurefire\.excludesFile=') { $tipo = 'parcial' }
+    $r += [pscustomobject]@{ Donde = $p[0]; Clases = $p[1]; Args = $p[2]; Tipo = $tipo }
+  }
+  return $r
+}
+
+function Cuenta-M22($Llamadas, [string]$Tipo) { return @($Llamadas | Where-Object { $_.Tipo -eq $Tipo }).Count }
+
+# El commit al que apunta la marca refs/rescate/control-ok del worktree ('' si no hay).
+function Marca-M22($E) {
+  $ErrorActionPreference = 'Continue'
+  $o = & git -C $E.Wt rev-parse --verify -q refs/rescate/control-ok 2>$null
+  if ($LASTEXITCODE -ne 0) { return '' }
+  return "$o".Trim()
+}
+
+function Head-M22($E) { return (GitEn $E.Wt @('rev-parse', 'HEAD')).Trim() }
+
+# Las lineas de control de intentos.tsv.
+function Controles-M22($E) {
+  $t = Intentos-M21 $E
+  if (-not $t) { return @() }
+  return @($t.Filas | Where-Object { $_.paso -eq 'control' })
+}
+
+$CtxM22 = @{ AppContextTest = (Test-Java-M22 'AppContextTest' '' '@SpringBootTest') }
+
+$Pruebas['m22 (a): la lista de contexto: @SpringBootTest, lo que hereda de eso, SpringExtension y el job; un JUnit sin Spring es ligero'] = {
+  $t = [ordered]@{
+    AppContextTest   = (Test-Java-M22 'AppContextTest' '' '@SpringBootTest')
+    HijoContextoTest = (Test-Java-M22 'HijoContextoTest' '' '' 'AppContextTest')
+    NietoContextoTest = (Test-Java-M22 'NietoContextoTest' '' '' 'HijoContextoTest')
+    ExtensionTest    = (Test-Java-M22 'ExtensionTest' '' '@ExtendWith(SpringExtension.class)')
+    JobTest          = (Test-Java-M22 'JobTest' 'new JobLauncherTestUtils()' '')
+    PlanoTest        = (Test-Java-M22 'PlanoTest' 'JUnit sin Spring' '')
+    OtroPlanoTest    = (Test-Java-M22 'OtroPlanoTest' '' '' 'PlanoTest')
+  }
+  $e = Escenario-M22 'm22-a' @('service/TotalService') $t
+  $r = Sonar-Lanza $e @('-Modo', 'fix', '-Paso', 'sonar', '-Sonar', $e.Xlsx, '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '0')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $ruta = Get-Ruta $e.Wt '.rescate/tests-de-contexto.txt'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { Comprueba 'existe .rescate/tests-de-contexto.txt' $false (Cola $r.Salida); return }
+  $l = @([System.IO.File]::ReadAllLines($ruta) | Where-Object { $_ } | Sort-Object)
+  $p = 'com/acme/plantillabatch/'
+  Igual 'son de contexto las cinco, una por linea y en el formato de excludesFile (paquete/Clase.*)' (@("${p}AppContextTest.*", "${p}ExtensionTest.*", "${p}HijoContextoTest.*", "${p}JobTest.*", "${p}NietoContextoTest.*") -join ' ') ($l -join ' ')
+  Comprueba 'un JUnit sin Spring, el que hereda de el y TotalServiceTest son ligeros: no salen' ((@($l | Where-Object { $_ -match 'PlanoTest|TotalServiceTest' })).Count -eq 0) ($l -join ' ')
+}
+
+$Pruebas['m22 (b): un lote de sonar pasa las puertas con el excludesFile (el Maven falso lo registra); fuera de PasosTestsElegidos pasa la suite entera'] = {
+  $e = Escenario-M22 'm22-b' @('service/TotalService') $CtxM22
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el lote pasa' ($r.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r.Salida)
+  $c = @(Llamadas-M22 $log)
+  $parc = @($c | Where-Object { $_.Tipo -eq 'parcial' })
+  Comprueba 'el Maven del lote lleva -Dsurefire.excludesFile con la lista de contexto' ($parc.Count -ge 1 -and $parc[0].Args -match '-Dsurefire\.excludesFile=\S*tests-de-contexto\.txt') (($c | ForEach-Object { $_.Tipo + ': ' + $_.Args }) -join ' // ')
+  Comprueba 'y solo ejecuta el test ligero' ($parc.Count -ge 1 -and $parc[0].Clases -eq 'TotalServiceTest') (($parc | ForEach-Object { $_.Clases }) -join ' | ')
+  Comprueba 'el diagnostico de antes pasa la suite entera: ejecuta los dos tests' (@($c | Where-Object { $_.Tipo -eq 'suite' -and (@($_.Clases -split ',') | Sort-Object) -join ',' -eq 'AppContextTest,TotalServiceTest' }).Count -ge 1) (($c | ForEach-Object { $_.Tipo + ': ' + $_.Clases }) -join ' | ')
+  # un paso que no esta en PasosTestsElegidos (como calidad; el Copilot de mentira no arregla calidad, por eso es sonar con la lista vacia): la suite entera en
+  # cada lote, sin excludesFile ni lista ni marca
+  $e2 = Escenario-M22 'm22-b2' @('service/TotalService') $CtxM22 @{ PasosTestsElegidos = @() }
+  $log2 = Join-Path $e2.Raiz 'mvn-m22.log'
+  $r2 = Lanza-M22 $e2 $log2
+  $c2 = @(Llamadas-M22 $log2)
+  Comprueba 'fuera de PasosTestsElegidos el lote pasa' ($r2.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r2.Salida)
+  Igual 'dos suites enteras: el diagnostico y el lote' 2 (Cuenta-M22 $c2 'suite')
+  Igual 'ningun Maven con excludesFile' 0 (Cuenta-M22 $c2 'parcial')
+  Comprueba 'ni lista de contexto ni marca' (-not (Test-Path -LiteralPath (Get-Ruta $e2.Wt '.rescate/tests-de-contexto.txt')) -and -not (Marca-M22 $e2)) (Cola $r2.Salida)
+}
+
+$Pruebas['m22 (c): un lote que toca un test de contexto lo pasa en ese lote; si no lo toca, ese test no se ejecuta en el lote'] = {
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_SI_CAMBIA' '@SpringBootTest') }
+  # el lote arregla una incidencia del propio test de contexto: el Copilot de mentira le anade ' + 0;' y el test de mentira falla si lo lleva
+  $e = Escenario-M22 'm22-c' @('service/TotalService') $t
+  $prop = $M22Dir + 'AppContextTest.java'
+  Informe-Sonar $e.Xlsx @(, (Inc 'CRITICAL' 'Fix this bug in the test.' 'BUG' 'AppContextTest.java' $prop ((Linea-De (Lee $e.Repo $prop) 'int base').ToString() + 'L')))
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  $c = @(Llamadas-M22 $log)
+  $parc = @($c | Where-Object { $_.Tipo -eq 'parcial' })
+  Comprueba 'el Maven del lote ejecuta el test de contexto que el lote toca' ($parc.Count -ge 1 -and (@($parc[0].Clases -split ',') -contains 'AppContextTest')) (($c | ForEach-Object { $_.Tipo + ': ' + $_.Clases }) -join ' | ')
+  Comprueba 'con una lista sin ese test (otro fichero)' ($parc.Count -ge 1 -and $parc[0].Args -match '-Dsurefire\.excludesFile=\S*tests-de-contexto-lote\.txt') (($parc | ForEach-Object { $_.Args }) -join ' | ')
+  Comprueba 'y como el lote lo rompe, no pasa: falla un test que no fallaba en el ultimo control' ($r.Salida -match 'NO PASA: .*[Ff]alla un test que no fallaba en el ultimo control' -and $r.Salida -match 'Lote 1 DESHECHO') (Cola $r.Salida)
+  # el mismo test, sin tocarlo: el lote arregla otra clase y el de contexto se queda fuera del lote (el control es quien lo pasa)
+  $e2 = Escenario-M22 'm22-c2' @('service/TotalService') $t
+  $log2 = Join-Path $e2.Raiz 'mvn-m22.log'
+  $r2 = Lanza-M22 $e2 $log2
+  $parc2 = @(Llamadas-M22 $log2 | Where-Object { $_.Tipo -eq 'parcial' })
+  Comprueba 'si el lote no lo toca, no lo ejecuta' ($parc2.Count -ge 1 -and $parc2[0].Clases -eq 'TotalServiceTest') (($parc2 | ForEach-Object { $_.Clases }) -join ' | ')
+  Comprueba 'y el lote pasa' ($r2.Salida -match "Lote 1 OK: 'sonar' 1 -> 0") (Cola $r2.Salida)
+}
+
+$Pruebas['m22 (d): con LotesEntreControles = 2 y 4 lotes buenos hay dos controles y la marca acaba en el HEAD; con 3, el segundo es el del final'] = {
+  $cl = @('service/TotalService', 'service/ReciboService', 'service/PagoService', 'service/CobroService')
+  $e = Escenario-M22 'm22-d' $cl $CtxM22 @{ LotesEntreControles = 2 }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log @() @{ RESCATE_MVN_ESPERA = '1' }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'cuatro lotes buenos' 4 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  $c = @(Llamadas-M22 $log)
+  Igual 'cada lote pasa solo los ligeros: 4 Maven parciales' 4 (Cuenta-M22 $c 'parcial')
+  Igual 'la suite entera, tres veces: el diagnostico de antes y los dos controles (el del final no hace falta: la marca ya esta en el HEAD)' 3 (Cuenta-M22 $c 'suite')
+  Igual 'ni una pasada con -Dtest: no hubo culpables' 0 (Cuenta-M22 $c 'solas')
+  Igual 'la marca refs/rescate/control-ok esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  $k = @(Controles-M22 $e)
+  Igual 'intentos.tsv lleva dos lineas de control' 2 $k.Count
+  Igual 'las dos en verde' 'verde verde' ((@($k | ForEach-Object { $_.resultado })) -join ' ')
+  Igual 'tras el lote 2 y tras el 4' '2 4' ((@($k | ForEach-Object { $_.lote })) -join ' ')
+  Comprueba 'con los segundos de Maven de la suite (cada llamada tarda 1 s)' (@($k | Where-Object { $_.seg_maven -notmatch '^\d+$' -or [int]$_.seg_maven -lt 1 }).Count -eq 0) ((@($k | ForEach-Object { $_.seg_maven })) -join ' ')
+  Igual 'sus 11 campos' '11 11' ((@($k | ForEach-Object { $_.Campos })) -join ' ')
+  # tres lotes: el control del lote 2 y el del final
+  $e2 = Escenario-M22 'm22-d2' $cl[0..2] $CtxM22 @{ LotesEntreControles = 2 }
+  $log2 = Join-Path $e2.Raiz 'mvn-m22.log'
+  $r2 = Lanza-M22 $e2 $log2
+  $c2 = @(Llamadas-M22 $log2)
+  Igual 'tres lotes: la suite entera tres veces (el diagnostico, el control del lote 2 y el del final)' 3 (Cuenta-M22 $c2 'suite')
+  Igual 'y la marca en el HEAD' (Head-M22 $e2) (Marca-M22 $e2)
+  Igual 'dos controles, el segundo tras el lote 3' '2 3' ((@(Controles-M22 $e2 | ForEach-Object { $_.lote })) -join ' ')
+}
+
+# El escenario de (e) y (n): cuatro lotes buenos y el de ReciboService rompe el test de contexto en el control (el de los lotes 1 y 2, y el de los 3 y 4).
+function Corre-E-M22([string]$Nombre) {
+  $cl = @('service/TotalService', 'service/ReciboService', 'service/PagoService', 'service/CobroService')
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_CON:ReciboService' '@SpringBootTest') }
+  $e = Escenario-M22 $Nombre $cl $t @{ LotesEntreControles = 2 }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  return [pscustomobject]@{ E = $e; Log = $log; R = (Lanza-M22 $e $log) }
+}
+
+$Pruebas['m22 (e): un lote rompe un test de contexto y pasa su lote; el control sale rojo, la biseccion da ese lote, se revierte y la marca se mueve'] = {
+  $x = Corre-E-M22 'm22-e'
+  $e = $x.E; $log = $x.Log; $r = $x.R
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los cuatro lotes pasan sus puertas (el de contexto no se ejecuta en el lote)' 4 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  Comprueba 'la consola dice que el control sale rojo y que el lote rompe el test de contexto' ($r.Salida -match 'rompe com\.acme\.plantillabatch\.AppContextTest en el control') (Cola $r.Salida)
+  Comprueba 'y que el fichero no se vuelve a intentar en esta pasada' ($r.Salida -match 'ReciboService\.java: .*no se vuelve a intentar') (Cola $r.Salida)
+  $sub = @((GitEn $e.Wt @('log', '--format=%s')) -split "`n")
+  Igual 'hay un commit de revert del control' 1 @($sub | Where-Object { $_ -match '^rescate\(control\): ' }).Count
+  Igual 'los cuatro lotes siguen en la rama' 4 @($sub | Where-Object { $_ -match '^rescate\(sonar\): lote \d' }).Count
+  $dir = 'src/main/java/com/acme/plantillabatch/service/'
+  Comprueba 'el codigo del culpable (ReciboService) vuelve a como estaba' ((Lee $e.Wt ($dir + 'ReciboService.java')) -notmatch '\+ 0;') ''
+  Comprueba 'y los otros tres lotes siguen puestos' ((@('TotalService', 'PagoService', 'CobroService') | Where-Object { (Lee $e.Wt ($dir + $_ + '.java')) -match 'a \+ b \+ 0;' }).Count -eq 3) ''
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  Igual 'el lote culpable no se reintenta: cuatro intentos de sonar y ninguno mas' 4 @((Intentos-M21 $e).Filas | Where-Object { $_.paso -eq 'sonar' }).Count
+  $pend = @(Hallazgos-Sonar $e.Wt 'error')
+  Igual 'su incidencia vuelve a pendiente (el codigo es el de antes)' 1 $pend.Count
+  $k = @(Controles-M22 $e)
+  Igual 'intentos.tsv: el primer control, revertido 1, y el segundo, verde' 'revertido 1 verde' ((@($k | ForEach-Object { $_.resultado })) -join ' ')
+  $c = @(Llamadas-M22 $log)
+  Igual 'la suite entera, cuatro veces: diagnostico, control rojo, la que confirma y el control del lote 4' 4 (Cuenta-M22 $c 'suite')
+  $solas = @($c | Where-Object { $_.Tipo -eq 'solas' })
+  Igual 'dos pasadas con -Dtest: en el HEAD y la de la biseccion' 2 $solas.Count
+  Comprueba 'la de la biseccion corre en un worktree aparte' ($solas.Count -eq 2 -and $solas[0].Donde -ne $solas[1].Donde) (($solas | ForEach-Object { $_.Donde }) -join ' | ')
+  Comprueba 'que no queda: ni worktree de control ni carpeta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/control-wt')) -and ((GitEn $e.Wt @('worktree', 'list')) -split "`n").Count -eq 2) (GitEn $e.Wt @('worktree', 'list'))
+}
+
+$Pruebas['m22 (n): tras revertir el lote culpable, su incidencia de Sonar vuelve a pendiente en la base (sin resuelta, regla ni commit) y las de los otros tres siguen resueltas'] = {
+  $x = Corre-E-M22 'm22-n'
+  $e = $x.E
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $x.R.Salida); return }
+  $ruta = Get-Ruta $e.Wt '.rescate/sonar-base.json'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { Comprueba 'existe .rescate/sonar-base.json' $false (Cola $x.R.Salida); return }
+  $inc = @(([System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json).incidencias)
+  Igual 'cuatro incidencias en la base' 4 $inc.Count
+  $rec = @($inc | Where-Object { $_.fichero -like '*ReciboService.java' })
+  Igual 'la del lote revertido (ReciboService) no esta resuelta' 'False' "$($rec[0].resuelta)"
+  Igual 'y no guarda el commit del lote' '' "$($rec[0].commit)"
+  Igual 'ni la regla con la que se arreglo' '' "$($rec[0].regla)"
+  $otras = @($inc | Where-Object { $_.fichero -notlike '*ReciboService.java' })
+  Igual 'las otras tres siguen resueltas y con el commit de su lote' 3 @($otras | Where-Object { $_.resuelta -eq $true -and "$($_.commit)" -match '^[0-9a-f]{40}$' }).Count
+}
+
+$Pruebas['m22 (e2): las pasadas de Maven de un control rojo con un culpable: 4 lotes sin controles intermedios'] = {
+  $cl = @('service/TotalService', 'service/ReciboService', 'service/PagoService', 'service/CobroService')
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_CON:PagoService' '@SpringBootTest') }
+  $e = Escenario-M22 'm22-e2' $cl $t
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $c = @(Llamadas-M22 $log)
+  $desdeCtl = @($c | Select-Object -Skip (1 + (Cuenta-M22 $c 'parcial')))   # lo que va despues del diagnostico y de los cuatro lotes
+  Igual 'cuatro lotes: cuatro Maven parciales' 4 (Cuenta-M22 $c 'parcial')
+  Igual 'el control rojo: la suite, las clases en el HEAD, 2 de biseccion (4 commits) y la suite que confirma: 5 pasadas' 5 $desdeCtl.Count
+  Igual 'en este orden' 'suite solas solas solas suite' ((@($desdeCtl | ForEach-Object { $_.Tipo })) -join ' ')
+  Igual 'el culpable es el lote 3 (PagoService revertido)' 'ok' $(if ((Lee $e.Wt 'src/main/java/com/acme/plantillabatch/service/PagoService.java') -notmatch '\+ 0;' -and (Lee $e.Wt 'src/main/java/com/acme/plantillabatch/service/CobroService.java') -match '\+ 0;') { 'ok' } else { 'no' })
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  Igual 'una sola linea de control: revertido 1' 'revertido 1' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
+}
+
+$Pruebas['m22 (e3): revertir un lote que choca con uno posterior da conflicto: se aborta y el arbol queda limpio; revertir los dos, del mas nuevo al mas viejo, lo deja como antes'] = {
+  $d = Join-Path $Dir 'm22-e3'
+  if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+  Escribe $d 'f.txt' "uno`ndos`ntres`n"
+  Inicia-Repo $d
+  Escribe $d 'f.txt' "uno`nDOS`ntres`n"; [void](GitEn $d @('commit', '-q', '-am', 'rescate(sonar): lote 1'))
+  $c1 = (GitEn $d @('rev-parse', 'HEAD')).Trim()
+  Escribe $d 'f.txt' "uno`nDOS-DOS`ntres`n"; [void](GitEn $d @('commit', '-q', '-am', 'rescate(sonar): lote 2'))
+  $c2 = (GitEn $d @('rev-parse', 'HEAD')).Trim()
+  function Invoke-Git([string]$D, [string[]]$A) {
+    $ErrorActionPreference = 'Continue'
+    $o = & git -C $D @A 2>&1 | ForEach-Object { "$_" }
+    return [pscustomobject]@{ Codigo = $LASTEXITCODE; Salida = @($o) }
+  }
+  $RepoRoot = $d
+  $Cfg = @{ CommitArgs = @() }
+  . ([scriptblock]::Create((Texto-De-Funciones @('Undo-LotesGit'))))
+  $ok1 = Undo-LotesGit @($c1) 'revierte uno'
+  Igual 'revertir solo el lote 1 da conflicto: devuelve falso' 'False' "$ok1"
+  Igual 'el HEAD no se mueve' $c2 (GitEn $d @('rev-parse', 'HEAD')).Trim()
+  Igual 'y el arbol queda limpio (nada a medias)' '' (GitEn $d @('status', '--porcelain')).Trim()
+  $ok2 = Undo-LotesGit @($c2, $c1) 'revierte dos'
+  Igual 'revertir los dos, del mas nuevo al mas viejo: devuelve cierto' 'True' "$ok2"
+  Igual 'el fichero vuelve a como era antes de los dos' "uno`ndos`ntres`n" (Lee $d 'f.txt')
+  Igual 'con un commit nuevo encima de los dos' '3' (GitEn $d @('rev-list', '--count', "$c1^..HEAD")).Trim()
+  Igual 'y el arbol limpio' '' (GitEn $d @('status', '--porcelain')).Trim()
+}
+
+$Pruebas['m22 (m): un commit que no es de un lote (arreglo a mano) deja la marca sin valor: la siguiente pasada no empieza con un control y el commit sigue en la rama'] = {
+  $e = Escenario-M22 'm22-m' @('service/TotalService', 'service/ReciboService') $CtxM22
+  $log1 = Join-Path $e.Raiz 'mvn-m22-1.log'
+  $r1 = Lanza-M22 $e $log1 @('-MaxLotes', '1')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r1.Salida); return }
+  Igual 'la primera pasada deja la marca en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  $marca = Marca-M22 $e
+  Escribe $e.Wt 'NOTAS.md' 'lo he tocado yo'
+  [void](GitEn $e.Wt @('add', '--', 'NOTAS.md'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano'))
+  $log2 = Join-Path $e.Raiz 'mvn-m22-2.log'
+  $r2 = Lanza-M22 $e $log2
+  Igual 'la segunda pasada sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que la marca ya no vale' ($r2.Salida -match 'La marca del ultimo control ya no vale') (Cola $r2.Salida)
+  Comprueba 'y no empieza con un control' ($r2.Salida -notmatch 'empiezo con un control') (Cola $r2.Salida)
+  Igual 'ningun control en el lote 0: solo el del final de cada pasada' '1 1' ((@(Controles-M22 $e | ForEach-Object { $_.lote })) -join ' ')
+  $sub = @((GitEn $e.Wt @('log', '--format=%s')) -split "`n")
+  Igual 'el commit a mano sigue en la rama' 1 @($sub | Where-Object { $_ -eq 'arreglo a mano' }).Count
+  Igual 'y no hay ningun revert' 0 @($sub | Where-Object { $_ -match '^rescate\(control\): ' }).Count
+  Comprueba 'el commit a mano es ancestro del HEAD y la marca esta en el HEAD' ((Head-M22 $e) -eq (Marca-M22 $e) -and (Marca-M22 $e) -ne $marca) ''
+}
+
+$Pruebas['m22 (o): un lote hace que se ejecuten menos tests (sin tocar los tests): el control sale rojo por la cuenta, revierte los lotes desde la marca y la suite vuelve a pasar'] = {
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_SALTA_CON:ReciboService' '@SpringBootTest') }
+  $e = Escenario-M22 'm22-o' @('service/TotalService', 'service/ReciboService') $t @{ LotesEntreControles = 2 }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'los dos lotes pasan sus puertas (el de contexto no corre en el lote)' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  Comprueba 'el control dice que se ejecutan menos tests que en el ultimo control (2 -> 1)' ($r.Salida -match 'se ejecutan menos tests que en el ultimo control \(2 -> 1\)') (Cola $r.Salida)
+  Comprueba 'y revierte todos los lotes desde la marca' ($r.Salida -match 'revierto todos los lotes desde la marca \(2\)') (Cola $r.Salida)
+  $k = @(Controles-M22 $e)
+  Igual 'intentos.tsv: un control, revertido 2' 'revertido 2' ((@($k | ForEach-Object { $_.resultado })) -join ' ')
+  Comprueba 'con la puerta que lo explica' ($k.Count -eq 1 -and $k[0].puerta -match 'se ejecutan menos tests') (($k | ForEach-Object { $_.puerta }) -join ' ')
+  $dir = 'src/main/java/com/acme/plantillabatch/service/'
+  Comprueba 'el codigo de los dos lotes vuelve a como estaba' ((@('TotalService', 'ReciboService') | Where-Object { (Lee $e.Wt ($dir + $_ + '.java')) -match '\+ 0;' }).Count -eq 0) ''
+  Igual 'la marca esta en el HEAD (la suite vuelve a pasar con los dos tests)' (Head-M22 $e) (Marca-M22 $e)
+}
+
+$Pruebas['m22 (f): un test inestable (falla en la suite del control y pasa solo) deja el control en verde, con el aviso'] = {
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_INESTABLE:2' '@SpringBootTest') }
+  $e = Escenario-M22 'm22-f' @('service/TotalService', 'service/ReciboService') $t @{ LotesEntreControles = 2 }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el aviso dice que el test es inestable y cual' ($r.Salida -match 'inestable.*AppContextTest|AppContextTest.*inestable') (Cola $r.Salida)
+  $c = @(Llamadas-M22 $log)
+  Igual 'la suite entera tres veces: el diagnostico, el control (rojo) y la repeticion' 3 (Cuenta-M22 $c 'suite')
+  Igual 'y una pasada de la clase sola' 1 (Cuenta-M22 $c 'solas')
+  Igual 'ningun revert' 0 @((GitEn $e.Wt @('log', '--format=%s')) -split "`n" | Where-Object { $_ -match '^rescate\(control\)' }).Count
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  Igual 'intentos.tsv: el control en verde' 'verde' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
+}
+
+$Pruebas['m22 (g): un test que fallaba en el ultimo control y sigue fallando no para ningun lote; uno nuevo que falla en un ligero si lo para'] = {
+  $t = @{
+    AppContextTest = (Test-Java-M22 'AppContextTest' '' '@SpringBootTest')
+    FallaTest      = (Test-Java-M22 'FallaTest' 'M22_FALLA' '')
+    RotoTest       = (Test-Java-M22 'RotoTest' 'M22_FALLA_CON:ReciboService' '')
+  }
+  $e = Escenario-M22 'm22-g' @('service/TotalService', 'service/ReciboService') $t
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'lote 1: FallaTest fallaba desde el principio y sigue: el lote pasa' ($r.Salida -match "Lote 1 OK: 'sonar'") (Cola $r.Salida)
+  Comprueba 'lote 2: rompe RotoTest, un ligero que no fallaba: no pasa, con el test en el mensaje' ($r.Salida -match 'NO PASA: .*[Ff]alla un test que no fallaba en el ultimo control.*RotoTestMetodo en com\.acme\.plantillabatch\.RotoTest') (Cola $r.Salida)
+  Comprueba 'y el lote 2 se deshace' ($r.Salida -match 'Lote 2 DESHECHO') (Cola $r.Salida)
+  Comprueba 'ya no sale la puerta de las cuentas' ($r.Salida -notmatch 'Hay mas tests fallando que antes') (Cola $r.Salida)
+  $parc = @(Llamadas-M22 $log | Where-Object { $_.Tipo -eq 'parcial' })
+  Comprueba 'el lote ejecuta los ligeros (con FallaTest y RotoTest) y deja fuera el de contexto' ($parc.Count -ge 1 -and (@($parc[0].Clases -split ',') | Sort-Object) -join ',' -eq 'FallaTest,RotoTest,TotalServiceTest') (($parc | ForEach-Object { $_.Clases }) -join ' | ')
+  Igual 'el control del final lo deja pasar: el unico que falla es el de antes' 'verde' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
+}
+
+$Pruebas['m22 (h): una pasada que se corta tras 3 lotes sin control dice cuantos quedan sin comprobar, y la siguiente empieza con un control'] = {
+  $cl = @('service/TotalService', 'service/ReciboService', 'service/PagoService', 'service/CobroService')
+  $e = Escenario-M22 'm22-h' $cl $CtxM22
+  # el corte: la 4.a llamada al modelo toca la carpeta del repo original (-Legacy): el script lo ve, deshace ese lote y para con ALTO
+  $orig = Join-Path $e.Raiz 'original'
+  Escribe $orig 'leeme.txt' 'el repo original'
+  $log1 = Join-Path $e.Raiz 'mvn-m22-1.log'
+  $r1 = Lanza-M22 $e $log1 @('-Legacy', $orig) @{ RESCATE_M22_CORTA = '4'; RESCATE_M22_TOCA = $orig }
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r1.Salida); return }
+  Igual 'la pasada para con 4 (ALTO)' 4 $r1.Codigo
+  $m1 = Marca-M22 $e
+  $h1 = Head-M22 $e
+  if ($m1.Length -lt 7) { Comprueba 'la pasada deja una marca' $false (Cola $r1.Salida); return }
+  Igual 'tres lotes buenos antes del corte' 3 @([regex]::Matches($r1.Salida, "Lote \d OK: 'sonar'")).Count
+  Comprueba "la consola dice: comprobado con la suite entera hasta <commit>; 3 lotes sin comprobar" ($r1.Salida -match ('comprobado con la suite entera hasta ' + $m1.Substring(0, 7) + '; 3 lotes sin comprobar')) (Cola $r1.Salida)
+  Comprueba 'la marca se ha quedado atras' ($m1 -ne $h1) "marca=$m1 head=$h1"
+  Igual 'sin ningun control en esa pasada' 0 @(Controles-M22 $e).Count
+  $log2 = Join-Path $e.Raiz 'mvn-m22-2.log'
+  $r2 = Lanza-M22 $e $log2
+  Igual 'la siguiente pasada sale con 0' 0 $r2.Codigo
+  Comprueba 'la siguiente pasada dice que empieza con un control' ($r2.Salida -match 'empiezo con un control') (Cola $r2.Salida)
+  $k = @(Controles-M22 $e)
+  Igual 'intentos.tsv: el control del principio (lote 0) y el del final (tras el lote 1 de esta pasada)' '0 1' ((@($k | ForEach-Object { $_.lote })) -join ' ')
+  Igual 'los dos en verde' 'verde verde' ((@($k | ForEach-Object { $_.resultado })) -join ' ')
+  $t = Intentos-M21 $e
+  Igual 'el del principio va despues de las 3 lineas de la primera pasada' 'control' $t.Filas[3].paso
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  Igual 'la suite entera, dos veces: el diagnostico (que hace de control) y el del final' 2 (Cuenta-M22 @(Llamadas-M22 $log2) 'suite')
+}
+
+$Pruebas['m22 (l): todos los tests con @Test son de contexto y hay un ayudante sin @Test: los lotes pasan sin el hallazgo de "ninguno ejecutado" y el control final pasa la suite entera'] = {
+  $ayudante = "package com.acme.plantillabatch;`n`nclass TestDataFactory {`n    static int numero() {`n        return 1;`n    }`n}`n"
+  $totalCtx = "package com.acme.plantillabatch.service;`n`nimport org.junit.jupiter.api.Test;`n`n@SpringBootTest`nclass TotalServiceTest {`n`n    @Test`n    void suma() {`n        int base = 1;`n    }`n}`n"
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' '' '@SpringBootTest'); 'service/TotalServiceTest' = $totalCtx; TestDataFactory = $ayudante }
+  $e = Escenario-M22 'm22-l' @('service/TotalService', 'service/ReciboService') $t
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos lotes pasan' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  Comprueba 'no sale el hallazgo de que Maven no ha ejecutado ninguno' ($r.Salida -notmatch 'no ha ejecutado ninguno') (Cola $r.Salida)
+  Comprueba 'ni el de un test que fallaba' ($r.Salida -notmatch 'Falla un test que no fallaba') (Cola $r.Salida)
+  $c = @(Llamadas-M22 $log)
+  Igual 'cada lote deja fuera todos los tests: 2 Maven parciales' 2 (Cuenta-M22 $c 'parcial')
+  Igual 'la suite entera, dos veces: el diagnostico y el control del final' 2 (Cuenta-M22 $c 'suite')
+  $k = @(Controles-M22 $e)
+  Igual 'una linea de control, en verde y tras el lote 2' 'verde 2' ((@($k | ForEach-Object { $_.resultado + ' ' + $_.lote })) -join ' ')
+  Igual 'la marca esta en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+}
+
+$Pruebas['m22 (i): sin tests de contexto no hay control ni lista, y la marca se mueve con cada lote; con -SinTests, nada de esto'] = {
+  $e = Escenario-M22 'm22-i' @('service/TotalService', 'service/ReciboService', 'service/PagoService')
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log @('-MaxLotes', '2')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  $c = @(Llamadas-M22 $log)
+  Igual 'ningun Maven con excludesFile: cada lote pasa la suite entera' 0 (Cuenta-M22 $c 'parcial')
+  Igual 'el diagnostico y los dos lotes: tres suites' 3 (Cuenta-M22 $c 'suite')
+  Igual 'ninguna linea de control en intentos.tsv' 0 @(Controles-M22 $e).Count
+  Comprueba 'ni lista de contexto' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/tests-de-contexto.txt'))) ''
+  Igual 'dos lotes' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  Igual 'la marca esta en el HEAD (se movio con cada lote, no hay control)' (Head-M22 $e) (Marca-M22 $e)
+  # -SinTests: ni lista ni marca ni excludesFile
+  $e2 = Escenario-M22 'm22-i2' @('service/TotalService') $CtxM22
+  $log2 = Join-Path $e2.Raiz 'mvn-m22.log'
+  $r2 = Lanza-M22 $e2 $log2 @('-SinTests')
+  Comprueba '-SinTests: el lote pasa y no se pasa ningun test' ($r2.Salida -match "Lote 1 OK: 'sonar'" -and @(Llamadas-M22 $log2).Count -eq 0) (Cola $r2.Salida)
+  Comprueba '-SinTests: sin lista ni marca' (-not (Test-Path -LiteralPath (Get-Ruta $e2.Wt '.rescate/tests-de-contexto.txt')) -and -not (Marca-M22 $e2)) ''
+}
+
+$Pruebas['m22 (k): si el control sigue rojo tras las rondas, revierte todos los lotes desde la marca y lo dice en rojo'] = {
+  $t = @{
+    Ctx1Test = (Test-Java-M22 'Ctx1Test' 'M22_FALLA_CON:TotalService' '@SpringBootTest')
+    Ctx2Test = (Test-Java-M22 'Ctx2Test' 'M22_FALLA_CON:ReciboService' '@SpringBootTest')
+  }
+  $e = Escenario-M22 'm22-k' @('service/TotalService', 'service/ReciboService', 'service/PagoService') $t @{ ControlRondas = 1 }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Comprueba 'la consola dice que revierte todos los lotes desde la marca' ($r.Salida -match 'revierto todos los lotes') (Cola $r.Salida)
+  $dir = 'src/main/java/com/acme/plantillabatch/service/'
+  Comprueba 'ninguno de los tres lotes queda en el codigo' ((@('TotalService', 'ReciboService', 'PagoService') | Where-Object { (Lee $e.Wt ($dir + $_ + '.java')) -match '\+ 0;' }).Count -eq 0) ''
+  Igual 'intentos.tsv: revertido 3' 'revertido 3' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
+  Igual 'la marca esta en el HEAD (el arbol es el de la marca y la suite lo confirma)' (Head-M22 $e) (Marca-M22 $e)
+  $c = @(Llamadas-M22 $log)
+  Igual 'la suite: el diagnostico, el control, la de despues del primer revert y la de despues de revertirlo todo' 4 (Cuenta-M22 $c 'suite')
+}
+
+$Pruebas['m22 (k2): si tras revertirlo todo la suite sigue en rojo, el control sale rojo: la marca no se mueve y el script sale con 2'] = {
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_DESDE:2' '@SpringBootTest') }
+  $e = Escenario-M22 'm22-k2' @('service/TotalService', 'service/ReciboService') $t
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'dice en rojo que el HEAD no ha pasado la suite entera' ($r.Salida -match 'no ha pasado la suite entera') (Cola $r.Salida)
+  Igual 'intentos.tsv: rojo' 'rojo' ((@(Controles-M22 $e | ForEach-Object { $_.resultado })) -join ' ')
+  Comprueba 'la marca no se mueve: sigue donde estaba' ((Marca-M22 $e) -and (Marca-M22 $e) -ne (Head-M22 $e)) ''
+}
+
+$Pruebas['m22: todo en ASCII (el falso nuevo)'] = {
+  $f = Join-Path $falsos 'm22-mvn.ps1'
+  Igual 'sin bytes fuera de ASCII en m22-mvn.ps1' 0 @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

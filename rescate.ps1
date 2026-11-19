@@ -209,6 +209,9 @@ $Cfg += @{
   LanzaJob              = 'launchJob\s*\(|JobLauncherTestUtils|[jJ]obLauncher\s*\.\s*run\s*\(|[jJ]obOperator\s*\.\s*start\s*\(|SpringApplication\s*\.\s*run\s*\('
   PasosDeUnoEnUno       = @('paridad', 'e2e', 'cobertura')   # un job (o una clase) por llamada a Copilot
   PasosSoloCompila      = @('sonar')   # pasos en los que el modelo solo compila (MvnCompilar) y los tests los pasa el script en sus puertas
+  PasosTestsElegidos    = @('sonar')   # pasos en los que cada lote pasa solo los tests ligeros (sin los de contexto de Spring) y la suite entera va en un control
+  LotesEntreControles   = 10           # cada cuantos lotes buenos se pasa la suite entera (el control); tambien al final del paso y al empezar si la pasada anterior se corto
+  ControlRondas         = 3            # veces que un control rojo busca el lote culpable y lo revierte antes de revertir todos los lotes desde la ultima marca
   # Pasos en los que la IA revisa antes todos los ficheros y escribe un plan
   PasosConPlan          = @('estructura', 'hexagonal', 'ficheros', 'config')
   # Calidad. Reglas que cuentan como error (el fix las arregla y las exige en
@@ -1995,7 +1998,7 @@ function Invoke-Build([bool]$ConTests) {
   $b = [pscustomobject]@{ Ejecutado = $true; Compila = $true; TestsEjecutados = $false; TestsOk = $false; TestsN = 0 }
   $rep = Join-Ruta $RepoRoot 'target/surefire-reports'
   if ($ConTests -and (Test-Path -LiteralPath $rep)) { Remove-Item -LiteralPath $rep -Recurse -Force }
-  if ($ConTests) { $a = $Cfg.MvnTests } else { $a = $Cfg.MvnCompilar }
+  if ($ConTests) { $a = @($Cfg.MvnTests) + @($script:TestsExtra | Where-Object { $_ }) } else { $a = $Cfg.MvnCompilar }   # TestsExtra: lo que pide el lote (el excludesFile de los tests de contexto)
   if ($ConTests) { $que = 'Maven (tests)' } else { $que = 'Maven (compilar)' }
   $previos = @(Get-Cambios $RepoRoot)
   $r = Invoke-ContandoMaven { Invoke-MavenTope $RepoRoot $a $que (Join-Path $Work 'build.log') }
@@ -2012,7 +2015,8 @@ function Invoke-Build([bool]$ConTests) {
       # Maven con 0 no dice que los tests pasen (testFailureIgnore, skipTests en la configuracion del plugin): se miran los informes
       $inf = Read-InformesTests $rep
       $b.TestsEjecutados = $true; $b.TestsN = $inf.Ejecutados; $b.TestsOk = ($inf.Fallan -eq 0)
-      if ($inf.Fallan -eq 0 -and $inf.Ejecutados -eq 0 -and @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java')).Count -gt 0) {
+      # con TestsExtra el lote ha dejado fuera tests a proposito (los de contexto): que no ejecute ninguno lo cubre el control, que pasa la suite entera
+      if ($inf.Fallan -eq 0 -and $inf.Ejecutados -eq 0 -and @($script:TestsExtra | Where-Object { $_ }).Count -eq 0 -and @(Get-JavaFiles (Join-Ruta $RepoRoot 'src/test/java')).Count -gt 0) {
         $b.TestsOk = $false
         Add-Hallazgo 'tests' 'error' 'pom.xml' 0 'Hay tests en src/test/java, pero Maven no ha ejecutado ninguno: mira skipTests, testFailureIgnore, excludes o el perfil del pom'
       }
@@ -3332,9 +3336,13 @@ function Add-Intento([string]$PasoId, [int]$N, [int]$I, $LoteH, $Sel, [double]$S
   if ($PasoId -eq 'sonar') { $reglas = (@($LoteH | ForEach-Object { (Get-SonarFamilia "$($script:SonarPorFila[$_.Fila].Mensaje)").Familia } | Sort-Object -Unique) -join ';') }
   $resultado = 'no pasa'; $puerta = ''
   if ($Pasa) { $resultado = 'pasa' } else { $puerta = "$(@($Problemas)[0])" }
+  Write-FilaIntento @($PasoId, $N, $I, @($Sel).Count, @($LoteH).Count, $reglas, [int][Math]::Round($SegCopilot), [int][Math]::Round($script:SegMaven), $resultado) $puerta
+}
+
+# Una linea de .rescate/intentos.tsv: la fecha de ahora, los otros 9 campos de $ColumnasIntentos y la puerta (cortada a 200). Nunca para el script.
+function Write-FilaIntento([object[]]$Campos, [string]$Puerta) {
   $fecha = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
-  $campos = @($fecha, $PasoId, $N, $I, @($Sel).Count, @($LoteH).Count, $reglas, [int][Math]::Round($SegCopilot), [int][Math]::Round($script:SegMaven), $resultado)
-  $fila = (@($campos | ForEach-Object { Get-CampoTsv "$_" }) + (Get-CampoTsv $puerta 200)) -join "`t"
+  $fila = (@(@($fecha) + @($Campos) | ForEach-Object { Get-CampoTsv "$_" }) + (Get-CampoTsv $Puerta 200)) -join "`t"
   $ruta = Join-Path $Work 'intentos.tsv'
   try {
     if (-not (Test-Path -LiteralPath $ruta)) { $fila = ($ColumnasIntentos -join "`t") + "`n" + $fila }
@@ -3343,6 +3351,291 @@ function Add-Intento([string]$PasoId, [int]$N, [int]$I, $LoteH, $Sel, [double]$S
   catch {
     if (-not $script:IntentosAvisado) { $script:IntentosAvisado = $true; Aviso "No he podido apuntar el intento en .rescate/intentos.tsv ($($_.Exception.Message)): sigo sin apuntar los intentos." }
   }
+}
+
+# ============================ TESTS ELEGIDOS Y CONTROL ============================
+# En los pasos de PasosTestsElegidos (sonar) cada lote pasa solo los tests ligeros: los de contexto de Spring (los que arrancan el contexto o lanzan el
+# job, y los que heredan de ellos) quedan fuera con Surefire -Dsurefire.excludesFile, salvo los que el propio lote toca. La suite entera va en un
+# control: cada LotesEntreControles lotes buenos, al final del paso y al empezar si la pasada anterior se corto. La marca refs/rescate/control-ok
+# apunta al ultimo commit que paso la suite entera y .rescate/control.json lleva lo que fallaba y cuantos tests corrian entonces.
+$RefControl = 'refs/rescate/control-ok'
+
+# Las clases de src/test/java: Nombre, Rel (ruta bajo src/test/java), Padre (de quien hereda) y Ctx ($true si arrancan el contexto de Spring o lanzan un
+# job, o heredan de una que si, hasta que no salgan mas).
+function Get-TestsDeContexto {
+  $base = Join-Ruta $RepoRoot 'src/test/java'
+  $rx = '@SpringBootTest|@SpringBatchTest|@SpringJUnitConfig|@ContextConfiguration|SpringExtension|' + $Cfg.LanzaJob
+  $cls = @()
+  foreach ($f in @(Get-JavaFiles $base)) {
+    $t = [System.IO.File]::ReadAllText($f.FullName)
+    $m = [regex]::Match($t, '\bclass\s+\w+(?:<[^>{]*>)?\s+extends\s+(\w+)')
+    $padre = ''
+    if ($m.Success) { $padre = $m.Groups[1].Value }
+    $cls += [pscustomobject]@{ Nombre = $f.BaseName; Rel = (Get-Rel $base $f.FullName); Padre = $padre; Ctx = [regex]::IsMatch($t, $rx) }
+  }
+  do {
+    $cambio = $false
+    foreach ($c in $cls) {
+      if ($c.Ctx -or -not $c.Padre) { continue }
+      if (@($cls | Where-Object { $_.Ctx -and $_.Nombre -eq $c.Padre }).Count -gt 0) { $c.Ctx = $true; $cambio = $true }
+    }
+  } while ($cambio)
+  return $cls
+}
+
+# Escribe en .rescate/$Nombre una linea por clase de contexto de $Clases, como la entiende excludesFile ('com/acme/FooTest.*'). Devuelve la ruta.
+function Write-ExcludesContexto($Clases, [string]$Nombre) {
+  $ruta = Join-Path $Work $Nombre
+  $lineas = @($Clases | Where-Object { $_.Ctx } | ForEach-Object { $_.Rel -replace '\.java$', '.*' })
+  $texto = ''
+  if ($lineas.Count -gt 0) { $texto = ($lineas -join "`n") + "`n" }
+  [System.IO.File]::WriteAllText($ruta, $texto)
+  return $ruta
+}
+
+# El excludesFile de un lote: la lista de contexto de todo el paso o, si el lote toca algun test de contexto ($Tocados: sus rutas), otra sin ese test.
+function Get-ExcludesLote($Clases, [string[]]$Tocados) {
+  $tocadas = @($Clases | Where-Object { $_.Ctx -and $Tocados -contains ('src/test/java/' + $_.Rel) })
+  if ($tocadas.Count -eq 0) { return (Join-Path $Work 'tests-de-contexto.txt') }
+  return (Write-ExcludesContexto @($Clases | Where-Object { $tocadas -notcontains $_ }) 'tests-de-contexto-lote.txt')
+}
+
+# Los tests que fallan en un diagnostico, por su texto ('falla <metodo> en <Clase>').
+function Get-FallosTests($Hall) { return @($Hall | Where-Object { $_.Cat -eq 'tests' -and $_.Sev -eq 'error' } | ForEach-Object { "$($_.Detalle)" }) }
+
+function Get-MarcaControl { return ((Invoke-Git $RepoRoot @('rev-parse', '--verify', '-q', $RefControl)).Salida -join '').Trim() }
+
+# Pone la marca en el HEAD y apunta en .rescate/control.json cuantos tests corrian y cuales fallaban en esa suite entera.
+function Save-Control([int]$TestsN, [string[]]$Fallos) {
+  $head = Get-Head $RepoRoot
+  [void](Invoke-Git $RepoRoot @('update-ref', $RefControl, $head))
+  $script:Control = [pscustomobject]@{ commit = $head; testsN = $TestsN; fallos = @($Fallos) }
+  try { [System.IO.File]::WriteAllText((Join-Path $Work 'control.json'), (ConvertTo-Json -InputObject $script:Control -Depth 3), $Utf8) }
+  catch { Aviso "No he podido escribir .rescate/control.json ($($_.Exception.Message)): la marca queda, pero sin lo que fallaba." }
+}
+
+# Lo que dejo el ultimo control en verde (control.json) o $null.
+function Read-Control {
+  $ruta = Join-Path $Work 'control.json'
+  if (-not (Test-Path -LiteralPath $ruta)) { return $null }
+  try { $o = [System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json } catch { return $null }
+  if (-not $o -or -not $o.commit) { return $null }
+  return [pscustomobject]@{ commit = "$($o.commit)"; testsN = [int]$o.testsN; fallos = @($o.fallos | ForEach-Object { "$_" }) }
+}
+
+# Los commits entre la marca y el HEAD, del mas viejo al mas nuevo: Commit, Asunto y Lote ($true si es el commit de un lote de un paso).
+function Get-CommitsDesdeMarca([string]$Marca) {
+  $o = @()
+  foreach ($l in @((Invoke-Git $RepoRoot @('log', '--reverse', '--format=%H%x09%s', "$Marca..HEAD")).Salida | Where-Object { $_ })) {
+    $p = "$l" -split "`t", 2
+    $o += [pscustomobject]@{ Commit = $p[0]; Asunto = $p[1]; Lote = [bool]($p[1] -match '^rescate\(\w+\): lote \d+') }
+  }
+  return $o
+}
+
+# La marca vale si esta detras del HEAD y todo lo que hay entre las dos es de lotes de este paso o de controles. Si no, la suite entera de ahora
+# (el diagnostico del principio) es el control de partida.
+function Test-MarcaVigente([string]$Marca, [string]$PasoId) {
+  if ((Invoke-Git $RepoRoot @('merge-base', '--is-ancestor', $Marca, 'HEAD')).Codigo -ne 0) { return $false }
+  $rx = '^rescate\((' + [regex]::Escape($PasoId) + '|control)\): '
+  return (@(Get-CommitsDesdeMarca $Marca | Where-Object { $_.Asunto -notmatch $rx }).Count -eq 0)
+}
+
+# Con $Marca ya sin comprobar, lo dice la consola: hasta donde esta comprobado con la suite entera y cuantos lotes quedan sin comprobar.
+function Write-SinComprobar {
+  $marca = Get-MarcaControl
+  if (-not $marca -or $marca -eq (Get-Head $RepoRoot)) { return }
+  $n = @(Get-CommitsDesdeMarca $marca | Where-Object { $_.Lote }).Count
+  $corto = ((Invoke-Git $RepoRoot @('rev-parse', '--short=7', $marca)).Salida -join '').Trim()
+  Aviso "Paso cortado: comprobado con la suite entera hasta $corto; $n lotes sin comprobar. La siguiente pasada empieza con un control."
+}
+
+# Deshace con git revert los commits de $Commits (del mas nuevo al mas viejo) en un solo commit con el mensaje $Mensaje. Con un conflicto lo aborta: el HEAD y
+# el arbol quedan como estaban y devuelve $false.
+function Undo-LotesGit([string[]]$Commits, [string]$Mensaje) {
+  $antes = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
+  $r = Invoke-Git $RepoRoot (@('revert', '--no-commit') + $Commits)
+  $bien = ($r.Codigo -eq 0)
+  if ($bien -and (Invoke-Git $RepoRoot @('diff', '--cached', '--quiet')).Codigo -ne 0) {
+    $bien = ((Invoke-Git $RepoRoot (@('commit', '-q', '-m', $Mensaje) + $Cfg.CommitArgs)).Codigo -eq 0)
+  }
+  if (-not $bien) {
+    [void](Invoke-Git $RepoRoot @('revert', '--abort'))
+    [void](Invoke-Git $RepoRoot @('reset', '-q', '--hard', $antes))
+  }
+  return $bien
+}
+
+# Las clases de $Clases solas (-Dtest) en la carpeta $Dir: $true si algo falla (o Maven no acaba bien).
+function Test-ClasesFallan([string]$Dir, [string[]]$Clases) {
+  $rep = Join-Ruta $Dir 'target/surefire-reports'
+  if (Test-Path -LiteralPath $rep) { Remove-Item -LiteralPath $rep -Recurse -Force }
+  $a = @($Cfg.MvnTests) + @(('-Dtest=' + ($Clases -join ',')), '-Dsurefire.failIfNoSpecifiedTests=false')
+  $previos = @(Get-Cambios $Dir)
+  $r = Invoke-ContandoMaven { Invoke-MavenTope $Dir $a "Maven ($($Clases.Count) clase(s) sola(s))" (Join-Path $Work 'control-build.log') }
+  [void](Remove-Ruido $Dir $previos)
+  $hAntes = $script:H
+  $script:H = New-Object System.Collections.Generic.List[object]
+  $inf = Read-InformesTests $rep
+  $script:H = $hAntes
+  return [bool]($r.Tope -or $r.Codigo -ne 0 -or $inf.Fallan -gt 0)
+}
+
+function Remove-WorktreeControl([string]$Dir) {
+  if (Test-Path -LiteralPath $Dir) { [void](Invoke-Git $RepoRoot @('worktree', 'remove', '--force', $Dir)) }
+  if (Test-Path -LiteralPath $Dir) { Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue }
+  [void](Invoke-Git $RepoRoot @('worktree', 'prune'))
+}
+
+# El primer commit de $Commits (del mas viejo al mas nuevo, el ultimo ya falla) con el que fallan $Clases solas, por biseccion. Cada prueba va en un
+# worktree temporal (git worktree add --detach) que se borra al acabar. '' si no puede.
+function Find-CulpableControl([string[]]$Commits, [string[]]$Clases) {
+  $dir = Join-Path $Work 'control-wt'
+  Remove-WorktreeControl $dir
+  $creado = $false
+  $g = -1; $b = $Commits.Count - 1
+  try {
+    while ($b - $g -gt 1) {
+      $mid = [int][Math]::Floor(($g + $b) / 2)
+      if ($creado) { $r = Invoke-Git $dir @('checkout', '-q', '--detach', $Commits[$mid]) }
+      else { $r = Invoke-Git $RepoRoot @('worktree', 'add', '-q', '--detach', $dir, $Commits[$mid]); $creado = ($r.Codigo -eq 0) }
+      if ($r.Codigo -ne 0) { Aviso ('  No he podido probar el commit ' + $Commits[$mid].Substring(0, 7) + ': ' + ($r.Salida -join ' ')); return '' }
+      Info ('  Biseccion: pruebo ' + $Commits[$mid].Substring(0, 7) + ' (' + ($mid + 1) + ' de ' + $Commits.Count + ')...')
+      if (Test-ClasesFallan $dir $Clases) { $b = $mid } else { $g = $mid }
+    }
+  }
+  finally { Remove-WorktreeControl $dir }
+  return $Commits[$b]
+}
+
+# Lo que dice una suite entera frente al ultimo control en verde ($Ctl): Rojo, Motivos, los fallos de ahora (Fallos), los nuevos (Nuevos) y sus clases.
+function Get-EvaluacionControl($Hall, $Build, $Ctl) {
+  $fallos = @(Get-FallosTests $Hall)
+  $nuevos = @($fallos | Where-Object { $Ctl.fallos -notcontains $_ })
+  $clases = @($nuevos | ForEach-Object { if ($_ -match ' en ([\w.$]+)$') { $Matches[1] } } | Select-Object -Unique)
+  $motivos = @()
+  if (-not $Build.Compila) { $motivos += 'el proyecto no compila' }
+  if ($nuevos.Count -gt 0) { $motivos += ('fallan tests que no fallaban: ' + (($nuevos | Select-Object -First 3) -join '; ')) }
+  if ($Build.TestsEjecutados -and $Build.TestsN -lt $Ctl.testsN) { $motivos += "se ejecutan menos tests que en el ultimo control ($($Ctl.testsN) -> $($Build.TestsN))" }
+  return [pscustomobject]@{ Rojo = ($motivos.Count -gt 0); Motivos = $motivos; Fallos = $fallos; Nuevos = $nuevos; Clases = $clases }
+}
+
+# Los lotes de $Commits que un control ha revertido: sus ficheros no se vuelven a intentar en esta pasada y sus incidencias de Sonar vuelven a pendientes.
+function Set-LotesRevertidos($Lotes, [string]$PasoId, [string]$Motivo) {
+  foreach ($l in $Lotes) {
+    $fich = @((Invoke-Git $RepoRoot @('diff-tree', '--no-commit-id', '--name-only', '-r', $l.Commit)).Salida | Where-Object { $_ -match '^src/.*\.java$' })
+    $script:NoReintentar += $fich
+    foreach ($f in @($fich | Select-Object -First 5)) { Info "  ${f}: no se vuelve a intentar en esta pasada ($Motivo)." }
+  }
+  if ($Sonar -and $PasoId -eq 'sonar') {
+    Initialize-SonarBase
+    $cambio = $false
+    foreach ($b in @($script:SonarBase.Values)) {
+      if ($b.resuelta -eq $true -and @($Lotes | Where-Object { $_.Commit -eq "$($b.commit)" }).Count -gt 0) {
+        Add-Member -InputObject $b -NotePropertyName resuelta -NotePropertyValue $false -Force
+        Add-Member -InputObject $b -NotePropertyName regla -NotePropertyValue '' -Force
+        Add-Member -InputObject $b -NotePropertyName commit -NotePropertyValue '' -Force
+        $cambio = $true
+      }
+    }
+    if ($cambio) { Save-SonarBase }
+  }
+}
+
+# Un control: la suite entera en el HEAD frente a lo que fallaba en el ultimo control en verde ($script:Control). $N es el lote tras el que se hace (0 al
+# empezar). $Hall y $Build: la suite entera que ya se ha pasado en el HEAD (el diagnostico del principio) y $SegPrevios lo que tardo; sin ellos se pasa ahora.
+#   Verde: la marca pasa al HEAD. Rojo: se pasan solas las clases que fallan; si pasan, se repite la suite y, si entonces pasa, es un test inestable.
+#   Si no, biseccion entre la marca y el HEAD, git revert del lote culpable (con un conflicto, los lotes desde el, del mas nuevo al mas viejo) y la suite otra vez,
+#   hasta ControlRondas veces. Si sigue en rojo, se revierten todos los lotes desde la marca. La suite que sale del control es la del HEAD que queda.
+# Devuelve Resultado (verde, revertido N o rojo), Hall y Build (los de la ultima suite entera). Un resultado rojo pone $script:ControlRojo.
+function Invoke-Control([string]$PasoId, [int]$N, $Hall = $null, $Build = $null, [double]$SegPrevios = 0) {
+  $script:TestsExtra = @()
+  $script:SegMaven = $SegPrevios
+  $ctl = $script:Control
+  $marca = Get-MarcaControl
+  $lotes = @(Get-CommitsDesdeMarca $marca | Where-Object { $_.Lote })
+  Info ''
+  Info "--- Control (tras el lote $N): la suite entera en el HEAD; $($lotes.Count) lote(s) sin comprobar desde la marca ---"
+  if ($null -eq $Hall) { Info '  Suite entera (Maven)...'; $Hall = @(Invoke-Diagnostico $true $true); $Build = $script:Build }
+  $revertidos = @{}      # commit -> el lote que el control ha revertido
+  $ev = Get-EvaluacionControl $Hall $Build $ctl
+  $primero = $ev
+  $inestable = ''
+  $ronda = 0
+  while ($ev.Rojo -and -not $inestable) {
+    foreach ($m in $ev.Motivos) { Aviso "  Control en rojo: $m." }
+    $todo = ($ronda -ge [int]$Cfg.ControlRondas -or $ev.Clases.Count -eq 0)
+    if (-not $todo) {
+      $ronda++
+      if (-not (Test-ClasesFallan $RepoRoot $ev.Clases)) {
+        Info '  Solas pasan: repito la suite entera una vez.'
+        $Hall = @(Invoke-Diagnostico $true $true); $Build = $script:Build
+        $ev = Get-EvaluacionControl $Hall $Build $ctl
+        if (-not $ev.Rojo) { $inestable = ($primero.Clases -join ', ') }
+        else { $todo = $true }
+      }
+      else {
+        $ventana = @(Get-CommitsDesdeMarca $marca)
+        $cul = Find-CulpableControl @($ventana | ForEach-Object { $_.Commit }) $ev.Clases
+        $rec = @($ventana | Where-Object { $_.Commit -eq $cul })[0]
+        if (-not $cul -or -not $rec.Lote -or $revertidos.ContainsKey($cul)) { $todo = $true }
+        else {
+          $cuales = $ev.Clases -join ', '
+          Aviso "  Control: el lote '$($rec.Asunto)' rompe $cuales en el control: lo revierto."
+          $hechos = @($rec)
+          $bien = Undo-LotesGit @($cul) "rescate(control): revierto un lote que rompe $cuales"
+          if (-not $bien) {
+            $desde = [array]::IndexOf(@($ventana | ForEach-Object { $_.Commit }), $cul)
+            $hechos = @($ventana[$desde..($ventana.Count - 1)] | Where-Object { $_.Lote -and -not $revertidos.ContainsKey($_.Commit) })
+            Aviso "  El revert da conflicto con los lotes que vienen despues: revierto los $($hechos.Count) lote(s) desde ese hasta el HEAD, del mas nuevo al mas viejo."
+            [array]::Reverse($hechos)
+            $bien = Undo-LotesGit @($hechos | ForEach-Object { $_.Commit }) "rescate(control): revierto los lotes desde uno que rompe $cuales"
+          }
+          if (-not $bien) { $todo = $true }
+          else {
+            foreach ($h in $hechos) { $revertidos[$h.Commit] = $h }
+            Set-LotesRevertidos $hechos $PasoId "rompe $cuales en el control"
+            Info '  Suite entera otra vez (Maven)...'
+            $Hall = @(Invoke-Diagnostico $true $true); $Build = $script:Build
+            $ev = Get-EvaluacionControl $Hall $Build $ctl
+          }
+        }
+      }
+    }
+    if ($todo) {
+      $ventana = @(Get-CommitsDesdeMarca $marca)
+      if ($ventana.Count -eq 0) { Fallo '  Control en rojo y la marca es el HEAD: no hay lotes que revertir.'; break }
+      Fallo "  Control: sigue en rojo y no hay un lote que lo explique: revierto todos los lotes desde la marca ($($lotes.Count))."
+      [array]::Reverse($ventana)
+      if (-not (Undo-LotesGit @($ventana | ForEach-Object { $_.Commit }) 'rescate(control): revierto todos los lotes desde la marca')) { Fallo '  No he podido revertirlos.'; break }
+      $nuevos = @($lotes | Where-Object { -not $revertidos.ContainsKey($_.Commit) })
+      foreach ($l in $lotes) { $revertidos[$l.Commit] = $l }
+      Set-LotesRevertidos $nuevos $PasoId 'el control seguia en rojo'
+      Info '  Suite entera otra vez (Maven)...'
+      $Hall = @(Invoke-Diagnostico $true $true); $Build = $script:Build
+      $ev = Get-EvaluacionControl $Hall $Build $ctl
+      break
+    }
+  }
+  if ($inestable) { Aviso "  Control: $inestable es inestable (falla en la suite entera y pasa sola): lo dejo pasar." }
+  $resultado = 'verde'
+  if ($revertidos.Count -gt 0) { $resultado = "revertido $($revertidos.Count)" }
+  $puerta = ''
+  if ($primero.Rojo) { $puerta = ($primero.Motivos -join ' ') }
+  if ($inestable) { $puerta = "inestable: $inestable" }
+  if ($ev.Rojo) {
+    $resultado = 'rojo'
+    $script:ControlRojo = $true
+    Fallo ('  El HEAD no ha pasado la suite entera: ' + ($ev.Motivos -join ' ') + ' La marca se queda en ' + (Get-MarcaControl).Substring(0, 7) + '.')
+  }
+  else {
+    Save-Control $Build.TestsN $ev.Fallos
+    Bien "  Control en verde: la marca pasa al HEAD ($((Get-MarcaControl).Substring(0, 7)))."
+  }
+  Write-FilaIntento @('control', $N, '-', $lotes.Count, $primero.Nuevos.Count, '-', 0, [int][Math]::Round($script:SegMaven), $resultado) $puerta
+  $script:TiemposPaso.SegMaven += $script:SegMaven
+  Write-Informe $Hall
+  return [pscustomobject]@{ Resultado = $resultado; Hall = $Hall; Build = $Build }
 }
 
 function Invoke-Fix {
@@ -3372,6 +3665,7 @@ function Invoke-Fix {
   if (-not $script:AtascadosLeidos) { Read-Atascados; $script:AtascadosLeidos = $true }
 
   # --- diagnostico inicial ---
+  $script:SegMaven = 0.0   # lo que tarda el diagnostico inicial: si hace de control (tests elegidos), son los segundos de su linea de intentos.tsv
   # Si es el mismo commit del ultimo diagnostico con Maven (el del ultimo lote del paso anterior) y el arbol esta limpio, sirven sus hallazgos.
   $head0 = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
   $cache = $script:HallCache
@@ -3445,13 +3739,45 @@ function Invoke-Fix {
   $consejoDe = @{}     # fichero atascado -> el consejo (de codigo) para su ultimo intento
   $motivos = @{}       # fichero -> por que no pasaron sus lotes (para el consejo)
   $reflexiones = @()   # las reflexiones del paso (Titulo, Texto, Ficheros)
+  $segInicial = $script:SegMaven
   $script:TiemposPaso = @{ Intentos = 0; SegCopilot = 0.0; SegMaven = 0.0 }   # lo que suman los intentos de esta pasada (Add-Intento)
-  for ($n = 1; $n -le $MaxLotes; $n++) {
+  # tests elegidos: con tests de contexto, cada lote pasa solo los ligeros (si todos son de contexto, ninguno) y la suite entera va en un control. Sin tests de contexto cada lote
+  # ya pasa la suite entera: no hay control y la marca se mueve con cada lote bueno. El diagnostico de arriba es la suite entera del HEAD: hace de control.
+  $script:TestsExtra = @(); $script:NoReintentar = @()
+  $marcaActiva = (($Cfg.PasosTestsElegidos -contains $paso) -and $conTests)
+  $elegidos = $false
+  $clasesTest = @()
+  $lotesDesdeControl = 0
+  $ultimoLote = 0
+  if ($marcaActiva) {
+    $clasesTest = @(Get-TestsDeContexto)
+    $nCtx = @($clasesTest | Where-Object { $_.Ctx }).Count
+    $elegidos = ($nCtx -gt 0)
+    $marca = Get-MarcaControl
+    $previo = Read-Control
+    $vigente = [bool]($marca -and $previo -and $previo.commit -eq $marca -and (Test-MarcaVigente $marca $paso))
+    if ($marca -and -not $vigente) { Info 'La marca del ultimo control ya no vale (la rama tiene commits que no son de este paso): la pongo en el HEAD.' }
+    if ($elegidos) {
+      [void](Write-ExcludesContexto $clasesTest 'tests-de-contexto.txt')
+      Info "Tests elegidos: cada lote pasa las $($clasesTest.Count - $nCtx) clases de test ligeras y deja fuera las $nCtx de contexto (lista: .rescate/tests-de-contexto.txt); la suite entera va en un control cada $($Cfg.LotesEntreControles) lotes y al final."
+    }
+    if ($elegidos -and $vigente -and $marca -ne (Get-Head $RepoRoot)) {
+      $script:Control = $previo
+      $sin = @(Get-CommitsDesdeMarca $marca | Where-Object { $_.Lote }).Count
+      Aviso "La pasada anterior se corto con $sin lote(s) sin comprobar con la suite entera: empiezo con un control."
+      $res = Invoke-Control $paso 0 $hall $script:Build $segInicial
+      $hall = $res.Hall
+    }
+    else { Save-Control $script:Build.TestsN (Get-FallosTests $hall) }
+  }
+  $completo = $false   # el paso ha llegado a su final sin cortarse (con tests elegidos, si no, el finally dice hasta donde esta comprobado)
+  try {
+  for ($n = 1; $n -le $MaxLotes -and -not $script:ControlRojo; $n++) {
     $pend = @($hall | Where-Object { $_.Cat -eq $paso -and $_.Sev -eq 'error' })
     if ($pend.Count -eq 0) { break }
     $stuck = @()
     if ($script:Atascados.ContainsKey($paso)) { $stuck = @($script:Atascados[$paso]) }
-    $fichs = @($pend | ForEach-Object { $_.Fichero } | Select-Object -Unique | Where-Object { $stuck -notcontains $_ -and $script:CobHechas -notcontains $_ })
+    $fichs = @($pend | ForEach-Object { $_.Fichero } | Select-Object -Unique | Where-Object { $stuck -notcontains $_ -and $script:CobHechas -notcontains $_ -and $script:NoReintentar -notcontains $_ })
     $cand = @($fichs | Select-Object -Skip $Saltar)
     $tam = $loteEf
     if ($cand.Count -gt 0 -and $unoAUno.ContainsKey($cand[0])) { $tam = 1 }
@@ -3599,7 +3925,9 @@ function Invoke-Fix {
       }
       else {
         Info '  Comprobando (Maven)...'
-        $hall2 = @(Invoke-Diagnostico $true $conTests)
+        if ($elegidos) { $script:TestsExtra = @('-Dsurefire.excludesFile=' + (Get-ExcludesLote $clasesTest $tocados)) }
+        try { $hall2 = @(Invoke-Diagnostico $true $conTests) }
+        finally { $script:TestsExtra = @() }
       }
       $d = Get-Cuenta $hall2 $paso
       $antesPaso = $antes[$paso]
@@ -3613,14 +3941,21 @@ function Invoke-Fix {
         # la colocacion (estructura, ficheros, config, paridad, e2e) solo si hay plantilla
         if ($indep -and $c -eq 'calidad') { continue }
         if ($indep -and -not $PlantillaRoot -and @('estructura', 'ficheros', 'config', 'paridad', 'e2e') -contains $c) { continue }
+        if ($elegidos -and $c -eq 'tests') { continue }   # con tests elegidos no se comparan cuentas de suites distintas: va por nombre, mas abajo
         $q = Get-Cuenta $hall2 $c
         if ($q -gt $antes[$c]) { $problemas += "Has empeorado el paso anterior '$c' ($($antes[$c]) -> $q hallazgos)."; $empeorados += $c }
       }
       $ft = Get-Cuenta $hall2 'tests'
+      # con tests elegidos el lote pasa solo los ligeros: lo que cuenta es un test que fallaba en el ultimo control en verde y que ahora falla (por su texto);
+      # que se ejecuten menos tests que antes se mira en el control
+      if ($elegidos) {
+        $rotos = @(Get-FallosTests $hall2 | Where-Object { $script:Control.fallos -notcontains $_ })
+        if ($rotos.Count -gt 0) { $problemas += ('Falla un test que no fallaba en el ultimo control: ' + (($rotos | Select-Object -First 3) -join '; ') + '.') }
+      }
       # sin 'tests' en Orden no hay cuenta de antes: no se compara
-      if ($conTests -and $paso -ne 'tests' -and $antes.ContainsKey('tests') -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
+      elseif ($conTests -and $paso -ne 'tests' -and $antes.ContainsKey('tests') -and $ft -gt $antes['tests']) { $problemas += "Hay mas tests fallando que antes ($($antes['tests']) -> $ft)." }
       # con tests antes y despues, no se ejecutan menos: borrar, saltar (@DisabledOnOs, assumeTrue) o excluir un test baja los fallos pero tambien los que corren
-      if ($conTests -and $buildAntes.TestsEjecutados -and $script:Build.TestsEjecutados -and $script:Build.TestsN -lt $buildAntes.TestsN) {
+      if ($conTests -and -not $elegidos -and $buildAntes.TestsEjecutados -and $script:Build.TestsEjecutados -and $script:Build.TestsN -lt $buildAntes.TestsN) {
         $problemas += "Se ejecutan menos tests que antes ($($buildAntes.TestsN) -> $($script:Build.TestsN)). No borres, saltes ni excluyas tests."
       }
       # el codigo nuevo sale ya con Javadoc y sin malas practicas: la cuenta de calidad no sube
@@ -3785,6 +4120,9 @@ function Invoke-Fix {
     }
     $hall = $hall2
     $script:Fallos = 0
+    $ultimoLote = $n
+    if ($elegidos -and -not $sinCambios) { $lotesDesdeControl++ }
+    elseif ($marcaActiva -and -not $elegidos) { Save-Control $script:Build.TestsN (Get-FallosTests $hall) }   # el lote ha pasado la suite entera: la marca va con el
     foreach ($f in $sel) { $unoAUno.Remove($f); $mejorDe.Remove($f) }
     Write-Informe $hall
     if ($sinCambios) { Bien "Lote $n OK: '$paso' $($antes[$paso]) -> $d. Sin cambios que guardar: el modelo ha dejado con su motivo todo lo del lote." }
@@ -3801,12 +4139,28 @@ function Invoke-Fix {
       if ($resp -eq 'd') { $script:Parar = $true; Undo-Lote $rama $check; Aviso 'Lote deshecho.'; return }
       if ($resp -eq 'n') { $script:Parar = $true; break }
     }
+    # tests elegidos: cada LotesEntreControles lotes buenos, la suite entera
+    if ($elegidos -and $lotesDesdeControl -ge [int]$Cfg.LotesEntreControles -and (Get-MarcaControl) -ne (Get-Head $RepoRoot)) {
+      $res = Invoke-Control $paso $n
+      $hall = $res.Hall
+      $lotesDesdeControl = 0
+    }
   }
+
+  # tests elegidos: al acabar, el HEAD ha pasado la suite entera o el paso sale en rojo; si el paso se corta, la consola dice hasta donde esta comprobado
+  if ($elegidos -and -not $script:Parar -and -not $script:ControlRojo -and (Get-MarcaControl) -ne (Get-Head $RepoRoot)) {
+    $res = Invoke-Control $paso $ultimoLote
+    $hall = $res.Hall
+  }
+  $completo = (-not $script:Parar)
+  }
+  finally { if ($elegidos -and -not $completo) { Write-SinComprobar } }
 
   $t = $script:TiemposPaso
   Info "Tiempos del paso ${paso}: $($t.Intentos) intentos, Copilot $(Format-Pct ($t.SegCopilot / 60)) min, Maven $(Format-Pct ($t.SegMaven / 60)) min (detalle: .rescate/intentos.tsv)"
   $script:Hall = $hall
   $script:HallCache = @{ Commit = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim(); Hall = $hall; Build = $script:Build }
+  if ($elegidos -and (Get-MarcaControl) -ne (Get-Head $RepoRoot)) { $script:HallCache = $null }   # el diagnostico del ultimo lote no pasa los tests de contexto: no vale para el paso siguiente
   if ($esCob) { $script:CobHecha = $true }
   Show-Resumen $hall
   if ($esSonar) { Write-SonarFaltan }
@@ -3930,6 +4284,10 @@ if (-not $script:ModDudas) { $script:ModDudas = $Modelo }
 $script:EsfDudas = $EsfuerzoDudas
 if (-not $script:EsfDudas) { $script:EsfDudas = "$($Cfg.EsfuerzoDudas)" }
 $script:Fallos = 0        # ficheros atascados seguidos
+$script:Control = $null      # el ultimo control en verde: commit, testsN (tests que corrian) y fallos (los que ya fallaban); lo escribe Save-Control
+$script:ControlRojo = $false # un control ha acabado en rojo: el HEAD no ha pasado la suite entera
+$script:TestsExtra = @()     # argumentos de Maven que Invoke-Build anade a los tests (los pone el lote y los quita al acabar)
+$script:NoReintentar = @()   # ficheros de lotes que un control ha revertido: esta pasada no los vuelve a intentar
 $script:SegMaven = 0.0    # los segundos de Maven del intento en curso (Invoke-ContandoMaven)
 $script:IntentosAvisado = $false   # Add-Intento ya ha avisado de que no puede escribir intentos.tsv
 Initialize-ConfigReintentos
@@ -4031,10 +4389,12 @@ switch ($Modo) {
       $decidir | ForEach-Object { Aviso "  $_" }
       Info ('Las 3 opciones de cada duda, con su porque: ' + (Join-Path $Work 'decisiones.md'))
     }
-    if ($script:Atascados.Count -gt 0) {
-      Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano (la pasada siguiente lo intenta si el fichero cambia o si haces un commit), o volver a lanzar con -Reintentar.'
-      exit 2
+    if ($script:ControlRojo) {
+      Fallo ''
+      Fallo 'Un control ha salido en rojo: el HEAD no ha pasado la suite entera (la marca refs/rescate/control-ok no se ha movido). Mira .rescate/intentos.tsv y la salida de arriba.'
     }
+    if ($script:Atascados.Count -gt 0) { Info 'Opciones: otro modelo (-Modelo / -ModeloB), arreglarlo a mano (la pasada siguiente lo intenta si el fichero cambia o si haces un commit), o volver a lanzar con -Reintentar.' }
+    if ($script:ControlRojo -or $script:Atascados.Count -gt 0) { exit 2 }
   }
   'deshacer' {
     $asunto = ((Invoke-Git $RepoRoot @('log', '-1', '--format=%s')).Salida -join '')
