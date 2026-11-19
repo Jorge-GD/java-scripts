@@ -5,7 +5,8 @@
 # src/test/resources/prueba-local/<job>/<caso>/ (de ese job y ese caso, si se piden) deja target/prueba-local/<job>/<caso>/
 # con estado.txt y, si el caso trae ficheros/, ficheros/salida/resultado_<aaaammdd de hoy>.txt: una linea por linea
 # de entrada, con 'aceptado' o 'rechazado' segun el importe=<n> de la linea frente al 'minimo' de regla.txt (en la
-# raiz del repo). regla.txt (clave=valor) tambien lleva 'segundos': la hora que se apunta va desplazada esos segundos.
+# raiz del repo, o src/main/resources/regla.txt si existe: ahi puede arreglarlo una IA que solo escribe en src/main/). regla.txt
+# (clave=valor) tambien lleva 'segundos': la hora que se apunta va desplazada esos segundos.
 # Una linea de entrada con AZAR deja ademas un numero al azar; con LATIN, la linea acaba en una enie (mayuscula si
 # regla.txt lleva mayus=si) y el fichero se escribe en Latin-1. El fichero lleva tambien la carpeta donde se ejecuta
 # (ruta completa). Con datos.sql, tablas/DATOS.csv: sus lineas ordenadas, con la misma regla del minimo.
@@ -38,7 +39,8 @@ $arrastra = 0
 [void](New-Item -ItemType Directory -Path (Join-Path $raiz 'logs') -Force)
 [System.IO.File]::AppendAllText((Join-Path $raiz 'logs/mvn.log'), ('test ' + [DateTime]::UtcNow.Ticks + "`n"))
 $regla = @{ minimo = '0'; segundos = '0'; mayus = 'no' }
-$fr = Join-Path $raiz 'regla.txt'
+$fr = Join-Path $raiz 'src/main/resources/regla.txt'
+if (-not (Test-Path -LiteralPath $fr)) { $fr = Join-Path $raiz 'regla.txt' }
 if (Test-Path -LiteralPath $fr) { foreach ($l in [System.IO.File]::ReadAllLines($fr)) { $k, $v = $l -split '=', 2; if ($k) { $regla[$k.Trim()] = "$v".Trim() } } }
 $casos = Join-Path $raiz 'src/test/resources/prueba-local'
 if (-not (Test-Path -LiteralPath $casos)) { exit 0 }
