@@ -1930,5 +1930,25 @@ $Pruebas['m29 (g) -RehacerArnes pregunta como hoy antes de llamar a Copilot: con
   Comprueba 'con el arnes nuevo guardado' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-2'))
 }
 
+$Pruebas['m29 (h) -RehacerArnes con un arnes nuevo que no vale: lo viejo ya no esta guardado y el siguiente lanzamiento, sin el switch, vuelve a llamar a la IA en vez de reutilizarlo'] = {
+  $e = Escenario-M29 'm29-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $original = Test-Guardado $e 'original'
+  Comprueba 'el arnes del migrado queda guardado' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado'))
+  $r = Prueba $e @('-RehacerArnes') 'arnes-no-compila:arnes-migrado'
+  Igual 'con -RehacerArnes y un test que no compila sale con 1' 1 $r.Codigo
+  Igual 'el arnes del migrado queda atascado' 'atascada' (Tarea-Arnes $e 'migrado').estado
+  Igual 'tras su llamada de antes y los dos intentos de ahora' 3 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el arnes viejo del migrado ya no esta guardado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado')))
+  Igual 'el del original sigue como estaba' $original (Test-Guardado $e 'original')
+  $r = Prueba $e
+  Igual 'el siguiente lanzamiento, sin el switch, sale con 0' 0 $r.Codigo
+  Igual 'vuelve a llamar a la IA para el migrado' 4 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'y no usa el arnes viejo' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'lo guardado ahora es lo que escribio esa llamada' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-4'))
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
