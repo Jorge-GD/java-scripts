@@ -16,8 +16,9 @@ QUE HACE
      con @SpringBootApplication y, si le hace falta, src\test\resources\application-prueba-local.yml (en el original,
      tambien dependencias de test en el pom.xml). Primero se escribe el del original y, cuando esta hecho, el del migrado,
      que lo traduce: lleva en su prompt la ruta del test del original ya guardado, para simular lo mismo y al mismo nivel.
-     El script comprueba que no toca nada mas, que compila y que, con un
-     caso vacio, cada job deja su estado.txt. Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
+     El script deshace lo que toque fuera de eso (lo dice) y, del pom.xml, deja el del original con solo las dependencias nuevas
+     de la IA, todas con <scope>test</scope>; despues comprueba que compila y que, con un caso vacio, cada job deja su estado.txt.
+     Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
      Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
      vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
@@ -52,9 +53,9 @@ QUE HACE
      diferencia tiene una clave (el nombre de su fichero, normalizado); se arregla primero la clave con mas casos distintos, y
      despues de cada arreglo se recalcula. Una tarea de IA por clave escribe, en la copia del migrado y solo en src\main\, el
      arreglo; el script lo da por bueno si pasa seis puertas, de la mas barata a la mas cara: la llamada acaba bien; la IA no
-     dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); solo cambia src\main\;
-     el caso de la tarea mejora; ningun otro caso empeora (ni claves nuevas, ni mas lineas distintas, ni deja de ejecutarse); y
-     la suite de tests unitarios, sin el arnes, no falla mas ni se ejecuta menos que al empezar. Un arreglo que pasa va a la
+     dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); algo cambia en src\main\
+     (lo que cambie fuera se deshace y se sigue con lo que quede); el caso de la tarea mejora; ningun otro caso empeora
+     (ni claves nuevas, ni mas lineas distintas, ni deja de ejecutarse); y la suite de tests unitarios, sin el arnes, no falla mas ni se ejecuta menos que al empezar. Un arreglo que pasa va a la
      rama de rescate (un commit por arreglo: 'rescate(local): <job>/<caso> <clave>'); uno que no pasa se deshace y se
      reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
      rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice. Una clave
@@ -144,7 +145,8 @@ function Test-CopiaDe([string]$Repo, [string]$Dir) {
 }
 
 # Rehace la copia desechable $Dir de $Repo en $Commit (un worktree sin rama). Una carpeta que ya existe solo se borra
-# si es un worktree de ese mismo repo. Devuelve '' o el motivo.
+# si es un worktree de ese mismo repo. La copia no trae lo que git no tiene: de .mvn/wrapper/ (maven-wrapper.properties suele no estar
+# en git) se llevan los ficheros de $Repo que la copia no tiene, para que su mvnw arranque sin bajarse nada. Devuelve '' o el motivo.
 function New-Copia([string]$Repo, [string]$Commit, [string]$Dir) {
   if (Test-Path -LiteralPath $Dir) {
     if (-not (Test-CopiaDe $Repo $Dir)) { return "La carpeta $Dir ya existe y no es una copia de la prueba local de $Repo. Muevela o borrala y vuelve a lanzar." }
@@ -154,6 +156,13 @@ function New-Copia([string]$Repo, [string]$Commit, [string]$Dir) {
   # -f: vale aunque git aun tenga apuntada una copia anterior que alguien borro a mano
   $r = Invoke-Git $Repo @('worktree', 'add', '-q', '-f', '--detach', $Dir, $Commit)
   if ($r.Codigo -ne 0) { return ("No he podido crear la copia ${Dir}: " + ($r.Salida -join ' ')) }
+  $wrapper = Join-Path (Join-Path $Repo '.mvn') 'wrapper'
+  if (Test-Path -LiteralPath $wrapper) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $wrapper -Recurse -File)) {
+      $a = Join-Ruta $Dir ('.mvn/wrapper/' + (Get-Rel $wrapper $f.FullName))
+      if (-not (Test-Path -LiteralPath $a)) { Copy-Fichero $f.FullName $a }
+    }
+  }
   Save-Copia $Dir
   return ''
 }
@@ -407,45 +416,176 @@ function Get-Permitidos($T) {
   return $p
 }
 
-# '' si el pom $Despues solo anade a $Antes dependencias con <scope>test</scope>; si no, el motivo.
-function Test-PomSoloTest([string]$Antes, [string]$Despues) {
-  $regla = 'En el pom.xml solo puedes anadir dependencias con <scope>test</scope>'
-  try { $a = [xml]$Antes; $d = [xml]$Despues }
-  catch { return ('El pom.xml ya no es un XML valido: ' + $_.Exception.Message) }
-  $ruta = "/*[local-name()='project']/*[local-name()='dependencies']"
-  $ya = @{}
-  foreach ($n in @($a.SelectNodes("$ruta/*[local-name()='dependency']"))) { $ya[($n.OuterXml -replace '\s', '')] = $true }
-  foreach ($n in @($d.SelectNodes("$ruta/*[local-name()='dependency']"))) {
-    if ($ya.ContainsKey(($n.OuterXml -replace '\s', ''))) { continue }
-    $s = $n.SelectSingleNode("*[local-name()='scope']")
-    if (-not $s -or $s.InnerText.Trim() -ne 'test') {
-      $nombre = (@($n.ChildNodes | Where-Object { $_.LocalName -eq 'groupId' -or $_.LocalName -eq 'artifactId' } | ForEach-Object { $_.InnerText.Trim() }) -join ':')
-      return "$regla, y $nombre no lo lleva."
-    }
-    [void]$n.ParentNode.RemoveChild($n)
+# Deshace en la copia $Dir lo que la IA cambio fuera de lo permitido: de $Cambios (Get-Cambios), lo que no es ninguna de las rutas de
+# $Permitidos (una ruta, o una carpeta si acaba en /). Lo nuevo se borra y lo que git ya tenia vuelve a su base; lo permitido no se toca. Lo
+# dice con una linea y devuelve la frase que va al principio del motivo si despues algo falla ('' si no ha deshecho nada). Lo usan
+# Test-Arnes y Test-Arreglo: una sola regla.
+function Undo-Fuera([string]$Dir, [string[]]$Cambios, [string[]]$Permitidos) {
+  [string[]]$fuera = @($Cambios | Where-Object { $c = $_; @($Permitidos | Where-Object { $c -eq $_ -or ($_.EndsWith('/') -and $c.StartsWith($_)) }).Count -eq 0 })
+  if ($fuera.Count -eq 0) { return '' }
+  [System.Array]::Sort($fuera, [System.StringComparer]::Ordinal)   # en un orden que no depende de lo que git dice primero
+  Invoke-GitRutas $Dir @('clean', '-fdq') $fuera
+  Invoke-GitRutas $Dir @('checkout', '-q') @(Get-Cambios $Dir | Where-Object { $fuera -contains $_ })
+  $lista = (@($fuera | Select-Object -First 5) -join ', ')
+  if ($fuera.Count -gt 5) { $lista += " (y $($fuera.Count - 5) mas)" }
+  Info "Deshago lo que la IA ha tocado fuera de lo suyo: $lista"
+  return "He deshecho lo que tocaste fuera de $($Permitidos -join ', '): $lista."
+}
+
+# git $Orden -- <rutas>, de 100 en 100 (un jar descomprimido son miles de rutas, y Windows no admite una linea de mas de 32.767 caracteres).
+function Invoke-GitRutas([string]$Dir, [string[]]$Orden, [string[]]$Rutas) {
+  for ($i = 0; $i -lt $Rutas.Count; $i += 100) { [void](Invoke-Git $Dir ($Orden + '--' + @($Rutas | Select-Object -Skip $i -First 100))) }
+}
+
+# Las dependencias del proyecto de un pom (<project><dependencies>, no las de un plugin ni las de dependencyManagement), por groupId:artifactId.
+function Get-DependenciasPom($Doc) {
+  $h = [ordered]@{}
+  foreach ($n in @($Doc.SelectNodes("/*[local-name()='project']/*[local-name()='dependencies']/*[local-name()='dependency']"))) {
+    $h[((Get-HijoPom $n 'groupId') + ':' + (Get-HijoPom $n 'artifactId'))] = $n
   }
-  $deps = $d.SelectSingleNode($ruta)
-  if ($deps -and -not $a.SelectSingleNode($ruta) -and $deps.SelectNodes('*').Count -eq 0) { [void]$deps.ParentNode.RemoveChild($deps) }
-  if (($a.DocumentElement.OuterXml -replace '\s', '') -cne ($d.DocumentElement.OuterXml -replace '\s', '')) { return "$regla, y has cambiado algo mas. Deja el resto como estaba." }
+  return $h
+}
+
+function Get-HijoPom($N, [string]$Nombre) {
+  $h = $N.SelectSingleNode("*[local-name()='$Nombre']")
+  if ($h) { return $h.InnerText.Trim() }
   return ''
 }
 
-# Comprueba el arnes que acaba de escribir la IA en su copia: solo los ficheros permitidos (y en el pom, solo
-# dependencias de test frente a $PomOriginal), compila y, con un caso vacio por job, cada job deja estado.txt (la
-# salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso). Devuelve '' o el motivo.
+# Que cambio la IA en una dependencia que ya estaba: '' o una frase por hijo ('<version> 1.16.20 -> 1.18.30', '<scope> quitado').
+function Get-CambioDependencia($Antes, $Despues) {
+  $cambios = @()
+  foreach ($nombre in @(@($Antes.ChildNodes) + @($Despues.ChildNodes) | Where-Object { $_.NodeType -eq 'Element' } | ForEach-Object { $_.LocalName } | Select-Object -Unique)) {
+    $a = $Antes.SelectSingleNode("*[local-name()='$nombre']")
+    $d = $Despues.SelectSingleNode("*[local-name()='$nombre']")
+    if (-not $d) { $cambios += "<$nombre> quitado" }
+    elseif (-not $a) { $cambios += "<$nombre> anadido" }
+    elseif (($a.OuterXml -replace '\s', '') -cne ($d.OuterXml -replace '\s', '')) {
+      if ($a.SelectNodes('*').Count -gt 0 -or $d.SelectNodes('*').Count -gt 0) { $cambios += "<$nombre> cambiado" }
+      else { $cambios += "<$nombre> $($a.InnerText.Trim()) -> $($d.InnerText.Trim())" }
+    }
+  }
+  return ($cambios -join ', ')
+}
+
+# La dependencia $Dep con <scope>test</scope>: el que tenga lo cambia; si no lleva, lo anade tras su ultimo hijo, con la sangria de ese hijo.
+function Set-ScopeTest($Dep) {
+  $s = $Dep.SelectSingleNode("*[local-name()='scope']")
+  if ($s) { $s.InnerText = 'test'; return }
+  $s = $Dep.OwnerDocument.CreateElement('scope', $Dep.NamespaceURI)
+  $s.InnerText = 'test'
+  $ultimo = @($Dep.ChildNodes | Where-Object { $_.NodeType -eq 'Element' } | Select-Object -Last 1)[0]
+  if (-not $ultimo) { [void]$Dep.AppendChild($s); return }
+  $antes = $ultimo.PreviousSibling
+  if ($antes -and $antes.NodeType -match 'Whitespace') { $antes = $Dep.InsertAfter($antes.Clone(), $ultimo); [void]$Dep.InsertAfter($s, $antes) }
+  else { [void]$Dep.InsertAfter($s, $ultimo) }
+}
+
+# La posicion, en $Texto, del '<' de la etiqueta de cierre del primer elemento $Nombre de profundidad $Profundidad (-1 si no hay).
+function Get-IndiceCierre([string]$Texto, [int]$Profundidad, [string]$Nombre) {
+  $r = New-Object System.Xml.XmlTextReader((New-Object System.IO.StringReader($Texto)))
+  try {
+    while ($r.Read()) {
+      if ($r.NodeType -ne [System.Xml.XmlNodeType]::EndElement -or $r.Depth -ne $Profundidad -or $r.LocalName -ne $Nombre) { continue }
+      $i = 0
+      for ($linea = 1; $linea -lt $r.LineNumber; $linea++) {   # el LinePosition de un cierre es el de su nombre, tras '</'
+        $i = $Texto.IndexOfAny([char[]]@("`r", "`n"), $i)
+        if ($Texto[$i] -eq "`r" -and $i + 1 -lt $Texto.Length -and $Texto[$i + 1] -eq "`n") { $i++ }
+        $i++
+      }
+      return $Texto.LastIndexOf('<', $i + $r.LinePosition - 1)
+    }
+  }
+  finally { $r.Close() }
+  return -1
+}
+
+# El texto de un elemento tal como lo escribio la IA, sin el xmlns que le pone OuterXml.
+function Get-TextoElemento($N) { return $N.OuterXml.Replace(' xmlns="' + $N.NamespaceURI + '"', '') }
+
+# Deja en $Ruta (el pom.xml de la copia del original, que la IA ha podido cambiar) el pom del original, $Antes (su texto, tal cual), mas
+# las dependencias nuevas de la IA: las de <project><dependencies> con un groupId:artifactId que no estaba, todas con <scope>test</scope>.
+# Lo demas que cambio la IA se pierde. Del original no cambia ni un byte (sus espacios, sus CRLF, sus comentarios): lo anadido va justo
+# antes del cierre de sus <dependencies> (o, si no tiene, del de <project>), con la sangria de la IA. Lo escribe en UTF-8 sin BOM.
+# Devuelve lo que ha deshecho, una frase por cosa: de cada dependencia que ya estaba y cambio, su groupId:artifactId y que cambio; 'algo mas
+# del pom.xml fuera de <dependencies>' si cambio otra cosa; si el pom de la IA no es XML valido, vuelve al original y lo dice.
+function Repair-PomSoloTest([string]$Antes, [string]$Ruta) {
+  $deshecho = @()
+  $final = $Antes
+  try {
+    $a = New-Object System.Xml.XmlDocument; $a.PreserveWhitespace = $true; $a.LoadXml($Antes)
+    $d = New-Object System.Xml.XmlDocument; $d.PreserveWhitespace = $true; $d.LoadXml([System.IO.File]::ReadAllText($Ruta))
+  }
+  catch { $a = $null; $deshecho += 'tu pom.xml no era un XML valido: ' + $_.Exception.Message }
+  if ($a) {
+    $viejas = Get-DependenciasPom $a
+    $ahora = Get-DependenciasPom $d
+    foreach ($k in $viejas.Keys) {
+      if (-not $ahora.Contains($k)) { $deshecho += "${k}: quitada"; continue }
+      $c = Get-CambioDependencia $viejas[$k] $ahora[$k]
+      if ($c) { $deshecho += "${k}: $c" }
+    }
+    $sinDependencias = @()
+    foreach ($doc in @($a, $d)) {
+      $copia = $doc.CloneNode($true)
+      foreach ($n in @($copia.SelectNodes("/*[local-name()='project']/*[local-name()='dependencies']"))) { [void]$n.ParentNode.RemoveChild($n) }
+      $sinDependencias += ($copia.DocumentElement.OuterXml -replace '\s', '')
+    }
+    if ($sinDependencias[0] -cne $sinDependencias[1]) { $deshecho += 'algo mas del pom.xml fuera de <dependencies>' }
+    $nuevas = @($ahora.Keys | Where-Object { -not $viejas.Contains($_) } | ForEach-Object { $ahora[$_] })
+    foreach ($n in $nuevas) { Set-ScopeTest $n }
+    $cierre = Get-IndiceCierre $Antes 1 'dependencies'
+    $anadir = ''
+    if ($nuevas.Count -gt 0 -and $cierre -ge 0) {
+      foreach ($n in $nuevas) {
+        if ($n.PreviousSibling -and $n.PreviousSibling.NodeType -match 'Whitespace') { $anadir += $n.PreviousSibling.Value }
+        $anadir += Get-TextoElemento $n
+      }
+    }
+    elseif ($nuevas.Count -gt 0) {   # el original no tiene <dependencies>: las de la IA (todas nuevas) van enteras, antes del cierre de <project>
+      $bloque = $d.SelectSingleNode("/*[local-name()='project']/*[local-name()='dependencies']")
+      if ($bloque.PreviousSibling -and $bloque.PreviousSibling.NodeType -match 'Whitespace') { $anadir += $bloque.PreviousSibling.Value }
+      $anadir += Get-TextoElemento $bloque
+      $cierre = Get-IndiceCierre $Antes 0 'project'
+    }
+    if ($anadir) {
+      $sitio = $cierre - [regex]::Match($Antes.Substring(0, $cierre), '\s*$').Length   # tras el ultimo hijo, antes de la sangria del cierre
+      $final = $Antes.Substring(0, $sitio) + $anadir + $Antes.Substring($sitio)
+    }
+  }
+  [System.IO.File]::WriteAllText($Ruta, $final, (New-Object System.Text.UTF8Encoding($false)))
+  return $deshecho
+}
+
+# Comprueba el arnes que acaba de escribir la IA en su copia. Antes lo deja en lo que se puede probar: lo que cambio fuera de lo que
+# puede escribir (Get-Permitidos) se deshace (Undo-Fuera) y el pom.xml del original queda como estaba con sus dependencias nuevas de test
+# (Repair-PomSoloTest), y cada cosa se dice. Despues, Test-ArnesEscrito. Devuelve '' o el motivo; si hubo algo que deshacer, el motivo
+# empieza por ello: la IA tiene que saber que lo que tocaste ya no esta.
 function Test-Arnes($T, [string[]]$Jobs) {
   $dir = $T.entradas.copia
-  $esOrig = ($T.entradas.repo -eq 'original')
   Remove-Carpeta (Join-Ruta $dir $Casos)
-  $permitidos = @(Get-Permitidos $T)
-  $cambios = @(Get-Cambios $dir)
-  $fuera = @($cambios | Where-Object { $permitidos -notcontains $_ })
-  if ($fuera.Count -gt 0) { return ('Solo puedes escribir ' + ($permitidos -join ', ') + ', y has cambiado tambien: ' + (@($fuera | Select-Object -First 5) -join ', ') + '. Deja todo lo demas como estaba.') }
-  if (-not (Test-Path -LiteralPath (Join-Ruta $dir $T.entradas.test))) { return "No has escrito el test $($T.entradas.test)." }
-  if ($cambios -contains 'pom.xml') {
-    $m = Test-PomSoloTest $PomOriginal ([System.IO.File]::ReadAllText((Join-Ruta $dir 'pom.xml')))
-    if ($m) { return $m }
+  $avisos = @()
+  $a = Undo-Fuera $dir @(Get-Cambios $dir) @(Get-Permitidos $T)
+  if ($a) { $avisos += $a }
+  if (@(Get-Cambios $dir) -contains 'pom.xml') {
+    $deshecho = @(Repair-PomSoloTest $PomOriginal (Join-Ruta $dir 'pom.xml'))
+    if ($deshecho.Count -gt 0) {
+      $a = 'Dejo el pom.xml del original como estaba, con tus dependencias nuevas de test: ' + ($deshecho -join '; ')
+      Info $a
+      $avisos += $a
+    }
   }
+  $m = Test-ArnesEscrito $T $Jobs
+  if ($m -and $avisos.Count -gt 0) { return (($avisos -join ' ') + " $m") }
+  return $m
+}
+
+# '' si el arnes de la copia, ya sin lo de fuera, vale; si no, el motivo: escrito el test, compila y, con un caso vacio por job, cada job
+# deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso).
+function Test-ArnesEscrito($T, [string[]]$Jobs) {
+  $dir = $T.entradas.copia
+  $esOrig = ($T.entradas.repo -eq 'original')
+  if (-not (Test-Path -LiteralPath (Join-Ruta $dir $T.entradas.test))) { return "No has escrito el test $($T.entradas.test)." }
   $r = Invoke-Maven $dir $esOrig @('test-compile') "arnes $($T.entradas.repo), compilar"
   if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r)) }
   foreach ($j in $Jobs) { foreach ($c in @('vacio', 'otro')) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/$c") -Force) } }
@@ -519,24 +659,6 @@ function Get-MotivoArnes($T, $C, [string[]]$Jobs) {
   return "$fallo Ademas, lo que dejo escrito no vale: $m"
 }
 
-# Deshace en la copia del arnes $T lo que la IA cambio fuera de lo permitido (Get-Permitidos) y deja lo permitido como lo dejo: el
-# reintento sigue desde ahi.
-function Undo-Fuera($T) {
-  $dir = $T.entradas.copia
-  $permitidos = @(Get-Permitidos $T)
-  $dejado = @{}
-  foreach ($rel in @(Get-Cambios $dir | Where-Object { $permitidos -contains $_ })) {
-    $f = Join-Ruta $dir $rel
-    if (Test-Path -LiteralPath $f -PathType Leaf) { $dejado[$rel] = [System.IO.File]::ReadAllBytes($f) }
-  }
-  Undo-Copia $dir
-  foreach ($rel in $dejado.Keys) {
-    $f = Join-Ruta $dir $rel
-    [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
-    [System.IO.File]::WriteAllBytes($f, $dejado[$rel])
-  }
-}
-
 # Las tareas de arnes pendientes, una detras de otra: primero la del original y, solo cuando esta hecha, la del migrado (que traduce
 # su test: se vuelve a calcular su huella con el test del original que acaba de quedar guardado). Cada una con su comprobacion y,
 # si falla, su reintento con el motivo. Si la del original queda atascada, la del migrado no se lanza: lo para el arranque.
@@ -559,8 +681,7 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
         # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
         $sigue = [bool]($m -and $ll[0].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
         if (-not $m) { Save-Arnes $t }
-        elseif ($sigue) { Undo-Fuera $t }
-        else { Undo-Copia $t.entradas.copia }
+        elseif (-not $sigue) { Undo-Copia $t.entradas.copia }   # con $sigue, lo escrito se queda: Test-Arnes ya ha deshecho lo de fuera
         $t.entradas.prompt.SI_CORTADO = $MarcaNo
         $t.entradas.prompt.SI_DESHECHO = ''
         if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
@@ -1193,7 +1314,7 @@ function Remove-NuevosFueraDeSrc([string]$Dir) {
 # Tipo ('rechazado', 'no se arregla' o 'bien'), Motivo, ConDiff (si hay un diff que ensenar en el reintento: no, si fallo la llamada) y,
 # si es bueno, Nuevos (los resultados medidos de ahora, por posicion en $S.Res). Las salidas medidas quedan en salidas\reparar\<n>.
 function Test-Arreglo($T, $Ll, $S) {
-  $v = [pscustomobject]@{ Tipo = 'rechazado'; Motivo = ''; ConDiff = $true; Nuevos = @{} }
+  $v = [pscustomobject]@{ Tipo = 'rechazado'; Motivo = ''; ConDiff = $true; Nuevos = @{}; Deshecho = '' }
   $j = $T.entradas.job
   $c = $T.entradas.caso
   # 1. la llamada acabo bien
@@ -1207,17 +1328,16 @@ function Test-Arreglo($T, $Ll, $S) {
     if (-not $v.Motivo) { $v.Motivo = 'La IA no da el motivo.' }
     return $v
   }
-  # 3. algo cambiado y solo en src/main/ (lo nuevo fuera de src/ lo ha dejado la ejecucion del batch: se quita y no cuenta)
+  # 3. algo cambiado en src/main/ (lo nuevo fuera de src/ lo ha dejado la ejecucion del batch: se quita y no cuenta; lo que la IA cambio fuera
+  #    de src/main/ se deshace y se sigue con lo que quede)
   $ruido = @(Remove-NuevosFueraDeSrc $CopiaMig)
   if ($ruido.Count -gt 0) {
     $nombres = (@($ruido | Select-Object -First 5) -join ', ')
     if ($ruido.Count -gt 5) { $nombres += " y $($ruido.Count - 5) mas" }
     Info "Quito lo que ha dejado la ejecucion fuera de src/: $nombres"
   }
-  $cambios = @(Get-Cambios $CopiaMig)
-  $fuera = @($cambios | Where-Object { -not $_.StartsWith('src/main/') })
-  if ($cambios.Count -eq 0) { $v.Motivo = 'No has cambiado ningun fichero de src/main/.'; return $v }
-  if ($fuera.Count -gt 0) { $v.Motivo = 'Solo puedes cambiar ficheros de src/main/, y has cambiado tambien: ' + (@($fuera | Select-Object -First 5) -join ', ') + '. Deja todo lo demas como estaba.'; return $v }
+  $v.Deshecho = Undo-Fuera $CopiaMig @(Get-Cambios $CopiaMig) @('src/main/')
+  if (@(Get-Cambios $CopiaMig).Count -eq 0) { $v.Motivo = 'No has cambiado ningun fichero de src/main/.'; return $v }
   # 4. el caso de la tarea, ejecutado: su puntuacion tiene que bajar
   $nombre = "reparar/$($S.N)"
   $i = Get-IndiceCaso $S.Res $j $c
@@ -1327,6 +1447,7 @@ function Repair-Clave($C, $S) {
     }
     $t.entradas.prompt.DIFF = ''
     if ($diff) { $t.entradas.prompt.DIFF = "Esto es lo que habias cambiado (las primeras 40 lineas del diff):`n`n$diff" }
+    if ($v.Deshecho) { $v.Motivo = "$($v.Deshecho) $($v.Motivo)" }
     Set-Intento $t $v.Motivo
     Aviso "Arreglo de $($C.job)/$($C.caso) rechazado (intento $($t.intentos) de $($Cfg.Intentos)): $(($v.Motivo -split "`n")[0])"
   }
@@ -1515,7 +1636,7 @@ try {
     if ($m) { Stop-Arranque $m }
   }
   Info "Copias: $CopiaOrig y $CopiaMig"
-  $PomOriginal = ''   # el pom.xml del original tal cual (leido como fichero, no por git): Test-PomSoloTest
+  $PomOriginal = ''   # el pom.xml del original tal cual (leido como fichero, no por git): Repair-PomSoloTest
   if (Test-Path -LiteralPath (Join-Path $CopiaOrig 'pom.xml')) { $PomOriginal = [System.IO.File]::ReadAllText((Join-Path $CopiaOrig 'pom.xml')) }
   foreach ($c in @($CopiaOrig, $CopiaMig)) {
     foreach ($v in @($c, ($c -replace '\\', '/'), ($c -replace '/', '\'))) { $RutasCopia += $v; $RutasCopia += $Latin.GetString($Utf8.GetBytes($v)) }

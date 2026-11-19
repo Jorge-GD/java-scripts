@@ -15,7 +15,7 @@ $Cfg = @{
   CopilotExe    = 'copilot'
   CopilotArgs   = @('-s', '--allow-all-tools', '--no-ask-user', '--deny-tool=shell(git push)')
   CommitArgs    = @()     # p.ej. @('--no-verify') si un hook local bloquea
-  MvnExe        = ''      # vacio = mvnw del repo o, si no hay, mvn del PATH
+  MvnExe        = ''      # vacio = mvnw del repo (con su .mvn/wrapper/maven-wrapper.properties) o, si no, mvn del PATH
   DirsIgnorados = @('.git', 'target', '.rescate', 'node_modules', '.idea', '.vscode', '.github', '.mvn')
   SegundosLatido = 60     # cada cuantos segundos escribe '... sigue' mientras espera a Copilot o a Maven (0 = nunca)
   MinutosMaven   = 30     # tope de cada llamada a Maven, en minutos (admite decimales); pasado, se para Maven con sus procesos hijos y la llamada cuenta como fallida
@@ -267,11 +267,12 @@ function Get-EsfuerzosMenores([string]$Esfuerzo) {
   return @()
 }
 
-# Maven del repo: el de -MvnExe, el mvnw de la raiz o el mvn del PATH.
+# Maven del repo: el de -MvnExe, el mvnw de la raiz o el mvn del PATH. El mvnw solo vale con su .mvn/wrapper/maven-wrapper.properties al
+# lado (Maven Wrapper: sin ese fichero se baja Maven de repo.maven.apache.org, y sin red no arranca); si falta, el mvn del PATH.
 function Get-Mvn([string]$Raiz) {
   if ($Cfg.MvnExe) { return $Cfg.MvnExe }
   if ([System.IO.Path]::DirectorySeparatorChar -eq '\') { $w = Join-Path $Raiz 'mvnw.cmd' } else { $w = Join-Path $Raiz 'mvnw' }
-  if (Test-Path -LiteralPath $w) { return $w }
+  if ((Test-Path -LiteralPath $w) -and (Test-Path -LiteralPath (Join-Path (Join-Path (Join-Path $Raiz '.mvn') 'wrapper') 'maven-wrapper.properties'))) { return $w }
   return 'mvn'
 }
 
