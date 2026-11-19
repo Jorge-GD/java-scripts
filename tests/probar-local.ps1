@@ -1682,5 +1682,57 @@ Estado 'despues de un lanzamiento que falla'
   Comprueba 'y deja el JAVA_HOME como estaba' ($r.Salida -match '(?m)^JAVA_HOME despues de un lanzamiento que falla \[C:\\jdk-del-script\]$') (Cola $r.Salida)
 }
 
+# ===================== LA CAUSA DE VERDAD DE UN TEST QUE DA ERROR (m28) =====================
+# Cuando el test del arnes del original da error, el motivo lleva, al final, 'Causa: ' y la del informe de surefire de la copia (target/surefire-reports/*.txt):
+# el ultimo 'Caused by:' o, si no hay, la primera linea con texto tras '<<< ERROR!'. mvn-local.ps1 deja ese informe segun el ARNES_SUREFIRE_<X> del test que escribe
+# copilot-local.ps1 (guion arnes-surefire-<x>, solo para el arnes del original).
+
+# Lanza un escenario con el arnes del original fallando como dice $Guion y devuelve la consola, la tarea (atascada) y el prompt del reintento.
+function Arnes-Falla-Surefire([string]$Nombre, [string]$Guion) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() ($Guion + ':arnes-original')
+  $reintento = ''
+  if (Test-Path -LiteralPath (Get-Ruta $e.Local 'registros/arnes-original-2.log')) { $reintento = Lee $e.Local 'registros/arnes-original-2.log' }
+  return [pscustomobject]@{ E = $e; R = $r; T = (Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')); Reintento = $reintento }
+}
+
+$M28Fondo = 'Caused by: java.lang.IllegalArgumentException: Could not resolve placeholder ''acme.entrada.ruta'' in value "${acme.entrada.ruta}"'
+
+$Pruebas['m28 (a) el arnes del original da error en el test: el motivo acaba con Causa: y el ultimo Caused by del informe de surefire, y lo ven el reintento y la consola'] = {
+  $x = Arnes-Falla-Surefire 'm28-a' 'arnes-surefire-error'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Igual 'el arnes queda atascado' 'atascada' $x.T.estado
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo sigue diciendo que el job no dejo estado.txt, con las lineas [ERROR] de Maven' ($m -match 'el job cargaJob no ha dejado estado\.txt\. Maven dice:' -and $m -match '\[ERROR\] Failed to execute goal') $m
+  Comprueba 'y acaba con una linea Causa: y el ULTIMO Caused by' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'no el primero' ($m -notmatch 'Causa: Caused by: org\.springframework') $m
+  Comprueba 'el prompt del reintento (registro del intento 2) lleva esa causa' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
+  Comprueba 'la consola la ensena' ($x.R.Salida.Contains('Causa: ' + $M28Fondo)) (Cola $x.R.Salida)
+}
+
+$Pruebas['m28 (b) un informe viejo de otra ejecucion y ninguno nuevo: el motivo no lleva la causa vieja ni Causa:'] = {
+  $x = Arnes-Falla-Surefire 'm28-b' 'arnes-surefire-viejo'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo lleva las lineas [ERROR] de Maven' ($m -match '\[ERROR\] Failed to execute goal') $m
+  Comprueba 'no lleva la causa vieja' ($m -notmatch 'causa-vieja') $m
+  Comprueba 'ni una linea Causa:' ($m -notmatch '(?m)^Causa:') $m
+  Comprueba 'el prompt del reintento tampoco' ($x.Reintento -and $x.Reintento -notmatch 'causa-vieja' -and $x.Reintento -notmatch '(?m)^Causa:') (Cola $x.Reintento)
+}
+
+$Pruebas['m28 (c) informe con <<< ERROR! y ningun Caused by: la causa es la primera linea con texto despues'] = {
+  $x = Arnes-Falla-Surefire 'm28-c' 'arnes-surefire-sin-causa'
+  $m = [string]$x.T.motivo
+  Comprueba 'acaba con Causa: y esa linea (no la del nombre del test)' ($m.TrimEnd().EndsWith("`nCausa: java.lang.NullPointerException: no hay nada de fondo")) $m
+}
+
+$Pruebas['m28 (d) la causa se recorta a 300 caracteres'] = {
+  $x = Arnes-Falla-Surefire 'm28-d' 'arnes-surefire-larga'
+  $m = [string]$x.T.motivo
+  $causa = [regex]::Match($m, '(?m)^Causa: (.*)$').Groups[1].Value
+  Igual 'la causa mide 300' 300 $causa.Length
+  Comprueba 'y es el principio del ultimo Caused by' ($causa.StartsWith('Caused by: java.lang.IllegalStateException: largalarga')) $causa
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
