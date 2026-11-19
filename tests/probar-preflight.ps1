@@ -35,7 +35,7 @@ $Inst = Join-Path $Dir 'instalacion'
 function Nueva-Instalacion {
   if (Test-Path -LiteralPath $Inst) { return }
   [void](New-Item -ItemType Directory -Path $Inst -Force)
-  foreach ($f in @('preflight.ps1', 'comun.ps1', 'tareas.ps1', 'analisis.ps1', 'rescate.ps1', 'sonar-reglas.ps1', 'migracion.ps1', 'informe.ps1', 'lanzadores.ps1')) {
+  foreach ($f in @('preflight.ps1', 'comun.ps1', 'tareas.ps1', 'analisis.ps1', 'practicas.ps1', 'rescate.ps1', 'sonar-reglas.ps1', 'migracion.ps1', 'informe.ps1', 'lanzadores.ps1')) {
     $de = Join-Path $origen $f
     if ($f -eq 'preflight.ps1') { $de = $Script }
     if (Test-Path -LiteralPath $de) { Copy-Item -LiteralPath $de -Destination (Join-Path $Inst $f) }
