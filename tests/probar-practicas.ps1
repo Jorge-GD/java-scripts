@@ -644,7 +644,7 @@ function Comprueba-Formato($J, $E) {
   Igual 'formato: paquete (el prefijo comun de los paquetes de src/main/java)' 'com.acme' $J.paquete
   Igual 'formato: referencia (el nombre de su carpeta)' 'batch-ejemplo' $J.referencia
   Comprueba 'formato: arquitectura existe y es null' ($J.PSObject.Properties.Name -contains 'arquitectura' -and $null -eq $J.arquitectura)
-  Igual 'formato: los 5 detectores en orden' 'javac,pmd,spotbugs,lombok-a-mano,lombok-qualifier' ((@($J.detectores | ForEach-Object { $_.id })) -join ',')
+  Igual 'formato: los 6 detectores en orden' 'javac,pmd,spotbugs,lombok-a-mano,lombok-qualifier,java21-texto' ((@($J.detectores | ForEach-Object { $_.id })) -join ',')
   $mal = @($J.detectores | Where-Object { -not ($_.PSObject.Properties.Name -join ',' -ceq 'id,estado,motivo,segundos,corte') })
   Igual 'formato: cada detector lleva id, estado, motivo, segundos y corte' 0 $mal.Count
   $estados = @('ok', 'no medido (tope)', 'no se pudo medir', 'no aplica')
@@ -658,7 +658,7 @@ function Comprueba-Formato($J, $E) {
   Comprueba 'el registro registros\practicas-antes.log existe' (Test-Path -LiteralPath $reg)
   $txt = ''
   if (Test-Path -LiteralPath $reg) { $txt = [System.IO.File]::ReadAllText($reg) }
-  Comprueba 'el registro lleva la salida de Maven y el resumen de los detectores' ($txt -match 'BUILD SUCCESS' -and $txt -match 'javac' -and $txt -match 'spotbugs' -and $txt -match 'lombok-qualifier') (Cola $txt)
+  Comprueba 'el registro lleva la salida de Maven y el resumen de los detectores' ($txt -match 'BUILD SUCCESS' -and $txt -match 'javac' -and $txt -match 'spotbugs' -and $txt -match 'lombok-qualifier' -and $txt -match 'java21-texto') (Cola $txt)
 }
 
 $Pruebas['10 d) consola: una linea Info con las incidencias por area y los segundos'] = {
@@ -1330,6 +1330,343 @@ $Pruebas['32 bp4 m) arreglo-practicas.ps1: solo funciones, cabecera, ASCII y nad
     })
   $repetidas = @($otras | Where-Object { $deMas -contains $_ })
   Comprueba 'ninguna de sus funciones esta definida en otro script' ($repetidas.Count -eq 0) ($repetidas -join ', ')
+}
+
+# ================================ BP-6: java21-texto ================================
+# El detector de texto que cambia en Java 21: juego de caracteres por defecto (JEP 400) y formatos de fecha y numero (CLDR). Sin Maven: lee los
+# .java de src/main/java. Cada linea que tiene que dar una incidencia acaba en '// X' (el detector no mira los comentarios).
+$Fuente6Charset = @'
+package com.acme.texto;
+
+import java.io.*;
+
+public class Entrada {
+    void abre(String ruta, File fichero, InputStream entrada, OutputStream salida) throws Exception {
+        Reader a = new FileReader(ruta); // X
+        Reader b = new FileReader(fichero); // X
+        Writer c = new FileWriter(ruta); // X
+        Writer d = new FileWriter(fichero, true); // X
+        Reader e = new InputStreamReader(entrada); // X
+        Writer f = new OutputStreamWriter(salida); // X
+        PrintWriter g = new PrintWriter(fichero); // X
+        PrintWriter h = new PrintWriter("salida.txt"); // X
+        PrintStream i = new PrintStream(new File(ruta)); // X
+        PrintStream j = new PrintStream(ruta); // X
+        byte[] k = ruta.getBytes(); // X
+        Writer m = new FileWriter( // X
+                fichero,
+                true);
+        BufferedReader n = new BufferedReader(new FileReader(ruta)); // X
+        byte[] o = new FileReader(ruta).toString().getBytes(); // X
+        Reader p = new InputStreamReader(abrir(ruta, fichero)); // X
+        Reader q = new FileReader("a,b.txt"); // X
+        Reader r = new FileReader("a)b(c.txt"); // X
+        System.out.println(new String(k));
+    }
+}
+'@
+
+$Fuente6Explicito = @'
+package com.acme.texto;
+
+import java.io.*;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
+public class Explicito {
+    void abre(String ruta, File fichero, InputStream entrada, OutputStream salida, Charset charset, Charset juegoCharset) throws Exception {
+        Reader a = new FileReader(ruta, StandardCharsets.UTF_8);
+        Reader b = new FileReader(fichero, Charset.forName("ISO-8859-1"));
+        Writer c = new FileWriter(ruta, StandardCharsets.UTF_8);
+        Writer d = new FileWriter(fichero, charset, true);
+        Writer e = new FileWriter(fichero, juegoCharset);
+        Writer f = new FileWriter(
+                fichero,
+                StandardCharsets.UTF_8);
+        Reader g = new InputStreamReader(entrada, StandardCharsets.UTF_8);
+        Reader h = new InputStreamReader(entrada, "UTF-8");
+        Writer i = new OutputStreamWriter(salida, StandardCharsets.UTF_8);
+        PrintWriter j = new PrintWriter(fichero, "UTF-8");
+        PrintWriter k = new PrintWriter(fichero, StandardCharsets.UTF_8);
+        PrintStream m = new PrintStream(ruta, "UTF-8");
+        PrintWriter r = new PrintWriter(writer);
+        PrintWriter s = new PrintWriter(fileWriter);
+        PrintStream t = new PrintStream(System.out);
+        byte[] n = ruta.getBytes(StandardCharsets.UTF_8);
+        byte[] o = ruta.getBytes("UTF-8");
+        BufferedReader p = Files.newBufferedReader(fichero.toPath());
+        java.util.List<String> q = Files.readAllLines(fichero.toPath());
+    }
+}
+'@
+
+$Fuente6Comentarios = @'
+package com.acme.texto;
+
+// Reader a = new FileReader(ruta);
+/* byte[] b = texto.getBytes(); */
+/*
+ * Writer c = new FileWriter(ruta);
+ * new InputStreamReader(entrada);
+ */
+public class Comentado {
+    /** Antes: new OutputStreamWriter(salida), new PrintWriter(fichero) y NumberFormat.getInstance(). */
+    void abre(String ruta) throws Exception {
+        String url = "http://acme.example/ruta"; byte[] k = url.getBytes(); // X
+        String dos = "/* no es un comentario */"; Object o = new FileReader(ruta); // X
+        String ayuda = "No uses new FileReader(ruta) ni ruta.getBytes() ni NumberFormat.getInstance() ni new SimpleDateFormat(\"MMM\")";
+        String bloque = """
+            // new FileWriter(ruta)
+            ruta.getBytes() y new DecimalFormat("0.00")
+            """;
+        Reader a = null; // new FileReader(ruta)
+        // SimpleDateFormat f = new SimpleDateFormat("dd-MMM-yyyy");
+        Reader b = null; /* new FileReader(ruta) */ Reader c = new FileReader(ruta); // X
+    }
+}
+'@
+
+$Fuente6FlatCon = @'
+package com.acme.texto;
+
+public class LectorCon {
+    FlatFileItemReader<Remesa> lector() {
+        return new FlatFileItemReaderBuilder<Remesa>()
+                .name("lector")
+                .encoding("ISO-8859-1")
+                .resource(recurso)
+                .build();
+    }
+
+    FlatFileItemWriter<Remesa> escritor() {
+        FlatFileItemWriter<Remesa> w = new FlatFileItemWriter<>();
+        w.setEncoding("ISO-8859-1");
+        return w;
+    }
+}
+'@
+
+$Fuente6FlatSet = @'
+package com.acme.texto;
+
+public class LectorSet {
+    FlatFileItemReader<Remesa> lector() {
+        FlatFileItemReader<Remesa> reader = new FlatFileItemReader<>();
+        reader.setEncoding("ISO-8859-1");
+        return reader;
+    }
+}
+'@
+
+$Fuente6FlatSin = @'
+package com.acme.texto;
+
+public class LectorSin {
+    // el juego de caracteres: .encoding("ISO-8859-1") o setEncoding(...)
+    FlatFileItemReader<Remesa> lector() {
+        return new FlatFileItemReaderBuilder<Remesa>() // X
+                .name("lector")
+                .resource(recurso)
+                .build();
+    }
+
+    FlatFileItemWriter<Remesa> escritor() {
+        FlatFileItemWriter<Remesa> w = new FlatFileItemWriter<>(); // X
+        return w;
+    }
+
+    FlatFileItemReader<Remesa> viejo() {
+        return new FlatFileItemReader<>(); // X
+    }
+
+    FlatFileItemWriterBuilder<Remesa> constructor;
+}
+'@
+
+$Fuente6Formatos = @'
+package com.acme.texto;
+
+public class Formatos {
+    void formatea(java.util.Locale locale) {
+        SimpleDateFormat a = new SimpleDateFormat("dd-MMM-yyyy"); // X
+        SimpleDateFormat b = new SimpleDateFormat("EEE dd/MM/yyyy", locale); // X
+        DateTimeFormatter c = DateTimeFormatter.ofPattern("dd MMMM yyyy"); // X
+        NumberFormat d = NumberFormat.getInstance(); // X
+        NumberFormat e = NumberFormat.getCurrencyInstance(locale); // X
+        DecimalFormat f = new DecimalFormat("#,##0.00"); // X
+        SimpleDateFormat g = new SimpleDateFormat("dd/MM/yyyy");
+        DateTimeFormatter h = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+        DateTimeFormatter i = DateTimeFormatter.ofPattern(PATRON);
+        SimpleDateFormat j = new SimpleDateFormat( // X
+                "dd-MMM-yyyy");
+    }
+}
+'@
+
+$Dir6 = 'src/main/java/com/acme/texto/'
+$Texto6Charset = 'Usa el juego de caracteres por defecto. En Java 8 era el del servidor; desde Java 18 es UTF-8. Si el fichero no es UTF-8 (n con tilde, acentos), sale distinto. Pon el juego de caracteres de forma explicita, o lanza con -Dfile.encoding=COMPAT mientras lo decidis.'
+$Texto6Cldr = 'Desde Java 9 los nombres de mes y dia y los separadores de numeros salen de CLDR y pueden cambiar. Comprueba la salida, o lanza con -Djava.locale.providers=COMPAT.'
+
+# Los numeros de linea de un texto cuya linea acaba en '// X': donde el detector tiene que dar una incidencia.
+function Marcadas6([string]$Fuente) {
+  $r = @()
+  $n = 0
+  foreach ($l in ($Fuente -split "`n")) { $n++; if ($l -match '// X\s*$') { $r += $n } }
+  return ($r -join ',')
+}
+
+# Las lineas (ordenadas) de las incidencias de java21-texto de un fichero y una regla.
+function Lineas6($J, [string]$Fichero, [string]$Regla) {
+  return (@($J.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' -and $_.fichero -ceq $Fichero -and $_.regla -ceq $Regla } | ForEach-Object { [int]$_.linea } | Sort-Object) -join ',')
+}
+
+# Un escenario con el .java de cada nombre del diccionario en src/main/java/com/acme/texto/ y, medido, el JSON que deja.
+function Mide6([string]$Nombre, [hashtable]$Fuentes) {
+  $E = Nuevo-Escenario $Nombre
+  foreach ($k in $Fuentes.Keys) { Escribe $E.Repo "$Dir6$k.java" $Fuentes[$k] }
+  return [pscustomobject]@{ E = $E; Json = (Mide $E @{} $Rapido).Json }
+}
+
+# Monta las paginas con un practicas-antes.json (el que se da) y devuelve la 5.
+function Pagina5-De6([string]$Nombre, $Json) {
+  $s = Join-Path (Join-Path $Dir $Nombre) 'migracion-batch-recibos'
+  [void](New-Item -ItemType Directory -Path (Join-Path $s 'datos') -Force)
+  [System.IO.File]::WriteAllText((Join-Path $s 'datos/estado.json'), '{"batch":"batch-recibos","legacy":"acme/recibos-java8","migrado":"acme/batch-recibos","plantilla":"acme/batch-referencia","modelo":"modelo-x","creado":"2026-11-19T10:00:00","actualizado":"2026-11-19T11:00:00","fase":"hecha","respuesta":"parar"}')
+  [System.IO.File]::WriteAllText((Join-Path $s 'datos/practicas-antes.json'), (ConvertTo-Json -InputObject $Json -Depth 8))
+  $cab = "`$ErrorActionPreference = 'Stop'`n. '" + (Join-Path $raiz 'comun.ps1') + "'`n. '" + (Join-Path $raiz 'tareas.ps1') + "'`n"
+  if (Test-Path -LiteralPath (Join-Path $raiz 'lanzadores.ps1')) { $cab += ". '" + (Join-Path $raiz 'lanzadores.ps1') + "'`n" }
+  $cab += ". '" + (Join-Path $raiz 'informe.ps1') + "'`nWrite-Informes -Salida '" + $s + "'`n'INFORMES-OK'`n"
+  Escribe (Join-Path $Dir $Nombre) 'informes.ps1' $cab
+  $g = Lanzar (Join-Path (Join-Path $Dir $Nombre) 'informes.ps1') @()
+  Comprueba "$Nombre : Write-Informes sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  $p5 = Join-Path $s '5-buenas-practicas.html'
+  if (-not (Test-Path -LiteralPath $p5)) { return '' }
+  return [System.IO.File]::ReadAllText($p5, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+$Pruebas['40 bp6 a) charset-por-defecto: cada patron da una incidencia en su fichero y su linea (una por linea) y con el texto del contrato'] = {
+  $x = Mide6 'bp6a' @{ Entrada = $Fuente6Charset }
+  $fich = "${Dir6}Entrada.java"
+  Igual 'las lineas con un patron (la anidada y la de dos patrones, una incidencia cada una)' (Marcadas6 $Fuente6Charset) (Lineas6 $x.Json $fich 'charset-por-defecto')
+  Igual 'ninguna incidencia mas en ese fichero' (Marcadas6 $Fuente6Charset).Split(',').Count @($x.Json.incidencias | Where-Object { $_.fichero -ceq $fich }).Count
+  $i = @($x.Json.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' })[0]
+  Comprueba 'hay una incidencia de java21-texto' ($null -ne $i)
+  if ($null -eq $i) { return }
+  Igual 'area' 'java21' $i.area
+  Igual 'regla' 'charset-por-defecto' $i.regla
+  Igual 'origen: S1943 no esta en Sonar way, asi que referencia' 'referencia' $i.origen
+  Igual 'sonar vacio' '' $i.sonar
+  Igual 'queHago' 'mano' $i.queHago
+  Igual 'fichero con /' $fich $i.fichero
+  Igual 'texto del contrato' $Texto6Charset $i.texto
+}
+
+$Pruebas['41 bp6 b) charset-por-defecto: con juego de caracteres (StandardCharsets, Charset.forName, una variable ...charset) y con Files.* no salta nada'] = {
+  $x = Mide6 'bp6b' @{ Explicito = $Fuente6Explicito }
+  Igual 'java21-texto: ok' 'ok' (Det $x.Json 'java21-texto').estado
+  Igual 'ninguna incidencia de java21-texto' 0 (Inc $x.Json 'java21-texto').Count
+}
+
+$Pruebas['42 bp6 c) un patron dentro de un comentario (// y /* */), de una cadena o de un bloque de texto no salta; las cadenas con // o /* no se toman por comentario y las lineas no se corren'] = {
+  $x = Mide6 'bp6c' @{ Comentado = $Fuente6Comentarios }
+  Igual 'solo las lineas con codigo (4 patrones en comentarios y un SimpleDateFormat comentado no cuentan)' (Marcadas6 $Fuente6Comentarios) (Lineas6 $x.Json "${Dir6}Comentado.java" 'charset-por-defecto')
+  Igual 'ni charset ni formato en los comentarios: tres incidencias' 3 (Inc $x.Json 'java21-texto').Count
+}
+
+$Pruebas['43 bp6 d) FlatFileItemReader y Writer (y sus Builder): con .encoding( o con solo setEncoding( en el fichero no saltan; sin el, si, y un .encoding( en un comentario no cuenta'] = {
+  $x = Mide6 'bp6d' @{ LectorCon = $Fuente6FlatCon; LectorSet = $Fuente6FlatSet; LectorSin = $Fuente6FlatSin }
+  Igual 'con encoding: ninguna' '' (Lineas6 $x.Json "${Dir6}LectorCon.java" 'charset-por-defecto')
+  Igual 'con solo setEncoding (sin .encoding): ninguna' '' (Lineas6 $x.Json "${Dir6}LectorSet.java" 'charset-por-defecto')
+  Igual 'sin encoding: el Builder, el Writer y el Reader (no la declaracion de un campo)' (Marcadas6 $Fuente6FlatSin) (Lineas6 $x.Json "${Dir6}LectorSin.java" 'charset-por-defecto')
+}
+
+$Pruebas['44 bp6 e) formato-cldr: MMM y EEE en el patron literal salen; dd/MM/yyyy y un patron que no es literal, no; NumberFormat.get y new DecimalFormat salen siempre'] = {
+  $x = Mide6 'bp6e' @{ Formatos = $Fuente6Formatos }
+  $fich = "${Dir6}Formatos.java"
+  Igual 'las lineas marcadas' (Marcadas6 $Fuente6Formatos) (Lineas6 $x.Json $fich 'formato-cldr')
+  Igual 'ninguna es de charset' '' (Lineas6 $x.Json $fich 'charset-por-defecto')
+  $i = @($x.Json.incidencias | Where-Object { $_.regla -ceq 'formato-cldr' })[0]
+  Comprueba 'hay una de formato-cldr' ($null -ne $i)
+  if ($null -eq $i) { return }
+  Igual 'area' 'java21' $i.area
+  Igual 'origen' 'referencia' $i.origen
+  Igual 'queHago' 'mano' $i.queHago
+  Igual 'texto del contrato' $Texto6Cldr $i.texto
+}
+
+$Pruebas['45 bp6 f) en el JSON: java21-texto va el ultimo de detectores con estado ok y sus incidencias llevan el area java21 y su herramienta'] = {
+  $x = Mide6 'bp6f' @{ Entrada = $Fuente6Charset; Formatos = $Fuente6Formatos }
+  $j = $x.Json
+  Igual 'los detectores, en orden' 'javac,pmd,spotbugs,lombok-a-mano,lombok-qualifier,java21-texto' ((@($j.detectores | ForEach-Object { $_.id })) -join ',')
+  $d = Det $j 'java21-texto'
+  Igual 'estado ok' 'ok' $d.estado
+  Igual 'motivo vacio' '' $d.motivo
+  Igual 'sin corte' $false $d.corte
+  Igual 'los campos de un detector' 'id,estado,motivo,segundos,corte' ($d.PSObject.Properties.Name -join ',')
+  $mias = Inc $j 'java21-texto'
+  Comprueba 'hay incidencias de java21-texto' ($mias.Count -gt 0)
+  Igual 'todas del area java21' 0 @($mias | Where-Object { $_.area -cne 'java21' }).Count
+  Igual 'todas con sus nueve campos' 0 @($mias | Where-Object { -not ($_.PSObject.Properties.Name -join ',' -ceq 'area,fichero,linea,herramienta,regla,origen,sonar,texto,queHago') }).Count
+  Igual 'las reglas son las dos del contrato' 'charset-por-defecto,formato-cldr' ((@($mias | ForEach-Object { $_.regla } | Sort-Object -Unique)) -join ',')
+  Comprueba-Formato $j $x.E
+}
+
+$Pruebas['46 bp6 g) la pagina 5 con ese JSON lleva las incidencias de java21-texto y el detector en la linea de los que midieron'] = {
+  $x = Mide6 'bp6g' @{ Entrada = $Fuente6Charset; Formatos = $Fuente6Formatos }
+  $mias = Inc $x.Json 'java21-texto'
+  $h = Pagina5-De6 'bp6g-pagina' $x.Json
+  Comprueba 'monta 5-buenas-practicas.html' ($h.Length -gt 0)
+  if ($h.Length -eq 0) { return }
+  Comprueba 'la linea Midieron lleva java21-texto' ($h -match '(?s)<dt>Midieron</dt>.*?<li>java21-texto</li>.*?</dl>')
+  Igual 'cada incidencia sale en las dos vistas: charset-por-defecto' (2 * @($mias | Where-Object { $_.regla -ceq 'charset-por-defecto' }).Count) ([regex]::Matches($h, 'java21-texto charset-por-defecto').Count)
+  Igual 'cada incidencia sale en las dos vistas: formato-cldr' (2 * @($mias | Where-Object { $_.regla -ceq 'formato-cldr' }).Count) ([regex]::Matches($h, 'java21-texto formato-cldr').Count)
+  Comprueba 'lleva el texto de charset' ($h.Contains('Usa el juego de caracteres por defecto.'))
+  Comprueba 'lleva el area Java 21' ($h.Contains('Java 21'))
+  Comprueba 'la explicacion del area Java 21 nombra el detector de texto' ($h.Contains('un detector de texto que avisa de lo que cambia en Java 21'))
+  Comprueba 'y no esta entre las notas de los que no midieron' ($h -notmatch '<code>java21-texto</code> <b>')
+}
+
+$Pruebas['47 bp6 h) sin src/main/java: java21-texto no aplica con su motivo y la pagina 5 lo dice en sus notas de detectores'] = {
+  $E = Nuevo-Escenario 'bp6h'
+  Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java') -Recurse -Force
+  $m = Mide $E @{} $Rapido
+  $d = Det $m.Json 'java21-texto'
+  Igual 'estado' 'no aplica' $d.estado
+  Igual 'motivo' 'no hay src/main/java' $d.motivo
+  Igual 'sin incidencias' 0 (Inc $m.Json 'java21-texto').Count
+  Igual 'ningun Aviso (no aplica no es un fallo)' 0 @($m.Avisos | Where-Object { $_ -like '*java21-texto*' }).Count
+  $h = Pagina5-De6 'bp6h-pagina' $m.Json
+  Comprueba 'la pagina dice java21-texto no aplica y por que' ($h -match '(?s)<code>java21-texto</code> <b>no aplica</b>: no hay src/main/java')
+}
+
+$Pruebas['48 bp6 i) una llamada sin cerrar (new FileWriter( sin ) ) no da incidencia ni para el detector: los demas ficheros dan las suyas'] = {
+  $x = Mide6 'bp6i' @{ Entrada = $Fuente6Charset; Roto = "package com.acme.texto;`nclass Roto { Object a = new FileWriter(`n" }
+  Igual 'estado ok' 'ok' (Det $x.Json 'java21-texto').estado
+  Igual 'las del fichero bueno estan' (Marcadas6 $Fuente6Charset) (Lineas6 $x.Json "${Dir6}Entrada.java" 'charset-por-defecto')
+  Igual 'el que no cierra el parentesis no da incidencia' '' (Lineas6 $x.Json "${Dir6}Roto.java" 'charset-por-defecto')
+}
+
+$Pruebas['49 bp6 j) ninguna funcion de practicas.ps1 esta definida tambien en otro script de la raiz (migracion.ps1 los carga todos juntos y la ultima pisaria a la otra)'] = {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $raiz 'practicas.ps1'), [ref]$null, [ref]$null)
+  $suyas = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+  $deMas = @(Get-ChildItem -LiteralPath $raiz -File -Filter '*.ps1' | Where-Object { $_.Name -cne 'practicas.ps1' } | ForEach-Object {
+      [regex]::Matches([System.IO.File]::ReadAllText($_.FullName), '(?m)^function ([\w-]+)') | ForEach-Object { $_.Groups[1].Value }
+    })
+  $repetidas = @($suyas | Where-Object { $deMas -contains $_ })
+  Comprueba 'practicas.ps1 define funciones' ($suyas.Count -gt 0)
+  Comprueba 'ninguna esta repetida en otro .ps1 de la raiz' ($repetidas.Count -eq 0) ($repetidas -join ', ')
+}
+
+$Pruebas['50 bp6 k) solo se lee src/main/java: el mismo codigo en src/test/java no da incidencias'] = {
+  $E = Nuevo-Escenario 'bp6k'
+  Escribe $E.Repo "${Dir6}Entrada.java" $Fuente6Charset
+  Escribe $E.Repo 'src/test/java/com/acme/texto/EntradaTest.java' $Fuente6Charset
+  Escribe $E.Repo 'src/test/java/com/acme/texto/FormatosTest.java' $Fuente6Formatos
+  $j = (Mide $E @{} $Rapido).Json
+  Igual 'estado ok' 'ok' (Det $j 'java21-texto').estado
+  Igual 'las de src/main/java estan' (Marcadas6 $Fuente6Charset) (Lineas6 $j "${Dir6}Entrada.java" 'charset-por-defecto')
+  Igual 'ninguna en src/test/java' 0 @($j.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' -and $_.fichero -like 'src/test/*' }).Count
 }
 
 # ================================ LANZADOR ================================
