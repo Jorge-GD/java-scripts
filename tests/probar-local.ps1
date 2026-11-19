@@ -1261,15 +1261,17 @@ $Pruebas['m24 config.json del migrado: las claves de rescate.ps1 (PalabrasConfig
 # Con -Reparar, de los casos distintos la IA escribe arreglos en la copia del migrado y el script solo da por bueno el que pasa las
 # puertas: el caso, los demas casos y la suite de tests unitarios. Estos escenarios usan m25-copilot.ps1 y m25-mvn.ps1: el migrado (su
 # rama de rescate) lleva minimo=5.01 en src/main/resources/regla.txt, el original 5.00, y el 'arreglo' es dejar 5.00 ahi. Con -Test,
-# la rama lleva un test unitario que espera lo de ahora (minimo=5.01). El caso del limite (importe=5.00) sale distinto.
+# la rama lleva un test unitario que espera lo de ahora (minimo=5.01); con -Sano, uno que pasa con cualquier limite. El caso del
+# limite (importe=5.00) sale distinto.
 
-function Escenario-M25([string]$Nombre, $Casos, [switch]$Test, [hashtable]$Ajustes = @{}) {
+function Escenario-M25([string]$Nombre, $Casos, [switch]$Test, [switch]$Sano, [hashtable]$Ajustes = @{}) {
   $e = Nuevo-Escenario $Nombre $Casos
   $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm25-copilot.ps1'); MvnExe = (Join-Path $falsos 'm25-mvn.ps1'); SegundosPorLlamada = 60 }
   foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
   Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
   [void](Commit-En $e.Wt 'src/main/resources/regla.txt' "minimo=5.01`n" 'migra el limite')
   if ($Test) { [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" 'test del limite') }
+  if ($Sano) { [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/OtroTest.java' "package com.acme.nuevo;`nclass OtroTest {}`n" 'otro test') }
   return $e
 }
 
@@ -1286,7 +1288,7 @@ function Registros-Reparar($E, [int]$N) {
 }
 
 $Pruebas['m25 (a) -Reparar: dos casos distintos por la misma causa: una llamada, un commit en la rama de rescate, los tres iguales y reparaciones con arreglado; la rama del usuario no se mueve'] = {
-  $e = Escenario-M25 'm25-a' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=5.00') }) -Test
+  $e = Escenario-M25 'm25-a' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=5.00') }) -Sano
   $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $usuario = Estado-Git $e.Migrado
   $original = Foto $e.Legacy
@@ -1418,7 +1420,7 @@ $Pruebas['m25 (f) -Reparar: con -Desde o -Deshacer, sin worktree de rescate o co
 }
 
 $Pruebas['m25 (g) -Reparar: el reintento lleva en su prompt el motivo y el diff rechazado, y arregla; el primer intento no lleva la correccion'] = {
-  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $e = Escenario-M25 'm25-g' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
   $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
   $r = Prueba $e @('-Reparar') 'reparar-test1'
   Igual 'sale con 0 (el reintento arregla)' 0 $r.Codigo
@@ -1429,7 +1431,7 @@ $Pruebas['m25 (g) -Reparar: el reintento lleva en su prompt el motivo y el diff 
   Comprueba 'el segundo si, con el test que toco' ($dos -match 'CORRECCI' -and $dos -match 'src/test/java/com/acme/nuevo/ReglaTest\.java') ''
   Comprueba 'y con el diff que se rechazo (el cambio de regla.txt y el del test)' ($dos -match 'diff --git a/src/main/resources/regla\.txt' -and $dos -match '\+minimo=5\.00' -and $dos -match 'diff --git a/src/test/java/com/acme/nuevo/ReglaTest\.java') ''
   Igual 'un commit nuevo' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
-  Igual 'sin tocar el test' "package com.acme.nuevo;`n// ESPERA minimo=5.01`nclass ReglaTest {}`n" (Lee $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java')
+  Comprueba 'sin el test que la IA toco en el primer intento' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/test/java/com/acme/nuevo/ReglaTest.java'))) ''
   Igual 'la entrada dice arreglado con dos intentos' 'arreglado 2' ((@(Reparaciones $e)[0]).resultado + ' ' + (@(Reparaciones $e)[0]).intentos)
 }
 

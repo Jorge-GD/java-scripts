@@ -44,6 +44,17 @@ QUE HACE
      revert de un commit no arregla ninguno de sus casos, lo quita con otro git revert (y lo dice en rojo). No deshace si
      esa carpeta tiene cambios sin commit, si el commit es un merge o si el revert da conflicto (lo aborta y no deja nada
      a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
+  7. Solo con -Reparar (no se combina con -Desde ni con -Deshacer; hace falta el worktree de rescate, y su carpeta sin cambios
+     sin commit): despues de la prueba de siempre, arregla el migrado hasta que los casos distintos salgan iguales. Cada
+     diferencia tiene una clave (el nombre de su fichero, normalizado); se arregla primero la clave con mas casos distintos, y
+     despues de cada arreglo se recalcula. Una tarea de IA por clave escribe, en la copia del migrado y solo en src\main\, el
+     arreglo; el script lo da por bueno si pasa seis puertas, de la mas barata a la mas cara: la llamada acaba bien; la IA no
+     dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); solo cambia src\main\;
+     el caso de la tarea mejora; ningun otro caso empeora (ni claves nuevas, ni mas lineas distintas, ni deja de ejecutarse); y
+     la suite de tests unitarios, sin el arnes, no falla mas ni se ejecuta menos que al empezar. Un arreglo que pasa va a la
+     rama de rescate (un commit por arreglo: 'rescate(local): <job>/<caso> <clave>'); uno que no pasa se deshace y se
+     reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
+     rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -56,10 +67,11 @@ USO
   .\prueba-local.ps1 ... -Si                   # no pregunta antes de llamar a Copilot
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
+  .\prueba-local.ps1 ... -Reparar             # y arregla el migrado (en la rama de rescate) hasta que los casos distintos salgan iguales
 
   Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno, o el
   test no le pasa las entradas a un job).
-  Con -Deshacer, la salida es la del estado de despues de deshacer.
+  Con -Deshacer o -Reparar, la salida es la del estado de despues de deshacer o de reparar.
   Antes de darlo por bueno, pasa tests\probar-local.ps1.
 #>
 [CmdletBinding()]
@@ -71,6 +83,7 @@ param(
   [string]$Job = '',          # solo los casos de este job
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
+  [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -87,6 +100,9 @@ $Cfg += @{
   Ejemplos       = 3      # tests de ejemplo que recibe la tarea de un arnes
   LineasError    = 15     # lineas del error de Maven que van al motivo
   FallosSeguidos = 6      # llamadas fallidas seguidas antes de parar
+  EsfuerzoReparar = 'high'
+  SegundosReparar = 1800  # tope de una llamada que repara (-Reparar; las demas usan SegundosPorLlamada)
+  MaxReparaciones = 8     # claves de diferencia que -Reparar prueba como mucho en un lanzamiento
 }
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
 # Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
@@ -591,10 +607,11 @@ function Invoke-Casos($Tareas) {
 }
 
 # ================================ EJECUCION ================================
-# Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>.
-function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas) {
+# Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>. Con $Limpiar
+# en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo).
+function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas, [bool]$Limpiar = $true) {
   $dest = Join-Ruta $Local "salidas/$Nombre"
-  Remove-Carpeta $dest
+  if ($Limpiar) { Remove-Carpeta $dest }
   foreach ($j in @($Listas | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
     Info "Ejecutando los casos de $j ($Nombre)..."
     foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
@@ -874,11 +891,12 @@ function Find-Culpables($Res) {
   return $culpables
 }
 
+# Tiene $DirRama cambios sin commit? (-Deshacer y -Reparar no trabajan sobre una carpeta sucia)
+function Test-RamaSucia { return (@((Invoke-Git $DirRama @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -gt 0) }
+
 # Por que no se puede deshacer $Commit en $DirRama, o '' si se puede.
 function Get-NoDeshacer([string]$Commit) {
-  if (@((Invoke-Git $DirRama @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -gt 0) {
-    return "$DirRama tiene cambios sin commit (git status): guardalos o descartalos y vuelve a lanzar con -Deshacer."
-  }
+  if (Test-RamaSucia) { return "$DirRama tiene cambios sin commit (git status): guardalos o descartalos y vuelve a lanzar con -Deshacer." }
   $linea = ((Invoke-Git $DirRama @('rev-list', '--parents', '-n', '1', $Commit)).Salida -join '').Trim()
   if (@($linea -split '\s+').Count -gt 2) { return 'es un commit de merge: deshazlo a mano (git revert -m 1).' }
   return ''
@@ -912,7 +930,7 @@ function Get-ResultadoDe($Res, $Culpable) { return @($Res | Where-Object { $_.jo
 # Con -Deshacer: revierte los commits de $Culpables (el mas nuevo primero) y vuelve a ejecutar TODOS los casos en el nuevo HEAD
 # (Measure-Migrado): un revert puede arreglar un caso y romper otro. Un commit cuyo revert no arregla ninguno de sus casos se
 # vuelve a dejar como estaba, con otro git revert del revert (el mas nuevo primero) y otra medida. Apunta en cada culpable si
-# queda deshecho y en $script:Reverts los commits que ha hecho (los unicos cambios que se dan por buenos en la carpeta). Pone
+# queda deshecho y en $script:Propios los commits que ha hecho (los unicos cambios que se dan por buenos en la carpeta). Pone
 # en su sitio, en $Res, el resultado de ahora.
 function Undo-Culpables($Culpables, $Res) {
   $commits = @($Culpables | Sort-Object -Property indice -Descending | ForEach-Object { $_.commit } | Select-Object -Unique)
@@ -926,7 +944,7 @@ function Undo-Culpables($Culpables, $Res) {
     if (-not $m) { $m = Invoke-Revert $commit }
     if ($m) { Aviso "No deshago $($commit.Substring(0, 7)) ($($suyos[0].asunto)): $m"; continue }
     $nuevo = Get-Head $DirRama
-    $script:Reverts += $nuevo
+    $script:Propios += $nuevo
     $reverts[$commit] = $nuevo
     foreach ($x in $suyos) { $x.deshecho = $true }
     Bien "Deshecho $($commit.Substring(0, 7)) ($($suyos[0].asunto)) con el commit $($nuevo.Substring(0, 7))."
@@ -950,7 +968,7 @@ function Undo-Culpables($Culpables, $Res) {
     Fallo "Deshacer $corto no arregla $((@($suyos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ', '): lo vuelvo a dejar como estaba"
     $m = Invoke-Revert $reverts[$commit]
     if ($m) { Aviso "No he podido quitar el revert de ${corto}: $m (el revert se queda)"; continue }
-    $script:Reverts += (Get-Head $DirRama)
+    $script:Propios += (Get-Head $DirRama)
     foreach ($x in $suyos) { $x.deshecho = $false }
     $quitado = $true
   }
@@ -961,17 +979,311 @@ function Undo-Culpables($Culpables, $Res) {
 }
 
 # Es la huella de $Dir de ahora la de antes? Solo se admite una diferencia: en la carpeta donde -Deshacer ha hecho sus commits
-# de revert, el HEAD de ahora puede ser el de antes con encima exactamente esos commits (y nada mas: lo demas de la huella, los
-# cambios sin commit, tiene que ser igual).
+# de revert o -Reparar los de sus arreglos, el HEAD de ahora puede ser el de antes con encima exactamente esos commits (y nada mas:
+# lo demas de la huella, los cambios sin commit, tiene que ser igual).
 function Test-MismaHuella([string]$Dir, [string]$Antes, [string]$Despues) {
   if ($Antes -ceq $Despues) { return $true }
-  if ($Dir -ne $DirRama -or @($script:Reverts).Count -eq 0) { return $false }
+  if ($Dir -ne $DirRama -or @($script:Propios).Count -eq 0) { return $false }
   $a = $Antes -split "`n", 2
   $d = $Despues -split "`n", 2
   if ($a.Count -ne 2 -or $d.Count -ne 2 -or $a[1] -cne $d[1]) { return $false }
   if ((Invoke-Git $Dir @('merge-base', '--is-ancestor', $a[0], $d[0])).Codigo -ne 0) { return $false }
   $nuevos = @((Invoke-Git $Dir @('rev-list', ($a[0] + '..' + $d[0]))).Salida | Where-Object { $_ })
-  return ($nuevos.Count -eq @($script:Reverts).Count -and @($nuevos | Where-Object { $script:Reverts -notcontains $_ }).Count -eq 0)
+  return ($nuevos.Count -eq @($script:Propios).Count -and @($nuevos | Where-Object { $script:Propios -notcontains $_ }).Count -eq 0)
+}
+
+# ======================== REPARAR (-Reparar) ========================
+# Con -Reparar, la clave de diferencia (Get-Normal del fichero) con mas casos distintos se le da a la IA, que escribe un arreglo en la copia
+# del migrado (<Migrado>-prueba-local, con el arnes y los casos ya guardados). El script lo da por bueno si pasa seis puertas, de la mas
+# barata a la mas cara (Test-Arreglo); lo bueno va a $DirRama (la rama de rescate) en un commit por arreglo, y lo demas se deshace. Tu
+# carpeta y tu rama no se tocan. $S es el estado del lanzamiento: Res (los resultados de ahora, uno por tarea de $tareasCasos), Salidas
+# (en que carpeta de salidas\ esta lo medido del migrado), N (los intentos hechos), Base (los tests unitarios de partida) y Probadas (las
+# claves ya tocadas). Lo que usan, del main: $DirRama, $CopiaMig, $LegacyRoot, $Local, $headMig y $tareasCasos.
+
+# Ordena textos en orden ordinal (el de Sort-Object va por la cultura).
+function Sort-Ordinal([string[]]$Textos) {
+  $a = [string[]]@($Textos)
+  [System.Array]::Sort($a, [System.StringComparer]::Ordinal)
+  return $a
+}
+
+# Un caso se puede reparar y comparar si se ha podido ejecutar en las tres ejecuciones.
+function Test-Ejecutable($R) { return (@('igual', 'distinto', 'no determinista') -contains $R.resultado) }
+
+# Las lineas distintas de un resultado, todas juntas: la puntuacion que un arreglo tiene que bajar.
+function Get-Puntuacion($R) {
+  $n = 0
+  foreach ($d in @($R.diferencias)) { $n += [int]$d.lineas }
+  return $n
+}
+
+# Las claves de un resultado: el nombre normalizado de cada fichero que sale distinto.
+function Get-Claves($R) { return @(@($R.diferencias) | ForEach-Object { Get-Normal $_.fichero } | Select-Object -Unique) }
+
+function Get-IndiceCaso($Res, [string]$Job, [string]$Caso) {
+  for ($i = 0; $i -lt @($Res).Count; $i++) { if ($Res[$i].job -ceq $Job -and $Res[$i].caso -ceq $Caso) { return $i } }
+  return -1
+}
+
+# La clave que toca arreglar: la que tienen mas casos distintos (a igualdad, la menor en orden ordinal) sin contar las ya probadas, con
+# su primer caso (por job y caso). $null si no queda ninguna.
+function Find-Clave($Res, $Probadas) {
+  $casos = @{}
+  foreach ($r in @($Res | Where-Object { $_.resultado -eq 'distinto' })) {
+    foreach ($k in @(Get-Claves $r)) {
+      if ($Probadas.ContainsKey($k)) { continue }
+      if (-not $casos.ContainsKey($k)) { $casos[$k] = @() }
+      $casos[$k] += ($r.job + "`t" + $r.caso)
+    }
+  }
+  if ($casos.Count -eq 0) { return $null }
+  $max = (@($casos.Values | ForEach-Object { @($_).Count }) | Measure-Object -Maximum).Maximum
+  $clave = @(Sort-Ordinal @($casos.Keys | Where-Object { @($casos[$_]).Count -eq $max }))[0]
+  $j, $c = (@(Sort-Ordinal @($casos[$clave]))[0]) -split "`t", 2
+  return [pscustomobject]@{ clave = $clave; job = $j; caso = $c; casos = @($casos[$clave]).Count }
+}
+
+# La tarea de IA que arregla la clave $C en su primer caso, con el resultado $R de ahora, o la de otro lanzamiento si quedo atascada con
+# este mismo HEAD (el id lo lleva). Trabaja en la copia del migrado y puede leer el original y las salidas y entradas del caso.
+function Get-TareaReparar($C, $R, $S) {
+  $tc = Get-TareaCaso $C.job $C.caso
+  $d = @($R.diferencias | Where-Object { (Get-Normal $_.fichero) -ceq $C.clave })[0]
+  $otras = @($R.diferencias | Where-Object { (Get-Normal $_.fichero) -cne $C.clave } | Select-Object -First 5 | ForEach-Object { '- `{0}`: {1} lineas distintas; la primera, la {2}: original [{3}], migrado [{4}]' -f $_.fichero, $_.lineas, $_.linea, $_.original, $_.migrado })
+  if ($otras.Count -eq 0) { $otras = @('(No hay otras diferencias en este caso.)') }
+  $salOrig = Join-Ruta $Local "salidas/original/$($C.job)/$($C.caso)"
+  $salMig = Join-Ruta $Local "salidas/$($S.Salidas)/$($C.job)/$($C.caso)"
+  $entradas = Join-Ruta $Local "casos/$($C.job)/$($C.caso)"
+  $id = 'reparar-' + (Get-Hash8 "$headMig|$($C.job)|$($C.caso)|$($C.clave)")
+  $prompt = [pscustomobject]@{
+    JOB = $C.job; CASO = $C.caso; TITULO = [string]$tc.entradas.titulo; ENTRADA = [string]$tc.entradas.prompt.ENTRADA; ESPERADO = [string]$tc.entradas.prompt.ESPERADO
+    FICHERO = $d.fichero; LINEAS = "$($d.lineas)"; LINEA = "$($d.linea)"; ORIGINAL = [string]$d.original; MIGRADO = [string]$d.migrado; OTRAS = ($otras -join "`n")
+    RUTA_ORIGINAL = $LegacyRoot; SAL_ORIGINAL = $salOrig; SAL_MIGRADO = $salMig; ENTRADAS = $entradas; DIFF = ''
+  }
+  $e = [pscustomobject]@{ job = $C.job; caso = $C.caso; clave = $C.clave; copia = $CopiaMig; dirs = @($LegacyRoot, $salOrig, $salMig, $entradas); huella = (Get-Hash8 ((Get-Plantilla 'reparar') + '|' + $id)); prompt = $prompt }
+  $t = Restore-Tarea (New-TareaTipo 'reparar' $id '' "prueba-local/reparar/$id" $e) $true
+  $t.entradas.copia = $CopiaMig   # la de ahora, aunque la tarea venga de otro lanzamiento
+  return $t
+}
+
+# Ejecuta en la copia la suite de tests unitarios, sin el arnes (Surefire sin **/PruebaLocalTest*, y sin parar por los fallos), y cuenta lo
+# que dicen sus TEST-*.xml: Fallos (failures + errors), Ejecutados (tests - skipped) y Nombres (los tests que fallan). Con Motivo, Maven
+# no ha podido (no compila, se paso del tope...).
+function Measure-Tests([string]$Que) {
+  $excluir = Join-Path $Local 'reparar-excluir.txt'
+  [System.IO.File]::WriteAllText($excluir, "**/PruebaLocalTest*`n", $Utf8)
+  $informes = Join-Ruta $CopiaMig 'target/surefire-reports'
+  Remove-Carpeta $informes
+  $r = Invoke-Maven $CopiaMig $false @('test', "-Dsurefire.excludesFile=$excluir", '-Dmaven.test.failure.ignore=true') $Que
+  $m = [pscustomobject]@{ Motivo = ''; Fallos = 0; Ejecutados = 0; Nombres = @() }
+  if ($r.Codigo -ne 0 -or $r.Tope) { $m.Motivo = "Los tests unitarios no se pueden ejecutar. Maven dice:`n" + (Get-FalloMaven $r); return $m }
+  if (-not (Test-Path -LiteralPath $informes)) { return $m }
+  foreach ($f in @(Get-ChildItem -LiteralPath $informes -File -Filter 'TEST-*.xml')) {
+    $x = ([xml][System.IO.File]::ReadAllText($f.FullName, $Utf8)).DocumentElement
+    $m.Fallos += [int]$x.GetAttribute('failures') + [int]$x.GetAttribute('errors')
+    $m.Ejecutados += [int]$x.GetAttribute('tests') - [int]$x.GetAttribute('skipped')
+    foreach ($t in @($x.SelectNodes('testcase[failure or error]'))) { $m.Nombres += ($t.GetAttribute('classname') + '.' + $t.GetAttribute('name')) }
+  }
+  return $m
+}
+
+# Que hay peor en $Despues que en $Antes (dos resultados del mismo caso, que se podia ejecutar): '' si nada; si no, como y cual.
+function Get-Empeora($Antes, $Despues) {
+  $caso = "$($Antes.job)/$($Antes.caso)"
+  if (-not (Test-Ejecutable $Despues)) { return "El caso $caso ya no se puede ejecutar ($($Despues.resultado)): $(Get-Resumen $Despues.motivo)" }
+  $viejas = @(Get-Claves $Antes)
+  $nueva = @($Despues.diferencias | Where-Object { $viejas -cnotcontains (Get-Normal $_.fichero) })[0]
+  if ($nueva) { return "El caso $caso sale peor: antes era $($Antes.resultado) y ahora es $($Despues.resultado), con una diferencia nueva en $($nueva.fichero) (linea $($nueva.linea): original [$($nueva.original)], migrado [$($nueva.migrado)])." }
+  $antes = Get-Puntuacion $Antes
+  $ahora = Get-Puntuacion $Despues
+  if ($ahora -gt $antes) { return "El caso $caso sale peor: antes tenia $antes lineas distintas y ahora $ahora." }
+  return ''
+}
+
+# Las lineas del diff de lo que ha cambiado la IA en la copia (lo nuevo tambien) frente a su base. Deja el indice como estaba.
+function Get-DiffCopia {
+  [void](Invoke-Git $CopiaMig @('add', '-A', '--', '.', ':(exclude).rescate', ':(exclude)target'))
+  $d = @((Invoke-Git $CopiaMig @('diff', '--cached', $script:Base[$CopiaMig].Arbol)).Salida)
+  Restore-Base $CopiaMig
+  return $d
+}
+
+# Pasa lo que ha dejado la IA en la copia tras la llamada $Ll de la tarea $T por las puertas, de la mas barata a la mas cara. Devuelve:
+# Tipo ('rechazado', 'no se arregla' o 'bien'), Motivo, ConDiff (si hay un diff que ensenar en el reintento: no, si fallo la llamada) y,
+# si es bueno, Nuevos (los resultados medidos de ahora, por posicion en $S.Res). Las salidas medidas quedan en salidas\reparar\<n>.
+function Test-Arreglo($T, $Ll, $S) {
+  $v = [pscustomobject]@{ Tipo = 'rechazado'; Motivo = ''; ConDiff = $true; Nuevos = @{} }
+  $j = $T.entradas.job
+  $c = $T.entradas.caso
+  # 1. la llamada acabo bien
+  $v.Motivo = Get-MotivoLlamada $Ll
+  if ($v.Motivo) { $v.ConDiff = $false; return $v }
+  # 2. la IA dice que no se arregla
+  $no = Join-Ruta $CopiaMig '.rescate/reparar-no.txt'
+  if (Test-Path -LiteralPath $no) {
+    $v.Tipo = 'no se arregla'
+    $v.Motivo = Get-Resumen ([System.IO.File]::ReadAllText($no, $Utf8))
+    if (-not $v.Motivo) { $v.Motivo = 'La IA no da el motivo.' }
+    return $v
+  }
+  # 3. algo cambiado y solo en src/main/
+  $cambios = @(Get-Cambios $CopiaMig)
+  $fuera = @($cambios | Where-Object { -not $_.StartsWith('src/main/') })
+  if ($cambios.Count -eq 0) { $v.Motivo = 'No has cambiado ningun fichero de src/main/.'; return $v }
+  if ($fuera.Count -gt 0) { $v.Motivo = 'Solo puedes cambiar ficheros de src/main/, y has cambiado tambien: ' + (@($fuera | Select-Object -First 5) -join ', ') + '. Deja todo lo demas como estaba.'; return $v }
+  # 4. el caso de la tarea, ejecutado: su puntuacion tiene que bajar
+  $nombre = "reparar/$($S.N)"
+  $i = Get-IndiceCaso $S.Res $j $c
+  Invoke-Salidas $CopiaMig $false $nombre @($tareasCasos[$i])
+  $r = Get-Resultado $tareasCasos[$i] $nombre
+  if (-not (Test-Ejecutable $r)) { $v.Motivo = "Con tu cambio el caso $j/$c ya no se puede ejecutar ($($r.resultado)): $(Get-Resumen $r.motivo)"; return $v }
+  $antes = Get-Puntuacion $S.Res[$i]
+  if ((Get-Puntuacion $r) -ge $antes) {
+    $v.Motivo = "Con tu cambio el caso $j/$c sigue igual de distinto: $(Get-Puntuacion $r) lineas distintas y antes eran $antes."
+    $d = @($r.diferencias)[0]
+    if ($d) { $v.Motivo += " La primera, en $($d.fichero), linea $($d.linea): original [$($d.original)] y migrado [$($d.migrado)]." }
+    return $v
+  }
+  $v.Nuevos[$i] = $r
+  # 5. todos los demas casos que se pueden ejecutar: ninguno peor
+  $otros = @(0..($tareasCasos.Count - 1) | Where-Object { $_ -ne $i -and (Test-Ejecutable $S.Res[$_]) })
+  Invoke-Salidas $CopiaMig $false $nombre @($otros | ForEach-Object { $tareasCasos[$_] }) $false
+  $peor = @()
+  foreach ($k in $otros) {
+    $n = Get-Resultado $tareasCasos[$k] $nombre
+    $m = Get-Empeora $S.Res[$k] $n
+    if ($m) { $peor += $m }
+    $v.Nuevos[$k] = $n
+  }
+  if ($peor.Count -gt 0) { $v.Motivo = (@($peor | Select-Object -First 3) -join "`n"); return $v }
+  # 6. la suite de tests unitarios: ni mas fallos ni menos tests que al empezar
+  $t = Measure-Tests "reparar $($S.N), tests unitarios"
+  if ($t.Motivo) { $v.Motivo = $t.Motivo; return $v }
+  if ($t.Fallos -gt $S.Base.Fallos) {
+    $v.Motivo = 'Tu cambio arregla el caso, pero rompe estos tests (esperan el comportamiento de ahora?): ' + (@($t.Nombres | Select-Object -First 5) -join ', ') + ". Fallan $($t.Fallos) y antes fallaban $($S.Base.Fallos)."
+    return $v
+  }
+  if ($t.Ejecutados -lt $S.Base.Ejecutados) { $v.Motivo = "Con tu cambio se ejecutan menos tests unitarios: $($t.Ejecutados) y antes eran $($S.Base.Ejecutados)."; return $v }
+  $v.Tipo = 'bien'
+  return $v
+}
+
+# Lleva a $DirRama el arreglo que hay en la copia (el cambio de src/main/ desde su base, con git apply --index) y lo commitea; la base de
+# la copia pasa a llevarlo. Devuelve '' o el motivo; si falla, deja la rama como estaba.
+function Save-Arreglo([string]$Asunto, [int]$N) {
+  $parche = Join-Path $Local "reparar-$N.patch"
+  [void](Invoke-Git $CopiaMig @('add', '-A', '--', 'src/main'))
+  [void](Invoke-Git $CopiaMig @('diff', '--cached', '--binary', "--output=$parche", $script:Base[$CopiaMig].Arbol))
+  $r = Invoke-Git $DirRama @('apply', '--index', $parche)
+  if ($r.Codigo -ne 0) { Restore-Base $CopiaMig; return "git apply no ha podido llevar el arreglo a ${DirRama}: " + (Get-Resumen ($r.Salida -join "`n")) }
+  $r = Invoke-Git $DirRama (@('commit', '-q') + @($Cfg.CommitArgs) + @('-m', $Asunto))
+  if ($r.Codigo -ne 0) {
+    [void](Invoke-Git $DirRama @('apply', '-R', '--index', $parche))
+    Restore-Base $CopiaMig
+    return "git commit ha fallado en ${DirRama}: " + (Get-Resumen ($r.Salida -join "`n"))
+  }
+  $script:headMig = Get-Head $DirRama
+  $script:Propios += $script:headMig
+  Save-Copia $CopiaMig
+  return ''
+}
+
+# Arregla la clave $C: llama a la IA (con reintento) hasta que un arreglo pasa las puertas, hasta que dice que no se arregla o hasta que
+# se acaban los intentos. Devuelve la entrada de reparaciones de prueba-local.json.
+function Repair-Clave($C, $S) {
+  $r = $S.Res[(Get-IndiceCaso $S.Res $C.job $C.caso)]
+  $t = Get-TareaReparar $C $r $S
+  $o = [ordered]@{ clave = $C.clave; job = $C.job; caso = $C.caso; casos = $C.casos; resultado = 'no arreglado'; commit = ''; asunto = ''; intentos = 0; motivo = '' }
+  if ($t.estado -eq 'atascada') {
+    $o.intentos = $t.intentos
+    if ($t.ultimoEstado -eq 'no se arregla') { $o.resultado = 'no se arregla'; $o.motivo = $t.motivo } else { $o.motivo = "ya probado en este commit: $($t.motivo)" }
+    Aviso "$($C.job)/$($C.caso) $($C.clave): $($o.motivo)"
+    return $o
+  }
+  $asunto = "rescate(local): $($C.job)/$($C.caso) $($C.clave)"
+  $no = Join-Ruta $CopiaMig '.rescate/reparar-no.txt'
+  Info ''
+  Info "Arreglando $($C.job)/$($C.caso): la clave $($C.clave) la tienen $($C.casos) caso(s) distinto(s)..."
+  while ($t.estado -eq 'pendiente') {
+    $S.N++
+    $n = $S.N
+    Remove-Carpeta $no
+    $tope = $Cfg.SegundosPorLlamada
+    $Cfg.SegundosPorLlamada = $Cfg.SegundosReparar
+    try { $ll = @(Invoke-Lote @($t) $Cfg.EsfuerzoReparar) }
+    finally { $Cfg.SegundosPorLlamada = $tope }
+    Restore-Base $CopiaMig
+    $v = Test-Arreglo $t $ll[0] $S
+    if ($v.Tipo -eq 'bien') {
+      $m = Save-Arreglo $asunto $n
+      if (-not $m) {
+        foreach ($k in @($v.Nuevos.Keys)) { $S.Res[$k] = $v.Nuevos[$k] }
+        $S.Salidas = "reparar/$n"
+        Set-Intento $t ''
+        $o.resultado = 'arreglado'; $o.commit = $script:headMig; $o.asunto = $asunto; $o.intentos = $t.intentos
+        Bien "Arreglado $($C.job)/$($C.caso) $($C.clave) en el commit $($o.commit.Substring(0, 7))."
+        return $o
+      }
+      $v.Tipo = 'rechazado'; $v.Motivo = $m
+    }
+    $diff = ''
+    if ($v.ConDiff) { $diff = (@(Get-DiffCopia | Select-Object -First 40) -join "`n") }
+    Remove-Carpeta (Join-Ruta $Local "salidas/reparar/$n")
+    Remove-Carpeta $no
+    Undo-Copia $CopiaMig
+    if ($v.Tipo -eq 'no se arregla') {
+      $t.estado = 'atascada'; $t.ultimoEstado = 'no se arregla'; $t.motivo = $v.Motivo; $t.intentos++
+      Save-Tarea $t
+      $o.resultado = 'no se arregla'; $o.intentos = $t.intentos; $o.motivo = $v.Motivo
+      Aviso "No se arregla $($C.job)/$($C.caso) $($C.clave): $($v.Motivo)"
+      return $o
+    }
+    $t.entradas.prompt.DIFF = ''
+    if ($diff) { $t.entradas.prompt.DIFF = "Esto es lo que habias cambiado (las primeras 40 lineas del diff):`n`n$diff" }
+    Set-Intento $t $v.Motivo
+    Aviso "Arreglo de $($C.job)/$($C.caso) rechazado (intento $($t.intentos) de $($Cfg.Intentos)): $(($v.Motivo -split "`n")[0])"
+  }
+  $o.intentos = $t.intentos; $o.motivo = $t.motivo
+  return $o
+}
+
+# Con -Reparar y casos distintos: arregla las claves, de la que tiene mas casos a la que menos, hasta MaxReparaciones, y deja en $Res (en su
+# sitio) lo medido tras el ultimo arreglo bueno, cuyas salidas pasan a ser las del migrado. Devuelve las entradas de reparaciones.
+function Invoke-Reparaciones($Res) {
+  Info ''
+  Info "Reparando en la rama de rescate ($(Get-Rama $DirRama)): hasta $($Cfg.MaxReparaciones) claves de diferencia, con $($Cfg.Intentos) intentos cada una..."
+  Remove-Carpeta (Join-Ruta $Local 'salidas/reparar')
+  Save-Copia $CopiaMig   # la copia ya lleva el arnes y los casos que dejo Invoke-Migrado: son su base
+  $base = Measure-Tests 'tests unitarios de partida'
+  if ($base.Motivo) { Aviso "No reparo nada: no he podido medir los tests unitarios de partida. $($base.Motivo)"; return @() }
+  Info "Tests unitarios de partida: $($base.Ejecutados) ejecutados, $($base.Fallos) fallan."
+  $s = [pscustomobject]@{ Res = $Res; Salidas = 'migrado'; N = 0; Base = $base; Probadas = @{} }
+  $reps = @()
+  while ($s.Probadas.Count -lt [int]$Cfg.MaxReparaciones) {
+    $c = Find-Clave $s.Res $s.Probadas
+    if (-not $c) { break }
+    $s.Probadas[$c.clave] = $true
+    $reps += , (Repair-Clave $c $s)
+  }
+  $quedan = @(@($s.Res | Where-Object { $_.resultado -eq 'distinto' } | ForEach-Object { Get-Claves $_ }) | Where-Object { -not $s.Probadas.ContainsKey($_) } | Select-Object -Unique)
+  if ($quedan.Count -gt 0) { Aviso "Tope de MaxReparaciones ($($Cfg.MaxReparaciones)) claves por lanzamiento: quedan sin probar: $($quedan -join ', '). Vuelve a lanzar con -Reparar." }
+  if ($s.Salidas -ne 'migrado') {
+    Remove-Carpeta (Join-Ruta $Local 'salidas/migrado')
+    Copy-Carpeta (Join-Ruta $Local "salidas/$($s.Salidas)") (Join-Ruta $Local 'salidas/migrado')
+  }
+  return $reps
+}
+
+# Una linea por reparacion.
+function Show-Reparaciones($Reps) {
+  Info ''
+  Info 'Reparaciones:'
+  foreach ($r in @($Reps)) {
+    $donde = "$($r.job)/$($r.caso) $($r.clave) ($($r.casos) casos)"
+    $motivo = ($r.motivo -split "`n")[0]
+    if ($r.resultado -eq 'arreglado') { Bien "  arreglado: $donde en $($r.commit.Substring(0, 7)) ($($r.asunto))" }
+    elseif ($r.resultado -eq 'no se arregla') { Aviso "  no se arregla: ${donde}: $motivo" }
+    else { Fallo "  no arreglado: ${donde}: $motivo" }
+  }
 }
 
 # ================================ RESULTADO ================================
@@ -1014,14 +1326,15 @@ function Get-PorJob($Res) {
   return $porJob
 }
 
-# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables) y devuelve lo escrito.
-function Save-Resultado($Res, $Culpables) {
+# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo escrito.
+function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   $o = [ordered]@{
     version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig
     modelo = $ModeloElegido; inicio = $Inicio.ToString('s'); fin = (Get-Date).ToString('s'); minutos = [Math]::Round($reloj.Elapsed.TotalMinutes, 1); llamadas = $script:Llamadas
     arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = @(Get-PorJob $Res); casos = $Res; noPromete = $NoPromete
   }
   if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
+  if ($Reparar) { $o.reparaciones = @($Reparaciones) }
   Write-Json (Join-Path $DatosMig 'prueba-local.json') $o
   return $o
 }
@@ -1030,6 +1343,7 @@ function Save-Resultado($Res, $Culpables) {
 $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original.' }
+if ($Reparar -and ($Desde -or $Deshacer)) { Stop-Arranque '-Reparar no se combina con -Desde ni con -Deshacer: o buscas el commit que rompe un caso, o arreglas lo que venia mal de la migracion.' }
 if ($Deshacer -and -not $Desde) { Stop-Arranque '-Deshacer solo vale con -Desde <commit>: dime desde que commit tengo que buscar lo que rompe.' }
 $ajustes = Read-CfgFile (Get-RutaAjustes) @('Plantilla') $false
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro git en el PATH." }
@@ -1073,7 +1387,7 @@ if (-not $PSBoundParameters.ContainsKey('Modelo') -and (Test-Path -LiteralPath (
 if ($ModeloElegido) { Info "Modelo: $ModeloElegido" } else { Info 'Modelo: el que tenga Copilot' }
 
 # Huellas de lo que no se puede tocar: el original, el migrado, su worktree de rescate y la referencia. La unica excepcion: con
-# -Deshacer, la carpeta de la rama que se prueba puede acabar con sus commits de revert nuevos encima (Test-MismaHuella).
+# -Deshacer o -Reparar, la carpeta de la rama que se prueba puede acabar con sus commits nuevos encima (Test-MismaHuella).
 $Worktree = ''
 $OrigenRoot = $MigradoRoot
 Set-Excluidos $MigradoRoot   # migracion-*/ fuera de git, como hace migracion.ps1
@@ -1081,6 +1395,8 @@ $dirRescate = Get-DirRescate
 $hayRescate = Test-WorktreeRescate $dirRescate
 $DirRama = $MigradoRoot   # la carpeta de la rama que se prueba (la de rescate, si hay): donde se busca con -Desde y se deshace con -Deshacer
 if ($hayRescate) { $DirRama = $dirRescate }
+if ($Reparar -and -not $hayRescate) { Stop-Arranque "-Reparar necesita el worktree de rescate: lanza migracion.ps1 primero: crea $dirRescate." }
+if ($Reparar -and (Test-RamaSucia)) { Stop-Arranque "$DirRama tiene cambios sin commit (git status): guardalos o descartalos y vuelve a lanzar con -Reparar." }
 $intocables = @($LegacyRoot, $MigradoRoot)
 if ($hayRescate) { $intocables += $dirRescate }
 if ($PlantillaRoot) { $intocables += $PlantillaRoot }
@@ -1091,7 +1407,7 @@ $script:Racha = 0
 $script:Mavens = 0
 $script:Maven = @{}
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
-$script:Reverts = @()   # -Deshacer: los commits de revert que ha hecho
+$script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -1176,7 +1492,19 @@ try {
     $culpables = @(Find-Culpables $res)
     if ($Deshacer) { Undo-Culpables $culpables $res }
     $o = Save-Resultado $res $culpables
-    if ($Deshacer -and @($script:Reverts).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
+    if ($Deshacer -and @($script:Propios).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
+  }
+  # 7. Con -Reparar: arregla la rama de rescate hasta que los casos distintos salgan iguales; el resultado y la salida son los de despues
+  if ($Reparar) {
+    $reparaciones = @()
+    if (@($res | Where-Object { $_.resultado -eq 'distinto' }).Count -eq 0) { Info ''; Info 'Con -Reparar: no hay casos distintos que arreglar.' }
+    elseif (Confirmar "Llamar a Copilot para arreglar hasta $($Cfg.MaxReparaciones) causas de los casos distintos (cada una, hasta $($Cfg.Intentos) llamadas)?") { $reparaciones = @(Invoke-Reparaciones $res) }
+    else { Info ''; Info 'No se repara nada.' }
+    $o = Save-Resultado $res @() $reparaciones
+    if ($reparaciones.Count -gt 0) {
+      if (@($reparaciones | Where-Object { $_.resultado -eq 'arreglado' }).Count -gt 0) { Info ''; Info 'Despues de reparar:'; Show-Resultado $res $o.jobs }
+      Show-Reparaciones $reparaciones
+    }
   }
   Info ''
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
