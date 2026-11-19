@@ -1,0 +1,84 @@
+# m33-mvn.ps1 - Maven de mentira para tests/probar-regresion.ps1 (-Regresion de prueba-local.ps1). Hace lo de m25-mvn.ps1 (y con el, lo de
+# mvn-local.ps1) y, ademas, segun las palabras de RESCATE_M33 (separadas por comas):
+#   estable    tras cada 'test -Dtest=...', ficheros/salida/resultado_<aaaammdd>.txt de cada caso pierde las lineas 'procesado en' y 'hecho el' (la ruta
+#              y la hora de la ejecucion) y pasa a llamarse resultado.txt: lo que sale no depende de cuando ni donde se ejecuta. Sin esta palabra,
+#              lo que sale lleva la fecha, la hora y la ruta de hoy, como el de un batch que escribe su propio dia
+#   framework  cada caso deja ademas tablas/BATCH_JOB_INSTANCE.csv y tablas/TASK_EXECUTION.csv, con otro contenido en cada lado (el original es
+#              la carpeta batch-viejo)
+#   sordo      el test de regresion no compara nada: pasa siempre
+# Un 'test' con -Dtest=...RegresionLocalTest... (los casos ya se han ejecutado todos, en una sola JVM, con lo de mvn-local.ps1) hace lo que haria el
+# RegresionLocalTest de verdad: por cada src/test/resources/prueba-local-esperado/<job>/<caso>/ compara cada fichero con el de target/prueba-local/<job>/<caso>/
+# (sin las tablas BATCH_ ni TASK_ y sin contar los saltos de linea) y, si algo no coincide, falla (sale con 1) y deja en target/regresion-fallos.txt una
+# linea por caso: job, caso y el mensaje (fichero, primera linea distinta, lo esperado y lo que sale), separados por tabuladores.
+$raiz = (Get-Location).Path
+$modo = @("$env:RESCATE_M33" -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+& (Join-Path $PSScriptRoot 'm25-mvn.ps1') @args
+$codigo = $LASTEXITCODE
+$prueba = @($args | Where-Object { "$_" -like '-Dtest=*' })
+$salidas = Join-Path $raiz 'target/prueba-local'
+if ($codigo -ne 0 -or $args -notcontains 'test' -or $prueba.Count -eq 0 -or -not (Test-Path -LiteralPath $salidas)) { exit $codigo }
+
+$original = ($raiz -like '*batch-viejo*')
+foreach ($caso in @(Get-ChildItem -LiteralPath $salidas -Directory | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory })) {
+  if ($modo -contains 'estable') {
+    foreach ($f in @(Get-ChildItem -LiteralPath $caso.FullName -Recurse -File -Filter 'resultado_*.txt')) {
+      $lineas = @([System.IO.File]::ReadAllLines($f.FullName) | Where-Object { $_ -notmatch '^(procesado en|hecho el) ' })
+      [System.IO.File]::WriteAllText((Join-Path $f.DirectoryName 'resultado.txt'), (($lineas -join "`n") + "`n"))
+      Remove-Item -LiteralPath $f.FullName
+    }
+  }
+  if ($modo -contains 'framework' -and $caso.Name -ne 'vacio') {
+    $tablas = Join-Path $caso.FullName 'tablas'
+    [void](New-Item -ItemType Directory -Path $tablas -Force)
+    if ($original) { $n = 'viejo' } else { $n = 'nuevo' }
+    [System.IO.File]::WriteAllText((Join-Path $tablas 'BATCH_JOB_INSTANCE.csv'), "JOB_INSTANCE_ID;JOB_NAME`n1;$n`n")
+    if (-not $original) { [System.IO.File]::WriteAllText((Join-Path $tablas 'TASK_EXECUTION.csv'), "TASK_EXECUTION_ID;TASK_NAME`n1;$n`n") }
+  }
+}
+
+if ($prueba[0] -notmatch 'RegresionLocalTest') { exit 0 }
+if (@(Get-ChildItem -LiteralPath (Join-Path $raiz 'src/test/java') -Recurse -File -Filter 'RegresionLocalTest.java' -ErrorAction SilentlyContinue).Count -eq 0) {
+  '[ERROR] No tests matching pattern "RegresionLocalTest" were executed!'
+  exit 1
+}
+if ($modo -contains 'sordo') { '[INFO] BUILD SUCCESS'; exit 0 }
+
+function Get-Lineas([string]$Ruta) {
+  $l = @(([System.IO.File]::ReadAllText($Ruta)) -split '\r?\n')
+  if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
+  return $l
+}
+function Get-Rutas([string]$Dir) {
+  if (-not (Test-Path -LiteralPath $Dir)) { return @() }
+  return @(Get-ChildItem -LiteralPath $Dir -Recurse -File | ForEach-Object { ($_.FullName.Substring($Dir.Length).TrimStart('\', '/')) -replace '\\', '/' } | Where-Object { $_ -cnotmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$' })
+}
+$esperado = Join-Path $raiz 'src/test/resources/prueba-local-esperado'
+$fallos = @()
+foreach ($dj in @(Get-ChildItem -LiteralPath $esperado -Directory | Sort-Object Name)) {
+  foreach ($dc in @(Get-ChildItem -LiteralPath $dj.FullName -Directory | Sort-Object Name)) {
+    $sale = Join-Path $salidas ($dj.Name + '/' + $dc.Name)
+    $mensaje = ''
+    foreach ($rel in @((Get-Rutas $dc.FullName) + (Get-Rutas $sale) | Sort-Object -Unique)) {
+      $a = Join-Path $dc.FullName $rel
+      $b = Join-Path $sale $rel
+      if (-not (Test-Path -LiteralPath $b)) { $mensaje = "${rel}: no sale"; break }
+      if (-not (Test-Path -LiteralPath $a)) { $mensaje = "${rel}: sobra, el original no lo deja"; break }
+      $x = @(Get-Lineas $a)
+      $y = @(Get-Lineas $b)
+      for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count) -and -not $mensaje; $i++) {
+        $va = '(no hay)'; $vb = '(no hay)'
+        if ($i -lt $x.Count) { $va = $x[$i] }
+        if ($i -lt $y.Count) { $vb = $y[$i] }
+        if ($va -cne $vb) { $mensaje = "${rel}: linea $($i + 1): esperado '$va' y sale '$vb'" }
+      }
+      if ($mensaje) { break }
+    }
+    if ($mensaje) { $fallos += ($dj.Name + "`t" + $dc.Name + "`t" + $mensaje) }
+  }
+}
+if ($fallos.Count -eq 0) { '[INFO] BUILD SUCCESS'; exit 0 }
+[void](New-Item -ItemType Directory -Path (Join-Path $raiz 'target') -Force)
+[System.IO.File]::WriteAllText((Join-Path $raiz 'target/regresion-fallos.txt'), (($fallos -join "`n") + "`n"))
+'[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0 <<< FAILURE! - in RegresionLocalTest'
+foreach ($f in $fallos) { '[ERROR]   RegresionLocalTest: ' + ($f -replace "`t", ' ') }
+exit 1
