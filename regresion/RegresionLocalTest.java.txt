@@ -1,0 +1,182 @@
+package {{PAQUETE}};
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Order;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Red de seguridad que dejo la prueba en local (prueba-local.ps1 -Regresion): lo que sale hoy es lo que dejo el batch original.
+ *
+ * Por cada carpeta de src/test/resources/prueba-local-esperado/&lt;job&gt;/&lt;caso&gt;/ (la salida del original con las entradas de
+ * src/test/resources/prueba-local/&lt;job&gt;/&lt;caso&gt;/) compara los ficheros con los que PruebaLocalTest ha dejado en
+ * target/prueba-local/&lt;job&gt;/&lt;caso&gt;/. Las reglas son las de la prueba en local:
+ * <ul>
+ * <li>no cuentan las tablas del framework, tablas/BATCH_*.csv ni tablas/TASK_*.csv;</li>
+ * <li>un tablas/*.csv se compara sin orden de columnas ni de filas (si una fila no tiene tantos campos como la cabecera, tal cual);</li>
+ * <li>lo demas, byte a byte, salvo los saltos de linea (\r\n cuenta como \n) y el ultimo salto del fichero.</li>
+ * </ul>
+ *
+ * Tiene que correr DESPUES de PruebaLocalTest, que es quien deja target/prueba-local. Lo garantiza @Order(Integer.MAX_VALUE) mas la
+ * propiedad junit.jupiter.testclass.order.default=org.junit.jupiter.api.ClassOrderer$OrderAnnotation de
+ * src/test/resources/junit-platform.properties (JUnit 5.8 o mas): las clases con @Order van por su numero y las demas, por delante. Si
+ * una clase no esta en target, el fallo lo dice.
+ *
+ * Para dejarla fuera: -DexcludedGroups=regresion.
+ */
+@Tag("regresion")
+@Order(Integer.MAX_VALUE)
+class RegresionLocalTest {
+
+  private static final Path ESPERADO = Paths.get("src/test/resources/prueba-local-esperado");
+  private static final Path SALIDA = Paths.get("target/prueba-local");
+  /** Una linea por caso que falla (job, caso y mensaje, separados por tabuladores): prueba-local.ps1 lo lee para quitar ese caso. */
+  private static final Path FALLOS = Paths.get("target/regresion-fallos.txt");
+  private static final int LARGO_MAXIMO = 200;
+
+  @Test
+  void loQueSaleEsLoQueDejoElOriginal() throws IOException {
+    List<String> fallos = new ArrayList<>();
+    for (Path job : subcarpetas(ESPERADO)) {
+      for (Path caso : subcarpetas(job)) {
+        String donde = job.getFileName() + "/" + caso.getFileName();
+        String mensaje = primeraDiferencia(caso, SALIDA.resolve(job.getFileName()).resolve(caso.getFileName()), donde);
+        if (mensaje != null) {
+          fallos.add(job.getFileName() + "\t" + caso.getFileName() + "\t" + mensaje);
+        }
+      }
+    }
+    if (!fallos.isEmpty()) {
+      Files.createDirectories(FALLOS.getParent());
+      Files.write(FALLOS, fallos, StandardCharsets.UTF_8);
+      Assertions.fail("La salida no es la que dejo el original en " + fallos.size() + " casos:\n"
+          + fallos.stream().map(f -> "  " + f.replaceFirst("\t", "/").replaceFirst("\t", ": ")).collect(Collectors.joining("\n")));
+    }
+  }
+
+  private static List<Path> subcarpetas(Path carpeta) throws IOException {
+    if (!Files.isDirectory(carpeta)) {
+      return List.of();
+    }
+    try (Stream<Path> s = Files.list(carpeta)) {
+      return s.filter(Files::isDirectory).sorted().collect(Collectors.toList());
+    }
+  }
+
+  /** Los ficheros de una carpeta, con su ruta relativa y con /, sin las tablas del framework. */
+  private static TreeSet<String> ficheros(Path carpeta) throws IOException {
+    TreeSet<String> rutas = new TreeSet<>();
+    if (!Files.isDirectory(carpeta)) {
+      return rutas;
+    }
+    try (Stream<Path> s = Files.walk(carpeta)) {
+      s.filter(Files::isRegularFile)
+          .map(f -> carpeta.relativize(f).toString().replace('\\', '/'))
+          .filter(r -> !r.matches("tablas/(BATCH|TASK)_[^/]*\\.csv"))
+          .forEach(rutas::add);
+    }
+    return rutas;
+  }
+
+  /** null si el caso sale igual; si no, el mensaje de la primera diferencia: fichero y primera linea distinta. */
+  private static String primeraDiferencia(Path esperado, Path sale, String donde) throws IOException {
+    if (!Files.isDirectory(sale)) {
+      return "no hay salida en " + SALIDA + "/" + donde + " (PruebaLocalTest no la ha dejado)";
+    }
+    TreeSet<String> rutas = ficheros(esperado);
+    rutas.addAll(ficheros(sale));
+    for (String ruta : rutas) {
+      Path a = esperado.resolve(ruta);
+      Path b = sale.resolve(ruta);
+      if (!Files.exists(b)) {
+        return ruta + ": no sale";
+      }
+      if (!Files.exists(a)) {
+        return ruta + ": sobra, el original no lo deja";
+      }
+      boolean tabla = ruta.matches("tablas/.+\\.csv");
+      List<String> x = lineas(a, tabla);
+      List<String> y = lineas(b, tabla);
+      for (int i = 0; i < Math.max(x.size(), y.size()); i++) {
+        String va = i < x.size() ? x.get(i) : null;
+        String vb = i < y.size() ? y.get(i) : null;
+        if (va == null || !va.equals(vb)) {
+          return ruta + ": linea " + (i + 1) + ": esperado '" + ensenar(va) + "' y sale '" + ensenar(vb) + "'";
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Las lineas de un fichero leido byte a byte (Latin-1), sin el ultimo salto; una tabla, con columnas y filas ordenadas. */
+  private static List<String> lineas(Path fichero, boolean tabla) throws IOException {
+    String texto = new String(Files.readAllBytes(fichero), StandardCharsets.ISO_8859_1);
+    List<String> l = new ArrayList<>(Arrays.asList(texto.split("\r?\n", -1)));
+    if (!l.isEmpty() && l.get(l.size() - 1).isEmpty()) {
+      l.remove(l.size() - 1);
+    }
+    return tabla ? ordenaTabla(l) : l;
+  }
+
+  /** Las columnas ordenadas por su nombre y las filas ordenadas; la misma lista si una fila no tiene tantos campos como la cabecera. */
+  private static List<String> ordenaTabla(List<String> l) {
+    if (l.isEmpty()) {
+      return l;
+    }
+    String[] cabecera = l.get(0).split(";", -1);
+    List<String[]> filas = new ArrayList<>();
+    for (String linea : l.subList(1, l.size())) {
+      String[] campos = linea.split(";", -1);
+      if (campos.length != cabecera.length) {
+        return l;
+      }
+      filas.add(campos);
+    }
+    Integer[] orden = new Integer[cabecera.length];
+    for (int i = 0; i < orden.length; i++) {
+      orden[i] = i;
+    }
+    Arrays.sort(orden, Comparator.comparing((Integer i) -> cabecera[i]).thenComparing(i -> i));
+    List<String> salida = new ArrayList<>();
+    salida.add(unir(cabecera, orden));
+    filas.stream().map(f -> unir(f, orden)).sorted().forEach(salida::add);
+    return salida;
+  }
+
+  private static String unir(String[] campos, Integer[] orden) {
+    return Arrays.stream(orden).map(i -> campos[i]).collect(Collectors.joining(";"));
+  }
+
+  /** Una linea leida en Latin-1, para ensenarla: en UTF-8 si lo es y, si no, tal cual; recortada. */
+  private static String ensenar(String linea) {
+    if (linea == null) {
+      return "(no hay)";
+    }
+    String legible = linea;
+    try {
+      legible = StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(linea.getBytes(StandardCharsets.ISO_8859_1)))
+          .toString();
+    } catch (CharacterCodingException e) {
+      legible = linea;
+    }
+    return legible.length() > LARGO_MAXIMO ? legible.substring(0, LARGO_MAXIMO) + "..." : legible;
+  }
+}
