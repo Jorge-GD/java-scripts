@@ -70,8 +70,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 valor de -JavaLegacy, o vacio): con ellos la portada monta el comando del siguiente paso.
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
   que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
-  migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato) y 4-correcciones.html (que se ha
-  corregido y que queda), con informe.ps1 y las plantillas de informe\.
+  migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato), 4-correcciones.html (que se ha
+  corregido y que queda) y 5-buenas-practicas.html (las buenas practicas del migrado y que hacer con cada una), con
+  informe.ps1 y las plantillas de informe\.
   Se abren con doble clic: sin IA, sin JavaScript y sin nada externo.
   Si algo se atasca, el script para y lo deja en datos\estado.json (parada) con un
   texto de ayuda listo para pegar en Copilot. Al relanzar el mismo comando salta
@@ -167,7 +168,7 @@ function Save-Estado {
   Write-Json (Join-Path $Datos 'estado.json') $Estado
 }
 
-# Las cinco paginas del informe (index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html y 4-correcciones.html) con lo que haya hasta ahora. Si no se pueden montar,
+# Las seis paginas del informe (index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html, 4-correcciones.html y 5-buenas-practicas.html) con lo que haya hasta ahora. Si no se pueden montar,
 # se avisa y la pasada sigue: son una vista de los datos, no parte del trabajo.
 function Save-Informes {
   try { Write-Informes -Salida $Salida }

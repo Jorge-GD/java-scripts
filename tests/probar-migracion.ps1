@@ -5844,5 +5844,158 @@ $Pruebas['bp2 integracion: una corrida real deja la pagina 5 con las incidencias
   Comprueba 'y la consola no dice que no pudo escribir las paginas' ($r.Salida -notmatch 'No he podido escribir las paginas')
 }
 
+# ============ BP-5: EL INFORME CONOCE LA FASE practicas Y LA PAGINA 5 MARCA LO ARREGLADO ============
+# Los nombres de las fases de la portada, en su orden, con corregir y sin la fase practicas (como hasta BP-4). '.' donde hay una letra con acento.
+$Bp5Fases = @('Diagn.stico del migrado', 'Lectura de las clases', 'Mapa de jobs, pasos y variables', 'C.mo se lanza cada job', 'Redacci.n de cada job', 'Resumen y glosario',
+  'Guion de prueba en pre', 'Casos de las reglas sin caso', 'Correcci.n del migrado', 'Comparaci.n con el original', 'Prueba en local')
+$Bp5FasesParar = @('Diagn.stico del migrado', 'Lectura de las clases', 'Mapa de jobs, pasos y variables', 'C.mo se lanza cada job', 'Redacci.n de cada job', 'Resumen y glosario',
+  'Guion de prueba en pre', 'Casos de las reglas sin caso', 'Comparaci.n con el original', 'Correcci.n del migrado', 'Prueba en local')
+
+# Los practicas-despues.json de BP-2 con los getters y setters a mano de 4 ficheros (la regla que busca BP-4) y una incidencia de otra regla en uno de ellos.
+function Bp5-Practicas {
+  $p = Bp2-Practicas 'despues'
+  $d = 'src/main/java/com/acme/recibos/domain/model/'
+  $mas = @(
+    (Bp2-Incidencia 'lombok' ($d + 'Pedido.java') 12 'lombok' 'getter-setter-a-mano' 'referencia' '' '6 getters y 6 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2'),
+    (Bp2-Incidencia 'java21' ($d + 'Pedido.java') 40 'pmd' 'UnusedPrivateField' 'referencia' '' 'El campo observaciones no se usa.' 'mano'),
+    (Bp2-Incidencia 'lombok' ($d + 'Remesa.java') 9 'lombok' 'getter-setter-a-mano' 'referencia' '' '3 getters y 3 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2'),
+    (Bp2-Incidencia 'lombok' ($d + 'Cliente.java') 7 'lombok' 'getter-setter-a-mano' 'referencia' '' '4 getters y 4 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2'),
+    (Bp2-Incidencia 'lombok' ($d + 'Tarifa.java') 5 'lombok' 'getter-setter-a-mano' 'referencia' '' '2 getters y 2 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2')
+  )
+  $p['incidencias'] = @($p['incidencias']) + $mas
+  return $p
+}
+
+# El practicas-arreglos.json que deja BP-4: 2 hechas con commit (Pedido y Remesa), 1 atascada (Cliente) y 1 sin cambios (Tarifa, hecha sin commit).
+function Bp5-Arreglos {
+  $d = 'src/main/java/com/acme/recibos/domain/model/'
+  return [ordered]@{
+    version = 1; cuando = '2026-11-19T12:30:00'; pasados = 2; atascados = 1; sinCambios = 1
+    tareas = @(
+      [ordered]@{ fichero = ($d + 'Pedido.java'); estado = 'hecha'; commit = '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d'; motivo = '' },
+      [ordered]@{ fichero = ($d + 'Remesa.java'); estado = 'hecha'; commit = '9f8e7d6c5b4a39281706f5e4d3c2b1a098765432'; motivo = '' },
+      [ordered]@{ fichero = ($d + 'Cliente.java'); estado = 'atascada'; commit = ''; motivo = 'lo compilado cambia' },
+      [ordered]@{ fichero = ($d + 'Tarifa.java'); estado = 'hecha'; commit = ''; motivo = 'sin cambios' }
+    )
+  }
+}
+
+# Una carpeta de salida sin correr migracion.ps1, con el estado en $Fase y la respuesta $Respuesta, una correccion completa y los JSON que se le den. Monta las paginas.
+function Bp5-Salida([string]$Nombre, [string]$Fase, $Practicas = $null, $Arreglos = $null, [string]$Respuesta = 'corregir') {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $s = Join-Path $raiz 'migracion-batch-recibos'
+  [void](New-Item -ItemType Directory -Path (Join-Path $s 'datos') -Force)
+  Guarda-Json (Join-Path $s 'datos/estado.json') ([ordered]@{ batch = 'batch-recibos'; legacy = 'acme/recibos-java8'; migrado = 'acme/batch-recibos'; plantilla = 'acme/batch-referencia'; modelo = 'modelo-x'; creado = '2026-11-19T10:00:00'; actualizado = '2026-11-19T11:00:00'; fase = $Fase; respuesta = $Respuesta })
+  Guarda-Json (Join-Path $s 'datos/hallazgos-antes.json') @((Hallazgo 'build' 'error' 'pom.xml' 0 'pom uno'), (Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests'))
+  Escribe $s 'datos/diagnostico-antes.md' (Md-Diagnostico 'compila: SI | tests: OK')
+  Guarda-Json (Join-Path $s 'datos/correcciones.json') ([ordered]@{ completa = $true; codigo = 0; rama = 'rescate/main-20261119-1000'; base = 'main'; commits = @(); atascados = @(); resueltos = @(); variablesNuevas = @() })
+  if ($null -ne $Practicas) { Guarda-Json (Join-Path $s 'datos/practicas-despues.json') $Practicas }
+  if ($null -ne $Arreglos) { Guarda-Json (Join-Path $s 'datos/practicas-arreglos.json') $Arreglos }
+  $g = Genera-Informes $s
+  Comprueba "$Nombre : Write-Informes sale bien" ($g.Codigo -eq 0 -and $g.Salida -match 'INFORMES-OK') (Cola $g.Salida)
+  return [pscustomobject]@{ Dir = $s; I = (Pagina $s 'index.html'); P5 = (Pagina $s '5-buenas-practicas.html') }
+}
+
+# Las lineas de "Que ha hecho el script" de la portada: Nombre, E (data-e) y Cuenta.
+function Bp5-Lineas([string]$Portada) {
+  $ol = [regex]::Match($Portada, '(?s)<ol class="fases">.*?</ol>').Value
+  return @([regex]::Matches($ol, '(?s)<li><span class="fase-n">(.*?)</span><span class="fase-e" data-e="(.*?)">.*?</span><span class="fase-c">(.*?)</span></li>') | ForEach-Object {
+      [pscustomobject]@{ Nombre = $_.Groups[1].Value; E = $_.Groups[2].Value; Cuenta = $_.Groups[3].Value }
+    })
+}
+
+# Los nombres de las lineas contra los patrones esperados, en orden (la misma cuenta y cada uno en su sitio).
+function Bp5-Orden($Lineas, [string[]]$Patrones) {
+  $l = @($Lineas)
+  if ($l.Count -ne $Patrones.Count) { return $false }
+  for ($k = 0; $k -lt $l.Count; $k++) { if ($l[$k].Nombre -notmatch ('^' + $Patrones[$k] + '$')) { return $false } }
+  return $true
+}
+
+# La pagina sin su CSS (que cambia por motivos que no son de esta prueba), en su SHA-256.
+function Bp5-HashPagina([string]$Html) {
+  $sin = [regex]::Replace($Html, '(?s)<style>.*?</style>', '')
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  return ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sin))) -replace '-', '')
+}
+
+# La pagina 5 de la Bp5-Practicas de despues, sin practicas-arreglos.json, medida con el codigo de antes de BP-5 (9a732e2): cada cambio de la pagina 5 o del marco la cambia.
+$Bp5HashSinArreglos = '2DCE51F6575560F9C2345D7C2293FBACBE137C3B191774A9C11B21326D1FD722'
+
+$Pruebas['bp5 (a) con el estado en la fase practicas la portada la pone en curso, las de antes hechas y prueba-local en espera; va despues de la correccion y de comparar y antes de prueba-local'] = {
+  $x = Bp5-Salida 'bp5-curso' 'practicas'
+  $l = @(Bp5-Lineas $x.I)
+  Igual 'la portada lista 12 fases' 12 $l.Count
+  $pr = @($l | Where-Object { $_.Nombre -match 'Buenas pr.cticas' })
+  Igual 'una de ellas es la de las buenas practicas' 1 $pr.Count
+  if ($pr.Count -ne 1) { return }
+  Igual 'esa fase esta en curso' 'curso' $pr[0].E
+  $n = [array]::IndexOf(@($l | ForEach-Object { $_.Nombre }), $pr[0].Nombre)
+  Comprueba 'va despues de Comparacion con el original, que va despues de la correccion' ($n -ge 2 -and $l[$n - 1].Nombre -match 'Comparaci.n con el original' -and $l[$n - 2].Nombre -match 'Correcci.n del migrado') (($l | ForEach-Object { $_.Nombre }) -join ' / ')
+  Comprueba 'y justo antes de la prueba en local' ($n + 1 -lt $l.Count -and $l[$n + 1].Nombre -match 'Prueba en local')
+  Igual 'las fases de antes salen hechas (diagnostico, lecturas, correccion y comparacion)' ((@('hecha') * 10) -join ' ') ((@($l | Select-Object -First $n | ForEach-Object { $_.E })) -join ' ')
+  Igual 'la prueba en local esta en espera' 'espera' $l[$n + 1].E
+  Comprueba 'sin practicas-arreglos.json la cuenta no tiene numeros inventados' ($pr[0].Cuenta -notmatch 'pasados a Lombok') $pr[0].Cuenta
+  # con parar, comparar va antes de la correccion, y practicas sigue a la correccion
+  $y = Bp5-Salida 'bp5-curso-parar' 'practicas' $null $null 'parar'
+  $m = @(Bp5-Lineas $y.I)
+  Comprueba 'con la respuesta parar: ... Comparacion, Correccion, Buenas practicas, Prueba en local' ((Bp5-Orden $m ($Bp5FasesParar[0..9] + @('Buenas pr.cticas.*') + @($Bp5FasesParar[10])))) (($m | ForEach-Object { $_.Nombre }) -join ' / ')
+}
+
+$Pruebas['bp5 (b) sin practicas-arreglos.json y con el estado en otra fase la lista de fases de la portada es la de antes, con corregir y con parar'] = {
+  foreach ($fase in @('prueba-local', 'hecha', 'correccion')) {
+    $x = Bp5-Salida "bp5-sin-$fase" $fase
+    Comprueba "corregir, fase $fase : las 11 fases de siempre, sin la de las buenas practicas" (Bp5-Orden (Bp5-Lineas $x.I) $Bp5Fases) ((Bp5-Lineas $x.I | ForEach-Object { $_.Nombre }) -join ' / ')
+  }
+  $y = Bp5-Salida 'bp5-sin-parar' 'hecha' $null $null 'parar'
+  Comprueba 'parar, fase hecha: las 11 fases de siempre, con Comparacion antes de la correccion' (Bp5-Orden (Bp5-Lineas $y.I) $Bp5FasesParar) ((Bp5-Lineas $y.I | ForEach-Object { $_.Nombre }) -join ' / ')
+  $z = Bp5-Salida 'bp5-roto' 'hecha'
+  Escribe $z.Dir 'datos/practicas-arreglos.json' '{ esto no es json'
+  $g = Genera-Informes $z.Dir
+  Comprueba 'con un practicas-arreglos.json roto se monta igual y la lista es la de siempre' ($g.Salida -match 'INFORMES-OK' -and (Bp5-Orden (Bp5-Lineas (Pagina $z.Dir 'index.html')) $Bp5Fases)) (Cola $g.Salida)
+}
+
+$Pruebas['bp5 (c) con practicas-arreglos.json la portada cuenta 2, 1 y 1 y la pagina 5 pone Arreglado: en las dos filas getter-setter-a-mano de los ficheros hechos con commit, y en ninguna mas'] = {
+  $x = Bp5-Salida 'bp5-arreglos' 'hecha' (Bp5-Practicas) (Bp5-Arreglos)
+  $l = @(Bp5-Lineas $x.I)
+  Igual 'la portada lista 12 fases' 12 $l.Count
+  $pr = @($l | Where-Object { $_.Nombre -match 'Buenas pr.cticas' })
+  Igual 'con una linea de buenas practicas' 1 $pr.Count
+  if ($pr.Count -eq 1) {
+    Igual 'su cuenta, con los numeros del JSON' '2 pasados a Lombok, 1 atascados, 1 sin cambios' $pr[0].Cuenta
+    Igual 'su estado: hecha (la pasada acabo)' 'hecha' $pr[0].E
+    $n = [array]::IndexOf(@($l | ForEach-Object { $_.Nombre }), $pr[0].Nombre)
+    Comprueba 'justo antes de la prueba en local' ($n + 1 -lt $l.Count -and $l[$n + 1].Nombre -match 'Prueba en local')
+  }
+  # la pagina 5: cada vista lleva las 15 incidencias; Arreglado: solo en las 2 de lombok de Pedido y Remesa
+  foreach ($vista in @('que', 'area')) {
+    $v = Bp2-Vista $x.P5 $vista
+    $filas = @([regex]::Matches($v, '(?s)<li class="bp-fila .*?</li>') | ForEach-Object { $_.Value })
+    Igual "vista $vista : las 15 incidencias" 15 $filas.Count
+    $con = @($filas | Where-Object { $_ -match 'Arreglado:' })
+    Igual "vista $vista : Arreglado: en 2 filas" 2 $con.Count
+    Comprueba "vista $vista : son las de getter-setter-a-mano de Pedido y de Remesa" ($con.Count -eq 2 -and @($con | Where-Object { $_ -match 'getter-setter-a-mano' -and $_ -match '(Pedido|Remesa)\.java' }).Count -eq 2)
+    Comprueba "vista $vista : con el commit en 7 caracteres" (@($con | Where-Object { $_ -match 'Arreglado: <code>(1a2b3c4|9f8e7d6)</code>' }).Count -eq 2) ($con -join "`n")
+    $pedido = @($filas | Where-Object { $_ -match 'Pedido\.java' })
+    Igual "vista $vista : Pedido tiene 2 filas y solo la de Lombok va arreglada" '2 1' ("$($pedido.Count) $(@($pedido | Where-Object { $_ -match 'Arreglado:' }).Count)")
+    $sin = @($filas | Where-Object { $_ -match '(Cliente|Tarifa)\.java' })
+    Igual "vista $vista : ni la atascada ni la sin cambios (2 filas) llevan la etiqueta" '2 0' ("$($sin.Count) $(@($sin | Where-Object { $_ -match 'Arreglado:' }).Count)")
+  }
+  Igual 'y en toda la pagina, 4 veces (2 filas en cada una de las 2 vistas)' 4 ([regex]::Matches($x.P5, 'Arreglado:').Count)
+}
+
+$Pruebas['bp5 (d) sin practicas-arreglos.json la pagina 5 es la de antes de BP-5, byte a byte; con uno que no arregla ningun getter-setter, tambien'] = {
+  $x = Bp5-Salida 'bp5-igual' 'hecha' (Bp5-Practicas)
+  $h = Bp5-HashPagina $x.P5
+  if ($Bp5HashSinArreglos -ceq 'PENDIENTE') { Write-Host "  HASH $h" }
+  Igual 'sin el JSON: el mismo SHA-256 (sin el CSS) que la pagina de antes del cambio' $Bp5HashSinArreglos $h
+  Comprueba 'y no dice Arreglado:' (-not $x.P5.Contains('Arreglado:'))
+  $a = Bp5-Arreglos
+  $a['tareas'] = @($a['tareas'] | Where-Object { $_.estado -ne 'hecha' -or -not $_.commit })
+  $y = Bp5-Salida 'bp5-igual-sin-hechas' 'hecha' (Bp5-Practicas) $a
+  Igual 'con un JSON sin ninguna hecha con commit: la misma pagina, byte a byte' $x.P5 $y.P5
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

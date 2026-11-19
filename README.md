@@ -222,7 +222,7 @@ Antes de escribir estas comprobaciones miramos lo que ya existe (noviembre de 20
 
 ## migracion.ps1
 
-Migración desatendida de un batch Java: lee el original, mide el migrado, lo corrige, compara y prueba. Un comando, dos preguntas (modelo y qué hacer al acabar el informe) y las cinco páginas del informe en `<Migrado>\migracion-<batch>\`. Las cabeceras del script explican cada fase.
+Migración desatendida de un batch Java: lee el original, mide el migrado, lo corrige, compara y prueba. Un comando, dos preguntas (modelo y qué hacer al acabar el informe) y las seis páginas del informe en `<Migrado>\migracion-<batch>\`. Las cabeceras del script explican cada fase.
 
 ```powershell
 .\migracion.ps1 -Legacy C:\ruta\life-java8 -Migrado C:\ruta\batch-life -Si       # lee, corrige, compara y prueba en local

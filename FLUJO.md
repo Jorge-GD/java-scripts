@@ -71,7 +71,7 @@ Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primer
 - No cambia código.
 - Si el original no compila con el JDK de Maven, añade `-JavaLegacy C:\ruta\jdk-del-original`. Sin eso, la prueba en local se queda sin hacer.
 - Si el original se lanza con scripts `.sh` que no están en su carpeta, añade `-Lanzadores C:\ruta\scripts`. Sin ningún `.sh`, la página 1 y la 3 lo dicen.
-- Abre `C:\ruta\migrado\migracion-<batch>\index.html`. `<batch>` es el `artifactId` del `pom.xml` del migrado. La portada dice cómo ha ido y qué te toca. Arriba del todo, el recuadro «Siguiente paso» dice qué hacer ahora, con el comando listo para copiar. Desde ahí llegas a las otras cuatro páginas.
+- Abre `C:\ruta\migrado\migracion-<batch>\index.html`. `<batch>` es el `artifactId` del `pom.xml` del migrado. La portada dice cómo ha ido y qué te toca. Arriba del todo, el recuadro «Siguiente paso» dice qué hacer ahora, con el comando listo para copiar. Desde ahí llegas a las otras cinco páginas.
 
 | Página | Qué cuenta | Para quién |
 |---|---|---|
@@ -79,6 +79,7 @@ Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primer
 | `2-problemas.html` | Los problemas del migrado: estructura, hexagonal, SFTP, configuración, Javadoc, cobertura | Tú |
 | `3-original-vs-migrado.html` | Caso a caso, si el migrado da lo mismo que el original | Tú |
 | `4-correcciones.html` | Qué se ha corregido y qué queda | Tú |
+| `5-buenas-practicas.html` | Las buenas prácticas del migrado (javac, PMD, SpotBugs y Lombok), qué hacer con cada incidencia y cuáles ya están arregladas | Tú |
 
 Carpetas que verás aparecer:
 

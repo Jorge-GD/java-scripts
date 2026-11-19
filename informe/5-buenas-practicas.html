@@ -131,10 +131,11 @@
 {{{FILAS}}}
       </ol>
     </section><!--FIN-->
-<!--TROZO bp-fila-->        <li class="bp-fila bp-q-{{QUE}}"><div class="bp-fb-c"><code class="bp-donde">{{{DONDE}}}</code></div><div class="bp-fb-o">{{{ORIGEN}}}<span class="bp-regla">{{REGLA}}</span></div><p class="bp-fb-p">{{TEXTO}}</p><div class="bp-fb-extra">{{{EXTRA}}}</div></li><!--FIN-->
+<!--TROZO bp-fila-->        <li class="bp-fila bp-q-{{QUE}}"><div class="bp-fb-c"><code class="bp-donde">{{{DONDE}}}</code></div><div class="bp-fb-o">{{{ORIGEN}}}{{{ARREGLADO}}}<span class="bp-regla">{{REGLA}}</span></div><p class="bp-fb-p">{{TEXTO}}</p><div class="bp-fb-extra">{{{EXTRA}}}</div></li><!--FIN-->
 <!--TROZO bp-origen-sonar--><span class="bp-tag"><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Sonar {{CLAVE}}</span><!--FIN-->
 <!--TROZO bp-origen-spotbugs--><span class="bp-tag"><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Sonar (SpotBugs)</span><!--FIN-->
 <!--TROZO bp-origen-referencia--><span class="bp-tag"><i class="bp-sw bp-sw-r" aria-hidden="true"></i>de la referencia</span><!--FIN-->
+<!--TROZO bp-arreglado--><span class="bp-tag">Arreglado: <code>{{COMMIT}}</code></span><!--FIN-->
 <!--TROZO bp-queHago-mano--><span class="bp-que bp-que-mano"><svg aria-hidden="true"><use href="#e-aviso"/></svg>A mano</span><!--FIN-->
 <!--TROZO bp-queHago-mano-expl-->Esto lo haces tú.<!--FIN-->
 <!--TROZO bp-queHago-paso2--><span class="bp-que bp-que-paso2"><svg aria-hidden="true"><use href="#e-auto"/></svg>Lo arregla el paso 2</span><!--FIN-->

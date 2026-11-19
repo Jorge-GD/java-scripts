@@ -288,7 +288,7 @@ function Read-DatosInforme([string]$Salida) {
     Tareas = $tareas; Indice = (Get-IndiceHechos $Salida); Vistas = @(); Diag = (Read-Diagnostico $datos); Despues = (Read-Diagnostico $datos 'despues')
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json')); PruebaLocal = (Read-JsonSuave (Join-Path $datos 'prueba-local.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
-    Practicas = (Read-Practicas $datos)
+    Practicas = (Read-Practicas $datos); Arreglos = (Read-JsonSuave (Join-Path $datos 'practicas-arreglos.json'))
     Comparacion = (Read-Comparaciones $datos)
     Lanzadores = @(); LanzadoresLeidos = $false
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
@@ -843,10 +843,14 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
 
 # Las fases de la pasada en el orden en que se hacen, que depende de la respuesta: con corregir, la comparacion y la prueba en local van
 # despues de la correccion; si no, la comparacion va antes. lectura-hecha y hecha no se pintan: marcan el sitio de esos dos estados.
+# practicas (-Practicas) va despues de la correccion y de comparar y antes de prueba-local, y solo si la pasada la tiene: el estado esta en ella
+# o hay datos\practicas-arreglos.json.
 function Get-OrdenFases($D) {
   $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'lanzadores', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
-  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar', 'prueba-local', 'hecha')) }
-  return @($lectura + @('comparar', 'lectura-hecha', 'correccion', 'prueba-local', 'hecha'))
+  $practicas = @()
+  if (($D.Estado -and [string]$D.Estado.fase -ceq 'practicas') -or $D.Arreglos) { $practicas = @('practicas') }
+  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar') + $practicas + @('prueba-local', 'hecha')) }
+  return @($lectura + @('comparar', 'lectura-hecha', 'correccion') + $practicas + @('prueba-local', 'hecha'))
 }
 
 # Una linea de una fase: su estado (segun la fase en que va la pasada) y lo que cuentan sus tareas.
@@ -889,6 +893,10 @@ function Get-FaseHtml($D, $T, [string]$Fase) {
   elseif ($Fase -eq 'correccion') {
     $cuenta = Format-Trozo $T 'sin-valor'
     if ($D.Correccion) { $cuenta = Format-Trozo $T 'cuenta-correccion' @{ COMMITS = "$(@($D.Correccion.commits).Count)"; ATASCADOS = "$(@($D.Correccion.atascados).Count)" } }
+  }
+  elseif ($Fase -eq 'practicas') {
+    $cuenta = Format-Trozo $T 'sin-valor'
+    if ($D.Arreglos) { $cuenta = Format-Trozo $T 'cuenta-practicas' @{ PASADOS = "$([int]$D.Arreglos.pasados)"; ATASCADOS = "$([int]$D.Arreglos.atascados)"; SIN = "$([int]$D.Arreglos.sinCambios)" } }
   }
   elseif ($ts.Count -gt 0) {
     $c = @{}
@@ -1333,14 +1341,21 @@ function Read-Practicas([string]$Datos) {
 }
 
 # Las incidencias del JSON con lo que las vistas necesitan: Area, Que (un queHago que no se conoce es "mano": todo lo demas), ConSonar
-# (origen sonar o spotbugs: el Sonar del equipo tambien lanza SpotBugs) e I, la incidencia tal cual.
-function Get-IncidenciasPractica($P) {
+# (origen sonar o spotbugs: el Sonar del equipo tambien lanza SpotBugs), Commit (los 7 primeros caracteres del commit con que arreglo-practicas.ps1
+# paso a Lombok el fichero de una incidencia getter-setter-a-mano; '' si no, o si no hay datos\practicas-arreglos.json) e I, la incidencia tal cual.
+function Get-IncidenciasPractica($P, $Arreglos) {
+  $commits = @{}
+  foreach ($t in @($Arreglos.tareas)) {
+    if ($t -and [string]$t.estado -ceq 'hecha' -and [string]$t.commit) { $commits[[string]$t.fichero] = ([string]$t.commit).Substring(0, [math]::Min(7, ([string]$t.commit).Length)) }
+  }
   $r = @()
   foreach ($i in @($P.incidencias)) {
     if ($null -eq $i) { continue }
     $que = [string]$i.queHago
     if ($QueHagoPractica -cnotcontains $que) { $que = 'mano' }
-    $r += [pscustomobject]@{ Area = [string]$i.area; Que = $que; ConSonar = (@('sonar', 'spotbugs') -ccontains [string]$i.origen); I = $i }
+    $commit = ''
+    if ([string]$i.regla -ceq 'getter-setter-a-mano' -and $commits.ContainsKey([string]$i.fichero)) { $commit = $commits[[string]$i.fichero] }
+    $r += [pscustomobject]@{ Area = [string]$i.area; Que = $que; ConSonar = (@('sonar', 'spotbugs') -ccontains [string]$i.origen); Commit = $commit; I = $i }
   }
   return $r
 }
@@ -1375,10 +1390,12 @@ function Get-OrigenPractica($T, $I) {
   return (Format-Trozo $T 'bp-origen-referencia')
 }
 
-# Una incidencia: donde esta, de donde sale, la regla, lo que dice y, aparte, $Extra (en la vista por "que hago", el area; en la otra, el "que hago").
+# Una incidencia: donde esta, de donde sale, si ya esta arreglada, la regla, lo que dice y, aparte, $Extra (en la vista por "que hago", el area; en la otra, el "que hago").
 function Get-FilaPractica($T, $X, [string]$Extra) {
+  $arreglado = ''
+  if ($X.Commit) { $arreglado = Format-Trozo $T 'bp-arreglado' @{ COMMIT = $X.Commit } }
   return (Format-Trozo $T 'bp-fila' @{
-      QUE = $X.Que; DONDE = (Get-DondePractica $T $X.I); ORIGEN = (Get-OrigenPractica $T $X.I)
+      QUE = $X.Que; DONDE = (Get-DondePractica $T $X.I); ORIGEN = (Get-OrigenPractica $T $X.I); ARREGLADO = $arreglado
       REGLA = ([string]$X.I.herramienta + ' ' + [string]$X.I.regla); TEXTO = [string]$X.I.texto; EXTRA = $Extra
     })
 }
@@ -1520,7 +1537,7 @@ function Get-CuerpoPracticas($D, $T, [string]$Cuerpo) {
   $cabecera = ''
   $practicas = Format-Trozo $T 'bp-sin-datos' @{ ETIQUETA = (Format-Trozo $T 'et-sin') }
   if ($P) {
-    $incs = @(Get-IncidenciasPractica $P)
+    $incs = @(Get-IncidenciasPractica $P $D.Arreglos)
     $ind = Get-IndicadoresPractica $T $P $incs
     $arq = ''
     if ($null -eq $P.arquitectura) { $arq = Format-Trozo $T 'bp-arquitectura-sin' @{ ETIQUETA = (Format-Trozo $T 'et-sin') } }
