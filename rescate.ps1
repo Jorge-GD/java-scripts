@@ -4364,10 +4364,11 @@ switch ($Modo) {
       Info "Los cambios estan en la rama '$ramaFin', en commits locales. El script no hace push."
       if ($RepoRoot -ne $OrigenRoot) {
         $ro = Get-Rama $OrigenRoot
-        Info "Tu carpeta '$OrigenRoot' sigue como estaba. Desde ella:"
-        Info "  ver que ha cambiado:  git diff --stat ${ro}...$ramaFin"
-        Info "  traerlo a tu rama:    git merge $ramaFin      (o sube la rama y abre un PR)"
-        Info "  borrar el worktree:   git worktree remove `"$RepoRoot`"      (la rama se conserva)"
+        Info "Tu carpeta '$OrigenRoot' sigue como estaba. Copia cada linea entera; lo que va detras de # es solo la explicacion:"
+        $ordenGit = "  git -C `"$OrigenRoot`" "
+        Info "${ordenGit}diff --stat ${ro}...$ramaFin   # ver que ha cambiado"
+        Info "${ordenGit}merge $ramaFin   # traerlo a tu rama (o sube la rama y abre un PR)"
+        Info "${ordenGit}worktree remove `"$RepoRoot`"   # borrar el worktree cuando acabes con prueba-local.ps1 (la rama se conserva)"
         if (@((Invoke-Git $OrigenRoot @('status', '--porcelain')).Salida | Where-Object { $_ }).Count -gt 0) {
           Info '  Ojo: si tenias cambios sin commit al crear el worktree, ya van dentro de esa rama (commit foto). Guardalos o descartalos antes del merge.'
         }

@@ -5899,5 +5899,22 @@ $Pruebas['m23: todo en ASCII (el falso nuevo)'] = {
   Igual 'sin bytes fuera de ASCII en m23-copilot.ps1' 0 @([System.IO.File]::ReadAllBytes($f) | Where-Object { $_ -gt 127 }).Count
 }
 
+# ===================== LOS COMANDOS DEL FINAL SE PEGAN ENTEROS (m27) =====================
+$Pruebas['m27 final del fix: las tres ordenes de git salen cada una en su linea, con git -C "<tu carpeta>" delante y la explicacion detras de #, para pegarlas enteras desde cualquier carpeta'] = {
+  $e = Nuevo-Escenario 'm27-final'
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si')
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  $ramaFin = GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')
+  $lineas = @($r.Salida -split "`n" | Where-Object { $_ -match 'diff --stat|merge rescate/|worktree remove' })
+  Igual 'tres lineas: ver lo que ha cambiado, traerlo y borrar el worktree' 3 $lineas.Count
+  Comprueba 'cada una empieza por git -C " (solo espacios delante)' (@($lineas | Where-Object { $_ -match '^\s*git -C "' }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'con la carpeta del usuario entre comillas' (@($lineas | Where-Object { $_ -match ('^\s*git -C "' + [regex]::Escape($e.Repo) + '" ') }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'y la explicacion detras de #, tras una orden que acaba antes' (@($lineas | Where-Object { $_ -match '^\s*git -C "[^"]+" \S.*\S\s+# \S' }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'ver: diff --stat con la rama de la carpeta y la de rescate' ($lineas[0] -match ('^\s*git -C "[^"]+" diff --stat main\.\.\.' + [regex]::Escape($ramaFin) + '\s+# ver que ha cambiado$')) $lineas[0]
+  Comprueba 'traer: merge, con la alternativa del PR en el comentario' ($lineas[1] -match ('^\s*git -C "[^"]+" merge ' + [regex]::Escape($ramaFin) + '\s+# traerlo a tu rama \(o sube la rama y abre un PR\)$')) $lineas[1]
+  Comprueba 'borrar: worktree remove, que se haga al acabar con prueba-local.ps1 y que la rama se conserva' ($lineas[2] -match ('^\s*git -C "[^"]+" worktree remove "' + [regex]::Escape($e.Wt) + '"\s+# borrar el worktree cuando acabes con prueba-local\.ps1 \(la rama se conserva\)$')) $lineas[2]
+  Comprueba 'antes de ellas, la frase que dice que se copia cada linea entera' ($r.Salida -match 'Copia cada linea entera; lo que va detras de # es solo la explicacion') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

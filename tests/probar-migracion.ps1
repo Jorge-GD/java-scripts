@@ -5565,5 +5565,24 @@ $Pruebas['m24 config.json del repo: las claves de rescate.ps1 (PalabrasConfigAnt
   Comprueba 'y lo que si comparte (el Maven falso del config.json) se sigue leyendo: el diagnostico llega a la pagina 2' (Test-Path -LiteralPath (Get-Ruta $e.Out '2-problemas.html')) (Cola $r.Salida)
 }
 
+# ===================== LOS COMANDOS DEL FINAL SE PEGAN ENTEROS (m27) =====================
+$Pruebas['m27 pagina 4: las tres ordenes de git, cada una en su linea con git -C "<carpeta del migrado>" delante y la explicacion detras de #'] = {
+  $c = Corrida-Dos $GuionBase
+  $d = Datos-Pagina4
+  $x = Correccion-Con $c.E 'm27-p4' $d.Antes $d.Despues $d.Corr
+  $st = Lee-Json (Get-Ruta $x.Dir 'datos/estado.json')
+  $co = Panel-De $x.P4 'codigo'
+  $lineas = @([regex]::Match($co, '(?s)<pre class="cmd">(.*?)</pre>').Groups[1].Value -split "`r?`n" | Where-Object { $_ })
+  Igual 'tres lineas' 3 $lineas.Count
+  Comprueba 'cada una empieza por git -C " (nada delante)' (@($lineas | Where-Object { $_.StartsWith('git -C "') }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'con la carpeta del migrado entre comillas' (@($lineas | Where-Object { $_.StartsWith('git -C "' + (Html $st.migrado) + '" ') }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'y la explicacion detras de #, tras una orden que acaba antes' (@($lineas | Where-Object { $_ -match '^git -C "[^"]+" \S.*\S\s+# \S' }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'ver: diff --stat con la base y la rama' ($lineas[0] -match '^git -C "[^"]+" diff --stat main\.\.\.rescate/main-20260101-0000\s+# ver qu. ha cambiado$') $lineas[0]
+  Comprueba 'traer: merge, con la alternativa del PR en el comentario' ($lineas[1] -match '^git -C "[^"]+" merge rescate/main-20260101-0000\s+# traerlo a tu rama \(o sube la rama y abre un PR\)$') $lineas[1]
+  Comprueba 'borrar: worktree remove del worktree, al acabar con prueba-local.ps1, y la rama se conserva' ($lineas[2] -match ('^git -C "[^"]+" worktree remove "' + [regex]::Escape((Html $st.worktree)) + '"\s+# borrar el worktree cuando acabes con prueba-local\.ps1 \(la rama se conserva\)$')) $lineas[2]
+  Comprueba 'antes de ellas, la frase que dice que se copia cada linea entera' ($co -match 'Copia cada l.nea entera; lo que va detr.s de <code>#</code> es solo la explicaci.n') $co
+  Comprueba 'sigue sin JavaScript ni nada externo' ($x.P4 -notmatch '(?i)<script' -and $x.P4 -notmatch 'https?://')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

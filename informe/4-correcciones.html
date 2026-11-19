@@ -33,10 +33,10 @@
 <section class="panel" id="codigo" aria-labelledby="t-codigo">
   <h2 id="t-codigo">Dónde está el código</h2>
   <p>Los arreglos están en la rama <code>{{RAMA}}</code>, en el worktree <code>{{WORKTREE}}</code>. Nada se ha subido a ningún servidor: son commits locales.</p>
-  <p>Desde la carpeta del migrado (<code>{{MIGRADO}}</code>):</p>
-  <pre class="cmd">ver qué ha cambiado:  git diff --stat {{BASE}}...{{RAMA}}
-traerlo a tu rama:    git merge {{RAMA}}
-borrar el worktree:   git worktree remove "{{WORKTREE}}"</pre>
+  <p>Copia cada línea entera; lo que va detrás de <code>#</code> es solo la explicación:</p>
+  <pre class="cmd">git -C "{{MIGRADO}}" diff --stat {{BASE}}...{{RAMA}}   # ver qué ha cambiado
+git -C "{{MIGRADO}}" merge {{RAMA}}   # traerlo a tu rama (o sube la rama y abre un PR)
+git -C "{{MIGRADO}}" worktree remove "{{WORKTREE}}"   # borrar el worktree cuando acabes con prueba-local.ps1 (la rama se conserva)</pre>
 </section><!--FIN-->
 <!--TROZO variables-nuevas--><section class="panel" id="variables-nuevas" aria-labelledby="t-variables">
   <h2 id="t-variables">Lo que necesita ahora para arrancar</h2>

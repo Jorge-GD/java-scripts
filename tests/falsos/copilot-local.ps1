@@ -10,14 +10,16 @@
 #   arnes-dep-sin-test   el arnes anade al pom.xml una dependencia sin <scope>test</scope> (prohibido)
 #   arnes-no-compila     el test lleva NO_COMPILA (mvn-local.ps1 no lo compila)
 #   arnes-sin-filtro     el test lleva IGNORA_CASO (mvn-local.ps1 no hace caso de -Dprueba.local.caso)
+#   arnes-surefire-error | arnes-surefire-sin-causa | arnes-surefire-larga | arnes-surefire-viejo | arnes-surefire-salida | arnes-surefire-sin-causa-con-salida
+#                        el test lleva ARNES_SUREFIRE_<...> (mvn-local.ps1 falla como un test de verdad y deja el informe de surefire que dice)
 #   caso-fuera           el caso escribe ademas src/main/resources/fuera.txt (prohibido), en todos los intentos
 #   caso-no-aplica       el caso solo escribe no-aplica.txt con una frase
 #   caso-nada            el caso no escribe nada
 #   caso-carpeta-vacia   el caso solo crea la carpeta ficheros/entrada, vacia
 #   caso-sin-efecto      el caso solo escribe parametros.properties (su salida es la de un caso vacio)
 #   caso-commit          el caso escribe lo suyo y src/main/resources/fuera.txt, y hace git add y git commit
-# Cada llamada deja en la carpeta RESCATE_LLAMADAS (si esta) <id>-<pid>.txt con id, tipo, flags y las horas de inicio y
-# de fin (ticks UTC). Con RESCATE_ESPERA=<n>, cada llamada tarda n segundos (para ver cuantas van a la vez).
+# Cada llamada deja en la carpeta RESCATE_LLAMADAS (si esta) <id>-<pid>.txt con id, tipo, flags, el JAVA_HOME que ve
+# (javahome) y las horas de inicio y de fin (ticks UTC). Con RESCATE_ESPERA=<n>, cada llamada tarda n segundos (para ver cuantas van a la vez).
 $texto = ''
 for ($i = 0; $i -lt $args.Count; $i++) { if ("$($args[$i])" -eq '-p') { $texto = "$($args[$i + 1])" } }
 if ($texto -notmatch 'tareas/([\w\-]+)\.prompt\.md') { 'no entiendo el prompt'; exit 1 }
@@ -33,7 +35,7 @@ foreach ($g in ("$env:RESCATE_FALSO" -split ';')) {
   if ($nombre -and -not $guion -and $id -match $solo) { $guion = $nombre }
 }
 $flags = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=)' }) -join ' ')
-$reg = @("id=$id", "pid=$PID", "tipo=$tipo", "flags=$flags", "guion=$guion", ('inicio=' + [DateTime]::UtcNow.Ticks))
+$reg = @("id=$id", "pid=$PID", "tipo=$tipo", "flags=$flags", "guion=$guion", "javahome=$env:JAVA_HOME", ('inicio=' + [DateTime]::UtcNow.Ticks))
 $fichero = ''
 if ($env:RESCATE_LLAMADAS) {
   [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
@@ -53,6 +55,7 @@ if ($tipo -eq 'arnes-local') {
   $test = "// PruebaLocalTest de mentira: mvn-local.ps1 hace lo que haria`nclass PruebaLocalTest {}`n"
   if ($guion -eq 'arnes-no-compila') { $test += "// NO_COMPILA`n" }
   if ($guion -eq 'arnes-sin-filtro') { $test += "// IGNORA_CASO`n" }
+  if ($guion -like 'arnes-surefire-*') { $test += '// ARNES_' + $guion.Substring(6).ToUpperInvariant().Replace('-', '_') + "`n" }
   Escribir (Linea 'ESCRIBIR') $test
   $pom = Join-Path $raiz 'pom.xml'
   $dep = '<dependency><groupId>org.ejemplo</groupId><artifactId>prueba</artifactId><version>1.0</version><scope>test</scope></dependency>'

@@ -1595,5 +1595,160 @@ $Pruebas['m26 (d) -Reparar: la IA arregla src/main/ y cambia pom.xml (con seguim
   Comprueba 'el pom.xml de la copia queda como estaba' ((Lee $e.CopiaMig 'pom.xml') -notmatch 'tocado por la IA') ''
 }
 
+# ===================== JAVA_HOME de la IA (m27) =====================
+# La IA que escribe el arnes del original y los casos ejecuta Maven en la copia del original: tiene que ver el JDK de -JavaLegacy y no el
+# del proceso. copilot-local.ps1 apunta en el registro de cada llamada el JAVA_HOME que ve (javahome=).
+
+# Lanza prueba-local.ps1 con JAVA_HOME = $Proceso (o sin JAVA_HOME si es '') y cada llamada de Copilot tardando 1 s (RESCATE_ESPERA), para
+# que se vea cuales van a la vez. Devuelve lo de Prueba; el JAVA_HOME de cada llamada queda en el registro del falso (JavaHome-De).
+function Prueba-Con-JavaHome($E, [string[]]$A, [string]$Proceso) {
+  $antes = $env:JAVA_HOME
+  if ($Proceso) { $env:JAVA_HOME = $Proceso } else { $env:JAVA_HOME = $null }
+  $env:RESCATE_ESPERA = '1'
+  try { $r = Prueba $E $A }
+  finally { $env:RESCATE_ESPERA = ''; $env:JAVA_HOME = $antes }
+  return $r
+}
+
+# El JAVA_HOME que vieron las llamadas cuyo id casa con $Id ('arnes-original', 'caso-*'), sin repetidos y unidos con comas.
+function JavaHome-De($E, [string]$Id) { return ((@(Llamadas $E | Where-Object { $_.id -like $Id } | ForEach-Object { $_.javahome } | Select-Object -Unique)) -join ',') }
+
+$Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME = -JavaLegacy, la del migrado ve el de antes, aunque vayan en la misma tanda'] = {
+  $e = Nuevo-Escenario 'm27-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $jdk = Join-Path $e.Raiz 'jdk-viejo'
+  [void](New-Item -ItemType Directory -Path $jdk -Force)
+  $proceso = Join-Path $e.Raiz 'jdk-del-proceso'
+  $r = Prueba-Con-JavaHome $e @('-JavaLegacy', $jdk) $proceso
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el arnes del original ve la carpeta de -JavaLegacy' $jdk (JavaHome-De $e 'arnes-original')
+  Igual 'el arnes del migrado ve el JAVA_HOME de antes' $proceso (JavaHome-De $e 'arnes-migrado')
+  Igual 'los dos fueron a la vez (la misma tanda)' 2 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.id -like 'arnes-*' }))
+  Igual 'los casos, que se preparan en la copia del original, ven la carpeta de -JavaLegacy' $jdk (JavaHome-De $e 'caso-*')
+  Igual 'cuatro llamadas en total: dos arneses y dos casos' 4 @(Llamadas $e).Count
+  $e2 = Nuevo-Escenario 'm27-a-vacio' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-Con-JavaHome $e2 @('-JavaLegacy', $jdk) ''
+  Igual 'sin JAVA_HOME en el proceso: sale con 0' 0 $r.Codigo
+  Igual 'el arnes del migrado ve el JAVA_HOME vacio' '' (JavaHome-De $e2 'arnes-migrado')
+  Igual 'y el del original, -JavaLegacy' $jdk (JavaHome-De $e2 'arnes-original')
+}
+
+$Pruebas['m27 (b) sin -JavaLegacy: la IA del original y la del migrado ven el JAVA_HOME de antes'] = {
+  $e = Nuevo-Escenario 'm27-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $proceso = Join-Path $e.Raiz 'jdk-del-proceso'
+  $r = Prueba-Con-JavaHome $e @() $proceso
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el arnes del original ve el JAVA_HOME de antes' $proceso (JavaHome-De $e 'arnes-original')
+  Igual 'el arnes del migrado, el mismo' $proceso (JavaHome-De $e 'arnes-migrado')
+  Igual 'los casos, el mismo' $proceso (JavaHome-De $e 'caso-*')
+  Igual 'cuatro llamadas en total' 4 @(Llamadas $e).Count
+}
+
+$Pruebas['m27 (c) Invoke-Llamadas: JavaHome solo vale para su elemento y el JAVA_HOME del script queda como estaba (con y sin JAVA_HOME, y si Copilot no se puede lanzar)'] = {
+  $f = Join-Path $Dir 'm27-llamadas.ps1'
+  [System.IO.File]::WriteAllText($f, @'
+param([string]$Sis, [string]$Copilot, [string]$Carpeta)
+. (Join-Path $Sis 'comun.ps1')
+. (Join-Path $Sis 'tareas.ps1')
+$Cfg.CopilotExe = $Copilot
+function Lote([string]$Marca) {
+  $con = [pscustomobject]@{ Id = "$Marca-con"; Dir = $Carpeta; Modelo = 'modelo-x'; Esfuerzo = 'medium'; Prompt = "TIPO: nada`n"; JavaHome = 'C:\jdk-del-item' }
+  $sin = [pscustomobject]@{ Id = "$Marca-sin"; Dir = $Carpeta; Modelo = 'modelo-x'; Esfuerzo = 'medium'; Prompt = "TIPO: nada`n" }
+  return @($con, $sin)
+}
+function Estado([string]$Que) { 'JAVA_HOME ' + $Que + ' [' + [Environment]::GetEnvironmentVariable('JAVA_HOME') + ']' }
+$env:JAVA_HOME = 'C:\jdk-del-script'
+[void](Invoke-Llamadas (Lote 'con-java'))
+Estado 'despues con JAVA_HOME'
+$env:JAVA_HOME = $null
+[void](Invoke-Llamadas (Lote 'sin-java'))
+Estado 'despues sin JAVA_HOME'
+$env:JAVA_HOME = 'C:\jdk-del-script'
+$Cfg.CopilotExe = Join-Path $Carpeta 'no-existe.ps1'
+$v = @(Invoke-Llamadas @([pscustomobject]@{ Id = 'roto'; Dir = $Carpeta; Modelo = 'modelo-x'; Esfuerzo = 'medium'; Prompt = "TIPO: nada`n"; JavaHome = 'C:\jdk-del-item' }))[0]
+'LANZAMIENTO ' + $v.Texto
+Estado 'despues de un lanzamiento que falla'
+'@)
+  $carpeta = Join-Path $Dir 'm27-c'
+  $reg = Join-Path $Dir 'm27-c-llamadas'
+  $env:RESCATE_LLAMADAS = $reg
+  try { $r = Lanzar $f @((Split-Path -Parent $Script), (Join-Path $falsos 'copilot-local.ps1'), $carpeta) }
+  finally { $env:RESCATE_LLAMADAS = '' }
+  $ll = Llamadas ([pscustomobject]@{ Llamadas = $reg })
+  Igual 'el elemento con JavaHome lo ve (en las dos tandas)' 'C:\jdk-del-item' ((@($ll | Where-Object { $_.id -like '*-con' } | ForEach-Object { $_.javahome } | Select-Object -Unique)) -join ',')
+  Igual 'el elemento sin JavaHome ve el del script (la primera tanda) o ninguno (la segunda)' 'C:\jdk-del-script,' ((@($ll | Where-Object { $_.id -like '*-sin' } | Sort-Object id | ForEach-Object { $_.javahome }) -join ','))
+  Comprueba 'despues, el JAVA_HOME del script es el de antes' ($r.Salida -match '(?m)^JAVA_HOME despues con JAVA_HOME \[C:\\jdk-del-script\]$') (Cola $r.Salida)
+  Comprueba 'y sin JAVA_HOME antes, sigue sin JAVA_HOME' ($r.Salida -match '(?m)^JAVA_HOME despues sin JAVA_HOME \[\]$') (Cola $r.Salida)
+  Comprueba 'un lanzamiento que falla lo dice' ($r.Salida -match '(?m)^LANZAMIENTO No pude lanzar Copilot') (Cola $r.Salida)
+  Comprueba 'y deja el JAVA_HOME como estaba' ($r.Salida -match '(?m)^JAVA_HOME despues de un lanzamiento que falla \[C:\\jdk-del-script\]$') (Cola $r.Salida)
+}
+
+# ===================== LA CAUSA DE VERDAD DE UN TEST QUE DA ERROR (m28) =====================
+# Cuando el test del arnes del original da error, el motivo lleva, al final, 'Causa: ' y la del informe de surefire de la copia (target/surefire-reports/*.txt):
+# el ultimo 'Caused by:' o, si no hay, la primera linea con texto tras '<<< ERROR!'. mvn-local.ps1 deja ese informe segun el ARNES_SUREFIRE_<X> del test que escribe
+# copilot-local.ps1 (guion arnes-surefire-<x>, solo para el arnes del original).
+
+# Lanza un escenario con el arnes del original fallando como dice $Guion y devuelve la consola, la tarea (atascada) y el prompt del reintento.
+function Arnes-Falla-Surefire([string]$Nombre, [string]$Guion) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() ($Guion + ':arnes-original')
+  $reintento = ''
+  if (Test-Path -LiteralPath (Get-Ruta $e.Local 'registros/arnes-original-2.log')) { $reintento = Lee $e.Local 'registros/arnes-original-2.log' }
+  return [pscustomobject]@{ E = $e; R = $r; T = (Lee-Json (Get-Ruta $e.Local 'tareas/arnes-original.json')); Reintento = $reintento }
+}
+
+$M28Fondo = 'Caused by: java.lang.IllegalArgumentException: Could not resolve placeholder ''acme.entrada.ruta'' in value "${acme.entrada.ruta}"'
+
+$Pruebas['m28 (a) el arnes del original da error en el test: el motivo acaba con Causa: y el ultimo Caused by del informe de surefire, y lo ven el reintento y la consola'] = {
+  $x = Arnes-Falla-Surefire 'm28-a' 'arnes-surefire-error'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Igual 'el arnes queda atascado' 'atascada' $x.T.estado
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo sigue diciendo que el job no dejo estado.txt, con las lineas [ERROR] de Maven' ($m -match 'el job cargaJob no ha dejado estado\.txt\. Maven dice:' -and $m -match '\[ERROR\] Failed to execute goal') $m
+  Comprueba 'y acaba con una linea Causa: y el ULTIMO Caused by' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'no el primero' ($m -notmatch 'Causa: Caused by: org\.springframework') $m
+  Comprueba 'el prompt del reintento (registro del intento 2) lleva esa causa' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
+  Comprueba 'la consola la ensena' ($x.R.Salida.Contains('Causa: ' + $M28Fondo)) (Cola $x.R.Salida)
+}
+
+$Pruebas['m28 (b) un informe viejo de otra ejecucion y ninguno nuevo: el motivo no lleva la causa vieja ni Causa:'] = {
+  $x = Arnes-Falla-Surefire 'm28-b' 'arnes-surefire-viejo'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo lleva las lineas [ERROR] de Maven' ($m -match '\[ERROR\] Failed to execute goal') $m
+  Comprueba 'no lleva la causa vieja' ($m -notmatch 'causa-vieja') $m
+  Comprueba 'ni una linea Causa:' ($m -notmatch '(?m)^Causa:') $m
+  Comprueba 'el prompt del reintento tampoco' ($x.Reintento -and $x.Reintento -notmatch 'causa-vieja' -and $x.Reintento -notmatch '(?m)^Causa:') (Cola $x.Reintento)
+}
+
+$Pruebas['m28 (c) informe con <<< ERROR! y ningun Caused by: la causa es la primera linea con texto despues'] = {
+  $x = Arnes-Falla-Surefire 'm28-c' 'arnes-surefire-sin-causa'
+  $m = [string]$x.T.motivo
+  Comprueba 'acaba con Causa: y esa linea (no la del nombre del test)' ($m.TrimEnd().EndsWith("`nCausa: java.lang.NullPointerException: no hay nada de fondo")) $m
+}
+
+$Pruebas['m28 (d) la causa se recorta a 300 caracteres'] = {
+  $x = Arnes-Falla-Surefire 'm28-d' 'arnes-surefire-larga'
+  $m = [string]$x.T.motivo
+  $causa = [regex]::Match($m, '(?m)^Causa: (.*)$').Groups[1].Value
+  Igual 'la causa mide 300' 300 $causa.Length
+  Comprueba 'y es el principio del ultimo Caused by' ($causa.StartsWith('Caused by: java.lang.IllegalStateException: largalarga')) $causa
+}
+
+# Surefire 2.x recorta la traza del informe (trimStackTrace) y puede dejarlo sin la cadena de Caused by: la traza entera sale en la salida de Maven.
+$Pruebas['m28 (e) sin informe de surefire y con dos Caused by en la salida de Maven: la causa es el ultimo, sin el [ERROR] de delante'] = {
+  $x = Arnes-Falla-Surefire 'm28-e' 'arnes-surefire-salida'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo acaba con Causa: y el ultimo Caused by de la salida' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'el prompt del reintento la lleva' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
+}
+
+$Pruebas['m28 (f) informe con <<< ERROR! y sin Caused by, y un Caused by en la salida de Maven: gana el de la salida'] = {
+  $x = Arnes-Falla-Surefire 'm28-f' 'arnes-surefire-sin-causa-con-salida'
+  $m = [string]$x.T.motivo
+  Comprueba 'el motivo acaba con Causa: y el Caused by de la salida, no la linea del informe' ($m.TrimEnd().EndsWith("`nCausa: Caused by: java.net.ConnectException: Connection refused")) $m
+  Comprueba 'y no lleva la excepcion del informe como causa' ($m -notmatch 'Causa: java\.lang\.NullPointerException') $m
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
