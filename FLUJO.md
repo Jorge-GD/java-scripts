@@ -142,6 +142,13 @@ Para encontrar el commit que rompe un caso:
 - Revisa esos commits (`git log`, `git show`) antes del `git merge` del paso 4. Con `-Job <job>` solo se miran los casos de ese job, también al comprobar que nada empeora.
 - No se combina con `-Desde` ni con `-Deshacer`. Pide que exista `C:\ruta\migrado-rescate` y que no tenga cambios sin commit.
 - **No promete nada sobre el entorno real.** Si un caso sale distinto solo porque la prueba local simula algo (la base de datos, el correo, el SFTP), Copilot lo dice y no cambia nada. Un arreglo que iguala la salida de la prueba local se revisa, y se prueba en pre.
+- **Si Copilot dice que la diferencia es del test del migrado** (`No se arregla ...: ... el arnés ...`), el que falla es `PruebaLocalTest` del migrado, no tu código. Escríbelo otra vez, traduciendo el del original, y vuelve a reparar:
+
+  ```powershell
+  .\prueba-local.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -RehacerArnes -Reparar
+  ```
+
+  El test del original no se toca. Las claves que salieron «no se arregla» se vuelven a probar con el test nuevo.
 
 ### Volver a comprobar, cuando quieras
 

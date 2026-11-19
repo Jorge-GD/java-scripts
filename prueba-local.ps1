@@ -12,15 +12,18 @@ QUE HACE
      HEAD del original, y <Migrado>-prueba-local, en el HEAD de la rama de rescate (si esta su worktree
      <Migrado>-rescate) o en el de la rama del migrado. Tus carpetas y tus ramas no se tocan (la unica excepcion es
      -Deshacer, mas abajo).
-  2. Arnes: una tarea de IA por copia (las dos a la vez, esfuerzo alto) escribe el test PruebaLocalTest junto a la clase
+  2. Arnes: una tarea de IA por copia (esfuerzo alto) escribe el test PruebaLocalTest junto a la clase
      con @SpringBootApplication y, si le hace falta, src\test\resources\application-prueba-local.yml (en el original,
-     tambien dependencias de test en el pom.xml). El script comprueba que no toca nada mas, que compila y que, con un
+     tambien dependencias de test en el pom.xml). Primero se escribe el del original y, cuando esta hecho, el del migrado,
+     que lo traduce: lleva en su prompt la ruta del test del original ya guardado, para simular lo mismo y al mismo nivel.
+     El script comprueba que no toca nada mas, que compila y que, con un
      caso vacio, cada job deja su estado.txt. Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
      Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
      vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
-     cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot.
+     cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
+     se borra y se escribe otra vez (el del original no se toca).
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -54,7 +57,8 @@ QUE HACE
      la suite de tests unitarios, sin el arnes, no falla mas ni se ejecuta menos que al empezar. Un arreglo que pasa va a la
      rama de rescate (un commit por arreglo: 'rescate(local): <job>/<caso> <clave>'); uno que no pasa se deshace y se
      reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
-     rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice.
+     rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice. Una clave
+     que sale 'no se arregla' no se vuelve a probar con el mismo test del migrado: con -RehacerArnes (otro test), si.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -68,6 +72,7 @@ USO
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
   .\prueba-local.ps1 ... -Reparar             # y arregla el migrado (en la rama de rescate) hasta que los casos distintos salgan iguales
+  .\prueba-local.ps1 ... -RehacerArnes        # escribe otra vez con la IA el test del migrado: si la IA de -Reparar dice que la diferencia es del test del migrado
 
   Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno, o el
   test no le pasa las entradas a un job).
@@ -84,6 +89,7 @@ param(
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
+  [switch]$RehacerArnes,      # borra el test del migrado guardado y lo escribe otra vez con la IA, traduciendo el del original (que no se toca)
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -342,10 +348,24 @@ function Get-Ejemplos([string]$Dir) {
   return @()
 }
 
+# El hash del test que dejo guardado el arnes de $Repo (prueba-local\arnes\<repo>\<ruta del test>), o '' si no esta.
+function Get-HashGuardado([string]$Repo, [string]$Test) {
+  $f = Join-Ruta $Local "arnes/$Repo/$Test"
+  if (-not $Test -or -not (Test-Path -LiteralPath $f -PathType Leaf)) { return '' }
+  return (Get-Hash8 ([System.IO.File]::ReadAllText($f)))
+}
+
+# La huella de la tarea de un arnes: la plantilla, el test y los jobs y, en el migrado, el hash del test del original guardado.
+function Get-HuellaArnes([string]$Test, [string[]]$Jobs, [string]$HashOriginal) {
+  return (Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ',') + '|' + $HashOriginal))
+}
+
 # La tarea del arnes de una copia ($Repo: original o migrado), o la hecha de antes si sus entradas no han cambiado (la
-# plantilla, el test y los jobs). El commit no entra en la huella: un arnes de antes se vuelve a comprobar en el commit
-# de ahora (Use-ArnesGuardado).
-function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$Jobs) {
+# plantilla, el test, los jobs y, en el migrado, el test del original guardado: $TestOriginal es su ruta dentro del arnes,
+# y '' en el original). El commit no entra en la huella: un arnes de antes se vuelve a comprobar en el commit
+# de ahora (Use-ArnesGuardado). El migrado traduce el test del original: su prompt lleva esa ruta (SI_ORIGINAL vacio) y la
+# carpeta del arnes del original va en sus dirs; el original no lleva la seccion (SI_ORIGINAL = MarcaNo).
+function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$Jobs, [string]$TestOriginal) {
   $ejemplos = @(Get-Ejemplos $Dir)
   $lista = '(No hay tests de ejemplo: escribe el test desde cero.)'
   if ($ejemplos.Count -gt 0) { $lista = (@($ejemplos | ForEach-Object { '- ' + $_ }) -join "`n") }
@@ -353,16 +373,26 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   if ($PlantillaRoot -and @($ejemplos | Where-Object { $_.StartsWith($PlantillaRoot) }).Count -gt 0) { $dirs = @($PlantillaRoot) }
   $pom = 'no'
   if ($Repo -eq 'original') { $pom = 'si' }
-  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = '' }
-  $huella = Get-Hash8 ((Get-Plantilla 'arnes-local') + '|' + $Test + '|' + ($Jobs -join ','))
-  $e = [pscustomobject]@{ repo = $Repo; test = $Test; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
+  $siOriginal = $MarcaNo
+  $rutaOriginal = ''
+  $hashOriginal = ''
+  if ($TestOriginal) {
+    $siOriginal = ''
+    $rutaOriginal = Join-Ruta (Join-Ruta $Local 'arnes/original') $TestOriginal
+    $dirs += (Join-Ruta $Local 'arnes/original')
+    $hashOriginal = Get-HashGuardado 'original' $TestOriginal
+  }
+  $prompt = [pscustomobject]@{ REPO = "el batch $Repo"; TEST = $Test; JOBS = ($Jobs -join ', '); EJEMPLOS = $lista; POM = $pom; SEGUNDOS_TEST = "$($Cfg.SegundosTestArnes)"; SI_CORTADO = $MarcaNo; SI_DESHECHO = ''; SI_ORIGINAL = $siOriginal; ORIGINAL = $rutaOriginal }
+  $huella = Get-HuellaArnes $Test $Jobs $hashOriginal
+  $e = [pscustomobject]@{ repo = $Repo; test = $Test; testOriginal = $TestOriginal; hashOriginal = $hashOriginal; copia = $Dir; dirs = $dirs; huella = $huella; prompt = $prompt }
   $guardada = Join-Path (Join-Path $Datos 'tareas') ('arnes-' + $Repo + '.json')
   $antes = $null
   if (Test-Path -LiteralPath $guardada) { try { $antes = Read-Json $guardada } catch { } }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
   # Un arnes invalidado (Stop-Vacios, o un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
-  # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas.
-  if ($t.estado -eq 'pendiente' -and $antes -and $antes.estado -eq 'pendiente' -and $antes.intentos -gt 0 -and $antes.motivo -and $antes.entradas.huella -eq $huella) {
+  # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas. Que el test del
+  # original ya no este guardado (Stop-Vacios lo borra) no cuenta: la huella se compara con el hash del original de entonces.
+  if ($t.estado -eq 'pendiente' -and $antes -and $antes.estado -eq 'pendiente' -and $antes.intentos -gt 0 -and $antes.motivo -and $antes.entradas.huella -eq (Get-HuellaArnes $Test $Jobs ([string]$antes.entradas.hashOriginal))) {
     $t.intentos = $antes.intentos; $t.motivo = $antes.motivo; $t.ultimoEstado = $antes.ultimoEstado
     Save-Tarea $t
   }
@@ -507,30 +537,36 @@ function Undo-Fuera($T) {
   }
 }
 
-# Las tareas de arnes pendientes, a la vez; cada una con su comprobacion y, si falla, su reintento con el motivo.
+# Las tareas de arnes pendientes, una detras de otra: primero la del original y, solo cuando esta hecha, la del migrado (que traduce
+# su test: se vuelve a calcular su huella con el test del original que acaba de quedar guardado). Cada una con su comprobacion y,
+# si falla, su reintento con el motivo. Si la del original queda atascada, la del migrado no se lanza: lo para el arranque.
 function Invoke-Arneses($Tareas, [string[]]$Jobs) {
-  while ($true) {
-    $pend = @($Tareas | Where-Object { $_.estado -eq 'pendiente' })
-    if ($pend.Count -eq 0) { break }
-    Info ('Arnes (el test que ejecuta los casos): ' + (@($pend | ForEach-Object { $_.entradas.repo }) -join ' y ') + '...')
-    $tope = $Cfg.SegundosPorLlamada
-    $Cfg.SegundosPorLlamada = $Cfg.SegundosArnes
-    try { $ll = @(Invoke-Lote $pend $Cfg.EsfuerzoArnes) }
-    finally { $Cfg.SegundosPorLlamada = $tope }
-    for ($i = 0; $i -lt $pend.Count; $i++) {
-      $t = $pend[$i]
-      Restore-Base $t.entradas.copia
-      $m = Get-MotivoArnes $t $ll[$i] $Jobs
-      # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
-      $sigue = [bool]($m -and $ll[$i].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
-      if (-not $m) { Save-Arnes $t }
-      elseif ($sigue) { Undo-Fuera $t }
-      else { Undo-Copia $t.entradas.copia }
-      $t.entradas.prompt.SI_CORTADO = $MarcaNo
-      $t.entradas.prompt.SI_DESHECHO = ''
-      if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
-      Set-Intento $t $m
-      if ($m) { Aviso "Arnes del $($t.entradas.repo) rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del $($t.entradas.repo): bien." }
+  foreach ($repo in @('original', 'migrado')) {
+    foreach ($t in @($Tareas | Where-Object { $_.entradas.repo -eq $repo })) {
+      if ($repo -eq 'migrado') {
+        if ($ArnesOrig.estado -ne 'hecha') { return }
+        $t.entradas.hashOriginal = Get-HashGuardado 'original' $t.entradas.testOriginal
+        $t.entradas.huella = Get-HuellaArnes $t.entradas.test $Jobs $t.entradas.hashOriginal
+      }
+      while ($t.estado -eq 'pendiente') {
+        Info "Arnes (el test que ejecuta los casos): $repo..."
+        $tope = $Cfg.SegundosPorLlamada
+        $Cfg.SegundosPorLlamada = $Cfg.SegundosArnes
+        try { $ll = @(Invoke-Lote @($t) $Cfg.EsfuerzoArnes) }
+        finally { $Cfg.SegundosPorLlamada = $tope }
+        Restore-Base $t.entradas.copia
+        $m = Get-MotivoArnes $t $ll[0] $Jobs
+        # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
+        $sigue = [bool]($m -and $ll[0].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
+        if (-not $m) { Save-Arnes $t }
+        elseif ($sigue) { Undo-Fuera $t }
+        else { Undo-Copia $t.entradas.copia }
+        $t.entradas.prompt.SI_CORTADO = $MarcaNo
+        $t.entradas.prompt.SI_DESHECHO = ''
+        if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
+        Set-Intento $t $m
+        if ($m) { Aviso "Arnes del $repo rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del ${repo}: bien." }
+      }
     }
   }
 }
@@ -1079,7 +1115,8 @@ function Find-Clave($Res, $Probadas) {
 }
 
 # La tarea de IA que arregla la clave $C en su primer caso, con el resultado $R de ahora, o la de otro lanzamiento si quedo atascada con
-# este mismo HEAD (el id lo lleva). Trabaja en la copia del migrado y puede leer el original y las salidas y entradas del caso.
+# este mismo HEAD y con este mismo test del migrado (el id lleva los dos: con otro arnes, una clave que salio 'no se arregla' se vuelve a
+# probar). Trabaja en la copia del migrado y puede leer el original y las salidas y entradas del caso.
 function Get-TareaReparar($C, $R, $S) {
   $tc = Get-TareaCaso $C.job $C.caso
   $d = @($R.diferencias | Where-Object { (Get-Normal $_.fichero) -ceq $C.clave })[0]
@@ -1088,7 +1125,7 @@ function Get-TareaReparar($C, $R, $S) {
   $salOrig = Join-Ruta $Local "salidas/original/$($C.job)/$($C.caso)"
   $salMig = Join-Ruta $Local "salidas/$($S.Salidas)/$($C.job)/$($C.caso)"
   $entradas = Join-Ruta $Local "casos/$($C.job)/$($C.caso)"
-  $id = 'reparar-' + (Get-Hash8 "$headMig|$($C.job)|$($C.caso)|$($C.clave)")
+  $id = 'reparar-' + (Get-Hash8 "$headMig|$($C.job)|$($C.caso)|$($C.clave)|$(Get-HashGuardado 'migrado' $ArnesMig.entradas.test)")
   $prompt = [pscustomobject]@{
     JOB = $C.job; CASO = $C.caso; TITULO = [string]$tc.entradas.titulo; ENTRADA = [string]$tc.entradas.prompt.ENTRADA; ESPERADO = [string]$tc.entradas.prompt.ESPERADO
     FICHERO = $d.fichero; LINEAS = "$($d.lineas)"; LINEA = "$($d.linea)"; ORIGINAL = [string]$d.original; MIGRADO = [string]$d.migrado; OTRAS = ($otras -join "`n")
@@ -1494,12 +1531,16 @@ try {
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()
+  $testOriginal = ''   # donde va el test del original: el del migrado lo traduce
   foreach ($x in @(@('original', $CopiaOrig), @('migrado', $CopiaMig))) {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
-    $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs
-    if (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
+    $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs $testOriginal
+    # Con -RehacerArnes el del migrado vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
+    if ($RehacerArnes -and $x[0] -eq 'migrado') { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
+    elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     $arneses += , $t
+    if ($x[0] -eq 'original') { $testOriginal = $test }
   }
   $ArnesOrig = $arneses[0]
   $ArnesMig = $arneses[1]
@@ -1513,6 +1554,7 @@ try {
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
+  if ($RehacerArnes) { Remove-Carpeta (Join-Ruta $Local 'arnes/migrado') }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
@@ -1555,6 +1597,7 @@ try {
     if ($reparaciones.Count -gt 0) {
       if (@($reparaciones | Where-Object { $_.resultado -eq 'arreglado' }).Count -gt 0) { Info ''; Info 'Despues de reparar:'; Show-Resultado $res $o.jobs }
       Show-Reparaciones $reparaciones
+      if (@($reparaciones | Where-Object { $_.resultado -eq 'no se arregla' }).Count -gt 0) { Info 'Si la IA dice que la diferencia es del test del migrado y no del codigo, relanza con -RehacerArnes.' }
     }
   }
   Info ''

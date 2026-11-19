@@ -82,10 +82,12 @@ function Nuevo-Escenario([string]$Nombre, $Casos, [string]$ReglaOrig = 'minimo=5
 }
 
 # Lanza prueba-local.ps1 con RESCATE_HOME en la carpeta del escenario (nunca toca los ajustes reales).
-function Prueba($E, [string[]]$A = @(), [string]$Guion = '') {
+function Prueba($E, [string[]]$A = @(), [string]$Guion = '', [string]$Responde = '') {
   $env:RESCATE_HOME = $E.Home
   $env:RESCATE_LLAMADAS = $E.Llamadas
-  try { return Lanzar $Script (@('-Legacy', $E.Legacy, '-Migrado', $E.Migrado, '-Modelo', 'modelo-x', '-Si') + $A) $Guion }
+  $si = @('-Si')
+  if ($Responde) { $si = @() }   # con $Responde, sin -Si: prueba-local.ps1 pregunta y lee esa respuesta de la entrada estandar
+  try { return Lanzar $Script (@('-Legacy', $E.Legacy, '-Migrado', $E.Migrado, '-Modelo', 'modelo-x') + $si + $A) $Guion @($Responde) }
   finally { $env:RESCATE_HOME = ''; $env:RESCATE_LLAMADAS = '' }
 }
 
@@ -245,7 +247,7 @@ $Pruebas['8 paralelo: nunca mas de 4 llamadas a la vez'] = {
   $max = Max-Simultaneas $casos
   Comprueba 'como mucho 4 a la vez' ($max -le 4) "hubo $max"
   Comprueba 'y en paralelo de verdad (mas de 1)' ($max -gt 1) "hubo $max"
-  Igual 'los dos arneses, a la vez' 2 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }))
+  Igual 'los dos arneses, uno detras de otro (el del migrado traduce el del original, m29)' 1 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }))
 }
 
 $Pruebas['9 sin pruebas: sin datos/pruebas para y dice que se lance antes migracion.ps1'] = {
@@ -1613,7 +1615,7 @@ function Prueba-Con-JavaHome($E, [string[]]$A, [string]$Proceso) {
 # El JAVA_HOME que vieron las llamadas cuyo id casa con $Id ('arnes-original', 'caso-*'), sin repetidos y unidos con comas.
 function JavaHome-De($E, [string]$Id) { return ((@(Llamadas $E | Where-Object { $_.id -like $Id } | ForEach-Object { $_.javahome } | Select-Object -Unique)) -join ',') }
 
-$Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME = -JavaLegacy, la del migrado ve el de antes, aunque vayan en la misma tanda'] = {
+$Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME = -JavaLegacy, la del migrado ve el de antes'] = {
   $e = Nuevo-Escenario 'm27-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   $jdk = Join-Path $e.Raiz 'jdk-viejo'
   [void](New-Item -ItemType Directory -Path $jdk -Force)
@@ -1622,7 +1624,7 @@ $Pruebas['m27 (a) -JavaLegacy: la IA del original (arnes y casos) ve JAVA_HOME =
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'el arnes del original ve la carpeta de -JavaLegacy' $jdk (JavaHome-De $e 'arnes-original')
   Igual 'el arnes del migrado ve el JAVA_HOME de antes' $proceso (JavaHome-De $e 'arnes-migrado')
-  Igual 'los dos fueron a la vez (la misma tanda)' 2 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.id -like 'arnes-*' }))
+  Igual 'los dos, uno detras de otro (m29: el del migrado traduce el del original)' 1 (Max-Simultaneas @(Llamadas $e | Where-Object { $_.id -like 'arnes-*' }))
   Igual 'los casos, que se preparan en la copia del original, ven la carpeta de -JavaLegacy' $jdk (JavaHome-De $e 'caso-*')
   Igual 'cuatro llamadas en total: dos arneses y dos casos' 4 @(Llamadas $e).Count
   $e2 = Nuevo-Escenario 'm27-a-vacio' ([ordered]@{ cargaJob = @('importe=10.00') })
@@ -1748,6 +1750,204 @@ $Pruebas['m28 (f) informe con <<< ERROR! y sin Caused by, y un Caused by en la s
   $m = [string]$x.T.motivo
   Comprueba 'el motivo acaba con Causa: y el Caused by de la salida, no la linea del informe' ($m.TrimEnd().EndsWith("`nCausa: Caused by: java.net.ConnectException: Connection refused")) $m
   Comprueba 'y no lleva la excepcion del informe como causa' ($m -notmatch 'Causa: java\.lang\.NullPointerException') $m
+}
+
+# ===================== M29: el test del migrado se escribe traduciendo el del original =====================
+# Estos escenarios usan m29-copilot.ps1 y m29-mvn.ps1 (sobre los de m25): el falso de Copilot apunta en la llamada de un arnes si su prompt
+# lleva la seccion de traducir el test del original (traduce=, original=, original-existe=) y deja en el test una marca con el numero de la
+# llamada (MARCA_ARNES=<repo>-<n>); el de Maven apunta en m29-tests.log con que marca se ejecuto cada caso. Con $Distinto, el migrado lleva el
+# limite de m25 (5.01) y el caso importe=5.00 sale distinto.
+
+function Escenario-M29([string]$Nombre, $Casos, [switch]$Distinto) {
+  if ($Distinto) { $e = Escenario-M25 $Nombre $Casos } else { $e = Nuevo-Escenario $Nombre $Casos }
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm29-copilot.ps1'); MvnExe = (Join-Path $falsos 'm29-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Los tests guardados de cada lado: donde los deja Save-Arnes.
+function Test-Guardado($E, [string]$Repo) {
+  $paquete = 'viejo'
+  if ($Repo -eq 'migrado') { $paquete = 'nuevo' }
+  return (Lee $E.Local "arnes/$Repo/src/test/java/com/acme/$paquete/PruebaLocalTest.java")
+}
+
+function Llamadas-Arnes($E, [string]$Repo) { return @(Llamadas $E | Where-Object { $_.id -eq "arnes-$Repo" }) }
+
+# Las ejecuciones de casos que apunto m29-mvn.ps1 desde la linea $Desde, de la copia $Copia: la marca del arnes con que se ejecuto cada una.
+function Marcas-Casos($E, [string]$Copia, [int]$Desde = 0) {
+  $f = Join-Path $E.Llamadas 'm29-tests.log'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  $lineas = @([System.IO.File]::ReadAllLines($f))
+  return @($lineas | Select-Object -Skip $Desde | ForEach-Object { $c, $caso, $marca = $_ -split '\|'; if ($c -eq $Copia -and $caso -like 'caso-*') { $marca } })
+}
+
+function Lineas-Marcas($E) {
+  $f = Join-Path $E.Llamadas 'm29-tests.log'
+  if (-not (Test-Path -LiteralPath $f)) { return 0 }
+  return @([System.IO.File]::ReadAllLines($f)).Count
+}
+
+$Traducelo = 'trad' + [char]0xFA + 'celo'
+
+$Pruebas['m29 (a) los dos arneses pendientes: el del migrado se escribe despues del del original, con la ruta del test guardado y el texto de traducirlo; el del original no lleva la seccion'] = {
+  $e = Escenario-M29 'm29-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $env:RESCATE_ESPERA = '2'
+  try { $r = Prueba $e }
+  finally { $env:RESCATE_ESPERA = '' }
+  Igual 'sale con 0' 0 $r.Codigo
+  $o = @(Llamadas-Arnes $e 'original')
+  $m = @(Llamadas-Arnes $e 'migrado')
+  Igual 'una llamada de arnes del original' 1 $o.Count
+  Igual 'y una del migrado' 1 $m.Count
+  Comprueba 'la del migrado empieza despues de que acabe la del original' ([long]$m[0].inicio -ge [long]$o[0].fin) "original fin=$($o[0].fin), migrado inicio=$($m[0].inicio)"
+  Igual 'los dos arneses no van a la vez' 1 (Max-Simultaneas @($o + $m))
+  $ruta = Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'
+  $pm = Registro-Arnes $e 'migrado' 1
+  $po = Registro-Arnes $e 'original' 1
+  Comprueba 'el prompt del migrado lleva la ruta del test guardado del original' ($pm.Contains($ruta)) $ruta
+  Comprueba 'y el texto de traducirlo' ($pm.Contains($Traducelo))
+  Comprueba 'el prompt del original no lleva esa seccion' (-not $po.Contains($Traducelo) -and -not $po.Contains('El test del original ya'))
+  Comprueba 'ni una llave de la plantilla sin sustituir en ninguno' ($pm -notmatch '\{\{' -and $po -notmatch '\{\{')
+  Igual 'el falso ve el prompt del migrado con la seccion' 'si' $m[0].traduce
+  Igual 'y el del original, sin ella' 'no' $o[0].traduce
+  Igual 'el falso lee la ruta del original en el prompt' $ruta $m[0].original
+  Igual 'cuando el migrado empieza, el test del original ya esta guardado' 'si' $m[0].'original-existe'
+  Comprueba 'la carpeta del arnes guardado del original va en los dirs de la llamada del migrado' ($m[0].flags.Contains('--add-dir=' + (Get-Ruta $e.Local 'arnes/original'))) $m[0].flags
+  Comprueba 'y no en los del original' (-not $o[0].flags.Contains('arnes/original')) $o[0].flags
+}
+
+$Pruebas['m29 (b) -RehacerArnes con los dos arneses hechos: una sola llamada de arnes, la del migrado; el del original no cambia y los casos del migrado se ejecutan con el arnes nuevo'] = {
+  $e = Escenario-M29 'm29-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $original = Test-Guardado $e 'original'
+  $migrado = Test-Guardado $e 'migrado'
+  Comprueba 'el migrado guardado lleva la marca de su primera llamada' ($migrado.Contains('MARCA_ARNES=migrado-1')) $migrado
+  $n = @(Llamadas $e).Count
+  $lineas = Lineas-Marcas $e
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  Igual 'una sola llamada nueva' ($n + 1) @(Llamadas $e).Count
+  Igual 'y es de arnes: ahora hay tres' 3 @(Llamadas $e | Where-Object { $_.tipo -eq 'arnes-local' }).Count
+  Igual 'hay una llamada del original (la de antes)' 1 (Llamadas-Arnes $e 'original').Count
+  Igual 'y dos del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
+  Igual 'el arnes del original guardado no cambia' $original (Test-Guardado $e 'original')
+  $nuevo = Test-Guardado $e 'migrado'
+  Comprueba 'el del migrado guardado es el de la segunda llamada' ($nuevo.Contains('MARCA_ARNES=migrado-2') -and $nuevo -ne $migrado) $nuevo
+  $marcas = @(Marcas-Casos $e $e.CopiaMig $lineas)
+  Igual 'los dos casos del migrado se vuelven a ejecutar' 2 $marcas.Count
+  Comprueba 'con el arnes nuevo' (@($marcas | Where-Object { $_ -ne 'migrado-2' }).Count -eq 0) ($marcas -join ',')
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+  Igual 'los casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'no dice que use el arnes de otro lanzamiento' ($r.Salida -notmatch 'el test de otro lanzamiento sigue valiendo') (Cola $r.Salida)
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e
+  Igual 'sin el switch, el siguiente lanzamiento no vuelve a llamar' $n @(Llamadas $e).Count
+  Igual 'y el arnes del migrado sigue siendo el rehecho' $nuevo (Test-Guardado $e 'migrado')
+}
+
+$Pruebas['m29 (c) -RehacerArnes -Reparar: una clave que salio no se arregla se vuelve a probar con el arnes nuevo; sin el switch no, y la pista sale una sola vez'] = {
+  $e = Escenario-M29 'm29-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Distinto
+  $pista = 'Si la IA dice que la diferencia es del test del migrado y no del codigo, relanza con -RehacerArnes.'
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Igual 'la clave sale no se arregla' 'no se arregla' (@(Reparaciones $e)[0]).resultado
+  Igual 'con una llamada de reparar' 1 (Llamadas-Reparar $e).Count
+  Igual 'la pista sale una sola vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($pista))).Count
+  Comprueba 'y despues de la lista de reparaciones' ($r.Salida.IndexOf($pista) -gt $r.Salida.IndexOf('Reparaciones:')) (Cola $r.Salida)
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'relanzado sin el switch no llama otra vez a reparar' 1 (Llamadas-Reparar $e).Count
+  Igual 'la clave sigue en no se arregla' 'no se arregla' (@(Reparaciones $e)[0]).resultado
+  $r = Prueba $e @('-RehacerArnes', '-Reparar') 'reparar-no'
+  Igual 'con -RehacerArnes -Reparar sale con 2' 2 $r.Codigo
+  Igual 'se rehace el arnes del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
+  Igual 'y la misma clave se vuelve a probar: otra llamada de reparar' 2 (Llamadas-Reparar $e).Count
+  Comprueba 'no dice que ya estaba probada en este commit' ($r.Salida -notmatch 'ya probado en este commit') (Cola $r.Salida)
+  $rep = @(Reparaciones $e)
+  Igual 'sigue una sola reparacion' 1 $rep.Count
+  Igual 'la clave vuelve a salir no se arregla' 'no se arregla' $rep[0].resultado
+  Igual 'y la pista vuelve a salir, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($pista))).Count
+}
+
+$Pruebas['m29 (d) la plantilla del arnes: carga datos.sql con ScriptUtils o ResourceDatabasePopulator, pone adjunto= en el correo, no deja sustituir clases del batch y lleva la seccion de traducir solo para el migrado'] = {
+  $t = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Split-Path -Parent $Script) 'tareas') 'arnes-local.md'), (New-Object System.Text.UTF8Encoding($false)))
+  Comprueba 'carga datos.sql con ScriptUtils.executeSqlScript o ResourceDatabasePopulator de Spring' ($t -match 'ScriptUtils\.executeSqlScript' -and $t -match 'ResourceDatabasePopulator')
+  Comprueba 'y dice que no se parte a mano por ;' ($t -match 'No lo partas a mano')
+  Comprueba 'cada adjunto del correo va en la cabecera con adjunto=<nombre del fichero>' ($t -match 'adjunto=<nombre del fichero>')
+  Comprueba 'el cuerpo del correo es el del mensaje' ($t -match 'como qued.r.a en la bandeja')
+  Comprueba 'sustituye la clase de la libreria que abre la conexion (JavaMailSender, RestTemplate)' ($t -match 'JavaMailSender' -and $t -match 'RestTemplate')
+  Comprueba 'nunca los puertos, adaptadores o servicios del batch' ($t -match 'Nunca sustituyas[^.]*puertos[^.]*adaptadores[^.]*servicios del batch')
+  Comprueba 'la seccion del test del original solo sale con la clave SI_ORIGINAL' ($t -match '\{\{SI_ORIGINAL\}\}' -and $t.Contains('{{ORIGINAL}}') -and $t.Contains($Traducelo))
+  $conOriginal = @($t -split "`n" | Where-Object { $_.Contains($Traducelo) -or $_.Contains('{{ORIGINAL}}') })
+  Comprueba 'y cada linea de esa seccion lleva la clave' (@($conOriginal | Where-Object { -not $_.StartsWith('{{SI_ORIGINAL}}') }).Count -eq 0) ($conOriginal -join ' / ')
+}
+
+$Pruebas['m29 (e) el arnes del original atascado: el del migrado no se lanza y se para como hoy'] = {
+  $e = Escenario-M29 'm29-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() 'arnes-no-compila:arnes-original'
+  Igual 'sale con 1' 1 $r.Codigo
+  Igual 'el arnes del original queda atascado' 'atascada' (Tarea-Arnes $e 'original').estado
+  Igual 'sin ninguna llamada de arnes del migrado' 0 (Llamadas-Arnes $e 'migrado').Count
+  Igual 'y su tarea sigue pendiente' 'pendiente' (Tarea-Arnes $e 'migrado').estado
+  Comprueba 'la consola dice que el del original ha quedado atascado' ($r.Salida -match 'PruebaLocalTest del original ha quedado atascado') (Cola $r.Salida)
+}
+
+$Pruebas['m29 (f) la huella del arnes del migrado lleva el hash del test del original guardado: si cambia, la tarea deja de estar hecha y el test guardado, si vale, se reutiliza'] = {
+  $e = Escenario-M29 'm29-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $huella = (Tarea-Arnes $e 'migrado').entradas.huella
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e
+  Igual 'sin cambios, sin llamadas' $n @(Llamadas $e).Count
+  Igual 'y la huella es la de antes' $huella (Tarea-Arnes $e 'migrado').entradas.huella
+  Comprueba 'sin aviso de que se use un test de otro lanzamiento' ($r.Salida -notmatch 'el test de otro lanzamiento sigue valiendo') (Cola $r.Salida)
+  [System.IO.File]::AppendAllText((Get-Ruta $e.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'), "// otro test`n")
+  $r = Prueba $e
+  Igual 'con otro test del original sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas: el test del migrado guardado sigue valiendo' $n @(Llamadas $e).Count
+  Comprueba 'la tarea del migrado dejo de estar hecha y vuelve a estarlo por el test de otro lanzamiento' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'la tarea del original no' ($r.Salida -notmatch 'Arnes del original: bien \(el test de otro lanzamiento') (Cola $r.Salida)
+  $t = Tarea-Arnes $e 'migrado'
+  Comprueba 'queda hecha, con otra huella' ($t.estado -eq 'hecha' -and $t.entradas.huella -ne $huella) "$($t.estado) $($t.entradas.huella)"
+}
+
+$Pruebas['m29 (g) -RehacerArnes pregunta como hoy antes de llamar a Copilot: con no, no se hace nada y el arnes guardado se queda'] = {
+  $e = Escenario-M29 'm29-g' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $migrado = Test-Guardado $e 'migrado'
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e @('-RehacerArnes') '' 'n'
+  Comprueba 'pregunta por la tarea que va a llamar' ($r.Salida -match 'Llamar a Copilot para esas 1 tareas\?') (Cola $r.Salida)
+  Comprueba 'con n dice que no se ha hecho nada' ($r.Salida -match 'No se ha hecho nada') (Cola $r.Salida)
+  Igual 'sin llamadas nuevas' $n @(Llamadas $e).Count
+  Igual 'y el arnes guardado del migrado sigue ahi' $migrado (Test-Guardado $e 'migrado')
+  $r = Prueba $e @('-RehacerArnes') '' 's'
+  Igual 'con s sale con 0' 0 $r.Codigo
+  Igual 'y llama una vez' ($n + 1) @(Llamadas $e).Count
+  Comprueba 'con el arnes nuevo guardado' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-2'))
+}
+
+$Pruebas['m29 (h) -RehacerArnes con un arnes nuevo que no vale: lo viejo ya no esta guardado y el siguiente lanzamiento, sin el switch, vuelve a llamar a la IA en vez de reutilizarlo'] = {
+  $e = Escenario-M29 'm29-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $original = Test-Guardado $e 'original'
+  Comprueba 'el arnes del migrado queda guardado' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado'))
+  $r = Prueba $e @('-RehacerArnes') 'arnes-no-compila:arnes-migrado'
+  Igual 'con -RehacerArnes y un test que no compila sale con 1' 1 $r.Codigo
+  Igual 'el arnes del migrado queda atascado' 'atascada' (Tarea-Arnes $e 'migrado').estado
+  Igual 'tras su llamada de antes y los dos intentos de ahora' 3 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el arnes viejo del migrado ya no esta guardado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado')))
+  Igual 'el del original sigue como estaba' $original (Test-Guardado $e 'original')
+  $r = Prueba $e
+  Igual 'el siguiente lanzamiento, sin el switch, sale con 0' 0 $r.Codigo
+  Igual 'vuelve a llamar a la IA para el migrado' 4 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'y no usa el arnes viejo' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'lo guardado ahora es lo que escribio esa llamada' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-4'))
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
 }
 
 # ================================ LANZADOR ================================
