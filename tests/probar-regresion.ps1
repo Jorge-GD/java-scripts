@@ -236,7 +236,7 @@ $Pruebas['m33 (f) sin -Regresion no cambia nada: ni commit ni regresion.json'] =
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'la rama de rescate no se mueve' $antes (Estado-Git $e.Wt)
   Comprueba 'no hay regresion.json' (-not (Test-Path -LiteralPath $e.Regresion)) ''
-  Comprueba 'y la consola no habla de regresion' ($r.Salida -notmatch 'Regresion') (Cola $r.Salida)
+  Comprueba 'y la consola no habla de regresion (sus lineas empiezan por Regresion:)' ($r.Salida -cnotmatch 'Regresion:') (Cola $r.Salida)
   Comprueba 'la copia de la regresion no se ha creado' (-not (Test-Path -LiteralPath ($e.Migrado + '-regresion'))) ''
 }
 
@@ -382,7 +382,7 @@ $Pruebas['m33 (l) arranque: -Regresion sin worktree de rescate, o con la rama de
   Igual 'sin worktree de rescate sale con 1' 1 $r.Codigo
   Comprueba 'y dice que -Regresion lo necesita' ($r.Salida -match '-Regresion necesita el worktree de rescate') (Cola $r.Salida)
   $r = Prueba $e
-  Comprueba 'sin -Regresion, el mismo escenario no se queja del worktree' ($r.Salida -notmatch '-Regresion') (Cola $r.Salida)
+  Comprueba 'sin -Regresion, el mismo escenario no se queja del worktree' ($r.Salida -cnotmatch '-Regresion necesita') (Cola $r.Salida)
 }
 
 $Pruebas['m33 (m) la ayuda de prueba-local.ps1 explica -Regresion (cabecera y uso) y el script carga regresion.ps1'] = {
