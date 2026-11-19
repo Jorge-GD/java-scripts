@@ -1531,5 +1531,69 @@ $Pruebas['m25 (m) -Reparar: la suite de tests unitarios de partida no se puede e
   Igual 'reparaciones queda vacio' 0 (Reparaciones $e).Count
 }
 
+# ===================== REPARAR: el ruido de la ejecucion (m26) =====================
+# La IA prueba su arreglo ejecutando el batch (mvn test), que puede dejar ficheros nuevos fuera de src/ (un log, una base H2): no son suyos y
+# no rechazan el arreglo. Todo lo demas fuera de src/main/ sigue rechazando. Usan los escenarios de m25 y sus guiones de m25-copilot.ps1.
+
+$Pruebas['m26 (a) -Reparar: la IA arregla src/main/ y la ejecucion deja logs/batch.log y datos/h2.mv.db nuevos: arreglado, un commit que solo toca src/main/, los dos ficheros fuera de la copia y la consola los nombra'] = {
+  $e = Escenario-M25 'm26-a' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Reparar') 'reparar-ruido'
+  Igual 'sale con 0 (todo igual al final)' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'una sola llamada: el ruido no rechaza' 1 (Llamadas-Reparar $e).Count
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones: arreglado' 'arreglado' $rep[0].resultado
+  Igual 'con un intento' 1 $rep[0].intentos
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  Igual 'que solo toca src/main/' 'src/main/resources/regla.txt' (GitEn $e.Wt @('diff', '--name-only', "$wt0..HEAD"))
+  Igual 'la carpeta de rescate queda sin cambios sin commit' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'logs/batch.log ya no esta en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'logs/batch.log'))) ''
+  Comprueba 'datos/h2.mv.db tampoco' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'datos/h2.mv.db'))) ''
+  Comprueba 'la consola nombra logs/batch.log en la linea de lo que quita' ($r.Salida -match 'Quito lo que ha dejado la ejecucion fuera de src/: [^\r\n]*logs/batch\.log') (Cola $r.Salida)
+  Comprueba 'y datos/h2.mv.db' ($r.Salida -match 'Quito lo que ha dejado la ejecucion fuera de src/: [^\r\n]*datos/h2\.mv\.db') (Cola $r.Salida)
+}
+
+$Pruebas['m26 (b) -Reparar: la IA arregla src/main/ y crea src/test/.../NuevoTest.java: rechazado nombrando ese fichero y src/main/, sin commit'] = {
+  $e = Escenario-M25 'm26-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-test-nuevo'
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Igual 'el caso del limite sigue distinto' 'distinto,igual' ((Resultados $e) -join ',')
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo nombra el test nuevo' ($rep[0].motivo -match 'src/test/java/com/acme/nuevo/NuevoTest\.java') $rep[0].motivo
+  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Comprueba 'lo nuevo bajo src/ no es ruido: la consola no dice que lo quita' ($r.Salida -notmatch 'Quito lo que ha dejado') (Cola $r.Salida)
+  Comprueba 'el test nuevo se deshace en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'src/test/java/com/acme/nuevo/NuevoTest.java'))) ''
+}
+
+$Pruebas['m26 (c) -Reparar: la IA solo deja logs/batch.log: es ruido, asi que no ha cambiado src/main/: rechazado con ese motivo y el fichero ya no esta'] = {
+  $e = Escenario-M25 'm26-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-ruido-solo'
+  Igual 'sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo dice que no ha cambiado ningun fichero de src/main/' ($rep[0].motivo -match 'No has cambiado ningun fichero de src/main/\.' -and $rep[0].motivo -notmatch 'logs/batch\.log') $rep[0].motivo
+  Comprueba 'la consola dice que quita logs/batch.log' ($r.Salida -match 'Quito lo que ha dejado la ejecucion fuera de src/: [^\r\n]*logs/batch\.log') (Cola $r.Salida)
+  Comprueba 'logs/batch.log ya no esta en la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'logs/batch.log'))) ''
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+}
+
+$Pruebas['m26 (d) -Reparar: la IA arregla src/main/ y cambia pom.xml (con seguimiento): rechazado nombrando pom.xml, sin commit'] = {
+  $e = Escenario-M25 'm26-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba $e @('-Reparar') 'reparar-pom'
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'no arreglado' 'no arreglado' $rep[0].resultado
+  Comprueba 'el motivo nombra pom.xml' ($rep[0].motivo -match 'pom\.xml') $rep[0].motivo
+  Comprueba 'y dice que solo se cambia src/main/' ($rep[0].motivo -match 'src/main/') $rep[0].motivo
+  Igual 'sin commit nuevo en la rama de rescate' $antes (Estado-Git $e.Wt)
+  Comprueba 'el pom.xml de la copia queda como estaba' ((Lee $e.CopiaMig 'pom.xml') -notmatch 'tocado por la IA') ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

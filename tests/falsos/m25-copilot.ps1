@@ -12,6 +12,10 @@
 #   reparar-pasado     pone minimo=4.50 (se pasa del 5.00 del original): arregla los casos de importe=5.00 y estropea los de importe=4.80
 #   reparar-cuelga     arregla y pone cuelga=caso-02 en regla.txt: m25-mvn.ps1 se cuelga en ese caso (lo para MinutosMaven)
 #   reparar-nada       no toca nada (como cualquier otro nombre)
+#   reparar-ruido      (m26) arregla y deja logs/batch.log y datos/h2.mv.db, nuevos en la raiz: lo que deja la ejecucion de un batch
+#   reparar-ruido-solo (m26) solo deja logs/batch.log, sin tocar src/main/
+#   reparar-test-nuevo (m26) arregla y crea src/test/java/com/acme/nuevo/NuevoTest.java (un fichero nuevo bajo src/ que no es de src/main/)
+#   reparar-pom        (m26) arregla y cambia pom.xml, que tiene seguimiento
 # Una tarea de caso (la hace copilot-local.ps1) con ' ;; ' en su ENTRADA deja una linea de datos.txt por cada trozo.
 # Cada llamada deja en RESCATE_LLAMADAS (si esta) <id>-<pid>.txt con id, tipo, flags y guion.
 $texto = ''
@@ -46,7 +50,7 @@ if ($env:RESCATE_LLAMADAS) {
 
 $regla = Ruta-M25 'src/main/resources/regla.txt'
 $reintento = ($prompt -match 'CORRECCI')
-if ($guion -in @('reparar-arregla', 'reparar-test', 'reparar-test1', 'reparar-rompe', 'reparar-sin-tests', 'reparar-cuelga')) {
+if ($guion -in @('reparar-arregla', 'reparar-test', 'reparar-test1', 'reparar-rompe', 'reparar-sin-tests', 'reparar-cuelga', 'reparar-ruido', 'reparar-test-nuevo', 'reparar-pom')) {
   [System.IO.File]::WriteAllText($regla, [System.IO.File]::ReadAllText($regla).Replace('minimo=5.01', 'minimo=5.00'))
 }
 if ($guion -eq 'reparar-pasado') { [System.IO.File]::WriteAllText($regla, [System.IO.File]::ReadAllText($regla).Replace('minimo=5.01', 'minimo=4.50')) }
@@ -58,6 +62,20 @@ if ($guion -eq 'reparar-test' -or ($guion -eq 'reparar-test1' -and -not $reinten
   [void](New-Item -ItemType Directory -Path (Split-Path $t -Parent) -Force)
   [System.IO.File]::AppendAllText($t, "// tocado por la IA`n")
 }
+if ($guion -in @('reparar-ruido', 'reparar-ruido-solo')) {
+  [void](New-Item -ItemType Directory -Path (Ruta-M25 'logs') -Force)
+  [System.IO.File]::WriteAllText((Ruta-M25 'logs/batch.log'), "arranque del batch`n")
+}
+if ($guion -eq 'reparar-ruido') {
+  [void](New-Item -ItemType Directory -Path (Ruta-M25 'datos') -Force)
+  [System.IO.File]::WriteAllText((Ruta-M25 'datos/h2.mv.db'), "base h2`n")
+}
+if ($guion -eq 'reparar-test-nuevo') {
+  $t = Ruta-M25 'src/test/java/com/acme/nuevo/NuevoTest.java'
+  [void](New-Item -ItemType Directory -Path (Split-Path $t -Parent) -Force)
+  [System.IO.File]::WriteAllText($t, "package com.acme.nuevo;`nclass NuevoTest {}`n")
+}
+if ($guion -eq 'reparar-pom') { [System.IO.File]::AppendAllText((Ruta-M25 'pom.xml'), "<!-- tocado por la IA -->`n") }
 if ($guion -eq 'reparar-sin-tests') { [System.IO.File]::WriteAllText((Ruta-M25 'src/main/resources/sin-tests.txt'), "sin tests`n") }
 if ($guion -eq 'reparar-no') {
   [void](New-Item -ItemType Directory -Path (Ruta-M25 '.rescate') -Force)

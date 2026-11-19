@@ -1107,6 +1107,16 @@ function Get-DiffCopia {
   return $d
 }
 
+# La IA prueba su arreglo ejecutando el batch (mvn test), que puede dejar ficheros nuevos fuera de src/ (un log, una base en fichero, una
+# carpeta de salida): no son suyos. Borra de la copia lo nuevo fuera de src/ (sin seguimiento, ni ignorado ni de .rescate ni de target) y
+# devuelve las rutas que quita. Lo cambiado o borrado de lo que ya tenia seguimiento, y lo nuevo bajo src/, no se toca.
+function Remove-NuevosFueraDeSrc([string]$Dir) {
+  $fuera = @('--', '.', ':(exclude)src', ':(exclude).rescate', ':(exclude)target')
+  $nuevos = @((Invoke-Git $Dir (@('-c', 'core.quotepath=off', 'ls-files', '--others', '--exclude-standard') + $fuera)).Salida | Where-Object { $_ })
+  if ($nuevos.Count -gt 0) { [void](Invoke-Git $Dir (@('clean', '-fdq') + $fuera)) }
+  return $nuevos
+}
+
 # Pasa lo que ha dejado la IA en la copia tras la llamada $Ll de la tarea $T por las puertas, de la mas barata a la mas cara. Devuelve:
 # Tipo ('rechazado', 'no se arregla' o 'bien'), Motivo, ConDiff (si hay un diff que ensenar en el reintento: no, si fallo la llamada) y,
 # si es bueno, Nuevos (los resultados medidos de ahora, por posicion en $S.Res). Las salidas medidas quedan en salidas\reparar\<n>.
@@ -1125,7 +1135,13 @@ function Test-Arreglo($T, $Ll, $S) {
     if (-not $v.Motivo) { $v.Motivo = 'La IA no da el motivo.' }
     return $v
   }
-  # 3. algo cambiado y solo en src/main/
+  # 3. algo cambiado y solo en src/main/ (lo nuevo fuera de src/ lo ha dejado la ejecucion del batch: se quita y no cuenta)
+  $ruido = @(Remove-NuevosFueraDeSrc $CopiaMig)
+  if ($ruido.Count -gt 0) {
+    $nombres = (@($ruido | Select-Object -First 5) -join ', ')
+    if ($ruido.Count -gt 5) { $nombres += " y $($ruido.Count - 5) mas" }
+    Info "Quito lo que ha dejado la ejecucion fuera de src/: $nombres"
+  }
   $cambios = @(Get-Cambios $CopiaMig)
   $fuera = @($cambios | Where-Object { -not $_.StartsWith('src/main/') })
   if ($cambios.Count -eq 0) { $v.Motivo = 'No has cambiado ningun fichero de src/main/.'; return $v }
