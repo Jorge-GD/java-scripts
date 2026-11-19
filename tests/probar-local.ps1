@@ -3447,5 +3447,93 @@ $Pruebas['m40 (g) un caso que el migrado no corrio (sin estado.txt) sale distint
   Igual 'el caso 2 sale igual y sin motivo' 'igual|' "$($c2.resultado)|$($c2.motivo)"
 }
 
+# ===================== M43: LA CLAVE DE REPARAR SIGUE AL CODIGO DEL MIGRADO, NO AL COMMIT =====================
+# El id de la tarea de reparar lleva el arbol de src/main y el pom.xml del migrado, no su HEAD: un commit que solo toca src/test (la
+# regresion, la cobertura) no hace volver a probar una clave que salio 'no se arregla'. Una tarea con el id de antes (con el HEAD) vale si
+# el HEAD es el mismo.
+
+function Hash8-M43([string]$Texto) {
+  $sha = [System.Security.Cryptography.SHA1]::Create()
+  try { $b = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Texto)) } finally { $sha.Dispose() }
+  return ((@($b[0..3]) | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# Las tareas de reparar guardadas en prueba-local\tareas.
+function Tareas-Reparar-M43($E) {
+  $d = Get-Ruta $E.Local 'tareas'
+  if (-not (Test-Path -LiteralPath $d)) { return @() }
+  return @(Get-ChildItem -LiteralPath $d -File -Filter 'reparar-*.json' | Sort-Object Name | ForEach-Object { Lee-Json $_.FullName })
+}
+
+# El escenario de reparar con una primera pasada en la que la IA dice que no se arregla (una llamada, el caso sigue distinto).
+function M43-No-Se-Arregla([string]$Nombre) {
+  $e = Escenario-M25 $Nombre ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'la primera vez sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Igual 'con una llamada de reparar' 1 (Llamadas-Reparar $e).Count
+  return $e
+}
+
+$Pruebas['m43 (e) -Reparar: una clave que salio no se arregla no se vuelve a probar tras un commit que solo toca src/test en la rama de rescate'] = {
+  $e = M43-No-Se-Arregla 'm43-e'
+  $t0 = @(Tareas-Reparar-M43 $e)
+  Igual 'hay una tarea de reparar, atascada' 'atascada' $t0[0].estado
+  [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/RegresionNuevaTest.java' "package com.acme.nuevo;`nclass RegresionNuevaTest {}`n" 'test de regresion')
+  [void](Commit-En $e.Wt 'src/test/resources/prueba-local-esperado/cargaJob/caso-01/salida.txt' "esperado`n" 'esperado de la regresion')
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'al relanzar sale con 2' 2 $r.Codigo
+  Igual 'ninguna llamada nueva a reparar' 1 (Llamadas-Reparar $e).Count
+  Comprueba 'la consola dice que ya esta probado' ($r.Salida -match 'ya probado') (Cola $r.Salida)
+  $t1 = @(Tareas-Reparar-M43 $e)
+  Igual 'sigue siendo una sola tarea, con el mismo id' $t0[0].id (($t1 | ForEach-Object { $_.id }) -join ',')
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones sigue con la clave no se arregla' 'no se arregla' $rep[0].resultado
+}
+
+$Pruebas['m43 (f) -Reparar: el mismo commit pero en src/main cambia el id: la clave que salio no se arregla se vuelve a probar'] = {
+  $e = M43-No-Se-Arregla 'm43-f'
+  $t0 = @(Tareas-Reparar-M43 $e)
+  [void](Commit-En $e.Wt 'src/main/resources/otra-regla.txt' "otra=1`n" 'otro cambio del migrado')
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'al relanzar sale con 2' 2 $r.Codigo
+  Igual 'una llamada mas a reparar' 2 (Llamadas-Reparar $e).Count
+  $t1 = @(Tareas-Reparar-M43 $e)
+  Igual 'hay dos tareas, con ids distintos' 2 $t1.Count
+  Comprueba 'y la de antes sigue guardada' (@($t1 | Where-Object { $_.id -ceq $t0[0].id }).Count -eq 1) (($t1 | ForEach-Object { $_.id }) -join ',')
+  [void](Commit-En $e.Wt 'pom.xml' ((Lee $e.Wt 'pom.xml') + "<!-- m43 -->`n") 'cambia el pom')
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'un commit que cambia el pom.xml tambien cambia el id: otra llamada' 3 (Llamadas-Reparar $e).Count
+}
+
+$Pruebas['m43 (g) -Reparar: una tarea guardada con el id de antes (con el HEAD) y el mismo HEAD: se usa su veredicto sin llamar, y queda con el id nuevo; con otra huella de plantilla no vale'] = {
+  $e = M43-No-Se-Arregla 'm43-g'
+  $t0 = @(Tareas-Reparar-M43 $e)
+  $head = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $arnes = Tarea-Arnes $e 'migrado'
+  $hashArnes = Hash8-M43 (Lee $e.Local ("arnes/migrado/" + $arnes.entradas.test))
+  $viejo = 'reparar-' + (Hash8-M43 "$head|$($t0[0].entradas.job)|$($t0[0].entradas.caso)|$($t0[0].entradas.clave)|$hashArnes")
+  Comprueba 'el id de antes no es el de ahora' ($viejo -cne $t0[0].id) $viejo
+  $plantilla = ([System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'tareas/reparar.md')) -replace "`r`n", "`n")
+  # la tarea de antes: con el id viejo y su huella (plantilla + id); la de ahora, fuera
+  $v = $t0[0]
+  $v.id = $viejo
+  $v.salida = "prueba-local/reparar/$viejo"
+  $v.entradas.huella = Hash8-M43 ($plantilla + '|' + $viejo)
+  Remove-Item -LiteralPath (Get-Ruta $e.Local ('tareas/' + $t0[0].id + '.json'))
+  [System.IO.File]::WriteAllText((Get-Ruta $e.Local ('tareas/' + $viejo + '.json')), (ConvertTo-Json -InputObject $v -Depth 8))
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 2: el veredicto es el de antes' 2 $r.Codigo
+  Igual 'ninguna llamada nueva a reparar' 1 (Llamadas-Reparar $e).Count
+  $nuevo = Get-Ruta $e.Local ('tareas/' + $t0[0].id + '.json')
+  Comprueba 'la tarea queda guardada con el id nuevo' (Test-Path -LiteralPath $nuevo) $nuevo
+  if (Test-Path -LiteralPath $nuevo) {
+    $n = Lee-Json $nuevo
+    Igual 'atascada, con el veredicto de antes' 'atascada|no se arregla' "$($n.estado)|$($n.ultimoEstado)"
+    Igual 'y el motivo de antes' $v.motivo $n.motivo
+  }
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones dice no se arregla' 'no se arregla' $rep[0].resultado
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
