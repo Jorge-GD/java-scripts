@@ -2896,5 +2896,17 @@ $Pruebas['m37 (f) la pregunta cuenta el arnes del migrado entre las tareas por h
   Comprueba 'y el del migrado guardado es el nuevo' ((Test-Guardado $e 'migrado').Contains('MARCA_ARNES=migrado-2'))
 }
 
+$Pruebas['m37 (g) con -RehacerArnes y la tarea del migrado sin plantilla: se escribe otra vez una sola vez y sin la Info, que ya lo pidio el usuario'] = {
+  $e = Escenario-M29 'm37-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Deja-Tarea-M37 $e 'migrado' $null
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el del migrado: una llamada nueva' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'no sale la Info de la plantilla' (-not $r.Salida.Contains($AvisoM37)) (Cola $r.Salida)
+  Igual 'la tarea del migrado guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
