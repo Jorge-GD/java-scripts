@@ -2398,6 +2398,21 @@ $Pruebas['m36 (c, f) un caso cuyo original no arranca (estado=EXCEPCION): se rec
   Comprueba 'y sin apuntarlo en la tarea' (-not $t.entradas.excepcionPedida) ''
 }
 
+$Pruebas['m36 (c2) un caso rechazado antes por otro motivo y que luego deja un original que no arranca: no queda atascado, se acepta en su ultimo intento'] = {
+  $e = Escenario-M36 'm36-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm36-copilot.ps1'); MvnExe = (Join-Path $falsos 'm36-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M36 $e 'excepcion' @() 'primera-nada'
+  Igual 'sale con 2 (el caso sale distinto del migrado)' 2 $r.Codigo
+  Igual 'dos llamadas, sin una tercera para lo de EXCEPCION' 2 (Llamadas-Casos $e).Count
+  Comprueba 'el primer rechazo es por no escribir nada' ($r.Salida -match 'caso-cargaJob-01 rechazado: No has escrito ningun fichero') (Cola $r.Salida)
+  $t = Tarea-Caso-M36 $e 'cargaJob' '01'
+  Igual 'la tarea queda hecha' 'hecha' $t.estado
+  Igual 'con dos intentos' 2 $t.intentos
+  Igual 'apuntado que ya se vio' $true $t.entradas.excepcionPedida
+  Igual 'el caso se prueba' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
 $Pruebas['m36 (d) un caso hecho en otro lanzamiento con EXCEPCION guardada vuelve a pendiente una vez, con la Info; en el siguiente lanzamiento no se repite'] = {
   $e = Escenario-M36 'm36-d' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
   $r = Prueba-M36 $e ''
