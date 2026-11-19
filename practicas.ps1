@@ -5,7 +5,7 @@ tareas.ps1 (Write-Json, Read-Json, Get-Hash8) y analisis.ps1 (Invoke-Analisis, G
 PowerShell 5.1 y para PowerShell 7.
 
   Invoke-Practicas <repo> <referencia> <cuando> <datos> <registros> <hallazgos del motor>
-      Mide el repo migrado con 5 detectores y escribe <datos>\practicas-<cuando>.json y <registros>\practicas-<cuando>.log
+      Mide el repo migrado con 6 detectores y escribe <datos>\practicas-<cuando>.json y <registros>\practicas-<cuando>.log
       (la salida de Maven de javac y, al final, un resumen). Nunca lanza una excepcion ni para el diagnostico: un detector que falla
       queda en 'no se pudo medir' con su motivo y los demas siguen. El JSON se escribe siempre.
         javac            mvn -B compile (sin -q ni clean; antes se borran solo target\classes y target\maven-status). Cada
@@ -16,6 +16,9 @@ PowerShell 5.1 y para PowerShell 7.
         lombok-qualifier Solo leyendo el codigo: clase con @RequiredArgsConstructor o @AllArgsConstructor y un campo con @Qualifier
                          o @Value sin 'lombok.copyableAnnotations +=' de esa anotacion en ningun lombok.config (carpeta y ancestros).
         pmd, spotbugs    Invoke-Analisis (analisis.ps1). Las claves de Sonar de PMD salen de analisis\pmd-sonar.xml.
+        java21-texto     Solo leyendo el codigo de src\main\java, sin comentarios: lo que cambia de texto en Java 21. charset-por-defecto
+                         (JEP 400, Java 18: el juego de caracteres por defecto pasa a UTF-8) y formato-cldr (Java 9: los nombres de mes y
+                         dia y los separadores de numeros salen de CLDR). Solo avisa donde mirar; el arreglo depende del servidor.
   Tope: $Cfg.SegundosPracticas en total. Orden: javac, Lombok y, al final, Invoke-Analisis con lo que quede; si quedan menos de
   $Cfg.SegundosMinAnalisis s, pmd y spotbugs quedan en 'no medido (tope)'.
   Cache: la clave es el HEAD del migrado mas su git status --porcelain (sin target, .rescate ni migracion-*) y la huella de cada fichero
@@ -333,6 +336,96 @@ function Get-ResultadoLombokQualifier([string]$Repo) {
   return @{ Estado = 'ok'; Incidencias = $inc }
 }
 
+# ============================ JAVA 21: TEXTO ============================
+# El codigo de un .java sin comentarios (// y /* */), con los mismos saltos de linea. Las cadenas y los caracteres se dejan tal cual (dentro de
+# una cadena un // o un /* no es un comentario) o, con -SinCadenas, se les rellena de espacios lo de dentro, con sus comillas: un nombre que sale en un
+# mensaje no es una llamada. Con o sin -SinCadenas, el mismo indice es el mismo sitio.
+function Get-JavaSinComentarios([string]$Texto, [switch]$SinCadenas) {
+  $rx = '/\*[\s\S]*?\*/|//[^\n]*|"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|''(?:\\.|[^''\\\n])*'''
+  return [regex]::Replace($Texto, $rx, {
+      param($m)
+      if ($m.Value.StartsWith('/')) { return ("`n" * ($m.Value.Split("`n").Count - 1)) }
+      if ($SinCadenas) { return ($m.Value.Substring(0, 1) + ($m.Value.Substring(1, $m.Value.Length - 2) -replace '[^\n]', ' ') + $m.Value.Substring($m.Value.Length - 1)) }
+      return $m.Value
+    })
+}
+
+# Los argumentos de primer nivel (sin los espacios de los lados) de la llamada cuyo '(' esta en $Abre, sobre un texto sin comentarios. @() si no
+# lleva ninguno y $null si el parentesis no se cierra.
+function Get-ArgumentosJava([string]$Texto, [int]$Abre) {
+  $lista = @()
+  $nivel = 0
+  $ini = $Abre + 1
+  for ($i = $Abre; $i -lt $Texto.Length; $i++) {
+    $c = $Texto[$i]
+    if ($c -eq '"' -or $c -eq "'") {
+      $i++
+      while ($i -lt $Texto.Length -and $Texto[$i] -ne $c) { if ($Texto[$i] -eq '\') { $i++ }; $i++ }
+    }
+    elseif ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $nivel++ }
+    elseif ($c -eq ')' -or $c -eq ']' -or $c -eq '}') {
+      $nivel--
+      if ($nivel -eq 0) {
+        $ultimo = $Texto.Substring($ini, $i - $ini).Trim()
+        if ($ultimo -or $lista.Count -gt 0) { $lista += $ultimo }
+        return , $lista
+      }
+    }
+    elseif ($c -eq ',' -and $nivel -eq 1) { $lista += $Texto.Substring($ini, $i - $ini).Trim(); $ini = $i + 1 }
+  }
+  return $null
+}
+
+# Donde los .java de src/main/java usan algo que en Java 21 cambia de texto, sin Maven. Una incidencia por linea y regla; el arreglo (que juego de
+# caracteres, que formato) lo sabe el equipo. S1943 (el juego de caracteres por defecto) no esta en el perfil Sonar way, asi que el origen es referencia.
+function Get-ResultadoJava21Texto([string]$Repo) {
+  $textoCharset = 'Usa el juego de caracteres por defecto. En Java 8 era el del servidor; desde Java 18 es UTF-8. Si el fichero no es UTF-8 (n con tilde, acentos), sale distinto. Pon el juego de caracteres de forma explicita, o lanza con -Dfile.encoding=COMPAT mientras lo decidis.'
+  $textoCldr = 'Desde Java 9 los nombres de mes y dia y los separadores de numeros salen de CLDR y pueden cambiar. Comprueba la salida, o lanza con -Djava.locale.providers=COMPAT.'
+  # un argumento que ya dice el juego de caracteres: StandardCharsets.X, Charset.forName(...) o una variable (o su metodo) que acaba en charset
+  $rxCharset = '(?i)\bStandardCharsets\s*\.|\bCharset\s*\.\s*forName\s*\(|\w*charset\s*(?:\(\s*\))?$'
+  # PrintWriter y PrintStream con un solo argumento solo son de fichero si este lo parece (sin tipos no se sabe mas): una cadena, new File(...),
+  # algo.toFile() o un nombre con file, path, ruta o fichero que no acaba en writer, stream ni out
+  $rxFichero = '(?i)^"|^new\s+(?:java\.io\.)?File\s*\(|\.toFile\s*\(\s*\)$|^(?![\w.]*(?:writer|stream|out)$)[\w.]*(?:file|path|ruta|fichero)\w*$'
+  $ficheros = @(Get-JavaFiles $Repo | Where-Object { (Get-RelRepo $Repo $_.FullName) -match '(^|/)src/main/java/' })
+  if ($ficheros.Count -eq 0) { return @{ Estado = 'no aplica'; Motivo = 'no hay src/main/java' } }
+  $inc = @()
+  foreach ($f in $ficheros) {
+    $rel = Get-RelRepo $Repo $f.FullName
+    $crudo = [System.IO.File]::ReadAllText($f.FullName)
+    $t = Get-JavaSinComentarios $crudo                # con las cadenas: de ahi salen los argumentos
+    $b = Get-JavaSinComentarios $crudo -SinCadenas    # sin ellas: donde se busca
+    $hallados = @()   # { Indice; Regla }
+    foreach ($m in [regex]::Matches($b, '\bnew\s+(?:java\.io\.)?(?<c>FileReader|FileWriter|InputStreamReader|OutputStreamWriter|PrintWriter|PrintStream)\s*\(')) {
+      $a = Get-ArgumentosJava $t ($m.Index + $m.Length - 1)
+      if ($null -eq $a) { continue }
+      $clase = $m.Groups['c'].Value
+      if ($clase -ceq 'FileWriter') { $sin = (@($a | Where-Object { $_ -match $rxCharset }).Count -eq 0) }
+      elseif ($clase -ceq 'PrintWriter' -or $clase -ceq 'PrintStream') { $sin = ($a.Count -eq 1 -and $a[0] -match $rxFichero) }
+      else { $sin = ($a.Count -eq 1) }
+      if ($sin) { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'charset-por-defecto' } }
+    }
+    foreach ($m in [regex]::Matches($b, '\.\s*getBytes\s*\(\s*\)')) { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'charset-por-defecto' } }
+    if ($b -cnotmatch '\.\s*encoding\s*\(|\bsetEncoding\s*\(') {
+      foreach ($m in [regex]::Matches($b, '\bnew\s+FlatFileItem(?:Reader|Writer)(?:Builder)?\b')) { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'charset-por-defecto' } }
+    }
+    foreach ($m in [regex]::Matches($b, '\b(?:new\s+(?:java\.text\.)?SimpleDateFormat|DateTimeFormatter\s*\.\s*ofPattern)\s*\(')) {
+      $a = Get-ArgumentosJava $t ($m.Index + $m.Length - 1)
+      if ($null -ne $a -and $a.Count -gt 0 -and $a[0] -cmatch '^"(?:[^"\\]|\\.)*(?:MMM|EEE)') { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'formato-cldr' } }
+    }
+    foreach ($m in [regex]::Matches($b, '\bNumberFormat\s*\.\s*get|\bnew\s+(?:java\.text\.)?DecimalFormat\s*\(')) { $hallados += [pscustomobject]@{ Indice = $m.Index; Regla = 'formato-cldr' } }
+    $vistos = @{}
+    foreach ($h in @($hallados | Sort-Object Indice)) {
+      $linea = $b.Substring(0, $h.Indice).Split("`n").Count
+      if ($vistos.ContainsKey("$linea|$($h.Regla)")) { continue }
+      $vistos["$linea|$($h.Regla)"] = $true
+      $texto = $textoCldr
+      if ($h.Regla -ceq 'charset-por-defecto') { $texto = $textoCharset }
+      $inc += , (New-Incidencia 'java21' $rel $linea 'java21-texto' $h.Regla 'referencia' '' $texto)
+    }
+  }
+  return @{ Estado = 'ok'; Incidencias = $inc }
+}
+
 # ============================ PMD Y SPOTBUGS ============================
 # Lo que Invoke-Analisis ($A) da de una herramienta ('pmd' o 'spotbugs'). Sin $A (no cabia en el tope) o con tope, no medido (tope); con
 # cualquier otro estado, el estado es el motivo.
@@ -374,7 +467,7 @@ function Set-QueHago($Incidencias, [string]$HallazgosMotor) {
 # ================================ MEDIR ================================
 function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [string]$Datos, [string]$Registros, [string]$HallazgosMotor) {
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-  $ids = @('javac', 'pmd', 'spotbugs', 'lombok-a-mano', 'lombok-qualifier')   # el orden del JSON
+  $ids = @('javac', 'pmd', 'spotbugs', 'lombok-a-mano', 'lombok-qualifier', 'java21-texto')   # el orden del JSON
   $json = Join-Path $Datos "practicas-$Cuando.json"
   $registro = Join-Path $Registros "practicas-$Cuando.log"
   $res = @{}
@@ -396,6 +489,7 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     $res['javac'] = Measure-Detector 'javac' { Get-ResultadoJavac $Repo $registro $fin }
     $res['lombok-a-mano'] = Measure-Detector 'lombok-a-mano' { Get-ResultadoLombokAMano $Repo $Referencia $fin }
     $res['lombok-qualifier'] = Measure-Detector 'lombok-qualifier' { Get-ResultadoLombokQualifier $Repo }
+    $res['java21-texto'] = Measure-Detector 'java21-texto' { Get-ResultadoJava21Texto $Repo }
     # PMD y SpotBugs, al final y con el tiempo que quede. Invoke-Analisis no dice cuanto tardo cada uno: SpotBugs deja su registro al acabar.
     $analisis = $null
     $segSpotbugs = 0
