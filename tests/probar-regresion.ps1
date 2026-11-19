@@ -214,6 +214,21 @@ $Pruebas['m33 (e) sin casos iguales: no hay commit y sale la linea'] = {
   Comprueba 'regresion.json existe, sin commit y con el motivo' ($j -and $j.commit -eq '' -and $j.motivo -match 'ningun caso sale igual') (Get-Content -LiteralPath $e.Regresion -Raw -ErrorAction SilentlyContinue)
 }
 
+$Pruebas['m33 (n) lanzarlo dos veces: la segunda no hace otro commit y lo dice; los casos siguen en regresion.json'] = {
+  $e = Escenario-M33 'm33-n' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @('-Regresion')
+  Igual 'la primera sale con 0' 0 $r.Codigo
+  $primero = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e @('-Regresion')
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'la rama de rescate no se mueve' $primero (GitEn $e.Wt @('rev-parse', 'HEAD'))
+  Comprueba 'la consola dice que ya estaban, sin cambios' ($r.Salida -match 'Regresion: 2 casos de 1 jobs ya estaban como tests en rescate/main-1 \(' + (Corto $primero) + '\), sin cambios: no hay commit nuevo\. Quitados: 0\.') (Cola $r.Salida)
+  $j = Lee-Json $e.Regresion
+  Igual 'regresion.json sigue con el commit que tiene los tests' $primero $j.commit
+  Igual 'y con los dos casos' 'cargaJob/caso-01,cargaJob/caso-02' ((@($j.casos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Igual 'la carpeta de la rama de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
 $Pruebas['m33 (f) sin -Regresion no cambia nada: ni commit ni regresion.json'] = {
   $e = Escenario-M33 'm33-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   $antes = Estado-Git $e.Wt

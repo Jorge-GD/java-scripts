@@ -1,7 +1,7 @@
 <#
 prueba-local.ps1 - Prueba en local, caso a caso: el batch original frente al migrado, con las mismas entradas.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1 y la carpeta tareas\ junto a este script, y los casos que deja migracion.ps1.
+Necesita comun.ps1, tareas.ps1, regresion.ps1 y las carpetas tareas\ y regresion\ junto a este script, y los casos que deja migracion.ps1.
 
 QUE HACE
   Se lanza despues de rescate.ps1 y de migracion.ps1. Coge los casos de cada job que escribio migracion.ps1
@@ -61,6 +61,11 @@ QUE HACE
      reintenta una vez con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan: revisa los commits de la rama de
      rescate antes del git merge. Como mucho MaxReparaciones claves por lanzamiento; lo que no se prueba se dice. Una clave
      que sale 'no se arregla' no se vuelve a probar con el mismo test del migrado: con -RehacerArnes (otro test), si.
+  8. Solo con -Regresion (hace falta el worktree de rescate, y su carpeta sin cambios sin commit): los casos que salen
+     iguales se quedan en la rama de rescate como tests de JUnit, en un solo commit: sus entradas, lo que dejo el original
+     (sin las tablas BATCH_ ni TASK_), el arnes del migrado y RegresionLocalTest, que corre despues y falla si lo que sale
+     cambia. Antes del commit se prueba en una copia desechable (<Migrado>-regresion): pasa, y con un byte cambiado falla; un caso
+     que no pasa o que lleva la fecha, la hora o la ruta de hoy se quita (datos\regresion.json lo cuenta). No cambia la salida.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
   se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
@@ -74,6 +79,7 @@ USO
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
   .\prueba-local.ps1 ... -Reparar             # y arregla el migrado (en la rama de rescate) hasta que los casos distintos salgan iguales
+  .\prueba-local.ps1 ... -Regresion          # y deja los casos que salen iguales como tests de JUnit en la rama de rescate (un commit)
   .\prueba-local.ps1 ... -RehacerArnes        # escribe otra vez con la IA el test del migrado: si la IA de -Reparar dice que la diferencia es del test del migrado
 
   Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno, o el
@@ -91,12 +97,14 @@ param(
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
+  [switch]$Regresion,         # deja los casos que salen iguales como tests de JUnit (RegresionLocalTest) en la rama de rescate, en un commit
   [switch]$RehacerArnes,      # borra el test del migrado guardado y lo escribe otra vez con la IA, traduciendo el del original (que no se toca)
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
 . (Join-Path $PSScriptRoot 'tareas.ps1')
+. (Join-Path $PSScriptRoot 'regresion.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -1636,6 +1644,7 @@ $DirRama = $MigradoRoot   # la carpeta de la rama que se prueba (la de rescate, 
 if ($hayRescate) { $DirRama = $dirRescate }
 if ($Reparar -and -not $hayRescate) { Stop-Arranque "-Reparar necesita el worktree de rescate: lanza migracion.ps1 primero: crea $dirRescate." }
 if ($Reparar -and (Test-RamaSucia)) { Stop-Arranque "$DirRama tiene cambios sin commit (git status): guardalos o descartalos y vuelve a lanzar con -Reparar." }
+if ($Regresion -and (Get-MotivoRegresion $hayRescate)) { Stop-Arranque (Get-MotivoRegresion $hayRescate) }
 $intocables = @($LegacyRoot, $MigradoRoot)
 if ($hayRescate) { $intocables += $dirRescate }
 if ($PlantillaRoot) { $intocables += $PlantillaRoot }
@@ -1751,6 +1760,8 @@ try {
       if (@($reparaciones | Where-Object { $_.resultado -eq 'no se arregla' }).Count -gt 0) { Info 'Si la IA dice que la diferencia es del test del migrado y no del codigo, relanza con -RehacerArnes.' }
     }
   }
+  # 8. Con -Regresion: los casos que salen iguales se quedan como tests en la rama de rescate (un commit); no cambia la salida
+  if ($Regresion) { Invoke-Regresion $res }
   Info ''
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
   Info $NoPromete
