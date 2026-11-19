@@ -3068,5 +3068,146 @@ $Pruebas['m37 (m) el arnes del original guardado ya no vale en este commit: se e
   Igual 'sin llamadas nuevas' $n @(Llamadas $e).Count
 }
 
+# ===================== -Job guarda lo de los otros jobs, y 'mejorado' (m39) =====================
+# E6: con -Job, datos\prueba-local.json se escribia solo con ese job y el informe contaba uno. Ahora, si lo guardado de antes es del mismo
+# commit del migrado y del mismo del original, el JSON lleva ademas lo de los otros jobs tal como estaba (casos, jobs, reparaciones y
+# culpables, por job); con otro commit lo descarta y lo dice. Sin -Job se escribe entero. Y un arreglo de -Reparar que baja las lineas
+# distintas pero deja la clave distinta es 'mejorado', no 'arreglado'. Los escenarios de -Reparar son los de m25.
+
+# cargaJob (dos casos) sale igual y remesaJob (el caso del limite, importe=5.00) sale distinto: el migrado lleva minimo=5.01.
+function Escenario-M39([string]$Nombre) {
+  return (Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=5.00') }) 'minimo=5.00' 'minimo=5.01')
+}
+
+$AvisoM39 = 'Los otros jobs se probaron con otro commit: no los guardo. Lanza sin -Job para probarlos todos.'
+
+function Jobs-M39($E) { return (@((Lee-Json $E.Json).jobs | ForEach-Object { $_.job }) -join ',') }
+
+function Casos-M39($E) { return (@((Lee-Json $E.Json).casos | ForEach-Object { "$($_.job)/$($_.caso)" }) -join ',') }
+
+# La fila de jobs y los casos de $Job tal como los lee el JSON, en una sola linea cada cosa: para ver que no han cambiado.
+function Entradas-M39($E, [string]$Job) {
+  $o = Lee-Json $E.Json
+  return ((ConvertTo-Json -InputObject @($o.jobs | Where-Object { $_.job -eq $Job }) -Depth 10 -Compress) + '|' + (ConvertTo-Json -InputObject @($o.casos | Where-Object { $_.job -eq $Job }) -Depth 10 -Compress))
+}
+
+$Pruebas['m39 (a) -Job con lo guardado del mismo commit: el JSON lleva el job de ahora y el otro tal como estaba, en el orden de los jobs; la consola, solo el de ahora'] = {
+  $e = Escenario-M39 'm39-a'
+  $r = Prueba $e
+  Igual 'el lanzamiento entero sale con 2 (remesaJob distinto)' 2 $r.Codigo
+  $otro = Entradas-M39 $e 'remesaJob'
+  Comprueba 'el otro job lleva su diferencia' ($otro -match '"resultado":"distinto"' -and $otro -match '"diferencias":\[') $otro
+  $r = Prueba $e @('-Job', 'cargaJob')
+  Igual 'con -Job sale con 0 (cargaJob igual)' 0 $r.Codigo
+  Igual 'el JSON lleva los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
+  Igual 'y los tres casos' 'cargaJob/caso-01,cargaJob/caso-02,remesaJob/caso-01' (Casos-M39 $e)
+  Igual 'la fila y el caso del otro job son los de antes, tal cual' $otro (Entradas-M39 $e 'remesaJob')
+  Comprueba 'la consola ensena la tabla del job de ahora' ($r.Salida -match 'cargaJob\s+2\s+2\s+0\s+0') (Cola $r.Salida)
+  Comprueba 'y nada del otro job' ($r.Salida -notmatch 'remesaJob') (Cola $r.Salida)
+  Comprueba 'sin la Info de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+  $o = Lee-Json $e.Json
+  Igual 'los commits del JSON son los de siempre' (GitEn $e.Wt @('rev-parse', 'HEAD')) $o.commitMigrado
+}
+
+$Pruebas['m39 (b) -Job con lo guardado de otro commit, del migrado o del original: el JSON solo lleva el job de ahora y la consola dice que descarta los otros'] = {
+  $e = Escenario-M39 'm39-b'
+  [void](Prueba $e)
+  [void](Commit-En $e.Wt 'notas/paso-1.txt' "nota`n" 'otro commit en el migrado')
+  $r = Prueba $e @('-Job', 'cargaJob')
+  Igual 'con -Job sale con 0' 0 $r.Codigo
+  Igual 'el JSON solo lleva el job de ahora' 'cargaJob' (Jobs-M39 $e)
+  Igual 'y sus dos casos' 'cargaJob/caso-01,cargaJob/caso-02' (Casos-M39 $e)
+  Comprueba 'la consola dice que no guarda los otros' ($r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+  Igual 'el commit del migrado del JSON es el nuevo' (GitEn $e.Wt @('rev-parse', 'HEAD')) (Lee-Json $e.Json).commitMigrado
+  # lo mismo con un commit nuevo en el original
+  $r = Prueba $e
+  Igual 'sin -Job el JSON vuelve a llevar los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
+  Comprueba 'y no dice nada de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+  [void](Commit-En $e.Legacy 'notas/paso-1.txt' "nota`n" 'otro commit en el original')
+  $r = Prueba $e @('-Job', 'cargaJob')
+  Igual 'con otro commit del original tambien: solo el job de ahora' 'cargaJob' (Jobs-M39 $e)
+  Comprueba 'y lo dice' ($r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+  Igual 'el commit del original del JSON es el nuevo' (GitEn $e.Legacy @('rev-parse', 'HEAD')) (Lee-Json $e.Json).commitOriginal
+}
+
+$Pruebas['m39 (c) sin -Job el JSON se escribe entero, como hoy, sin mezclar lo de antes; con -Job y sin JSON de antes, solo ese job y sin Info'] = {
+  $e = Escenario-M39 'm39-c'
+  [void](Prueba $e)
+  Igual 'la primera vez, remesaJob sale distinto' 'igual,igual,distinto' ((Resultados $e) -join ',')
+  [void](Commit-En $e.Wt 'regla.txt' "minimo=5.00`n" 'arregla el limite')
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'los tres casos son los de ahora' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Igual 'los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
+  Comprueba 'sin Info de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+  Remove-Item -LiteralPath $e.Json
+  $r = Prueba $e @('-Job', 'remesaJob')
+  Igual 'sin JSON de antes, -Job escribe solo ese job' 'remesaJob' (Jobs-M39 $e)
+  Comprueba 'y sin Info' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+}
+
+$Pruebas['m39 (d) -Reparar: el arreglo baja las lineas distintas pero la clave sigue distinta: la consola y la reparacion dicen mejorado, no arreglado; el commit y el resultado, como siempre'] = {
+  $e = Escenario-M25 'm39-d' ([ordered]@{ cargaJob = @('importe=5.00;;importe=5.00;;importe=4.80') })
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $antes = (Caso $e 'cargaJob' 'caso-01')
+  $r = Prueba $e @('-Reparar') 'reparar-pasado'
+  Igual 'sale con 2 (el caso sigue distinto)' 2 $r.Codigo
+  Igual 'el caso sigue distinto' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+  Igual 'con una linea distinta (eran dos)' 1 (@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { [int]$_.lineas } | Measure-Object -Sum).Sum)
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones lleva una entrada' 1 $rep.Count
+  Igual 'que dice mejorado' 'mejorado' $rep[0].resultado
+  Igual 'con el commit entero' (GitEn $e.Wt @('rev-parse', 'HEAD')) $rep[0].commit
+  Igual 'su asunto' (Asunto-M25 'cargaJob' 'caso-01') $rep[0].asunto
+  Igual 'y un intento' 1 $rep[0].intentos
+  Comprueba 'la consola dice Mejorado, con la clave y el commit' ($r.Salida.Contains("Mejorado cargaJob/caso-01 ficheros/salida/resultado_<hoy:yyyyMMdd>.txt en el commit $(Corto $rep[0].commit): sigue distinta, con menos lineas.")) (Cola $r.Salida)
+  Comprueba 'y no dice Arreglado' ($r.Salida -cnotmatch 'Arreglado ') (Cola $r.Salida)
+  Comprueba 'el resumen de reparaciones dice mejorado' ($r.Salida -match "(?m)^  mejorado: cargaJob/caso-01 .* en $(Corto $rep[0].commit) ") (Cola $r.Salida)
+  Comprueba 'y no lo da por arreglado ni por no arreglado' ($r.Salida -notmatch '(?m)^  (no )?arreglado: ') (Cola $r.Salida)
+  Comprueba 'sigue la tabla de despues de reparar' ($r.Salida.Contains('Despues de reparar:')) (Cola $r.Salida)
+}
+
+$Pruebas['m39 (e) -Reparar: el arreglo deja la clave igual: sigue diciendo Arreglado, en la consola y en la reparacion'] = {
+  $e = Escenario-M25 'm39-e' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Sano
+  $r = Prueba $e @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0' 0 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'reparaciones lleva una entrada, arreglado' 'arreglado' $rep[0].resultado
+  Comprueba 'la consola dice Arreglado, con la clave y el commit' ($r.Salida.Contains("Arreglado cargaJob/caso-01 ficheros/salida/resultado_<hoy:yyyyMMdd>.txt en el commit $(Corto $rep[0].commit).")) (Cola $r.Salida)
+  Comprueba 'y no dice Mejorado' ($r.Salida -cnotmatch 'Mejorado ') (Cola $r.Salida)
+  Comprueba 'el resumen dice arreglado' ($r.Salida -match '(?m)^  arreglado: cargaJob/caso-01 ') (Cola $r.Salida)
+  Comprueba 'sigue la tabla de despues de reparar' ($r.Salida.Contains('Despues de reparar:')) (Cola $r.Salida)
+}
+
+$Pruebas['m39 (f) -Job con -Reparar: el arreglo hace un commit nuevo y lo guardado de los otros jobs ya no vale: el JSON solo lleva el job de ahora, con su reparacion, y la consola lo dice'] = {
+  $e = Escenario-M25 'm39-f' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=10.00') }) -Sano
+  $r = Prueba $e
+  Igual 'el lanzamiento entero sale con 2' 2 $r.Codigo
+  Igual 'el JSON lleva los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
+  $r = Prueba $e @('-Job', 'cargaJob', '-Reparar') 'reparar-arregla'
+  Igual 'con -Job y -Reparar sale con 0' 0 $r.Codigo
+  Igual 'el JSON solo lleva el job de ahora' 'cargaJob' (Jobs-M39 $e)
+  Comprueba 'la consola dice que no guarda los otros' ($r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+  $rep = @(Reparaciones $e)
+  Igual 'con su reparacion, arreglada' 'arreglado' $rep[0].resultado
+  Igual 'el commit del JSON es el del arreglo' $rep[0].commit (Lee-Json $e.Json).commitMigrado
+}
+
+$Pruebas['m39 (g) -Job con -Reparar sin commit nuevo: las reparaciones del otro job tambien se quedan, por job'] = {
+  $e = Escenario-M25 'm39-g' ([ordered]@{ cargaJob = @('importe=5.00'); remesaJob = @('importe=10.00') }) -Sano
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'el lanzamiento entero sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Igual 'cargaJob: no se arregla' 'cargaJob no se arregla' "$($rep[0].job) $($rep[0].resultado)"
+  $antes = ConvertTo-Json -InputObject $rep -Depth 10 -Compress
+  $r = Prueba $e @('-Job', 'remesaJob', '-Reparar') 'reparar-no'
+  Igual 'con -Job remesaJob sale con 0' 0 $r.Codigo
+  Comprueba 'dice que no hay casos distintos que arreglar' ($r.Salida.Contains('no hay casos distintos que arreglar')) (Cola $r.Salida)
+  Igual 'el JSON lleva los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
+  Igual 'y la reparacion de cargaJob, como estaba' $antes (ConvertTo-Json -InputObject @(Reparaciones $e) -Depth 10 -Compress)
+  Comprueba 'sin Info de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
