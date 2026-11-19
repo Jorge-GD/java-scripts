@@ -6128,9 +6128,9 @@ $Pruebas['m34b (d) sin datos/prueba-local-cobertura.json la pagina 3 es la de an
 
 $Pruebas['m34b (e) con estado no medido la pagina dice el motivo (escapado), no lleva ninguna etiqueta y las filas salen como sin JSON'] = {
   $sin = M34b-Salida 'm34b-e-sin' $null
-  $x = M34b-Salida 'm34b-e' (M34b-Cobertura 'no medido' 'no hay .exec: <script>alert(1)</script> & "x"')
+  $x = M34b-Salida 'm34b-e' (M34b-Cobertura 'no medido' 'no hay .exec: <script>alert(1)</script> & "x".')
   $r = M34b-Resumen $x.P3
-  Comprueba 'hay una frase con el motivo, con el HTML escapado' ($r.Length -gt 0 -and $r.Contains((Html 'no hay .exec: <script>alert(1)</script> & "x"'))) $r
+  Comprueba 'hay una frase con el motivo, con el HTML escapado y sin un punto de mas al final' ($r.Length -gt 0 -and $r.Contains((Html 'no hay .exec: <script>alert(1)</script> & "x"') + '.</p>')) $r
   Comprueba 'y no dice cuanto recorren los casos ni da numeros' ($r -notmatch ' % ' -and $r -notmatch 'empieza por esos') $r
   Comprueba 'sin <script> en la pagina' ((M34b-SinCss $x.P3) -notmatch '(?i)<script')
   Comprueba 'ninguna fila lleva etiqueta' ((M34b-SinCss $x.P3) -notmatch 'm34-ejec|Ejecutado:|Ning.n caso lo recorre')

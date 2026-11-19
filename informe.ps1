@@ -289,10 +289,11 @@ function Read-DatosInforme([string]$Salida) {
     Correccion = (Read-JsonSuave (Join-Path $datos 'correcciones.json')); PruebaLocal = (Read-JsonSuave (Join-Path $datos 'prueba-local.json'))
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
     Practicas = (Read-Practicas $datos); Arreglos = (Read-JsonSuave (Join-Path $datos 'practicas-arreglos.json'))
-    Comparacion = (Read-Comparaciones $datos)
+    Comparacion = (Read-Comparaciones $datos); CoberturaCasos = (Read-JsonSuave (Join-Path $datos 'prueba-local-cobertura.json')); LineasCasos = $null
     Lanzadores = @(); LanzadoresLeidos = $false
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
   }
+  if ($D.CoberturaCasos -and [string]$D.CoberturaCasos.estado -ceq 'ok') { $D.LineasCasos = Get-LineasCasos $D.CoberturaCasos }
   $lz = Read-JsonSuave (Join-Path $datos 'lanzadores.json')
   if ($lz) { $D.LanzadoresLeidos = $true; $D.Lanzadores = @($lz.lanzadores | Where-Object { $null -ne $_ }) }
   if ($D.Mapa) {
@@ -456,8 +457,43 @@ function Get-CuerpoOriginal($D, $T, [string]$Cuerpo) {
 }
 
 # ============================== EL ORIGINAL FRENTE AL MIGRADO ==============================
+# Las lineas de una lista de rangos ordenados ("12-15,18,30-41") como un conjunto. Un trozo que no se entiende se salta.
+function ConvertTo-ConjuntoLineas([string]$Rangos) {
+  $c = New-Object 'System.Collections.Generic.HashSet[int]'
+  foreach ($t in @($Rangos.Split(',') | Where-Object { $_.Trim() })) {
+    $p = $t.Trim().Split('-')
+    $a = 0; $b = 0
+    if ($p.Count -gt 2 -or -not [int]::TryParse($p[0], [ref]$a)) { continue }
+    if ($p.Count -eq 1) { $b = $a } elseif (-not [int]::TryParse($p[1], [ref]$b)) { continue }
+    for ($i = $a; $i -le $b; $i++) { [void]$c.Add($i) }
+  }
+  return ,$c
+}
+
+# Lo que recorrieron los casos, por fichero del original (datos\prueba-local-cobertura.json): las lineas de los casos que salieron iguales en los dos
+# lados y las de los que salieron distintos. Una linea puede estar en las dos.
+function Get-LineasCasos($Cob) {
+  $r = @{}
+  if ($Cob.ficheros) {
+    foreach ($f in $Cob.ficheros.PSObject.Properties) {
+      $r[$f.Name] = @{ Igual = (ConvertTo-ConjuntoLineas ([string]$f.Value.igual)); Distinto = (ConvertTo-ConjuntoLineas ([string]$f.Value.distinto)) }
+    }
+  }
+  return $r
+}
+
+# Que hicieron los casos con la linea de un dato del original: ejecutado-distinto (alguno que salio distinto la ejecuto, aunque otros salieran iguales),
+# ejecutado-igual o sin-ejecutar. Vacio si los casos no se midieron.
+function Get-EjecucionLinea($D, [string]$Fichero, [int]$Linea) {
+  if ($null -eq $D.LineasCasos) { return '' }
+  $f = $D.LineasCasos[$Fichero]
+  if ($f -and $f.Distinto.Contains($Linea)) { return 'ejecutado-distinto' }
+  if ($f -and $f.Igual.Contains($Linea)) { return 'ejecutado-igual' }
+  return 'sin-ejecutar'
+}
+
 # Las filas de la comparacion de un job del mapa: por cada clase del job (en su orden) y cada dato de su comparacion, lo que dijo
-# la IA (o el script, en sin-pieza) junto al dato del original.
+# la IA (o el script, en sin-pieza) junto al dato del original y lo que hicieron los casos con su linea.
 function Get-DatosComparar($D, $J) {
   $filas = @()
   foreach ($cl in @($J.clases)) {
@@ -465,13 +501,13 @@ function Get-DatosComparar($D, $J) {
     if (-not $c) { continue }
     foreach ($dato in @($c.datos)) {
       $h = $D.Indice["$($cl.ficha)#$($dato.dato)"]
-      $texto = ''; $original = ''; $citaOriginal = ''
-      if ($h) { $texto = $h.texto; $original = "$($h.fichero):$($h.linea)"; $citaOriginal = $h.cita }
+      $texto = ''; $original = ''; $citaOriginal = ''; $ejecucion = ''
+      if ($h) { $texto = $h.texto; $original = "$($h.fichero):$($h.linea)"; $citaOriginal = $h.cita; $ejecucion = Get-EjecucionLinea $D ([string]$h.fichero) ([int]$h.linea) }
       $migrado = ''
       if ($dato.fichero) { $migrado = "$($dato.fichero):$($dato.linea)" }
       $filas += [pscustomobject]@{
         Job = $J.job; Clase = $c.clase; Estado = [string]$dato.estado; Texto = $texto; Original = $original; CitaOriginal = $citaOriginal
-        Migrado = $migrado; CitaMigrado = [string]$dato.cita; Nota = [string]$dato.nota; Probado = ($dato.probado -eq $true)
+        Migrado = $migrado; CitaMigrado = [string]$dato.cita; Nota = [string]$dato.nota; Probado = ($dato.probado -eq $true); Ejecucion = $ejecucion
       }
     }
   }
@@ -491,10 +527,18 @@ function Get-FilaComparar($T, $R) {
   if ($R.Migrado) { $migrado = Format-Trozo $T 'comp-migrado' @{ DONDE = $R.Migrado; CITA = $R.CitaMigrado } }
   $nota = ''
   if ($R.Nota) { $nota = Format-Trozo $T 'comp-nota' @{ NOTA = $R.Nota } }
+  $ejecucion = ''
+  if ($R.Ejecucion) { $ejecucion = Format-Trozo $T "comp-$($R.Ejecucion)" }
   return (Format-Trozo $T 'comp-fila' @{
-      CLASE = $clase; ESTADO = (Format-Trozo $T "comp-est-$($R.Estado)"); TEXTO = $R.Texto; MARCA = (Get-MarcaComparar $T $R)
+      CLASE = $clase; ESTADO = (Format-Trozo $T "comp-est-$($R.Estado)"); TEXTO = $R.Texto; MARCA = (Get-MarcaComparar $T $R); EJECUCION = $ejecucion
       NOMBRE = $R.Clase; ORIGINAL = $R.Original; CITA = $R.CitaOriginal; MIGRADO = $migrado; NOTA = $nota
     })
+}
+
+# Las filas de un estado: primero las que ejecuto algun caso que salio distinto, despues las que ningun caso recorre y al final las que salieron iguales.
+# Sin medida la ejecucion va vacia y el orden es el de siempre.
+function Sort-PorEjecucion($Filas) {
+  return @(foreach ($e in @('ejecutado-distinto', 'sin-ejecutar', '', 'ejecutado-igual')) { @($Filas | Where-Object { [string]$_.Ejecucion -ceq $e }) })
 }
 
 # Un job: la cabecera con sus cuentas, primero los distintos, las faltas, los que no sabe y los sin pieza, y los iguales plegados.
@@ -502,7 +546,7 @@ function Get-GrupoComparar($D, $T, $J) {
   $filas = @(Get-DatosComparar $D $J)
   $n = @{ 'igual' = 0; 'distinto' = 0; 'falta' = 0; 'no-lo-se' = 0; 'sin-pieza' = 0 }
   foreach ($f in $filas) { $n[$f.Estado]++ }
-  $primeras = @(foreach ($e in @('distinto', 'falta', 'no-lo-se', 'sin-pieza')) { @($filas | Where-Object { $_.Estado -ceq $e }) })
+  $primeras = @(foreach ($e in @('distinto', 'falta', 'no-lo-se', 'sin-pieza')) { Sort-PorEjecucion @($filas | Where-Object { $_.Estado -ceq $e }) })
   $iguales = @($filas | Where-Object { $_.Estado -ceq 'igual' })
   $cuerpo = ''
   if ($primeras.Count -gt 0) { $cuerpo = Format-Trozo $T 'comp-filas' @{ FILAS = (@($primeras | ForEach-Object { Get-FilaComparar $T $_ }) -join "`n") } }
@@ -811,12 +855,44 @@ function Get-PruebaLocalHtml($D, $T) {
   return (Format-Trozo $T 'pl-seccion' @{ CUERPO = $cuerpo })
 }
 
+# El resumen de arriba de la pagina 3: cuanto del original recorren los casos y, de los datos que la IA no pudo dar por iguales, cuantos ejecuto un caso que
+# salio igual y cuantos no recorre ninguno. Con los casos sin medir, una frase con el motivo; sin JSON, nada.
+function Get-ResumenCasos($D, $T) {
+  $frases = @()
+  if ($D.CoberturaCasos -and [string]$D.CoberturaCasos.estado -ceq 'no medido') {
+    $motivo = ([string]$D.CoberturaCasos.motivo).Trim().TrimEnd('.')
+    if (-not $motivo) { $motivo = Format-Trozo $T 'm34-sin-motivo' }
+    $frases += Format-Trozo $T 'm34-no-medido' @{ MOTIVO = $motivo }
+  }
+  elseif ($null -ne $D.LineasCasos) {
+    $recorridas = 0
+    foreach ($f in $D.LineasCasos.Values) {
+      $u = New-Object 'System.Collections.Generic.HashSet[int]'
+      $u.UnionWith($f.Igual); $u.UnionWith($f.Distinto)
+      $recorridas += $u.Count
+    }
+    $pct = "$(Get-PorcentajePractica $recorridas $D.CoberturaCasos.lineasTotal)".Replace('.', ',')
+    $frases += Format-Trozo $T 'm34-recorren' @{ PCT = $pct }
+    if ($D.Mapa -and $D.Comparacion.Count -gt 0) {
+      $dudosos = @(foreach ($j in @($D.Mapa.jobs)) { @(Get-DatosComparar $D $j | Where-Object { @('distinto', 'falta', 'no-lo-se') -ccontains $_.Estado }) })
+      if ($dudosos.Count -eq 0) { $frases += Format-Trozo $T 'm34-sin-dudosos' }
+      else {
+        $frases += Format-Trozo $T 'm34-dudosos' @{
+          N = "$($dudosos.Count)"; IGUAL = "$(@($dudosos | Where-Object { $_.Ejecucion -ceq 'ejecutado-igual' }).Count)"; NINGUNO = "$(@($dudosos | Where-Object { $_.Ejecucion -ceq 'sin-ejecutar' }).Count)"
+        }
+      }
+    }
+  }
+  if ($frases.Count -eq 0) { return '' }
+  return (Format-Trozo $T 'm34-resumen' @{ FRASES = ($frases -join "`n") })
+}
+
 function Get-CuerpoComparar($D, $T, [string]$Cuerpo) {
   $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'comparar'; ETIQUETA = (Format-Trozo $T 'et-sin') }
   if (-not $D.Mapa) { $jobs = Format-Trozo $T 'sin-datos' @{ FASE = 'mapa'; ETIQUETA = (Format-Trozo $T 'et-sin') } }
   elseif ($D.Comparacion.Count -gt 0) { $jobs = (@($D.Mapa.jobs | ForEach-Object { Get-GrupoComparar $D $T $_ }) -join "`n") }
   return (Expand-Plantilla $Cuerpo @{
-      PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs; LANZADORES = (Get-LanzadoresComparar $D $T)
+      RESUMENCASOS = (Get-ResumenCasos $D $T); PRUEBALOCAL = (Get-PruebaLocalHtml $D $T); ETIQUETA = (Format-Trozo $T 'et-ia'); MOMENTO = (Get-MomentoComparar $D $T); JOBS = $jobs; LANZADORES = (Get-LanzadoresComparar $D $T)
     })
 }
 
