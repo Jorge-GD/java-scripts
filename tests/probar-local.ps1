@@ -2363,6 +2363,49 @@ $Pruebas['m32 (b3) un caso sin estado.txt ni error.txt cuya salida no habla de l
   Igual 'una sola fila de caso-01 en el migrado, con -o' 'True' ((@(Tiempos $e | Where-Object { $_.lado -eq 'migrado' -and $_.caso -eq 'caso-01' }) | ForEach-Object { $_.offline }) -join ',')
 }
 
+# El registro de Maven (registros\mvn-<n>-<que>.log) de los casos del migrado de $Caso, en orden: lo que dijo cada llamada.
+function Registros-Mvn-Migrado($E, [string]$Caso) {
+  return @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local 'registros') -File -Filter "mvn-*-migrado-cargaJob-$Caso.log" | Sort-Object { [int]($_.Name -replace '^mvn-(\d+)-.*$', '$1') })
+}
+
+$Pruebas['m32 (b4) un caso que ya dejo estado.txt, o solo error.txt, no se repite aunque la salida de Maven diga offline'] = {
+  $e = Escenario-M32 'm32-b4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M32 $e 'ejecutado-y-offline'
+  foreach ($c in @('caso-01', 'caso-02')) {
+    $reg = @(Registros-Mvn-Migrado $e $c)
+    Igual "$c del migrado: una sola llamada de Maven" 1 $reg.Count
+    Comprueba "  y su salida dice offline (el guion se cumplio)" ($reg.Count -gt 0 -and [System.IO.File]::ReadAllText($reg[0].FullName) -match 'offline') ''
+  }
+  Comprueba 'caso-01 dejo estado.txt y caso-02 solo error.txt' ((Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-01/estado.txt')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-02/estado.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-02/error.txt'))) ''
+  Comprueba 'no sale la Info de repetir con red' ($r.Salida -notmatch 'Sin red Maven no ha podido') (Cola $r.Salida)
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'el migrado ejecuta cada caso una vez y con -o' 'caso-01 True,caso-02 True' ((@($m | ForEach-Object { (Caso-De $_) + ' ' + (Con-O $_) })) -join ',')
+}
+
+$Pruebas['m32 (b5) un caso que Maven para por el tope no se repite aunque su salida diga offline'] = {
+  $e = Escenario-M32 'm32-b5' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) @{ MinutosMaven = 0.1 }
+  $r = Prueba-M32 $e 'tope-offline'
+  Comprueba 'Maven se paso del tope en caso-01 del migrado' ($r.Salida -match 'Maven se ha pasado del tope de 0\.1 min y se ha parado \(Maven, migrado cargaJob caso-01\)') (Cola $r.Salida)
+  $reg = @(Registros-Mvn-Migrado $e 'caso-01')
+  Comprueba 'su registro lleva lo que Maven dijo antes de colgarse: offline' ($reg.Count -gt 0 -and [System.IO.File]::ReadAllText($reg[0].FullName) -match 'offline') ''
+  Igual 'caso-01 del migrado: una sola llamada de Maven' 1 $reg.Count
+  Comprueba 'no sale la Info de repetir con red' ($r.Salida -notmatch 'Sin red Maven no ha podido') (Cola $r.Salida)
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'el migrado ejecuta cada caso una vez y con -o' 'caso-01 True,caso-02 True' ((@($m | ForEach-Object { (Caso-De $_) + ' ' + (Con-O $_) })) -join ',')
+}
+
+$Pruebas['m32 (b6) al repetir con red se borra antes lo que dejo el intento sin red: un fichero suelto de ese intento no queda en la salida del caso'] = {
+  $e = Escenario-M32 'm32-b6' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M32 $e 'sin-red-parcial'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'la Info sale una vez' 1 (@([regex]::Matches($r.Salida, [regex]::Escape('Sin red Maven no ha podido'))).Count)
+  $m = @(Casos-Mvn $e $e.CopiaMig)
+  Igual 'caso-01 con -o y repetido sin -o; caso-02 ya sin -o' 'caso-01 True,caso-01 False,caso-02 False' ((@($m | ForEach-Object { (Caso-De $_) + ' ' + (Con-O $_) })) -join ',')
+  Comprueba 'ficheros/parcial.txt no esta en la salida del caso de la copia' (-not (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'target/prueba-local/cargaJob/caso-01/ficheros/parcial.txt'))) ''
+  Comprueba 'ni en la que guarda la prueba (salidas\migrado)' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/ficheros/parcial.txt'))) ''
+}
+
 $Pruebas['m32 (c) un caso que deja estado.txt (aunque sea FAILED) o error.txt no se repite, ni con -o'] = {
   $e = Escenario-M32 'm32-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
   $r = Prueba-M32 $e 'falla-migrado'
@@ -2391,6 +2434,11 @@ $Pruebas['m32 (d) prueba-local-tiempos.json: una fila por ejecucion de un caso, 
   $ultimo = @($t | Where-Object { $_.lado -eq 'migrado' })[-1]
   Igual 'la ultima fila del migrado lleva el time del XML que dejo Maven' $xml.DocumentElement.GetAttribute('time') "$($ultimo.segundosTest)"
   Comprueba 'la consola da la media: el test 0.3 s (la de 0.2 y 0.4)' ($r.Salida -match 'Maven por caso: [\d\.]+ s de media; el test 0\.3 s y Maven [\d\.]+ s \(arranque, plugins y red\)\. Detalle: .*prueba-local-tiempos\.json') (Cola $r.Salida)
+  $f = @($t | Where-Object { $null -ne $_.segundosTest })
+  $mediaMaven = ($f | Measure-Object -Property segundosMaven -Average).Average
+  $resta = [Math]::Round($mediaMaven - ($f | Measure-Object -Property segundosTest -Average).Average, 1)
+  Comprueba 'la media de los segundos de Maven y la de Maven menos test se distinguen (el test dura 0.3 s)' ([Math]::Round($mediaMaven, 1) -ne $resta) "$mediaMaven $resta"
+  Comprueba "y la linea da Maven menos test: y Maven $resta s (no los segundos de Maven)" ($r.Salida.Contains("y Maven $resta s (arranque")) (Cola $r.Salida)
   $antes = $t.Count
   $r = Prueba $e
   $t2 = @(Tiempos $e)
@@ -2413,6 +2461,17 @@ $Pruebas['m32 (e) un XML de surefire anterior a ese Maven no cuenta (segundosTes
   $t = @(Tiempos $e2)
   Comprueba 'hay filas, todas con segundosTest null' ($t.Count -ge 3 -and (Tests-De $t) -notmatch '[0-9]') (Tests-De $t)
   Comprueba 'y la linea de Maven por caso no sale' ($r.Salida -notmatch 'Maven por caso') (Cola $r.Salida)
+}
+
+$Pruebas['m32 (f) un prueba-local-tiempos.json de antes que no se puede leer no para la prueba: sale con 0, avisa y no lo pisa'] = {
+  $e = Escenario-M32 'm32-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $datos = Split-Path $e.Json -Parent
+  Escribe $datos 'prueba-local-tiempos.json' "esto no es json {`n"
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba 'avisa: No he podido guardar los tiempos' ($r.Salida -match 'No he podido guardar los tiempos') (Cola $r.Salida)
+  Igual 'y el fichero de antes sigue como estaba' "esto no es json {`n" (Lee $datos 'prueba-local-tiempos.json')
 }
 
 # ================================ LANZADOR ================================

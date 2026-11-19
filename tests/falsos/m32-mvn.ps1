@@ -11,6 +11,11 @@
 #      contexto-roto      en la copia del migrado, caso-01 no llega a ejecutar el test, con o sin -o, y la salida no habla de la red: el contexto de
 #                         Spring no arranca. No deja estado.txt ni error.txt
 #      falla-migrado      en la copia del migrado, caso-01 deja estado=FAILED y caso-02 deja error.txt (sin estado.txt): Maven sale con 1
+#      ejecutado-y-offline  en la copia del migrado, caso-01 deja estado.txt y caso-02 solo error.txt, y la salida de Maven de los dos dice
+#                         'offline' (Maven sale con 1): el caso llego al test, no se repite
+#      tope-offline       en la copia del migrado, caso-01 escribe la frase de 'offline' y se cuelga 60 s (lo para el tope de Maven)
+#      sin-red-parcial    en la copia del migrado, con -o, caso-01 deja un fichero suelto (ficheros/parcial.txt) sin estado.txt y dice 'offline';
+#                         sin -o va bien y no escribe ese fichero
 #      xml-viejo          el XML solo lo escribe el primer caso de cada copia: los demas Maven dejan el que ya habia, de antes de ese Maven
 $raiz = (Get-Location).Path
 $original = ($raiz -like '*batch-viejo*')
@@ -23,9 +28,9 @@ foreach ($a in $args) {
 }
 $sinRed = ($args -contains '-o')
 $frase = ''
-if ($caso -and $guion -eq 'sin-red-original' -and $original -and $sinRed) {
-  $frase = '[ERROR] Failed to execute goal on project batch-viejo: Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact com.acme:lib:jar:1.0 has not been downloaded from it before.'
-}
+$offline = '[ERROR] Failed to execute goal on project batch: Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact com.acme:lib:jar:1.0 has not been downloaded from it before.'
+if ($caso -and $guion -eq 'sin-red-original' -and $original -and $sinRed) { $frase = $offline }
+if ($caso -eq 'caso-01' -and -not $original -and (($guion -eq 'sin-red-parcial' -and $sinRed) -or $guion -eq 'tope-offline')) { $frase = $offline }
 if ($caso -eq 'caso-01' -and $guion -eq 'migrado-roto' -and -not $original) {
   if ($sinRed) { $frase = '[ERROR] Failed to execute goal on project batch-nuevo: The repository system is offline but the artifact com.acme:lib:jar:1.0 is not available in the local repository.' }
   else { $frase = '[ERROR] java.lang.IllegalStateException: Failed to load ApplicationContext' }
@@ -36,7 +41,13 @@ if ($frase) {
     [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
     [System.IO.File]::AppendAllText((Join-Path $env:RESCATE_LLAMADAS 'mvn.log'), ($raiz + '|' + $env:JAVA_HOME + '|' + ($args -join ' ') + "`n"))
   }
+  if ($guion -eq 'sin-red-parcial') {
+    $parcial = Join-Path $raiz "target/prueba-local/$job/$caso/ficheros"
+    [void](New-Item -ItemType Directory -Path $parcial -Force)
+    [System.IO.File]::WriteAllText((Join-Path $parcial 'parcial.txt'), "a medias`n")
+  }
   $frase
+  if ($guion -eq 'tope-offline') { Start-Sleep -Seconds 60 }
   exit 1
 }
 & (Join-Path $PSScriptRoot 'mvn-local.ps1') @args
@@ -50,6 +61,14 @@ if (-not $original -and $guion -eq 'falla-migrado' -and $caso -eq 'caso-01') {
 if (-not $original -and $guion -eq 'falla-migrado' -and $caso -eq 'caso-02') {
   Remove-Item -LiteralPath (Join-Path $salida 'estado.txt') -Force
   [System.IO.File]::WriteAllText((Join-Path $salida 'error.txt'), "java.lang.IllegalStateException: el job ha fallado`n")
+  $codigo = 1
+}
+if (-not $original -and $guion -eq 'ejecutado-y-offline' -and ($caso -eq 'caso-01' -or $caso -eq 'caso-02')) {
+  if ($caso -eq 'caso-02') {
+    Remove-Item -LiteralPath (Join-Path $salida 'estado.txt') -Force
+    [System.IO.File]::WriteAllText((Join-Path $salida 'error.txt'), "java.lang.IllegalStateException: el job ha fallado`n")
+  }
+  $offline
   $codigo = 1
 }
 $paquete = 'com.acme.nuevo'
