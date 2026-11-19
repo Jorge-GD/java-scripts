@@ -5504,12 +5504,18 @@ $Pruebas['m22 (d): con LotesEntreControles = 2 y 4 lotes buenos hay dos controle
   Igual 'dos controles, el segundo tras el lote 3' '2 3' ((@(Controles-M22 $e2 | ForEach-Object { $_.lote })) -join ' ')
 }
 
-$Pruebas['m22 (e): un lote rompe un test de contexto y pasa su lote; el control sale rojo, la biseccion da ese lote, se revierte y la marca se mueve'] = {
+# El escenario de (e) y (n): cuatro lotes buenos y el de ReciboService rompe el test de contexto en el control (el de los lotes 1 y 2, y el de los 3 y 4).
+function Corre-E-M22([string]$Nombre) {
   $cl = @('service/TotalService', 'service/ReciboService', 'service/PagoService', 'service/CobroService')
   $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_FALLA_CON:ReciboService' '@SpringBootTest') }
-  $e = Escenario-M22 'm22-e' $cl $t @{ LotesEntreControles = 2 }
+  $e = Escenario-M22 $Nombre $cl $t @{ LotesEntreControles = 2 }
   $log = Join-Path $e.Raiz 'mvn-m22.log'
-  $r = Lanza-M22 $e $log
+  return [pscustomobject]@{ E = $e; Log = $log; R = (Lanza-M22 $e $log) }
+}
+
+$Pruebas['m22 (e): un lote rompe un test de contexto y pasa su lote; el control sale rojo, la biseccion da ese lote, se revierte y la marca se mueve'] = {
+  $x = Corre-E-M22 'm22-e'
+  $e = $x.E; $log = $x.Log; $r = $x.R
   if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'los cuatro lotes pasan sus puertas (el de contexto no se ejecuta en el lote)' 4 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
@@ -5533,6 +5539,22 @@ $Pruebas['m22 (e): un lote rompe un test de contexto y pasa su lote; el control 
   Igual 'dos pasadas con -Dtest: en el HEAD y la de la biseccion' 2 $solas.Count
   Comprueba 'la de la biseccion corre en un worktree aparte' ($solas.Count -eq 2 -and $solas[0].Donde -ne $solas[1].Donde) (($solas | ForEach-Object { $_.Donde }) -join ' | ')
   Comprueba 'que no queda: ni worktree de control ni carpeta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/control-wt')) -and ((GitEn $e.Wt @('worktree', 'list')) -split "`n").Count -eq 2) (GitEn $e.Wt @('worktree', 'list'))
+}
+
+$Pruebas['m22 (n): tras revertir el lote culpable, su incidencia de Sonar vuelve a pendiente en la base (sin resuelta, regla ni commit) y las de los otros tres siguen resueltas'] = {
+  $x = Corre-E-M22 'm22-n'
+  $e = $x.E
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $x.R.Salida); return }
+  $ruta = Get-Ruta $e.Wt '.rescate/sonar-base.json'
+  if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { Comprueba 'existe .rescate/sonar-base.json' $false (Cola $x.R.Salida); return }
+  $inc = @(([System.IO.File]::ReadAllText($ruta) | ConvertFrom-Json).incidencias)
+  Igual 'cuatro incidencias en la base' 4 $inc.Count
+  $rec = @($inc | Where-Object { $_.fichero -like '*ReciboService.java' })
+  Igual 'la del lote revertido (ReciboService) no esta resuelta' 'False' "$($rec[0].resuelta)"
+  Igual 'y no guarda el commit del lote' '' "$($rec[0].commit)"
+  Igual 'ni la regla con la que se arreglo' '' "$($rec[0].regla)"
+  $otras = @($inc | Where-Object { $_.fichero -notlike '*ReciboService.java' })
+  Igual 'las otras tres siguen resueltas y con el commit de su lote' 3 @($otras | Where-Object { $_.resuelta -eq $true -and "$($_.commit)" -match '^[0-9a-f]{40}$' }).Count
 }
 
 $Pruebas['m22 (e2): las pasadas de Maven de un control rojo con un culpable: 4 lotes sin controles intermedios'] = {
@@ -5578,6 +5600,45 @@ $Pruebas['m22 (e3): revertir un lote que choca con uno posterior da conflicto: s
   Igual 'el fichero vuelve a como era antes de los dos' "uno`ndos`ntres`n" (Lee $d 'f.txt')
   Igual 'con un commit nuevo encima de los dos' '3' (GitEn $d @('rev-list', '--count', "$c1^..HEAD")).Trim()
   Igual 'y el arbol limpio' '' (GitEn $d @('status', '--porcelain')).Trim()
+}
+
+$Pruebas['m22 (m): un commit que no es de un lote (arreglo a mano) deja la marca sin valor: la siguiente pasada no empieza con un control y el commit sigue en la rama'] = {
+  $e = Escenario-M22 'm22-m' @('service/TotalService', 'service/ReciboService') $CtxM22
+  $log1 = Join-Path $e.Raiz 'mvn-m22-1.log'
+  $r1 = Lanza-M22 $e $log1 @('-MaxLotes', '1')
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r1.Salida); return }
+  Igual 'la primera pasada deja la marca en el HEAD' (Head-M22 $e) (Marca-M22 $e)
+  $marca = Marca-M22 $e
+  Escribe $e.Wt 'NOTAS.md' 'lo he tocado yo'
+  [void](GitEn $e.Wt @('add', '--', 'NOTAS.md'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano'))
+  $log2 = Join-Path $e.Raiz 'mvn-m22-2.log'
+  $r2 = Lanza-M22 $e $log2
+  Igual 'la segunda pasada sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que la marca ya no vale' ($r2.Salida -match 'La marca del ultimo control ya no vale') (Cola $r2.Salida)
+  Comprueba 'y no empieza con un control' ($r2.Salida -notmatch 'empiezo con un control') (Cola $r2.Salida)
+  Igual 'ningun control en el lote 0: solo el del final de cada pasada' '1 1' ((@(Controles-M22 $e | ForEach-Object { $_.lote })) -join ' ')
+  $sub = @((GitEn $e.Wt @('log', '--format=%s')) -split "`n")
+  Igual 'el commit a mano sigue en la rama' 1 @($sub | Where-Object { $_ -eq 'arreglo a mano' }).Count
+  Igual 'y no hay ningun revert' 0 @($sub | Where-Object { $_ -match '^rescate\(control\): ' }).Count
+  Comprueba 'el commit a mano es ancestro del HEAD y la marca esta en el HEAD' ((Head-M22 $e) -eq (Marca-M22 $e) -and (Marca-M22 $e) -ne $marca) ''
+}
+
+$Pruebas['m22 (o): un lote hace que se ejecuten menos tests (sin tocar los tests): el control sale rojo por la cuenta, revierte los lotes desde la marca y la suite vuelve a pasar'] = {
+  $t = @{ AppContextTest = (Test-Java-M22 'AppContextTest' 'M22_SALTA_CON:ReciboService' '@SpringBootTest') }
+  $e = Escenario-M22 'm22-o' @('service/TotalService', 'service/ReciboService') $t @{ LotesEntreControles = 2 }
+  $log = Join-Path $e.Raiz 'mvn-m22.log'
+  $r = Lanza-M22 $e $log
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false (Cola $r.Salida); return }
+  Igual 'los dos lotes pasan sus puertas (el de contexto no corre en el lote)' 2 @([regex]::Matches($r.Salida, "Lote \d OK: 'sonar'")).Count
+  Comprueba 'el control dice que se ejecutan menos tests que en el ultimo control (2 -> 1)' ($r.Salida -match 'se ejecutan menos tests que en el ultimo control \(2 -> 1\)') (Cola $r.Salida)
+  Comprueba 'y revierte todos los lotes desde la marca' ($r.Salida -match 'revierto todos los lotes desde la marca \(2\)') (Cola $r.Salida)
+  $k = @(Controles-M22 $e)
+  Igual 'intentos.tsv: un control, revertido 2' 'revertido 2' ((@($k | ForEach-Object { $_.resultado })) -join ' ')
+  Comprueba 'con la puerta que lo explica' ($k.Count -eq 1 -and $k[0].puerta -match 'se ejecutan menos tests') (($k | ForEach-Object { $_.puerta }) -join ' ')
+  $dir = 'src/main/java/com/acme/plantillabatch/service/'
+  Comprueba 'el codigo de los dos lotes vuelve a como estaba' ((@('TotalService', 'ReciboService') | Where-Object { (Lee $e.Wt ($dir + $_ + '.java')) -match '\+ 0;' }).Count -eq 0) ''
+  Igual 'la marca esta en el HEAD (la suite vuelve a pasar con los dos tests)' (Head-M22 $e) (Marca-M22 $e)
 }
 
 $Pruebas['m22 (f): un test inestable (falla en la suite del control y pasa solo) deja el control en verde, con el aviso'] = {

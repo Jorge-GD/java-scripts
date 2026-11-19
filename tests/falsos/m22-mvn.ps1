@@ -6,6 +6,7 @@
 #   M22_FALLA                  siempre
 #   M22_FALLA_CON:<Clase>      si el fuente de esa clase en src/main/java lleva ' + 0;' (lo que le deja el Copilot de mentira al arreglarlo)
 #   M22_FALLA_SI_CAMBIA        si la propia clase lleva ' + 0;'
+#   M22_SALTA_CON:<Clase>      no se ejecuta (ni falla) si el fuente de esa clase en src/main/java lleva ' + 0;': un lote que hace que corran menos tests
 #   M22_INESTABLE:<n>          solo en la suite entera n-esima (sin -Dtest ni excludesFile) de las que pasa este Maven
 #   M22_FALLA_DESDE:<n>        en la suite entera n-esima y en las que siguen
 # El numero de suites sale de RESCATE_M22_ESTADO (una carpeta donde deja suites.n); sin ella, esas dos marcas no fallan nunca.
@@ -69,6 +70,8 @@ foreach ($f in @(Get-ChildItem -LiteralPath $base -Recurse -File -Filter '*.java
     foreach ($j in @($main | Where-Object { $_.BaseName -eq $m.Groups[1].Value })) { if ([System.IO.File]::ReadAllText($j.FullName).Contains(' + 0;')) { $falla = $true } }
   }
   if ($texto -match 'M22_FALLA_SI_CAMBIA' -and $texto.Contains(' + 0;')) { $falla = $true }
+  $m = [regex]::Match($texto, 'M22_SALTA_CON:(\w+)')
+  if ($m.Success -and @($main | Where-Object { $_.BaseName -eq $m.Groups[1].Value -and [System.IO.File]::ReadAllText($_.FullName).Contains(' + 0;') }).Count -gt 0) { continue }
   $m = [regex]::Match($texto, 'M22_INESTABLE:(\d+)')
   if ($m.Success -and $suite -gt 0 -and $suite -eq [int]$m.Groups[1].Value) { $falla = $true }
   $m = [regex]::Match($texto, 'M22_FALLA_DESDE:(\d+)')
