@@ -530,5 +530,24 @@ $Pruebas['l) cobertura: Despues dice cuando se midio (la fecha del fichero que m
   Comprueba 'la linea de donde mirar solo sale en los dos batchs con Despues (2 en toda la salida)' (@($r.Salida -split "\r?\n" | Where-Object { $_ -match 'cobertura-faltan' }).Count -eq 2) (Cola $r.Salida)
 }
 
+$Pruebas['m42 (e) el comando lleva las opciones de la pasada que guarda estado.json (-Practicas, -Reglas, -MaxHoras, -Limite, -SinPruebaLocal); el de un estado.json de antes es el de siempre'] = {
+  $E = Nuevo-Escenario 'm42-e'
+  $mAntes = Join-Path $E.Raiz 'e-antes'
+  $mCon = Join-Path $E.Raiz 'e-con'
+  [void](Nuevo-Batch $E 'e-antes' (Estado-Base 'e-antes' $mAntes @{ fin = ''; fase = 'mapa' }))
+  [void](Nuevo-Batch $E 'e-con' (Estado-Base 'e-con' $mCon @{ fin = ''; fase = 'mapa'; practicas = $true; reglas = $false; maxHoras = 2; limite = 5; sinPruebaLocal = $true }))
+  $r = Donde $E
+  Igual 'sale con 0' 0 $r.Codigo
+  $bl = Bloques $r.Salida
+  $orig = Join-Path $E.Raiz 'original-acme'
+  $ref = Join-Path $E.Raiz 'referencia-acme'
+  $base = '.\migracion.ps1 -Legacy "' + $orig + '" -Migrado "<M>" -Plantilla "' + $ref + '" -Modelo claude-sonnet-5.5 -SoloInforme'
+  $a = Campo-De $bl['e-antes'] 'Siguiente'
+  Igual 'sin los campos nuevos: el comando de siempre' ($base.Replace('<M>', $mAntes)) ($a.Comando -join ' / ')
+  $c = Campo-De $bl['e-con'] 'Siguiente'
+  Comprueba 'con practicas = true el comando lleva -Practicas' ($c.Comando.Count -eq 1 -and $c.Comando[0] -cmatch ' -Practicas( |$)') ($c.Comando -join ' / ')
+  Igual 'y las demas opciones guardadas, en orden y sin -Reglas (estaba en false)' ($base.Replace('<M>', $mCon) + ' -Practicas -MaxHoras 2 -Limite 5 -SinPruebaLocal') ($c.Comando -join ' / ')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

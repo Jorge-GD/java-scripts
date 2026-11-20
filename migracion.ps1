@@ -73,7 +73,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 pasada sigue: el codigo de salida no depende de esta fase. estado.json lleva pruebaLocal (resultado hecha,
                 fallo o saltada, codigo, minutos, detalle, jdkOriginal -true si el original no compila con el JDK de Maven- y registro); hasta llegar
                 a la fase vale null. estado.json lleva tambien ramaOrigen (la rama del migrado de la que sale la de rescate) y javaLegacy (el
-                valor de -JavaLegacy, o vacio): con ellos la portada monta el comando del siguiente paso.
+                valor de -JavaLegacy, o vacio): con ellos la portada monta el comando del siguiente paso. Y las opciones de ese lanzamiento: practicas, reglas,
+                maxHoras, limite y sinPruebaLocal (-Reintentar no se guarda: es de una sola vez); relanzar sin una de ellas la quita del comando.
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
   que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
   migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato), 4-correcciones.html (que se ha
@@ -681,7 +682,7 @@ if ($SoloInforme -and $Si) { Stop-Arranque 'Usa -SoloInforme o -Si, no los dos.'
 $respondeSi = [bool]$Si
 
 # 1. Herramientas y repos (antes, los ajustes: pueden cambiar donde estan)
-$ajustes = Read-CfgFile (Get-RutaAjustes) @('Plantilla')
+$ajustes = Read-CfgFile (Get-RutaAjustes) (Get-ClavesAjustes $PSScriptRoot)   # ajustes.json es de todos los scripts: solo avisa de lo que no es de ninguno
 foreach ($x in @(@('git', 'git'), @('java', $Cfg.JavaExe), @('Copilot', $Cfg.CopilotExe))) {
   if (-not (Get-Command $x[1] -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro $($x[0]) ('$($x[1])') en el PATH." }
 }
@@ -767,6 +768,8 @@ $Estado = [ordered]@{
 }
 # En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
 if ($previo -and $previo.creado) { $Estado['creado'] = if ($previo.creado -is [datetime]) { $previo.creado.ToString('s') } else { [string]$previo.creado } }
+# las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
+$Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal
 try {
   foreach ($d in @((Join-Path $Datos 'tareas'), (Join-Path $Datos 'fichas'))) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
   Save-Estado

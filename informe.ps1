@@ -1671,11 +1671,18 @@ function Format-ArgComando([string]$Valor) {
 }
 
 # La linea con la que se lanzo la pasada, montada con estado.json: las rutas entre comillas, el modelo si lo hay, -SoloInforme o -Si segun
-# $Respuesta (parar o corregir) y -JavaLegacy si hay ($Java).
-function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java) {
+# $Respuesta (parar o corregir), las opciones del lanzamiento que guarda migracion.ps1 (-Practicas, -Reglas, -MaxHoras y -Limite si no son 0,
+# -SinPruebaLocal; un estado.json de antes no las trae y no salen) y -JavaLegacy si hay ($Java). -Reintentar no: es de una sola vez. Con
+# $ConPruebaLocal no sale -SinPruebaLocal: es el comando que hace la prueba en local que se salto.
+function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java, [switch]$ConPruebaLocal) {
   $c = '.\migracion.ps1 -Legacy "' + $Est.legacy + '" -Migrado "' + $Est.migrado + '" -Plantilla "' + $Est.plantilla + '"'
   if ($Est.modelo) { $c += ' -Modelo ' + (Format-ArgComando ([string]$Est.modelo)) }
   if ($Respuesta -ceq 'parar') { $c += ' -SoloInforme' } elseif ($Respuesta -ceq 'corregir') { $c += ' -Si' }
+  if ($Est.practicas -eq $true) { $c += ' -Practicas' }
+  if ($Est.reglas -eq $true) { $c += ' -Reglas' }
+  if ([double]$Est.maxHoras -ne 0) { $c += ' -MaxHoras ' + [string]$Est.maxHoras }
+  if ([int]$Est.limite -ne 0) { $c += ' -Limite ' + [string]$Est.limite }
+  if ($Est.sinPruebaLocal -eq $true -and -not $ConPruebaLocal) { $c += ' -SinPruebaLocal' }
   if ($Java) { $c += ' -JavaLegacy "' + $Java + '"' }
   return $c
 }
@@ -1722,7 +1729,7 @@ function Get-SiguientePaso($Est, $D) {
   }
   elseif ($local -ceq 'fallo') { $r.Caso = 'local-fallo'; $r.Detalle = [string]$Est.pruebaLocal.detalle; $r.Comando = $pasada }
   elseif ($sinPreparar -gt 0) { $r.Caso = 'local-incompleta'; $r.N = $sinPreparar; $r.M = $casos; $r.Comando = $pasada }
-  elseif ($local -ceq 'saltada') { $r.Caso = 'local-saltada'; $r.Comando = $pasada }
+  elseif ($local -ceq 'saltada') { $r.Caso = 'local-saltada'; $r.Comando = Get-ComandoPasada $Est $respuesta $java -ConPruebaLocal }
   elseif ($respuesta -ceq 'parar' -and $errores -gt 0) { $r.Caso = 'parar-con-problemas'; $r.N = $errores; $r.Comando = Get-ComandoPasada $Est 'corregir' $java }
   elseif ($corregido -and $D.Correccion.completa -eq $true) {
     $rama = [string]$Est.rama

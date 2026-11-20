@@ -6543,5 +6543,89 @@ $Pruebas['m38 (h) si el worktree no puede avanzar hasta el commit nuevo (lleva a
   Comprueba 'el Aviso dice que el worktree no esta en tu commit y que lo que se mide es el worktree' ($r2.Salida -match 'worktree de rescate no esta en tu commit' -and $r2.Salida.Contains($nuevo.Substring(0, 7)) -and $r2.Salida.Contains($wt.Substring(0, 7))) (Cola $r2.Salida)
 }
 
+# ============================ M42: EL COMANDO DE LA PORTADA REPITE LAS OPCIONES ============================
+# El comando del recuadro "Siguiente paso" de la portada de una corrida (index.html), sin el escapado del HTML.
+function M42-Comando($E) {
+  $sec = Panel-De (Pagina $E.Out 'index.html') 'siguiente-paso'
+  return [System.Net.WebUtility]::HtmlDecode([regex]::Match($sec, '(?s)<pre class="cmd">(.*?)</pre>').Groups[1].Value)
+}
+
+# El comando de la pasada de una corrida, sin opciones: las rutas son las que guardo estado.json y el modelo, el del banco.
+function M42-Base($S) { return ('.\migracion.ps1 -Legacy "' + $S.legacy + '" -Migrado "' + $S.migrado + '" -Plantilla "' + $S.plantilla + '" -Modelo modelo-x -SoloInforme') }
+
+$Pruebas['m42 (a) la portada da el comando con -Practicas, -MaxHoras, -Limite y -SinPruebaLocal y sin -Reintentar; estado.json guarda las opciones de la pasada'] = {
+  $e = Nuevo-Escenario 'm42-a'
+  $r = Migra $e ((Basicos $e) + @('-Practicas', '-MaxHoras', '2', '-Limite', '5', '-SinPruebaLocal', '-Reintentar'))
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  Comprueba 'estado.json guarda practicas, maxHoras, limite y sinPruebaLocal tal como se dieron, y reglas en false' ($s.practicas -eq $true -and $s.reglas -eq $false -and [double]$s.maxHoras -eq 2 -and [int]$s.limite -eq 5 -and $s.sinPruebaLocal -eq $true) (Lee $e.Out 'datos/estado.json')
+  Comprueba 'no guarda -Reintentar: es de una sola vez' (-not (@($s.PSObject.Properties.Name) -contains 'reintentar'))
+  Igual 'el comando de la portada lleva las cuatro y no -Reintentar' ((M42-Base $s) + ' -Practicas -MaxHoras 2 -Limite 5 -SinPruebaLocal') (M42-Comando $e)
+}
+
+$Pruebas['m42 (b) relanzar sin las opciones (solo con -Reintentar): estado.json las deja en false o 0 y el comando de la portada ya no las lleva'] = {
+  $e = Nuevo-Escenario 'm42-b'
+  $r = Migra $e ((Basicos $e) + @('-Practicas', '-Reglas', '-MaxHoras', '2', '-Limite', '5'))
+  Igual 'la primera sale con 0' 0 $r.Codigo
+  Comprueba 'el comando de la primera lleva -Practicas, -Reglas, -MaxHoras y -Limite' ((M42-Comando $e) -cmatch ' -Practicas -Reglas -MaxHoras 2 -Limite 5( |$)') (M42-Comando $e)
+  $r = Migra $e ((Basicos $e) + @('-Reintentar'))
+  Igual 'el relanzamiento (solo con -Reintentar, que no se guarda) sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  Comprueba 'estado.json: practicas y reglas en false, maxHoras y limite en 0' ($s.practicas -eq $false -and $s.reglas -eq $false -and [double]$s.maxHoras -eq 0 -and [int]$s.limite -eq 0) (Lee $e.Out 'datos/estado.json')
+  Igual 'el comando de la portada es el de siempre' (M42-Base $s) (M42-Comando $e)
+}
+
+$Pruebas['m42 (c) un estado.json de antes, sin los campos nuevos, da el comando de hoy; con ellos, en orden fijo antes de -JavaLegacy; -SinPruebaLocal no sale si lo que toca es hacer la prueba en local'] = {
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; fase = 'mapa' }) (Datos-Siguiente)
+  Igual 'sin los campos nuevos: el comando de hoy' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; fase = 'mapa'; practicas = $false; reglas = $false; maxHoras = 0; limite = 0; sinPruebaLocal = $false }) (Datos-Siguiente)
+  Igual 'con todo en false o 0: el comando de hoy' ($ComandoSiguiente + ' -SoloInforme') $s.Comando
+  $todo = @{ fin = ''; fase = 'mapa'; practicas = $true; reglas = $true; maxHoras = 1.5; limite = 3; sinPruebaLocal = $true; javaLegacy = 'C:\jdk8' }
+  $s = Siguiente (Estado-Siguiente $todo) (Datos-Siguiente)
+  Igual 'con todas, tras -SoloInforme y antes de -JavaLegacy, en orden fijo' ($ComandoSiguiente + ' -SoloInforme -Practicas -Reglas -MaxHoras 1.5 -Limite 3 -SinPruebaLocal -JavaLegacy "C:\jdk8"') $s.Comando
+  $todo['respuesta'] = 'corregir'
+  $s = Siguiente (Estado-Siguiente $todo) (Datos-Siguiente)
+  Igual 'con -Si, igual' ($ComandoSiguiente + ' -Si -Practicas -Reglas -MaxHoras 1.5 -Limite 3 -SinPruebaLocal -JavaLegacy "C:\jdk8"') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ fin = ''; fase = 'mapa'; maxHoras = 0.5 }) (Datos-Siguiente)
+  Igual 'maxHoras con decimales sale con punto' ($ComandoSiguiente + ' -SoloInforme -MaxHoras 0.5') $s.Comando
+  $p = [ordered]@{ motivo = 'copilot-no-responde'; detalle = 'x'; registro = 'r'; ayuda = 'a' }
+  $s = Siguiente (Estado-Siguiente @{ parada = $p; practicas = $true; sinPruebaLocal = $true }) (Datos-Siguiente)
+  Igual 'una pasada parada: el comando de la pasada con sus opciones' ($ComandoSiguiente + ' -SoloInforme -Practicas -SinPruebaLocal') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ fase = 'comparar'; practicas = $true; limite = 5; sinPruebaLocal = $true }) (Datos-Siguiente)
+  Igual 'una pasada cortada por -Limite: el mismo comando, con sus opciones' ($ComandoSiguiente + ' -SoloInforme -Practicas -Limite 5 -SinPruebaLocal') $s.Comando
+  $salto = [ordered]@{ resultado = 'saltada'; codigo = $null; minutos = 0; detalle = ''; registro = '' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $salto; practicas = $true; maxHoras = 2; sinPruebaLocal = $true }) (Datos-Siguiente)
+  Igual 'local-saltada: el caso es el de siempre' 'local-saltada' $s.Caso
+  Igual 'y el comando hace la prueba en local: lleva lo demas y no -SinPruebaLocal' ($ComandoSiguiente + ' -SoloInforme -Practicas -MaxHoras 2') $s.Comando
+  $s = Siguiente (Estado-Siguiente @{ practicas = $true; reglas = $true }) (Datos-Siguiente 0 $null 3)
+  Igual 'parar con problemas: el comando pasa a -Si y sigue con sus opciones' ($ComandoSiguiente + ' -Si -Practicas -Reglas') $s.Comando
+  $fallo = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'no compila'; jdkOriginal = $true; registro = 'registros/prueba-local.log' }
+  $s = Siguiente (Estado-Siguiente @{ pruebaLocal = $fallo; limite = 4 }) (@{})
+  Igual 'local-jdk: con sus opciones y el JDK de ejemplo al final' ($ComandoSiguiente + ' -SoloInforme -Limite 4 -JavaLegacy "C:\ruta\jdk-del-original"') $s.Comando
+}
+
+$Pruebas['m42 (d) ajustes.json con claves de rescate.ps1, prueba-local.ps1 o preflight.ps1 no avisa de clave desconocida; una inventada si; la lista sale de los $Cfg de los scripts'] = {
+  $e = Nuevo-Escenario 'm42-d1' @('Clase1') @{ ModeloB = 'modelo-b'; ModeloDudas = 'modelo-d'; EsfuerzoDudas = 'max'; EsfuerzoReintento = 'high'; EsfuerzoArnes = 'high'; MinutosDiagnostico = 30 }
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'con ModeloB, ModeloDudas, EsfuerzoDudas, EsfuerzoReintento, EsfuerzoArnes y MinutosDiagnostico no sale clave desconocida' ($r.Salida -notmatch 'clave desconocida') (Cola $r.Salida)
+  $e = Nuevo-Escenario 'm42-d2' @('Clase1') @{ ModeloB = 'modelo-b'; Modeloo = 'modelo-x' }
+  $r = Migra $e (Basicos $e)
+  Igual 'con una clave inventada sale con 0' 0 $r.Codigo
+  Comprueba "avisa de 'Modeloo'" ($r.Salida.Contains("ajustes.json: clave desconocida 'Modeloo'")) (Cola $r.Salida)
+  Igual "y solo de esa: un solo aviso de clave desconocida" 1 ([regex]::Matches($r.Salida, 'clave desconocida').Count)
+  $raiz = Split-Path -Parent $Script
+  $lib = En-Biblioteca 'm42-claves' ("'CLAVES=' + ((Get-ClavesAjustes '" + $raiz + "') -join ',')`n")
+  $l = @($lib.Salida -split "`n" | Where-Object { $_ -match '^CLAVES=' })
+  Igual 'la funcion que da la lista sale una vez' 1 $l.Count
+  if ($l.Count -eq 1) {
+    $claves = @($l[0].Substring(7).TrimEnd("`r") -split ',')
+    foreach ($k in @('ModeloB', 'ModeloDudas', 'EsfuerzoDudas', 'EsfuerzoReintento', 'EsfuerzoArnes', 'MinutosDiagnostico', 'Modelos', 'MvnExe', 'Plantilla')) {
+      Comprueba "la lista lleva $k" ($claves -ccontains $k) $l[0]
+    }
+    Comprueba 'y no lleva una clave inventada' (-not ($claves -ccontains 'Modeloo'))
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

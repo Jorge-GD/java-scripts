@@ -429,6 +429,26 @@ function Read-CfgFile([string]$Ruta, [string[]]$Aparte = @(), [bool]$Avisar = $t
   catch { Fallo ("No puedo leer $Ruta" + ': ' + $_.Exception.Message); exit 1 }
 }
 
+# Las claves de ajustes.json que conoce algun script: las de todos los '$Cfg = @{...}' y '$Cfg += @{...}' de los .ps1 de $Dir (la carpeta de los
+# scripts) y Plantilla, que no es de $Cfg. Salen del codigo con el parser, sin ejecutarlo: rescate.ps1, prueba-local.ps1... no se cargan. Es el
+# $Aparte de Read-CfgFile: ajustes.json es de todos los scripts, asi que la clave de otro no avisa y la que no es de ninguno (un error de
+# escritura) si.
+function Get-ClavesAjustes([string]$Dir) {
+  $claves = New-Object System.Collections.Generic.List[string]
+  $claves.Add('Plantilla')
+  foreach ($f in @(Get-ChildItem -LiteralPath $Dir -File -Filter '*.ps1')) {
+    if ([System.IO.File]::ReadAllText($f.FullName) -cnotmatch '(?m)^\$Cfg\s*\+?=') { continue }
+    $arbol = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$null)
+    $asignaciones = $arbol.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -ceq '$Cfg' }, $true)
+    foreach ($a in $asignaciones) {
+      if ($a.Right -isnot [System.Management.Automation.Language.CommandExpressionAst]) { continue }
+      if ($a.Right.Expression -isnot [System.Management.Automation.Language.HashtableAst]) { continue }
+      foreach ($par in $a.Right.Expression.KeyValuePairs) { if ($par.Item1.Value) { $claves.Add([string]$par.Item1.Value) } }
+    }
+  }
+  return $claves.ToArray()
+}
+
 # Ajustes propios de un repo: su .rescate/config.json pisa las claves de $Cfg. Es de rescate.ps1 (lo escribe y conoce sus claves):
 # migracion.ps1 y prueba-local.ps1 lo leen por las compartidas (CommitArgs...) y lo llaman con $Avisar en $false.
 function Read-Config([string]$Raiz, [bool]$Avisar = $true) {
