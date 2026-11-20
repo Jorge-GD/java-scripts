@@ -6977,7 +6977,7 @@ $Pruebas['m41 (a) un fichero con seguimiento cambiado y sin marca: se para en el
   Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// arreglo a mano`n")
   $hash = M41-Hash (Get-Ruta $e.Wt $Fichero41)
   $estado = GitEn $e.Wt @('status', '--porcelain')
-  $json = M41-Hash (Get-Ruta $e.Out 'datos/estado.json')
+  $antes = Estado $e
   $n = M41-Llamadas $e
   $r = Migra $e (Basicos $e)
   M41-Comprueba-Parada $e $r $Fichero41
@@ -6985,7 +6985,10 @@ $Pruebas['m41 (a) un fichero con seguimiento cambiado y sin marca: se para en el
   Igual 'git ve lo mismo que antes' $estado (GitEn $e.Wt @('status', '--porcelain'))
   Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
   Igual 'ni una llamada mas a Copilot ni a Maven' $n (M41-Llamadas $e)
-  Igual 'estado.json no se ha tocado' $json (M41-Hash (Get-Ruta $e.Out 'datos/estado.json'))
+  # m46: la parada queda en estado.json (antes: 'estado.json no se ha tocado'); el modelo, la aptitud y la respuesta siguen siendo los de antes
+  $s = Estado $e
+  Igual 'estado.json lleva la parada cambios-sin-commit' 'cambios-sin-commit' $s.parada.motivo
+  Igual 'y el modelo, la aptitud y la respuesta de antes' "$($antes.modelo)|$($antes.aptitud)|$($antes.respuesta)" "$($s.modelo)|$($s.aptitud)|$($s.respuesta)"
 }
 
 $Pruebas['m41 (b) un fichero nuevo sin seguimiento: la misma parada; con mas de 10 ficheros, salen 10 y cuantos mas'] = {
@@ -7254,6 +7257,79 @@ $Pruebas['m45 (g) un stash que falla (cerrojo en refs/stash) con la marca de un 
   Igual 'hay un stash' 1 @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ }).Count
   Igual 'el worktree queda limpio, en el mismo commit' "$head|" ((M38-Head $e.Wt) + '|' + (GitEn $e.Wt @('status', '--porcelain')))
   Comprueba 'y la marca ya no esta' (-not (M45-HayMarca $e))
+}
+
+# ============================ M46: LA PARADA DEL ARRANQUE, ANTES DE GASTAR Y CON RASTRO ============================
+# Si la carpeta de rescate ya existe y tiene cambios sin commit, el arranque para antes de la prueba de aptitud y de la pregunta (con otro
+# modelo, la aptitud gasta una llamada a Copilot) y deja la parada en estado.json, para que donde-estoy.ps1 no diga "terminado". Y la seccion
+# "Uso diario" del README solo da opciones que existen.
+
+$Pruebas['m46 (a) el worktree de rescate existe con un fichero cambiado sin commit y el modelo es otro (su aptitud no ha pasado): para con 1 y el mensaje de siempre, sin una llamada a Copilot'] = {
+  $e = M41-Primera 'm46-a'
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// arreglo a mano`n")
+  $hash = M41-Hash (Get-Ruta $e.Wt $Fichero41)
+  # la carpeta de la aptitud del primer lanzamiento se quita: una llamada nueva la volveria a crear
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'registros/aptitud') -Recurse -Force
+  $n = M41-Llamadas $e
+  $r = Migra $e (Basicos $e 'modelo-y')
+  M41-Comprueba-Parada $e $r $Fichero41
+  Comprueba 'no anuncia la prueba de aptitud' ($r.Salida -notmatch 'Prueba de aptitud') (Cola $r.Salida)
+  Igual 'ninguna llamada de aptitud' 0 @(Llamadas (Get-Ruta $e.Out 'registros/aptitud')).Count
+  Igual 'ni una llamada mas a Copilot ni a Maven' $n (M41-Llamadas $e)
+  Igual 'el fichero queda igual, byte a byte' $hash (M41-Hash (Get-Ruta $e.Wt $Fichero41))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+}
+
+$Pruebas['m46 (b) tras esa parada estado.json lleva la parada (sin dar por pasados el modelo ni la pregunta nuevos), donde-estoy.ps1 la ensena y no dice terminado, y con la carpeta limpia el relanzamiento sigue'] = {
+  $e = M41-Primera 'm46-b'
+  $antes = Estado $e
+  Igual 'antes de la parada, la pasada estaba hecha' 'hecha' $antes.fase
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// arreglo a mano`n")
+  $r = Migra $e (Basicos $e 'modelo-y')
+  Igual 'sale con 1' 1 $r.Codigo
+  $s = Estado $e
+  Igual 'parada: motivo' 'cambios-sin-commit' $s.parada.motivo
+  Comprueba 'parada: el detalle dice los cambios sin commit y el fichero' (([string]$s.parada.detalle).Contains('La carpeta de rescate tiene cambios sin commit: ' + $Fichero41)) "$($s.parada.detalle)"
+  Igual 'parada: registro es la carpeta de registros' (Get-Ruta $e.Out 'registros') $s.parada.registro
+  Comprueba 'parada: la ayuda nombra el motivo' ($s.parada.ayuda -match 'cambios-sin-commit')
+  Comprueba 'fin es una hora: la pasada no queda como corriendo' (Es-Hora $s.fin) "$($s.fin)"
+  Igual 'el modelo sigue siendo el de antes (el nuevo no se ha usado)' 'modelo-x' $s.modelo
+  Igual 'la aptitud sigue siendo la del modelo de antes' 'modelo-x' $s.aptitud
+  Igual 'la respuesta sigue siendo la de antes' $antes.respuesta $s.respuesta
+  Igual 'creado no cambia' $antes.creado $s.creado
+  Igual 'el comando de la portada lleva este lanzamiento: migrado' $e.Migrado $s.migrado
+  $d = Lanzar (Join-Path (Split-Path -Parent $Script) 'donde-estoy.ps1') @('-Migrado', $e.Migrado)
+  Igual 'donde-estoy sale con 0' 0 $d.Codigo
+  Comprueba 'donde-estoy dice que esta parada y por que' ($d.Salida -match 'Punto: .*parada: cambios-sin-commit') (Cola $d.Salida)
+  Comprueba 'y no dice terminado en su punto' ($d.Salida -notmatch '(?m)^Punto:\s+terminado') (Cola $d.Salida)
+  Comprueba 'trae el texto para pegar en Copilot, con el fichero' (($d.Salida -match 'Para pegar en Copilot') -and $d.Salida.Contains($Fichero41)) (Cola $d.Salida)
+  # el usuario hace su commit y relanza: sigue, y ahora si queda el modelo nuevo
+  [void](GitEn $e.Wt @('add', '--', $Fichero41))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano'))
+  $r = Migra $e (Basicos $e 'modelo-y')
+  Igual 'el relanzamiento con la carpeta limpia sale con 0' 0 $r.Codigo
+  Comprueba 'hace la prueba de aptitud del modelo nuevo' ($r.Salida -match 'Prueba de aptitud: bien') (Cola $r.Salida)
+  $s = Estado $e
+  Comprueba 'y la parada ya no esta' ($null -eq $s.parada) "$($s.parada)"
+  Igual 'modelo nuevo' 'modelo-y' $s.modelo
+  Igual 'aptitud nueva' 'modelo-y' $s.aptitud
+}
+
+$Pruebas['m46 (d) sin estado.json de antes (el worktree viene de otra herramienta): la parada deja un estado.json que no da por pasados ni el modelo ni la pregunta, y el relanzamiento si hace la aptitud'] = {
+  $e = M41-Primera 'm46-d'
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'datos/estado.json') -Force
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// arreglo a mano`n")
+  $r = Migra $e (Basicos $e)
+  M41-Comprueba-Parada $e $r $Fichero41
+  $s = Estado $e
+  Igual 'estado.json lleva la parada' 'cambios-sin-commit' $s.parada.motivo
+  Comprueba 'y ni modelo, ni aptitud, ni respuesta (no hay nada decidido)' (($null -eq $s.modelo) -and ($null -eq $s.aptitud) -and ($null -eq $s.respuesta)) "$($s.modelo)|$($s.aptitud)|$($s.respuesta)"
+  [void](GitEn $e.Wt @('add', '--', $Fichero41))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano'))
+  $r = Migra $e (Basicos $e)
+  Igual 'el relanzamiento sale con 0' 0 $r.Codigo
+  Comprueba 'y hace la prueba de aptitud: no la da por pasada' (($r.Salida -match 'Prueba de aptitud: bien') -and ($r.Salida -notmatch 'ya pasada')) (Cola $r.Salida)
+  Igual 'estado.json queda con el modelo' 'modelo-x' (Estado $e).aptitud
 }
 
 # ================================ LANZADOR ================================

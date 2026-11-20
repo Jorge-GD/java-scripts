@@ -11,9 +11,10 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
   en un worktree aparte (<Migrado>-rescate), nunca en tu carpeta.
 
   Arranque: herramientas y repos, batch de referencia (-Plantilla, o el guardado
-  en %USERPROFILE%\.rescate\ajustes.json, o se pregunta), modelo, prueba de
-  aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree. No borra nunca lo que haya sin commit en el worktree: lo de un
-  intento cortado va a un git stash y lo demas, o una rama rescate/ sin unir a tu rama, para el arranque (salida 1) sin tocar nada.
+  en %USERPROFILE%\.rescate\ajustes.json, o se pregunta), modelo, carpeta de rescate (si ya existe: lo que tenga sin commit se mira antes de
+  gastar nada), prueba de aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree (si no existe, se crea). No borra nunca lo
+  que haya sin commit en el worktree: lo de un intento cortado va a un git stash y lo demas, o una rama rescate/ sin unir a tu rama, para el
+  arranque (salida 1) sin tocar nada; si es lo primero, la parada (motivo cambios-sin-commit) queda en estado.json.
   Diagnostico (sin IA, la primera fase): rescate.ps1 -Modo diagnostico mide el migrado y deja datos\hallazgos-antes.json y
   datos\diagnostico-antes.md; su pagina es 2-problemas.html. Lleva el commit del migrado que midio (datos\diagnostico-antes.json): con el
   mismo commit relanzar no repite Maven; con otro (o sin ese dato) se hace otra vez, con cobertura y buenas practicas, y el diagnostico
@@ -756,7 +757,40 @@ if ($ModeloElegido) { Info "Modelo: $ModeloElegido" } else { Info 'Modelo: el qu
 $conservar = [bool]((-not $Reintentar) -and $previo -and ([string]$previo.modelo -ceq $ModeloElegido))
 $H0 = [pscustomobject]@{ Legacy = (Get-Huella $LegacyRoot); Plantilla = (Get-Huella $PlantillaRoot) }
 
-# 4. Prueba de aptitud (se salta si ya paso con este modelo)
+# 4. La carpeta de rescate, si ya existe. Lo que haya sin commit en ella no se borra nunca: lo de un intento cortado va a un git stash (como en
+# rescate.ps1) y todo lo demas (un arreglo a mano, lo de otra herramienta) para el arranque sin tocar nada. Se mira ANTES de la prueba de aptitud
+# y de la pregunta: con otro modelo, la aptitud gasta una llamada a Copilot, y parar despues la tira. Si no existe, no hay nada que mirar y se
+# crea mas abajo. El estado de este lanzamiento se arma aqui para que la parada quede en estado.json (donde-estoy.ps1 no dira "terminado"); hasta
+# que se decidan, el modelo, la aptitud y la respuesta son los del lanzamiento anterior: una parada no da por pasado lo que no se ha probado.
+$OrigenRoot = $MigradoRoot
+$Worktree = ''
+$dirWt = Get-DirRescate
+$hayWt = Test-WorktreeRescate $dirWt
+$Estado = [ordered]@{
+  version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
+  worktree = $dirWt; rama = $(if ($hayWt) { Get-Rama $dirWt }); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; lanzadores = $LanzadoresRoot
+  modelo = $previo.modelo; aptitud = $previo.aptitud; respuesta = $previo.respuesta
+  fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null
+}
+# En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
+if ($previo -and $previo.creado) { $Estado['creado'] = if ($previo.creado -is [datetime]) { $previo.creado.ToString('s') } else { [string]$previo.creado } }
+# las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
+$Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal
+if ($hayWt) {
+  $RepoRoot = $dirWt
+  Undo-IntentoCortado $Estado['rama']
+  $sinCommit = @(Get-SinCommit $RepoRoot)
+  if ($sinCommit.Count -gt 0) {
+    $Estado['fin'] = (Get-Date).ToString('s')
+    Set-Parada 'cambios-sin-commit' ("La carpeta de rescate tiene cambios sin commit: $(Get-ListaFicheros $sinCommit). No sigo, para no perderlos.`n" +
+      "Si son tuyos y los quieres:  git -C `"$RepoRoot`" add -A ; git -C `"$RepoRoot`" commit -m `"arreglo a mano`"`n" +
+      "Si no los quieres:           git -C `"$RepoRoot`" stash push -u -m `"aparte`"`n" +
+      'Despues, lanza el mismo comando.') $Registros
+    exit 1
+  }
+}
+
+# 5. Prueba de aptitud (se salta si ya paso con este modelo)
 if ($previo -and ($null -ne $previo.aptitud) -and ([string]$previo.aptitud -eq $ModeloElegido)) { Info 'Prueba de aptitud: ya pasada con este modelo.' }
 else {
   Info 'Prueba de aptitud (una ficha de clase sobre un fichero de juguete)...'
@@ -765,7 +799,7 @@ else {
   Bien 'Prueba de aptitud: bien.'
 }
 
-# 5. Pregunta: que hacer al acabar el informe
+# 6. Pregunta: que hacer al acabar el informe
 if ($SoloInforme) { $respuesta = 'parar' }
 elseif ($respondeSi) { $respuesta = 'corregir' }
 elseif ($previo -and $previo.respuesta) { $respuesta = [string]$previo.respuesta }
@@ -775,32 +809,11 @@ else {
 }
 $Si = [switch]$true    # las preguntas ya estan contestadas: Confirmar no vuelve a preguntar
 
-# 6. Worktree y estado
-$OrigenRoot = $MigradoRoot
-$Worktree = ''
-$dirWt = Get-DirRescate
-if (-not (Test-WorktreeRescate $dirWt)) { New-WorktreeRescate $dirWt }
+# 7. Worktree y estado: lo decidido pasa a estado.json
+if (-not $hayWt) { New-WorktreeRescate $dirWt; $Estado['rama'] = Get-Rama $dirWt }
 $RepoRoot = $dirWt
 Read-Config $RepoRoot $false
-# Lo que haya sin commit en la carpeta de rescate no se borra nunca: lo de un intento cortado va a un git stash (como en rescate.ps1) y todo lo
-# demas (un arreglo a mano, lo de otra herramienta) para el arranque sin tocar nada.
-Undo-IntentoCortado (Get-Rama $RepoRoot)
-$sinCommit = @(Get-SinCommit $RepoRoot)
-if ($sinCommit.Count -gt 0) {
-  Stop-Arranque ("La carpeta de rescate tiene cambios sin commit: $(Get-ListaFicheros $sinCommit). No sigo, para no perderlos.`n" +
-    "Si son tuyos y los quieres:  git -C `"$RepoRoot`" add -A ; git -C `"$RepoRoot`" commit -m `"arreglo a mano`"`n" +
-    "Si no los quieres:           git -C `"$RepoRoot`" stash push -u -m `"aparte`"`n" +
-    'Despues, lanza el mismo comando.')
-}
-$Estado = [ordered]@{
-  version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
-  worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; lanzadores = $LanzadoresRoot; modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta
-  fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null
-}
-# En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
-if ($previo -and $previo.creado) { $Estado['creado'] = if ($previo.creado -is [datetime]) { $previo.creado.ToString('s') } else { [string]$previo.creado } }
-# las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
-$Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal
+$Estado['modelo'] = $ModeloElegido; $Estado['aptitud'] = $ModeloElegido; $Estado['respuesta'] = $respuesta
 try {
   foreach ($d in @((Join-Path $Datos 'tareas'), (Join-Path $Datos 'fichas'))) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
   Save-Estado
