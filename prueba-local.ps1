@@ -1485,25 +1485,35 @@ function Get-Normal([string]$Texto, $Dias = $null) {
 }
 
 # Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
-# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este. Con $Tabla (un .csv de
-# tablas\: campos separados por ';', la primera linea con los nombres de las columnas), antes se ordenan las columnas por su nombre y las
-# filas: cada lado crea la tabla con su DDL y lee las filas en el orden que sea, y eso no es una diferencia del batch. Si una fila no
-# tiene tantos campos como la cabecera no se sabe cortarla y el fichero se queda como esta.
-function Get-LineasNormales([string]$Ruta, [bool]$Tabla = $false, $Dias = $null) {
+# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
+function Get-LineasNormales([string]$Ruta, $Dias = $null) {
   $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta))) $Dias) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
-  if ($Tabla -and $l.Count -gt 0) { return @(Sort-Tabla $l) }
   return $l
 }
 
-# Las lineas $L de una tabla con las columnas ordenadas por su nombre (ordinal; a igual nombre, como estaban) y las filas ordenadas
-# (String.CompareOrdinal), o $L tal cual si alguna fila no tiene tantos campos como la cabecera.
-function Sort-Tabla([string[]]$L) {
+# Las lineas $L de una tabla (un .csv de tablas\: campos separados por ';', la primera linea con los nombres de las columnas) con las
+# columnas ordenadas por su nombre (ordinal; a igual nombre, como estaban) y las filas ordenadas (String.CompareOrdinal): cada lado crea la
+# tabla con su DDL y lee las filas en el orden que sea, y eso no es una diferencia del batch. $null si una fila no tiene tantos campos
+# como la cabecera. Con $Col (el nombre de una columna), una fila con campos de mas los lleva a la primera columna con ese nombre: su valor
+# lleva ';' dentro (la IA escribe los valores tal cual, sin comillas) y esa columna se queda con tantos campos como sobran; una fila con
+# menos campos que la cabecera sigue sin valer.
+function Sort-Tabla([string[]]$L, [string]$Col = '') {
   $cab = $L[0].Split(';')
+  $c = -1
+  if ($Col) { $c = [System.Array]::IndexOf($cab, $Col) }
   $filas = @()
   foreach ($x in @($L | Select-Object -Skip 1)) {
     $f = $x.Split(';')
-    if ($f.Count -ne $cab.Count) { return $L }
+    $mas = $f.Count - $cab.Count
+    if ($mas -ne 0 -and ($c -lt 0 -or $mas -lt 0)) { return $null }
+    if ($mas -gt 0) {
+      $celdas = New-Object 'System.Collections.Generic.List[string]'
+      for ($i = 0; $i -lt $f.Count; $i++) {
+        if ($i -gt $c -and $i -le $c + $mas) { $celdas[$celdas.Count - 1] += ';' + $f[$i] } else { $celdas.Add($f[$i]) }
+      }
+      $f = $celdas.ToArray()
+    }
     $filas += , $f
   }
   $claves = New-Object 'string[]' $cab.Count
@@ -1513,6 +1523,42 @@ function Sort-Tabla([string[]]$L) {
   $cuerpo = [string[]]@($filas | ForEach-Object { $f = $_; (@($orden | ForEach-Object { $f[$_] }) -join ';') })
   [System.Array]::Sort($cuerpo, [System.StringComparer]::Ordinal)
   return @((@($orden | ForEach-Object { $cab[$_] }) -join ';')) + $cuerpo
+}
+
+# Las lineas de las dos tablas $X (original) e $Y (migrado), ordenadas (Sort-Tabla), y la nota que dice por que no se han podido ordenar, si es
+# el caso: X, Y y Nota. Una tabla con una fila que no tiene tantos campos como su cabecera se queda como esta, como siempre. Salvo si las dos
+# cabeceras tienen los mismos nombres y alguna fila tiene campos de mas (un valor con ';' dentro, como una lista de correos a@x;b@x): se
+# prueba cada nombre de columna, en orden ordinal, como la columna que se lleva los de mas en todas las filas de las dos tablas, y se queda
+# la primera con la que las dos salen iguales. El supuesto: los ';' de mas de todas las filas son de la misma columna, en los dos lados. Si
+# ninguna sirve, las tablas se quedan como estan y la nota dice la primera fila con otro numero de campos (del original o, si no, del migrado).
+function Resolve-ParTablas([string[]]$X, [string[]]$Y) {
+  $sx = $null; $sy = $null
+  if ($X.Count -gt 0) { $sx = Sort-Tabla $X }
+  if ($Y.Count -gt 0) { $sy = Sort-Tabla $Y }
+  $r = [pscustomobject]@{ X = $X; Y = $Y; Nota = '' }
+  if ($null -ne $sx) { $r.X = $sx }
+  if ($null -ne $sy) { $r.Y = $sy }
+  if ($X.Count -eq 0 -or $Y.Count -eq 0 -or ($null -ne $sx -and $null -ne $sy)) { return $r }
+  $nombres = [string[]]@($X[0].Split(';'))
+  $otros = [string[]]@($Y[0].Split(';'))
+  if ((@(Sort-Ordinal $nombres) -join ';') -cne (@(Sort-Ordinal $otros) -join ';')) { return $r }
+  $ancha = $false
+  foreach ($lado in @(@{ L = $X; N = $nombres.Count }, @{ L = $Y; N = $otros.Count })) {
+    for ($i = 1; $i -lt $lado.L.Count; $i++) {
+      $m = $lado.L[$i].Split(';').Count
+      if ($m -gt $lado.N) { $ancha = $true }
+      if ($m -ne $lado.N -and -not $r.Nota) { $r.Nota = "la tabla tiene ';' dentro de algun valor (fila $($i + 1): $m campos; la cabecera, $($lado.N)): no se han podido ordenar sus columnas" }
+    }
+  }
+  if (-not $ancha) { $r.Nota = ''; return $r }
+  $orden = @(Sort-Ordinal $nombres)
+  for ($i = 0; $i -lt $orden.Count; $i++) {
+    if ($i -gt 0 -and $orden[$i] -ceq $orden[$i - 1]) { continue }
+    $tx = Sort-Tabla $X $orden[$i]
+    $ty = Sort-Tabla $Y $orden[$i]
+    if ($null -ne $tx -and $null -ne $ty -and (@($tx) -join "`n") -ceq (@($ty) -join "`n")) { return [pscustomobject]@{ X = $tx; Y = $ty; Nota = '' } }
+  }
+  return $r
 }
 
 # Una linea leida byte a byte, para ensenarla: en UTF-8 si lo es; si no, tal cual (Latin-1).
@@ -1536,13 +1582,19 @@ function Get-NotaJdk([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   return ''
 }
 
-# Compara dos ficheros ('' si falta uno) linea a linea, normalizados (con $Tabla, una tabla sin orden de columnas ni de filas: la linea
-# que se ensena es la ya ordenada). $null si son iguales; si no, Lineas (cuantas son distintas, posicion a posicion), Linea (la
-# primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy).
+# Compara dos ficheros ('' si falta uno) linea a linea, normalizados (con $Tabla, una tabla sin orden de columnas ni de filas, y con un
+# valor con ';' dentro si hace falta: Resolve-ParTablas; la linea que se ensena es la ya ordenada). $null si son iguales; si no, Lineas
+# (cuantas son distintas, posicion a posicion), Linea (la primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota (la de la
+# tabla, si la hay, y la del JDK). $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy).
 function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA = $null, $DiasB = $null) {
   $x = @(); $y = @()
-  if ($A) { $x = @(Get-LineasNormales $A $Tabla $DiasA) }
-  if ($B) { $y = @(Get-LineasNormales $B $Tabla $DiasB) }
+  if ($A) { $x = @(Get-LineasNormales $A $DiasA) }
+  if ($B) { $y = @(Get-LineasNormales $B $DiasB) }
+  $notaTabla = ''
+  if ($Tabla) {
+    $t = Resolve-ParTablas $x $y
+    $x = @($t.X); $y = @($t.Y); $notaTabla = $t.Nota
+  }
   $n = 0
   $primera = -1
   for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count); $i++) {
@@ -1556,6 +1608,7 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
   $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
   if ($A -and $B) { $nota = Get-NotaJdk $A $B $DiasA $DiasB }
+  $nota = (@($notaTabla, $nota) | Where-Object { $_ }) -join '; '
   return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
 }
 
@@ -1563,7 +1616,7 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
 # Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
 # mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
 # Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
-# .csv de tablas\ se comparan sin orden de columnas ni de filas (Get-LineasNormales), y uno que esta en un solo lado y no tiene ninguna fila
+# .csv de tablas\ se comparan sin orden de columnas ni de filas (Resolve-ParTablas), y uno que esta en un solo lado y no tiene ninguna fila
 # de datos no es una diferencia. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy): un original de otro dia no
 # lleva las fechas de hoy. Cada diferencia lleva su clave (Get-Normal de la ruta, con los dias de su lado): la de las diferencias de un mismo
 # fichero en casos con originales de dias distintos es la misma.
@@ -1659,49 +1712,194 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   return $o
 }
 
-# La tabla por consola y lo que no es igual, caso a caso.
-function Show-Resultado($Res, $PorJob) {
+# ======================== GRUPOS POR CAUSA ========================
+# Los casos distintos de un batch suelen ser pocas causas repetidas (una dependencia mal puesta, un test del migrado que no arranca, una columna
+# que cambia): se agrupan, sin IA, por la firma de su causa, y la consola y prueba-local.json cuentan causas y no casos. Cada grupo lleva ademas
+# lo que se mide de el (Add-Hechos). Solo los casos distintos entran en un grupo.
+
+# La causa $Causa del caso $Caso sin lo que cambia de un caso a otro: el nombre del caso (<caso>), @ y hexadecimal (@<id>), las fechas y horas de
+# hoy (Get-Normal), las rutas (<ruta>: una palabra con \, o que empieza por / y lleva otra /, o con letra de unidad (C:\ o C:/), o file:, o la de una
+# copia) y los numeros de dos cifras o mas (<n>); en 200 letras como mucho. org/x/Clase (el nombre de una clase que falta, NoClassDefFoundError) no es una ruta.
+function Get-CausaNormal([string]$Causa, [string]$Caso) {
+  $t = $Causa
+  if ($Caso) { $t = $t.Replace($Caso, '<caso>') }
+  $t = (Get-Normal $t) -replace '@[0-9a-fA-F]+\b', '@<id>'
+  $t = $t -replace '(?<!\S)(?:\S*\\\S*|[A-Za-z]:[\\/]\S*|file:\S*|/\S*/\S*|<copia>/\S*)', '<ruta>'
+  $t = $t -replace '\d{2,}', '<n>'
+  if ($t.Length -gt 200) { $t = $t.Substring(0, 200) }
+  return $t
+}
+
+# Los grupos de los casos distintos de $Res, numerados desde 1: primero los de fallo, despues los de mas casos y, a igualdad, por la firma (en orden
+# ordinal). Cada uno: numero, tipo, firma, casos ('job/caso', por job y caso), descripcion (la cabecera de la consola, sin 'Grupo <n>: ') y hechos (vacio).
+# - De fallo: el migrado acaba FAILED, EXCEPCION o sin estado.txt y el original no. Firma 'fallo|<estado>|<causa normalizada>' (Get-CausaNormal).
+# - De fichero: los demas. Firma 'fichero|' y la lista ordenada de '<clave>:<tipo>' de sus diferencias; el tipo es falta (no esta en el migrado), sobra
+#   (solo esta en el migrado), noGuardado o contenido.
+function Get-Grupos($Res) {
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($r in @($Res | Where-Object { $_.resultado -eq 'distinto' })) {
+    $mig = @($r.fallos | Where-Object { $_.lado -ceq 'migrado' })
+    $orig = @($r.fallos | Where-Object { $_.lado -ceq 'original' })
+    $ent = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+    if ($mig.Count -gt 0 -and $orig.Count -eq 0) {
+      $tipo = 'fallo'
+      $firma = 'fallo|' + $mig[0].estado + '|' + (Get-CausaNormal ([string]$mig[0].causa) $r.caso)
+    }
+    else {
+      $tipo = 'fichero'
+      foreach ($d in @($r.diferencias)) {
+        $t = 'contenido'
+        if ($d.noGuardado) { $t = 'noGuardado' } elseif ($d.migrado -ceq '(no esta)') { $t = 'falta' } elseif ($d.original -ceq '(no esta)') { $t = 'sobra' }
+        $ent[$d.clave + ':' + $t] = $d.fichero
+      }
+      $firma = 'fichero|' + ((Sort-Ordinal @($ent.Keys)) -join '|')
+    }
+    if (-not $por.ContainsKey($firma)) { $por[$firma] = [pscustomobject]@{ tipo = $tipo; firma = $firma; miembros = @() } }
+    $por[$firma].miembros += [pscustomobject]@{ clave = ($r.job + "`t" + $r.caso); caso = $r; ent = $ent }
+  }
+  $claves = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($g in $por.Values) {
+    $m = @($g.miembros)
+    $k = [string[]]@($m | ForEach-Object { $_.clave })
+    [System.Array]::Sort($k, [object[]]$m, [System.StringComparer]::Ordinal)
+    $cuantos = "$($m.Count) casos distintos"
+    if ($m.Count -eq 1) { $cuantos = '1 caso distinto' }
+    if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0]) }
+    else {
+      $lista = @(Sort-Ordinal @($m[0].ent.Keys))
+      $desc = "$cuantos, en $($m[0].ent[$lista[0]]): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1)
+      if ($lista.Count -eq 2) { $desc += ' y 1 fichero mas' }
+      if ($lista.Count -gt 2) { $desc += " y $($lista.Count - 1) ficheros mas" }
+    }
+    $orden = '1'
+    if ($g.tipo -ceq 'fallo') { $orden = '0' }
+    $claves[$orden + '|' + (999999 - $m.Count).ToString('D6') + '|' + $g.firma] = [ordered]@{
+      numero = 0; tipo = $g.tipo; firma = $g.firma; casos = @($m | ForEach-Object { $_.caso.job + '/' + $_.caso.caso }); descripcion = $desc; hechos = @()
+    }
+  }
+  $grupos = @()
+  foreach ($k in @(Sort-Ordinal @($claves.Keys))) {
+    $g = $claves[$k]
+    $g.numero = $grupos.Count + 1
+    $grupos += $g
+  }
+  return $grupos
+}
+
+# El resultado del caso 'job/caso' de $Res.
+function Get-CasoDe($Res, [string]$Clave) { return @($Res | Where-Object { ($_.job + '/' + $_.caso) -ceq $Clave })[0] }
+
+# El prueba-local.json que hay ahora en datos\ ($null si no hay o no se lee).
+function Get-JsonPrueba {
+  $json = Join-Path $DatosMig 'prueba-local.json'
+  if (-not (Test-Path -LiteralPath $json)) { return $null }
+  try { return (Read-Json $json) } catch { return $null }
+}
+
+# El arbol de dependencias del migrado (mvn dependency:tree en su copia), una sola vez por lanzamiento y solo si un grupo lo pide (Add-Hechos). Lo deja
+# en prueba-local\dependencias.txt. Devuelve Lineas, Ruta (de dependencias.txt) y Motivo (corto; '' si Maven ha dado el arbol). Si Maven falla o se
+# pasa del tope no se guarda nada y no se vuelve a intentar.
+function Get-ArbolDependencias {
+  if ($null -eq $script:Arbol) {
+    $r = Invoke-Maven $CopiaMig $false @('dependency:tree') 'el arbol de dependencias del migrado'
+    $a = [pscustomobject]@{ Lineas = @(); Ruta = ''; Motivo = '' }
+    if ($r.Codigo -eq 0 -and -not $r.Tope) {
+      $a.Lineas = @($r.Salida)
+      $a.Ruta = Join-Path $Local 'dependencias.txt'
+      [System.IO.File]::WriteAllText($a.Ruta, ((@($r.Salida) -join "`n") + "`n"), $Utf8)
+    }
+    else {
+      $m = $r.Tope
+      if (-not $m) { $m = (@($r.Salida | Where-Object { $_ -match '^\[ERROR\]' } | Select-Object -First 1) -join '') -replace '^\[ERROR\]\s*', '' }
+      if (-not $m) { $m = "Maven acaba con el codigo $($r.Codigo)" }
+      $a.Motivo = $m.Substring(0, [Math]::Min($m.Length, 200))
+    }
+    $script:Arbol = $a
+  }
+  return $script:Arbol
+}
+
+# Lo que se ha medido de cada grupo de $Grupos (sus 'hechos', uno por cadena), con los casos de $Res; $Codigo y $Hash son el codigo y el test del migrado
+# de ahora (codigoMigrado y hashArnesMigrado de prueba-local.json). Dos hechos:
+# - De dependencias: la causa de un grupo de fallo dice que falta una clase o un metodo (TypeNotPresentException, NoClassDefFoundError...). Del
+#   nombre de la clase que falta (el primero con tres segmentos o mas tras el nombre de la excepcion; no el de la excepcion) se buscan en el arbol de
+#   dependencias del migrado (Get-ArbolDependencias) las lineas con sus tres primeros segmentos y, si no hay ninguna, con los dos primeros.
+# - Cambio con el test: el prueba-local.json de antes de este lanzamiento ($script:Anterior) es del mismo codigo del migrado y de otro test del migrado, y
+#   al menos la mitad de los casos del grupo eran iguales en el. Sin esos dos campos en el de antes (el primer lanzamiento con ellos), no se dice nada.
+function Add-Hechos($Grupos, $Res, [string]$Codigo, [string]$Hash) {
+  $antes = $script:Anterior
+  foreach ($g in @($Grupos)) {
+    $h = @()
+    if ($g.tipo -ceq 'fallo') {
+      $fallo = @((Get-CasoDe $Res $g.casos[0]).fallos | Where-Object { $_.lado -ceq 'migrado' })[0]
+      $falta = [regex]::Match([string]$fallo.causa, '(?s)(TypeNotPresentException|NoClassDefFoundError|ClassNotFoundException|NoSuchMethodError|NoSuchFieldError|AbstractMethodError|IncompatibleClassChangeError)(?<resto>.*)')
+      $clase = [regex]::Match($falta.Groups['resto'].Value, '[A-Za-z_$][\w$]*([./][A-Za-z_$][\w$]*){2,}')
+      if ($falta.Success -and $clase.Success) {
+        $seg = @($clase.Value.Replace('/', '.').Split('.'))
+        $arbol = Get-ArbolDependencias
+        if ($arbol.Motivo) { $h += "de dependencias, sin arbol: $($arbol.Motivo)" }
+        else {
+          $prefijo = ($seg | Select-Object -First 3) -join '.'
+          $lineas = @($arbol.Lineas | Where-Object { $_.Contains($prefijo) })
+          if ($lineas.Count -eq 0) { $prefijo = ($seg | Select-Object -First 2) -join '.'; $lineas = @($arbol.Lineas | Where-Object { $_.Contains($prefijo) }) }
+          $texto = (@($lineas | Select-Object -First 5 | ForEach-Object { ($_ -replace '^\[INFO\]\s*', '') -replace '^[|+\\\-\s]+', '' }) -join '; ')
+          if (-not $texto) { $texto = "ninguna linea con $prefijo" }
+          $h += "de dependencias: falta una clase o un metodo de $prefijo. En el arbol del migrado: $texto. Arbol completo: $($arbol.Ruta)"
+        }
+      }
+    }
+    if ($antes -and $antes.PSObject.Properties['codigoMigrado'] -and $antes.PSObject.Properties['hashArnesMigrado'] -and $antes.codigoMigrado -ceq $Codigo -and $antes.hashArnesMigrado -cne $Hash) {
+      $iguales = 0
+      foreach ($c in @($g.casos)) { if (@($antes.casos | Where-Object { ($_.job + '/' + $_.caso) -ceq $c -and $_.resultado -ceq 'igual' }).Count -gt 0) { $iguales++ } }
+      if ($iguales * 2 -ge @($g.casos).Count) { $h += "cambio con el test: $iguales de $(@($g.casos).Count) casos eran iguales con el test del migrado anterior y el mismo codigo" }
+    }
+    $g.hechos = $h
+  }
+}
+
+# La tabla por consola, los casos distintos por grupo (Get-Grupos: la cabecera, los casos, lo medido y el detalle de los dos primeros) y, despues, lo que
+# no es igual de los demas, caso a caso. Si un grupo de fallo EXCEPCION cubre todos los casos que se han comparado de un job, lo normal es que sea el
+# test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso.
+function Show-Resultado($Res, $PorJob, $Grupos) {
   Info ''
   Info 'Prueba en local: el original frente al migrado, con las mismas entradas'
   $fmt = '{0,-32} {1,6} {2,8} {3,10} {4,11}'
   Info ($fmt -f 'Job', 'Casos', 'Iguales', 'Distintos', 'Sin probar')
   foreach ($p in $PorJob) { Info ($fmt -f $p.job, $p.casos, $p.iguales, $p.distintos, $p.sinProbar) }
-  foreach ($r in @($Res | Where-Object { $_.resultado -ne 'igual' -or $_.motivo })) {
-    $donde = "$($r.job)/$($r.caso) ($($r.titulo))"
-    if ($r.resultado -eq 'distinto') {
-      Fallo "  distinto: $donde"
-      if ($r.motivo) { Aviso "    $($r.motivo)" }
-      foreach ($f in @($r.fallos)) { Aviso "    $(Format-Fallo $f)" }
-      foreach ($d in @($r.diferencias | Select-Object -First 3)) {
-        if ($d.noGuardado) { Info "    $($d.fichero): original: $($d.original); migrado: $($d.migrado)"; continue }
-        Info "    $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"
-        Info "      original: $($d.original)"
-        Info "      migrado:  $($d.migrado)"
-        if ($d.nota) { Aviso "      ($($d.nota))" }
+  foreach ($g in @($Grupos)) {
+    $lista = @($g.casos)
+    $miembros = @($lista | ForEach-Object { Get-CasoDe $Res $_ })
+    Fallo "  Grupo $($g.numero): $($g.descripcion)"
+    $texto = (@($lista | Select-Object -First 10) -join ', ')
+    if ($lista.Count -gt 10) { $texto += " y $($lista.Count - 10) mas" }
+    Info "    casos: $texto"
+    foreach ($h in @($g.hechos)) { Info "    medido: $h" }
+    if ($g.firma -cmatch '^fallo\|EXCEPCION\|') {
+      foreach ($j in @($miembros | ForEach-Object { $_.job } | Select-Object -Unique)) {
+        $casos = @($Res | Where-Object { $_.job -ceq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
+        if (@($casos | Where-Object { $lista -ccontains ($_.job + '/' + $_.caso) }).Count -ne $casos.Count) { continue }
+        $clase = Get-Excepcion (Join-Ruta $Local "salidas/migrado/$j/$($casos[0].caso)")
+        $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
+        $detalle = $clase
+        if ($causa) { $detalle = "${clase}: $causa" }
+        Aviso "    El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes."
       }
     }
-    else { Aviso "  $($r.resultado): $donde. $(($r.motivo -split "`n")[0])" }
+    foreach ($r in @($miembros | Select-Object -First 2)) {
+      Fallo "    distinto: $($r.job)/$($r.caso) ($($r.titulo))"
+      if ($r.motivo) { Aviso "      $($r.motivo)" }
+      foreach ($f in @($r.fallos)) { Aviso "      $(Format-Fallo $f)" }
+      foreach ($d in @($r.diferencias | Select-Object -First 3)) {
+        if ($d.noGuardado) { Info "      $($d.fichero): original: $($d.original); migrado: $($d.migrado)"; continue }
+        Info "      $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"
+        Info "        original: $($d.original)"
+        Info "        migrado:  $($d.migrado)"
+        if ($d.nota) { Aviso "        ($($d.nota))" }
+      }
+    }
   }
-  Show-MigradoNoArranca $Res
-}
-
-# Los jobs cuyo migrado acaba EXCEPCION en todos los casos que se han comparado mientras el original no (en ninguno): lo normal es que sea el test
-# del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes. Una linea por job, con la clase y la causa del primer caso.
-function Show-MigradoNoArranca($Res) {
-  foreach ($j in @($Res | ForEach-Object { $_.job } | Select-Object -Unique)) {
-    $casos = @($Res | Where-Object { $_.job -eq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
-    if ($casos.Count -eq 0) { continue }
-    $roto = @($casos | Where-Object {
-        $mig = @($_.fallos | Where-Object { $_.lado -eq 'migrado' -and $_.estado -eq 'EXCEPCION' })
-        $orig = @($_.fallos | Where-Object { $_.lado -eq 'original' -and $_.estado -eq 'EXCEPCION' })
-        $mig.Count -gt 0 -and $orig.Count -eq 0
-      })
-    if ($roto.Count -ne $casos.Count) { continue }
-    $clase = Get-Excepcion (Join-Ruta $Local "salidas/migrado/$j/$($casos[0].caso)")
-    $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
-    $detalle = $clase
-    if ($causa) { $detalle = "${clase}: $causa" }
-    Aviso "El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes."
+  foreach ($r in @($Res | Where-Object { $_.resultado -ne 'distinto' -and ($_.resultado -ne 'igual' -or $_.motivo) })) {
+    Aviso "  $($r.resultado): $($r.job)/$($r.caso) ($($r.titulo)). $(($r.motivo -split "`n")[0])"
   }
 }
 
@@ -2321,9 +2519,7 @@ function Join-PorJob($Nuevas, $Viejas) {
 # Con -Job: $O (lo de este lanzamiento) mas lo de los otros jobs del prueba-local.json de antes (casos, jobs, reparaciones y culpables),
 # si se probaron con el mismo commit del migrado y del original. Con otro, se descartan y se dice: se probaron con otro codigo.
 function Merge-OtrosJobs($O) {
-  $json = Join-Path $DatosMig 'prueba-local.json'
-  $antes = $null
-  if (Test-Path -LiteralPath $json) { try { $antes = Read-Json $json } catch { $antes = $null } }
+  $antes = Get-JsonPrueba
   if (-not $antes -or @($antes.jobs | Where-Object { $null -ne $_ -and $_.job -cne $Job }).Count -eq 0) { return $O }
   if ($antes.commitMigrado -cne $O.commitMigrado -or $antes.commitOriginal -cne $O.commitOriginal) {
     Info 'Los otros jobs se probaron con otro commit: no los guardo. Lanza sin -Job para probarlos todos.'
@@ -2335,16 +2531,29 @@ function Merge-OtrosJobs($O) {
     $m = @(Join-PorJob $O[$k] $antes.$k)
     if ($m.Count -gt 0 -or $O.Contains($k)) { $f[$k] = $m }
   }
+  # Los grupos (grupos[] y el 'grupo' de cada caso) son solo de este lanzamiento, de los casos de -Job: el 'grupo' de un caso de otro job que se
+  # conserva apuntaria a un grupo de otro lanzamiento.
+  foreach ($c in @($f.casos | Where-Object { $_.job -cne $Job })) { [void]$c.PSObject.Properties.Remove('grupo') }
   return $f
 }
 
 # Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo de este lanzamiento.
 # Con -Job, el fichero lleva ademas lo de los otros jobs (Merge-OtrosJobs); lo devuelto, solo lo de ahora: es lo que ensena la consola.
 function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
+  $grupos = @(Get-Grupos $Res)
+  $codigo = Get-CodigoMigrado $headMig
+  $hash = Get-Hash8 (Get-HashCarpeta (Join-Ruta $Local 'arnes/migrado'))
+  Add-Hechos $grupos $Res $codigo $hash
+  $numero = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($g in $grupos) { foreach ($c in @($g.casos)) { $numero[$c] = $g.numero } }
+  foreach ($r in @($Res)) {
+    $r.Remove('grupo')
+    if ($numero.ContainsKey($r.job + '/' + $r.caso)) { $r['grupo'] = $numero[$r.job + '/' + $r.caso] }
+  }
   $o = [ordered]@{
-    version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig
+    version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig; codigoMigrado = $codigo; hashArnesMigrado = $hash
     modelo = $ModeloElegido; inicio = $Inicio.ToString('s'); fin = (Get-Date).ToString('s'); minutos = [Math]::Round($reloj.Elapsed.TotalMinutes, 1); llamadas = $script:Llamadas
-    arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = @(Get-PorJob $Res); casos = $Res; noPromete = $NoPromete
+    arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = @(Get-PorJob $Res); casos = $Res; grupos = $grupos; noPromete = $NoPromete
   }
   if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
   if ($Reparar) { $o.reparaciones = @($Reparaciones) }
@@ -2429,6 +2638,8 @@ $script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Inv
 $script:InventarioOrig = $null   # las tablas que usa el codigo del original (Get-TablasBatch), la primera vez que hacen falta (Get-MotivoBase)
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
+$script:Arbol = $null   # el arbol de dependencias del migrado (Get-ArbolDependencias), la primera vez que un grupo lo pide
+$script:Anterior = Get-JsonPrueba   # el prueba-local.json de antes de este lanzamiento: Save-Resultado lo pisa y Add-Hechos lo compara
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -2524,14 +2735,18 @@ try {
   $vacios = @(Get-JobsVacios $res)
   if ($vacios.Count -gt 0) { Stop-Vacios $vacios }
   $o = Save-Resultado $res @()
-  Show-Resultado $res $o.jobs
+  foreach ($g in @($o.grupos)) {   # una linea por grupo y lanzamiento: cuantas causas hay y de que clase
+    $linea = [ordered]@{ fecha = (Get-Date).ToString('s'); numero = $g.numero; tipo = $g.tipo; firma = $g.firma; casos = @($g.casos).Count; hechos = @($g.hechos) }
+    [System.IO.File]::AppendAllText((Join-Path $DatosMig 'prueba-local-grupos.jsonl'), ((ConvertTo-Json -InputObject $linea -Compress) + "`n"), $Utf8)
+  }
+  Show-Resultado $res $o.jobs $o.grupos
 
   # 6. Con -Desde: el commit que rompe cada caso distinto y, con -Deshacer, su git revert; el resultado y la salida son los de despues
   if ($Desde) {
     $culpables = @(Find-Culpables $res)
     if ($Deshacer) { Undo-Culpables $culpables $res }
     $o = Save-Resultado $res $culpables
-    if ($Deshacer -and @($script:Propios).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs }
+    if ($Deshacer -and @($script:Propios).Count -gt 0) { Info ''; Info 'Despues de deshacer:'; Show-Resultado $res $o.jobs $o.grupos }
   }
   # 7. Con -Reparar: arregla la rama de rescate hasta que los casos distintos salgan iguales; el resultado y la salida son los de despues
   if ($Reparar) {
@@ -2541,7 +2756,7 @@ try {
     else { Info ''; Info 'No se repara nada.' }
     $o = Save-Resultado $res @() $reparaciones
     if ($reparaciones.Count -gt 0) {
-      if (@($reparaciones | Where-Object { $_.commit }).Count -gt 0) { Info ''; Info 'Despues de reparar:'; Show-Resultado $res $o.jobs }
+      if (@($reparaciones | Where-Object { $_.commit }).Count -gt 0) { Info ''; Info 'Despues de reparar:'; Show-Resultado $res $o.jobs $o.grupos }
       Show-Reparaciones $reparaciones
       if (@($reparaciones | Where-Object { $_.resultado -eq 'no se arregla' }).Count -gt 0) { Info 'Si la IA dice que la diferencia es del test del migrado y no del codigo, relanza con -RehacerArnes.' }
     }

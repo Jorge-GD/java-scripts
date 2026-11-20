@@ -2557,7 +2557,7 @@ Caso 'fuera-de-tablas' @{ 'ficheros/salida/x.csv' = "ID;NOMBRE`n" } @{}
 Caso 'tablas-no-csv' @{ 'tablas/nota.txt' = "ID;NOMBRE`n" } @{}
 Caso 'vacia-y-otra' @{ $t = "ID;NOMBRE`n"; 'tablas/U.csv' = "ID;NOMBRE`n1;ana`n" } @{}
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -3101,7 +3101,8 @@ $Pruebas['m39 (a) -Job con lo guardado del mismo commit: el JSON lleva el job de
   Igual 'con -Job sale con 0 (cargaJob igual)' 0 $r.Codigo
   Igual 'el JSON lleva los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
   Igual 'y los tres casos' 'cargaJob/caso-01,cargaJob/caso-02,remesaJob/caso-01' (Casos-M39 $e)
-  Igual 'la fila y el caso del otro job son los de antes, tal cual' $otro (Entradas-M39 $e 'remesaJob')
+  Comprueba 'el caso del otro job llevaba su grupo (el del lanzamiento de antes)' ($otro -match '"grupo":\d+') $otro
+  Igual 'la fila y el caso del otro job son los de antes, tal cual, menos su grupo (que es de otro lanzamiento: M50)' ($otro -replace ',"grupo":\d+', '') (Entradas-M39 $e 'remesaJob')
   Comprueba 'la consola ensena la tabla del job de ahora' ($r.Salida -match 'cargaJob\s+2\s+2\s+0\s+0') (Cola $r.Salida)
   Comprueba 'y nada del otro job' ($r.Salida -notmatch 'remesaJob') (Cola $r.Salida)
   Comprueba 'sin la Info de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
@@ -3717,7 +3718,7 @@ $o = Join-Path $Raiz 'cambiante'
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
   $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) {
@@ -4187,6 +4188,409 @@ $Pruebas['m48 (h) la clave del original lleva la version del formato de salidas:
 
 $Pruebas['m48 (h2) la clave del original lleva el tope de la ruta de salidas (decide los nombres cortos): con otro tope, el original se ejecuta otra vez'] = {
   Comprueba-Clave-M48 (Escenario-M48 'm48-h2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })) 'LimiteRuta'
+}
+
+# ===================== M50: grupos por causa, el dato de dependencias y las tablas con ';' dentro de un valor =====================
+# m50-mvn.ps1 (sobre m48-mvn.ps1) deja, segun el guion de RESCATE_M50 ('guion:regex sobre job/caso', separados por ';'): un migrado FAILED con una causa
+# (numero, otra, tipo, tipo2), tablas con ';' dentro de un valor, un fichero de mas o de menos en el migrado; y un arbol de dependencias de mentira
+# para 'dependency:tree' (M50_ARBOL=falla: el plugin falla). Los escenarios son los de m25: el migrado lleva minimo=5.01 y la entrada importe=5.00 sale distinta.
+
+function Escenario-M50([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm50-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes $aj)
+}
+
+# Lanza con los guiones $Guion de m50-mvn.ps1 y las variables de entorno $Env (nombre -> valor).
+function Prueba-M50($E, [string]$Guion, [string[]]$A = @(), [hashtable]$Env = @{}) {
+  $env:RESCATE_M50 = $Guion
+  foreach ($k in $Env.Keys) { Set-Item -Path "env:$k" -Value ([string]$Env[$k]) }
+  try { return (Prueba $E $A) }
+  finally {
+    $env:RESCATE_M50 = ''
+    foreach ($k in $Env.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+  }
+}
+
+function Grupos-M50($E) { return @((Lee-Json $E.Json).grupos | Where-Object { $_ }) }
+
+# Los 'mvn dependency:tree' que se han lanzado (en cualquier copia).
+function Arboles-M50($E) { return @(Mavens-Con $E 'dependency:tree').Count }
+
+# Cuenta cuantas veces sale $Texto (literal) en $Salida.
+function Veces-M50([string]$Salida, [string]$Texto) { return @([regex]::Matches($Salida, [regex]::Escape($Texto))).Count }
+
+$NotaTabla50 = "la tabla tiene ';' dentro de algun valor (fila 2: 4 campos; la cabecera, 3): no se han podido ordenar sus columnas"
+
+$Pruebas['m50 (a) una tabla con un valor con ; dentro (a@x;b@x), las columnas en otro orden en cada lado y los mismos datos: el caso sale igual'] = {
+  $e = Escenario-M50 'm50-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M50 $e 'tabla-igual:/caso-01'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'el original guarda la tabla con ID primero y el migrado con NOMBRE primero (no era la misma, en bruto)' (((Lee $e.Local 'salidas/original/cargaJob/caso-01/tablas/CLIENTES.csv') -match '^ID;CORREOS;NOMBRE') -and ((Lee $e.Local 'salidas/migrado/cargaJob/caso-01/tablas/CLIENTES.csv') -match '^NOMBRE;ID;CORREOS')) ''
+  Igual 'sin grupos en prueba-local.json' 0 (Grupos-M50 $e).Count
+}
+
+$Pruebas['m50 (a2) la misma tabla con un dato distinto en otra columna: el caso sale distinto, con la nota de ;'] = {
+  $e = Escenario-M50 'm50-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'tabla-dato'
+  Igual 'sale con 2' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)
+  Igual 'solo por la tabla' 'tablas/CLIENTES.csv' (($d | ForEach-Object { $_.fichero }) -join ',')
+  Igual 'con la nota del punto y coma, con la fila y los campos del original' $NotaTabla50 "$($d[0].nota)"
+  Comprueba 'la consola lleva la nota' ($r.Salida.Contains("($NotaTabla50)")) (Cola $r.Salida)
+}
+
+$Pruebas['m50 (a3) filas con ; en dos columnas distintas (correos en una, nombre en otra): ninguna columna da las tablas iguales: distinto, con la nota'] = {
+  $e = Escenario-M50 'm50-a3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'tabla-dos'
+  Igual 'sale con 2' 2 $r.Codigo
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)
+  Igual 'distinto por la tabla' 'tablas/CLIENTES.csv' (($d | ForEach-Object { $_.fichero }) -join ',')
+  Igual 'con la nota' $NotaTabla50 "$($d[0].nota)"
+}
+
+# Compara con Compare-Fichero (como tabla) los pares de contenidos de $Casos (lineas "Caso '<id>' <A> <B>"): devuelve id -> 'igual' o 'distinto [<nota>]'.
+function Tablas-M50([string]$Nombre, [string]$Casos) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @()
+function Caso([string]$Id, [string]$A, [string]$B) {
+  $d = Join-Path $Raiz $Id
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  $pa = Join-Path $d 'a.csv'; $pb = Join-Path $d 'b.csv'
+  [System.IO.File]::WriteAllText($pa, $A); [System.IO.File]::WriteAllText($pb, $B)
+  $c = Compare-Fichero $pa $pb $true
+  if ($c) { 'R ' + $Id + ' distinto [' + $c.Nota + ']' } else { 'R ' + $Id + ' igual' }
+}
+
+'@ + "`n" + $Casos
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
+  $r = Lanzar $f @((Join-Path $Dir $Nombre))
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  return $v
+}
+
+$Pruebas['m50 (a4) Compare-Fichero con tablas: la columna con ; en cualquier sitio (primera, ultima), 1 o 2 campos de mas por fila, un lado u otro, cabeceras con otros nombres, filas con menos campos'] = {
+  $v = Tablas-M50 'm50-tablas' @'
+Caso 'sin-punto-y-coma' "ID;NOMBRE`n1;ana`n" "NOMBRE;ID`nana;1`n"
+Caso 'primera-columna' "CORREOS;ID`na@x;b@x;1`n" "ID;CORREOS`n1;a@x;b@x`n"
+Caso 'ultima-columna' "ID;CORREOS`n1;a@x;b@x`n" "CORREOS;ID`na@x;b@x;1`n"
+Caso 'uno-o-dos-de-mas-por-fila' "ID;CORREOS`n1;a;b`n2;c;d;e`n3;f`n" "CORREOS;ID`nf;3`nc;d;e;2`na;b;1`n"
+Caso 'ancho-solo-en-el-migrado-y-distinto' "ID;NOMBRE`n1;ana`n2;maria`n" "NOMBRE;ID`nana;1`nmaria;2;x`n"
+Caso 'cabeceras-con-otros-nombres' "ID;NOMBRE`n1;a;b`n" "ID;OTRO`n1;a;b`n"
+Caso 'fila-con-menos-campos' "ID;CORREOS;NOMBRE`n1;a;b;ana`n2;c`n" "NOMBRE;ID;CORREOS`nana;1;a;b`n"
+Caso 'dos-columnas-con-punto-y-coma' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x;lopez;maria`n" "NOMBRE;ID;CORREOS`nana;1;a@x;b@x`nlopez;maria;2;c@x`n"
+Caso 'nombre-repetido-en-la-cabecera' "ID;V;V`n1;x;y;z`n" "V;V;ID`nx;y;z;1`n"
+Caso 'iguales-en-bruto-con-ancho' "ID;CORREOS`n1;a;b`n" "ID;CORREOS`n1;a;b`n"
+'@
+  Igual 'sin ; de mas: se ordenan las columnas, como siempre' 'igual' $v['sin-punto-y-coma']
+  Igual 'la columna con ; es la primera' 'igual' $v['primera-columna']
+  Igual 'la columna con ; es la ultima' 'igual' $v['ultima-columna']
+  Igual 'filas con uno y con dos campos de mas, y otra sin ninguno' 'igual' $v['uno-o-dos-de-mas-por-fila']
+  Igual 'con un nombre de columna repetido, la primera con ese nombre se lleva lo de mas' 'igual' $v['nombre-repetido-en-la-cabecera']
+  Igual 'dos tablas iguales en bruto con ; de mas: iguales' 'igual' $v['iguales-en-bruto-con-ancho']
+  Igual 'el ancho esta solo en el migrado (fila 3, 3 campos, cabecera 2) y no hay columna que lo arregle: distinto, con la fila del migrado' "distinto [la tabla tiene ';' dentro de algun valor (fila 3: 3 campos; la cabecera, 2): no se han podido ordenar sus columnas]" $v['ancho-solo-en-el-migrado-y-distinto']
+  Igual 'cabeceras con otros nombres: distinto y sin nota (no se prueba nada)' 'distinto []' $v['cabeceras-con-otros-nombres']
+  Comprueba 'una fila con menos campos: ninguna columna sirve; distinto con la nota (la primera fila con otro numero de campos, la 2)' ($v['fila-con-menos-campos'] -ceq "distinto [la tabla tiene ';' dentro de algun valor (fila 2: 4 campos; la cabecera, 3): no se han podido ordenar sus columnas]") "$($v['fila-con-menos-campos'])"
+  Igual 'dos columnas con ; en filas distintas: distinto, con la nota' "distinto [la tabla tiene ';' dentro de algun valor (fila 2: 4 campos; la cabecera, 3): no se han podido ordenar sus columnas]" $v['dos-columnas-con-punto-y-coma']
+}
+
+
+$Pruebas['m50 (a5) tablas con un valor con ; dentro: una fila con menos campos que la cabecera no se rellena con un campo vacio, ni con el mismo numero de filas'] = {
+  $v = Tablas-M50 'm50-tablas-corta' @'
+Caso 'corta-frente-a-completa-con-vacio' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x`n" "NOMBRE;ID;CORREOS`nana;1;a@x;b@x`n;2;c@x`n"
+Caso 'la-misma-con-el-campo-escrito' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x;maria`n" "NOMBRE;ID;CORREOS`nana;1;a@x;b@x`nmaria;2;c@x`n"
+'@
+  Igual 'la fila 2 del original tiene un campo menos (2 de 3) y la del migrado lo tiene vacio: distinto, con la nota de la primera fila con otro numero de campos (la 2, de 4 campos)' "distinto [$NotaTabla50]" $v['corta-frente-a-completa-con-vacio']
+  Igual 'con el campo escrito en los dos lados, igual (la prueba del helper y de la columna con ;)' 'igual' $v['la-misma-con-el-campo-escrito']
+}
+
+$Pruebas['m50 (b) 9 casos con la misma causa (cambia un numero y el nombre del caso): un grupo, una cabecera, el detalle de 2 casos, grupos en prueba-local.json y grupo en cada caso'] = {
+  $e = Escenario-M50 'm50-b' ([ordered]@{ cargaJob = @(1..9 | ForEach-Object { 'importe=10.00' }) })
+  $r = Prueba-M50 $e 'numero:/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'los 9 casos salen distintos' (@(1..9 | ForEach-Object { 'distinto' }) -join ',') ((Resultados $e) -join ',')
+  Comprueba 'la consola: una sola cabecera, con los 9 casos y la causa del primero sin normalizar' ($r.Salida.Contains('Grupo 1: 9 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-01 (id 101)')) (Cola $r.Salida)
+  Igual 'y ningun grupo 2' 0 (Veces-M50 $r.Salida 'Grupo 2')
+  Comprueba 'la lista de casos, sin el y N mas (son menos de 10)' ($r.Salida.Contains('casos: cargaJob/caso-01, cargaJob/caso-02, cargaJob/caso-03, cargaJob/caso-04, cargaJob/caso-05, cargaJob/caso-06, cargaJob/caso-07, cargaJob/caso-08, cargaJob/caso-09') -and $r.Salida -match 'caso-09\r?\n') (Cola $r.Salida)
+  Igual 'el detalle de 2 casos, no de los 9' 2 @([regex]::Matches($r.Salida, 'distinto: cargaJob/caso-\d\d \(')).Count
+  Comprueba 'que son los dos primeros' ($r.Salida.Contains('distinto: cargaJob/caso-01 (') -and $r.Salida.Contains('distinto: cargaJob/caso-02 (') -and -not $r.Salida.Contains('distinto: cargaJob/caso-03 (')) (Cola $r.Salida)
+  Comprueba 'cada uno con su fallo, en su linea (la cabecera no cuenta)' (@([regex]::Matches($r.Salida, '(?m)^\s+el migrado acaba FAILED: java\.lang\.IllegalStateException: no hay datos para caso-0[12] ')).Count -eq 2) (Cola $r.Salida)
+  $g = @(Grupos-M50 $e)
+  Igual 'prueba-local.json lleva un grupo' 1 $g.Count
+  Igual 'con numero, tipo y firma (la causa normalizada)' '1|fallo|fallo|FAILED|java.lang.IllegalStateException: no hay datos para <caso> (id <n>)' "$($g[0].numero)|$($g[0].tipo)|$($g[0].firma)"
+  Igual 'los 9 casos, job/caso' (@(1..9 | ForEach-Object { 'cargaJob/caso-0' + $_ }) -join ',') (@($g[0].casos) -join ',')
+  Igual 'la descripcion es la cabecera sin Grupo n' '9 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-01 (id 101)' "$($g[0].descripcion)"
+  Igual 'sin hechos (ni de dependencias ni de cambio con el test)' 0 @($g[0].hechos).Count
+  Igual 'cada caso lleva su grupo, el 1' '1,1,1,1,1,1,1,1,1' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
+}
+
+$Pruebas['m50 (b2) un caso con un fallo y con diferencias de fichero va solo a su grupo de fallo'] = {
+  $e = Escenario-M50 'm50-b2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=5.00', 'importe=10.00') })
+  $r = Prueba-M50 $e 'numero:/caso-01$'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'dos casos distintos y uno igual' 'distinto,distinto,igual' ((Resultados $e) -join ',')
+  $c1 = Caso $e 'cargaJob' 'caso-01'
+  Comprueba 'el caso 1 tiene diferencias de fichero ademas del fallo (el resultado y el estado)' (@($c1.diferencias).Count -ge 2 -and @($c1.fallos).Count -eq 1) "diferencias: $(@($c1.diferencias).Count), fallos: $(@($c1.fallos).Count)"
+  $g = @(Grupos-M50 $e)
+  Igual 'dos grupos' 2 $g.Count
+  Igual 'el 1 es el de fallo, solo con el caso 1' '1|fallo|cargaJob/caso-01' "$($g[0].numero)|$($g[0].tipo)|$(@($g[0].casos) -join ',')"
+  Igual 'el 2 es de fichero, solo con el caso 2 (sin fallo, con las diferencias de fichero)' '2|fichero|cargaJob/caso-02' "$($g[1].numero)|$($g[1].tipo)|$(@($g[1].casos) -join ',')"
+  Igual 'la firma de fichero: la clave normalizada con su tipo' ('fichero|ficheros/salida/resultado_<hoy:yyyyMMdd>.txt:contenido') "$($g[1].firma)"
+  Igual 'el caso 3, igual, no lleva grupo' 0 @((Caso $e 'cargaJob' 'caso-03').PSObject.Properties | Where-Object { $_.Name -eq 'grupo' }).Count
+  Igual 'el 1 lleva el grupo 1 y el 2, el 2' '1,2' (((Caso $e 'cargaJob' 'caso-01').grupo, (Caso $e 'cargaJob' 'caso-02').grupo) -join ',')
+}
+
+$Pruebas['m50 (b3) dos causas de fallo y una de fichero: los grupos van primero los de fallo, y los de mas casos antes'] = {
+  $e = Escenario-M50 'm50-b3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=5.00', 'importe=5.00', 'importe=5.00', 'importe=5.00') })
+  $r = Prueba-M50 $e 'otra:/caso-0[123]$;numero:/caso-0[45]$'
+  Igual 'sale con 2' 2 $r.Codigo
+  $g = @(Grupos-M50 $e)
+  Igual 'tres grupos' 3 $g.Count
+  Igual 'el 1: fallo, 3 casos (sin correo), aunque su firma va despues en orden alfabetico' '1|fallo|3|fallo|FAILED|java.lang.IllegalStateException: sin correo' "$($g[0].numero)|$($g[0].tipo)|$(@($g[0].casos).Count)|$($g[0].firma)"
+  Igual 'el 2: fallo, 2 casos (no hay datos)' '2|fallo|2|fallo|FAILED|java.lang.IllegalStateException: no hay datos para <caso> (id <n>)' "$($g[1].numero)|$($g[1].tipo)|$(@($g[1].casos).Count)|$($g[1].firma)"
+  Igual 'el 3: fichero, 4 casos, aunque tiene mas casos que los de fallo' '3|fichero|4' "$($g[2].numero)|$($g[2].tipo)|$(@($g[2].casos).Count)"
+  $s = $r.Salida
+  $i1 = [regex]::Match($s, [regex]::Escape('Grupo 1: 3 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: sin correo')).Index
+  $i2 = [regex]::Match($s, [regex]::Escape('Grupo 2: 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-04 (id 104)')).Index
+  $i3 = [regex]::Match($s, [regex]::Escape('Grupo 3: 4 casos distintos, en ficheros/salida/resultado_')).Index
+  Comprueba 'la consola los saca en ese orden, con la cabecera de cada uno' ($i1 -gt 0 -and $i2 -gt $i1 -and $i3 -gt $i2) "$i1 $i2 $i3 | $(Cola $s)"
+  Comprueba 'el de fichero dice el fichero y el tipo' ($s -match 'Grupo 3: 4 casos distintos, en ficheros/salida/resultado_\d{8}\.txt: contenido\r?\n') (Cola $s)
+  Igual 'cada caso con su grupo' '1,1,1,2,2,3,3,3,3' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
+}
+
+$Pruebas['m50 (b4) casos de fichero con las mismas diferencias: un grupo de fichero (con y N mas); un fichero que sobra y uno que falta, cada uno el suyo'] = {
+  $uno = @(1..12 | ForEach-Object { 'importe=5.00' })
+  $e = Escenario-M50 'm50-b4' ([ordered]@{ cargaJob = @($uno + @('importe=10.00', 'importe=10.00')) })
+  $r = Prueba-M50 $e 'extra:/caso-13$;falta:/caso-14$'
+  Igual 'sale con 2' 2 $r.Codigo
+  $g = @(Grupos-M50 $e)
+  Igual 'tres grupos, todos de fichero' 'fichero,fichero,fichero' ((@($g | ForEach-Object { $_.tipo })) -join ',')
+  Igual 'el 1 son los 12 casos con la misma diferencia' '12|fichero|ficheros/salida/resultado_<hoy:yyyyMMdd>.txt:contenido' "$(@($g[0].casos).Count)|$($g[0].tipo)|$($g[0].firma -replace '^fichero\|', '')"
+  Igual 'el 2 y el 3, de un caso cada uno; a igualdad, por firma: sobra (extra.txt) y falta (resultado)' 'fichero|ficheros/extra.txt:sobra,fichero|ficheros/salida/resultado_<hoy:yyyyMMdd>.txt:falta' ($g[1].firma + ',' + $g[2].firma)
+  Comprueba 'la lista de casos del 1: los 10 primeros y y 2 mas' ($r.Salida.Contains('cargaJob/caso-10 y 2 mas')) (Cola $r.Salida)
+  Comprueba 'el grupo de un caso dice un caso distinto y el fichero que sobra' ($r.Salida -match 'Grupo 2: 1 caso distinto, en ficheros/extra\.txt: sobra\r?\n') (Cola $r.Salida)
+  Comprueba 'el del fichero que falta' ($r.Salida -match 'Grupo 3: 1 caso distinto, en ficheros/salida/resultado_\d{8}\.txt: falta\r?\n') (Cola $r.Salida)
+  Igual 'el detalle de 2 casos del grupo 1 y uno de cada uno de los otros dos' 4 @([regex]::Matches($r.Salida, 'distinto: cargaJob/caso-\d\d \(')).Count
+}
+
+$Pruebas['m50 (b5) Get-CausaNormal: numeros de 2 cifras o mas, rutas, fechas y horas, el nombre del caso, @hex y 200 letras'] = {
+  $f = Join-Path $Dir 'm50-causa.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @('/copia/x')
+$Hoy = @([datetime]'2026-11-20')
+function Prueba([string]$Id, [string]$Causa, [string]$Caso = 'caso-07') { 'R ' + $Id + ' ' + (Get-CausaNormal $Causa $Caso) }
+Prueba 'numeros' 'Error 5 de 12 en la linea 345 (1234)'
+Prueba 'caso' 'no hay datos para caso-07 y para caso-07'
+Prueba 'rutas' 'No existe /home/ana/datos/in.csv ni C:\datos\in.csv ni \\srv\comp\x'
+Prueba 'ruta-corta' 'En /tmp no hay nada y a/b si'
+Prueba 'ruta-jvm' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA y (org/x/b/ClaseB)'
+Prueba 'ruta-ejemplos' 'En C:\datos\x\caso.txt y /tmp/a/b y C:/datos/x y file:///x/y'
+Prueba 'copia' 'No existe /copia/x/src/main/A.java'
+Prueba 'hex' 'Bean@1a2b3c4d no es Bean@FF00AA ni ana@acme.com'
+Prueba 'fechas' 'En 2026-11-20 10:20:30 y a las 10:20:30 y el 2026-11-18'
+Prueba 'sin-nada' 'java.lang.IllegalStateException: sin correo'
+Prueba 'clase' 'java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present'
+Prueba 'larga' ('x' * 250)
+Prueba 'vacia' ''
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-CausaNormal', 'Get-Normal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  Igual 'los numeros de 2 cifras o mas, a <n>; el de una, no' 'Error 5 de <n> en la linea <n> (<n>)' $v['numeros']
+  Igual 'el nombre del caso, a <caso>' 'no hay datos para <caso> y para <caso>' $v['caso']
+  Igual 'las rutas (con / o con \, y mas de un segmento), a <ruta>' 'No existe <ruta> ni <ruta> ni <ruta>' $v['rutas']
+  Igual 'una sola barra al principio (/tmp) no es una ruta, ni a/b: sin \ y sin barra inicial no es una ruta (cambia a proposito: antes a/b salia <ruta>)' 'En /tmp no hay nada y a/b si' $v['ruta-corta']
+  Igual 'el nombre de una clase con barras (NoClassDefFoundError) no es una ruta: dos clases distintas, dos causas' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA y (org/x/b/ClaseB)' $v['ruta-jvm']
+  Igual 'es ruta C:\... y C:/... (unidad), /a/b, y file:' 'En <ruta> y <ruta> y <ruta> y <ruta>' $v['ruta-ejemplos']
+  Igual 'la ruta de la copia (<copia>) con lo que sigue, una sola ruta' 'No existe <ruta>' $v['copia']
+  Igual '@ y hexadecimal, a @<id>; un correo no' 'Bean@<id> no es Bean@<id> ni ana@acme.com' $v['hex']
+  Igual 'fechas y horas como Get-Normal: la de hoy con hora y la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
+  Igual 'sin nada que cambiar, igual' 'java.lang.IllegalStateException: sin correo' $v['sin-nada']
+  Igual 'la causa de un TypeNotPresentException no cambia' 'java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present' $v['clase']
+  Igual 'recortada a 200 letras' (('x' * 200)) $v['larga']
+  Igual 'una causa vacia, vacia' '' $v['vacia']
+}
+
+$Pruebas['m50 (b6) Get-Grupos con resultados inventados: tipos de diferencia, un original que tambien falla, sin estado.txt, el orden y los empates'] = {
+  $f = Join-Path $Dir 'm50-grupos.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-20')
+function Fallo-M([string]$Estado, [string]$Causa, [string]$Lado = 'migrado') { [ordered]@{ lado = $Lado; estado = $Estado; causa = $Causa } }
+function Dif([string]$Clave, [string]$Original, [string]$Migrado, [bool]$NoGuardado = $false) {
+  $d = [ordered]@{ fichero = $Clave; clave = $Clave; lineas = 1; linea = 1; original = $Original; migrado = $Migrado; nota = '' }
+  if ($NoGuardado) { $d.noGuardado = $true }
+  return $d
+}
+function Caso-M([string]$Job, [string]$Caso, [string]$Resultado, $Fallos = @(), $Dif = @()) {
+  [ordered]@{ job = $Job; caso = $Caso; titulo = 't'; resultado = $Resultado; motivo = ''; diferencias = @($Dif); fallos = @($Fallos) }
+}
+$res = @(
+  (Caso-M 'remesaJob' 'caso-02' 'distinto' @() @((Dif 'b.txt' 'x' '(no esta)'), (Dif 'a.txt' '(no esta)' 'y'), (Dif 'c.txt' 'x' 'y'), (Dif 'd.txt' 'no se ha podido guardar: ruta' '(guardado)' $true))),
+  (Caso-M 'cargaJob' 'caso-02' 'distinto' @() @((Dif 'c.txt' 'x' 'y'), (Dif 'a.txt' '(no esta)' 'y'), (Dif 'b.txt' 'x' '(no esta)'), (Dif 'd.txt' 'no se ha podido guardar: ruta' '(guardado)' $true))),
+  (Caso-M 'cargaJob' 'caso-01' 'igual'),
+  (Caso-M 'cargaJob' 'caso-03' 'distinto' @((Fallo-M 'EXCEPCION' 'org.h2.X: Table "T_X" not found' 'original')) @((Dif 'e.txt' 'x' 'y'))),
+  (Caso-M 'cargaJob' 'caso-04' 'distinto' @((Fallo-M 'FAILED' 'java.lang.A: uno 12'), (Fallo-M 'FAILED' 'java.lang.A: uno 99' 'original')) @((Dif 'e.txt' 'x' 'y'))),
+  (Caso-M 'cargaJob' 'caso-05' 'distinto' @((Fallo-M 'sin estado.txt' '')) @((Dif 'estado.txt' 'estado=COMPLETED' '(no esta)'))),
+  (Caso-M 'cargaJob' 'caso-06' 'distinto' @((Fallo-M 'FAILED' 'java.lang.A: uno 77')) @((Dif 'e.txt' 'x' 'y'))),
+  (Caso-M 'cargaJob' 'caso-07' 'distinto' @((Fallo-M 'EXCEPCION' 'java.lang.B: dos')) @((Dif 'e.txt' 'x' 'y'))),
+  (Caso-M 'cargaJob' 'caso-08' 'no determinista'),
+  (Caso-M 'cargaJob' 'caso-09' 'distinto' @((Fallo-M 'FAILED' 'java.lang.A: uno 55')) @((Dif 'f.txt' 'x' 'y'))),
+  (Caso-M 'cargaJob' 'caso-10' 'distinto' @((Fallo-M 'FAILED' 'java.lang.A: uno 31')) @((Dif 'g.txt' 'x' 'y')))
+)
+foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  Igual 'cinco grupos' 5 $g.Count
+  Igual '1: de fallo, los 3 casos con java.lang.A (el numero se normaliza; sus diferencias de fichero no cuentan), por job y caso; la cabecera, con la causa del primero sin normalizar' '1 ## fallo ## fallo|FAILED|java.lang.A: uno <n> ## cargaJob/caso-06,cargaJob/caso-09,cargaJob/caso-10 ## 3 casos distintos, el migrado acaba FAILED: java.lang.A: uno 77' $g[0]
+  Igual '2: de fallo, 1 caso (EXCEPCION); a igualdad de casos, por la firma en orden ordinal' '2 ## fallo ## fallo|EXCEPCION|java.lang.B: dos ## cargaJob/caso-07 ## 1 caso distinto, el migrado acaba EXCEPCION: java.lang.B: dos' $g[1]
+  Igual '3: de fallo, sin estado.txt y sin causa' '3 ## fallo ## fallo|sin estado.txt| ## cargaJob/caso-05 ## 1 caso distinto, el migrado no deja estado.txt' $g[2]
+  Igual '4: de fichero (2 casos, el mismo de dos jobs): la lista ordenada de clave:tipo (sobra, falta, contenido, noGuardado) y la cabecera con el primero y los que faltan' '4 ## fichero ## fichero|a.txt:sobra|b.txt:falta|c.txt:contenido|d.txt:noGuardado ## cargaJob/caso-02,remesaJob/caso-02 ## 2 casos distintos, en a.txt: sobra y 3 ficheros mas' $g[3]
+  Igual '5: de fichero: un caso con fallo del migrado y del original, y otro con fallo solo del original, no son de fallo' '5 ## fichero ## fichero|e.txt:contenido ## cargaJob/caso-03,cargaJob/caso-04 ## 2 casos distintos, en e.txt: contenido' $g[4]
+}
+
+$Pruebas['m50 (b7) dos clases distintas que faltan (NoClassDefFoundError con barras): dos grupos, no uno'] = {
+  $f = Join-Path $Dir 'm50-clases.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-20')
+function Caso-M([string]$Caso, [string]$Causa) {
+  [ordered]@{ job = 'cargaJob'; caso = $Caso; titulo = 't'; resultado = 'distinto'; motivo = ''; diferencias = @(); fallos = @([ordered]@{ lado = 'migrado'; estado = 'FAILED'; causa = $Causa }) }
+}
+$res = @((Caso-M 'caso-01' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'), (Caso-M 'caso-02' 'java.lang.NoClassDefFoundError: org/x/a/ClaseB'), (Caso-M 'caso-03' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'))
+foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') }
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  Igual 'dos grupos' 2 $g.Count
+  Igual 'el 1: la clase A, con sus dos casos, y la barra de la clase en la firma' '1 ## fallo|FAILED|java.lang.NoClassDefFoundError: org/x/a/ClaseA ## cargaJob/caso-01,cargaJob/caso-03' $g[0]
+  Igual 'el 2: la clase B' '2 ## fallo|FAILED|java.lang.NoClassDefFoundError: org/x/a/ClaseB ## cargaJob/caso-02' $g[1]
+}
+
+$Pruebas['m50 (c) causa de dependencias (TypeNotPresentException de org.springframework.kafka): un solo dependency:tree aunque haya dos grupos, dependencias.txt guardado y el hecho con las lineas del prefijo'] = {
+  $e = Escenario-M50 'm50-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M50 $e 'tipo:^cargaJob/caso-;tipo2:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'un solo dependency:tree en todo el lanzamiento (dos grupos de dependencias)' 1 (Arboles-M50 $e)
+  Comprueba 'y en la copia del migrado' (@(Mavens-Con $e ('^' + [regex]::Escape($e.CopiaMig + '|') + '.*dependency:tree')).Count -eq 1) ''
+  $dep = Get-Ruta $e.Local 'dependencias.txt'
+  Comprueba 'prueba-local\dependencias.txt guardado, con el arbol' ((Test-Path -LiteralPath $dep) -and (Lee $e.Local 'dependencias.txt').Contains('org.springframework.kafka:spring-kafka:jar:2.9.0:compile')) ''
+  $g = @(Grupos-M50 $e)
+  Igual 'dos grupos de fallo' 'fallo,fallo' ((@($g | ForEach-Object { $_.tipo })) -join ',')
+  Comprueba 'el 1 (empatan a 2 casos; la firma de ClassNotFound va antes) es el de io.micrometer' ($g[0].firma -match 'ClassNotFoundException') $g[0].firma
+  $kafka = $g | Where-Object { $_.firma -match 'TypeNotPresentException' }
+  $esperado = 'de dependencias: falta una clase o un metodo de org.springframework.kafka. En el arbol del migrado: org.springframework.kafka:spring-kafka:jar:2.9.0:compile; org.springframework.kafka:spring-kafka-test:jar:2.9.0:test; org.springframework.kafka:spring-kafka-streams:jar:2.9.0:test; org.springframework.kafka:spring-kafka-extras:jar:2.9.0:test; org.springframework.kafka:spring-kafka-bom:jar:2.9.0:test. Arbol completo: ' + $dep
+  Igual 'el hecho del grupo de kafka: el prefijo de 3 segmentos, 5 lineas como mucho, sin los caracteres del arbol ni [INFO]' $esperado ((@($kafka.hechos) -join '|'))
+  $micro = $g | Where-Object { $_.firma -match 'ClassNotFoundException' }
+  Igual 'el del otro grupo: sin lineas con io.micrometer.observation, se prueba con los 2 primeros segmentos' ('de dependencias: falta una clase o un metodo de io.micrometer. En el arbol del migrado: io.micrometer:micrometer-observation:jar:1.9.0:compile. Arbol completo: ' + $dep) ((@($micro.hechos) -join '|'))
+  Comprueba 'la consola lleva el hecho de kafka, con medido:' ($r.Salida.Contains('medido: ' + $esperado)) (Cola $r.Salida)
+}
+
+$Pruebas['m50 (c2) otra causa (IllegalStateException): ningun dependency:tree, sin dependencias.txt y sin hecho de dependencias'] = {
+  $e = Escenario-M50 'm50-c2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M50 $e 'otra:/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'ningun dependency:tree' 0 (Arboles-M50 $e)
+  Comprueba 'ni dependencias.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'dependencias.txt'))) ''
+  Igual 'el grupo sin hechos' 0 @((Grupos-M50 $e)[0].hechos).Count
+  Comprueba 'la consola no dice medido:' ($r.Salida -notmatch 'medido:') (Cola $r.Salida)
+}
+
+$Pruebas['m50 (c3) dependency:tree falla: el hecho dice sin arbol, no hay dependencias.txt y el lanzamiento acaba igual'] = {
+  $e = Escenario-M50 'm50-c3' ([ordered]@{ cargaJob = @('importe=10.00') ; remesaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'tipo:^cargaJob/caso-;tipo2:^remesaJob/caso-' @() @{ M50_ARBOL = 'falla' }
+  Igual 'sale con 2 (los casos distintos)' 2 $r.Codigo
+  Igual 'un solo intento de dependency:tree, aunque falle' 1 (Arboles-M50 $e)
+  Comprueba 'sin dependencias.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'dependencias.txt'))) ''
+  $g = @(Grupos-M50 $e)
+  Igual 'los dos grupos llevan el hecho, con el motivo corto' 2 @($g | Where-Object { @($_.hechos).Count -eq 1 -and $_.hechos[0] -match '^de dependencias, sin arbol: .*Could not resolve dependencies' }).Count
+  Comprueba 'prueba-local.json se escribio y la consola lo dice' ((Test-Path -LiteralPath $e.Json) -and $r.Salida -match 'medido: de dependencias, sin arbol: ') (Cola $r.Salida)
+}
+
+# Un lanzamiento sin guiones (todos iguales) y, a partir del prueba-local.json que deja, uno por cada $Variante (un bloque que cambia ese json antes), con el guion 'otra'.
+$Pruebas['m50 (d) cambio con el test: mismo codigoMigrado, otro hashArnesMigrado y casos antes iguales: sale el hecho; con otro codigo, el mismo hash, un json sin esos campos o menos de la mitad iguales, no'] = {
+  $e = Escenario-M50 'm50-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M50 $e ''
+  Igual 'el primero sale con 0' 0 $r.Codigo
+  $base = Lee-Json $e.Json
+  Comprueba 'prueba-local.json guarda codigoMigrado y hashArnesMigrado (8 hex)' (("$($base.codigoMigrado)".Length -gt 8) -and ("$($base.hashArnesMigrado)" -match '^[0-9a-f]{8}$')) "$($base.codigoMigrado) / $($base.hashArnesMigrado)"
+  $hechoCon = 'cambio con el test: {0} de {1} casos eran iguales con el test del migrado anterior y el mismo codigo'
+  $variante = {
+    param([string]$Que, [scriptblock]$Cambia, [string]$Esperado)
+    $j = $base | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    & $Cambia $j
+    [System.IO.File]::WriteAllText($e.Json, (ConvertTo-Json -InputObject $j -Depth 8))
+    $r = Prueba-M50 $e 'otra:/caso-'
+    Igual "$Que : sale con 2" 2 $r.Codigo
+    $g = @(Grupos-M50 $e)
+    Igual "$Que : un grupo" 1 $g.Count
+    Igual "$Que : hechos" $Esperado ((@($g[0].hechos)) -join '|')
+    if ($Esperado) { Comprueba "$Que : la consola lo dice" ($r.Salida.Contains("medido: $Esperado")) (Cola $r.Salida) }
+    else { Comprueba "$Que : la consola no dice medido:" ($r.Salida -notmatch 'medido:') (Cola $r.Salida) }
+  }
+  & $variante 'otro hash, mismo codigo, los dos casos eran iguales' { param($j) $j.hashArnesMigrado = '00000000' } ($hechoCon -f 2, 2)
+  & $variante 'el mismo hash' { param($j) } ''
+  & $variante 'otro codigo del migrado' { param($j) $j.hashArnesMigrado = '00000000'; $j.codigoMigrado = 'otro-codigo' } ''
+  & $variante 'un json sin esos campos (el primer lanzamiento tras este cambio)' { param($j) $j.PSObject.Properties.Remove('hashArnesMigrado'); $j.PSObject.Properties.Remove('codigoMigrado') } ''
+  & $variante 'solo la mitad de los casos eran iguales (1 de 2)' { param($j) $j.hashArnesMigrado = '00000000'; $j.casos[0].resultado = 'distinto' } ($hechoCon -f 1, 2)
+  & $variante 'ninguno era igual (0 de 2)' { param($j) $j.hashArnesMigrado = '00000000'; foreach ($c in @($j.casos)) { $c.resultado = 'distinto' } } ''
+}
+
+$Pruebas['m50 (e) datos/prueba-local-grupos.jsonl: una linea por grupo y lanzamiento, y crece al relanzar'] = {
+  $e = Escenario-M50 'm50-e' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=10.00', 'importe=10.00') })
+  $jsonl = Get-Ruta (Split-Path -Parent $e.Json) 'prueba-local-grupos.jsonl'
+  $r = Prueba-M50 $e 'otra:/caso-0[12]$;tipo:/caso-03$'
+  Igual 'sale con 2' 2 $r.Codigo
+  $l = @([System.IO.File]::ReadAllLines($jsonl) | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json })
+  Igual 'dos lineas, una por grupo' 2 $l.Count
+  Igual 'cada una con numero, tipo y N casos' '1|fallo,2|fallo|2,1' ((($l | ForEach-Object { "$($_.numero)|$($_.tipo)" }) -join ',') + '|' + (($l | ForEach-Object { "$($_.casos)" }) -join ','))
+  Comprueba 'la firma es la del json' ($l[0].firma -ceq (Grupos-M50 $e)[0].firma -and $l[1].firma -ceq (Grupos-M50 $e)[1].firma) ''
+  $crudo = @([System.IO.File]::ReadAllLines($jsonl) | Where-Object { $_.Trim() })
+  Comprueba 'con la fecha (ISO) y los hechos como lista' ($crudo[0] -match '"fecha":"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d"' -and $crudo[0] -match '"hechos":\[\]') $crudo[0]
+  Igual 'el segundo grupo lleva el hecho de dependencias' 1 @($l[1].hechos).Count
+  $r = Prueba-M50 $e 'otra:/caso-0[12]$;tipo:/caso-03$'
+  $l = @([System.IO.File]::ReadAllLines($jsonl) | Where-Object { $_.Trim() })
+  Igual 'al relanzar, 4 lineas: se anade, no se pisa' 4 $l.Count
+  Igual 'la misma firma las dos veces' (($l[0] | ConvertFrom-Json).firma) (($l[2] | ConvertFrom-Json).firma)
+}
+
+$Pruebas['m50 (f) la linea de -RehacerArnes sale dentro del bloque del grupo, una vez por job cuyo migrado no arranca en ningun caso, con el mismo texto de siempre'] = {
+  $e = Escenario-M48 'm50-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
+  Igual 'sale con 2' 2 $r.Codigo
+  $linea = 'El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.'
+  Comprueba 'la linea de cargaJob, igual que antes' ($r.Salida.Contains($linea)) (Cola $r.Salida)
+  Comprueba 'dentro del bloque del grupo 1: despues de su cabecera y antes del detalle de sus casos' ($r.Salida -cmatch '(?s)Grupo 1: 4 casos distintos, el migrado acaba EXCEPCION: .*?El migrado no arranca el job cargaJob.*?distinto: cargaJob/caso-01 \(') (Cola $r.Salida)
+  Igual 'y solo una linea de esas' 1 (Veces-M50 $r.Salida 'El migrado no arranca el job')
+  Comprueba 'remesaJob (falla un solo caso) y tarifaJob (el original tambien falla en otro) no la llevan' ($r.Salida -notmatch 'no arranca el job (remesaJob|tarifaJob)') (Cola $r.Salida)
+}
+
+$Pruebas['m50 (g) con -Job los grupos son solo de este lanzamiento: los casos de los otros jobs que se conservan no llevan grupo'] = {
+  $e = Escenario-M50 'm50-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=10.00'); remesaJob = @('importe=10.00', 'importe=10.00') })
+  $r = Prueba-M50 $e 'otra:/caso-'
+  Igual 'el primero (todos los jobs) sale con 2' 2 $r.Codigo
+  Igual 'con un grupo de 4 casos' 4 @((Grupos-M50 $e)[0].casos).Count
+  $r = Prueba-M50 $e 'otra:/caso-' @('-Job', 'cargaJob')
+  Igual 'con -Job sale con 2' 2 $r.Codigo
+  $o = Lee-Json $e.Json
+  Igual 'prueba-local.json sigue con los casos de los dos jobs' 4 @($o.casos).Count
+  Igual 'pero el grupo es solo de cargaJob' 'cargaJob/caso-01,cargaJob/caso-02' ((@($o.grupos[0].casos)) -join ',')
+  Igual 'cargaJob lleva el grupo 1' '1,1' (((Caso $e 'cargaJob' 'caso-01').grupo, (Caso $e 'cargaJob' 'caso-02').grupo) -join ',')
+  Igual 'remesaJob (de antes) no lleva grupo: apuntaria a otro grupo' 0 @((Caso $e 'remesaJob' 'caso-01').PSObject.Properties | Where-Object { $_.Name -eq 'grupo' }).Count
 }
 
 # ================================ LANZADOR ================================
