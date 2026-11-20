@@ -94,7 +94,8 @@ QUE HACE
   el migrado y a comparar, y el original solo si ha cambiado algo de lo que entra en su ejecucion.
   Rutas largas: un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto (20 letras, ~ y un hash), el mismo en todos los
   lados; uno que ni asi cabe no se guarda y su caso sale distinto, con ese fichero. Cuando un lado de un caso acaba FAILED, EXCEPCION o sin
-  estado.txt, el resultado (campo fallos), la consola, la pagina 3 y el prompt de -Reparar llevan la causa que dejo su Maven.
+  estado.txt, el resultado (campo fallos), la consola, la pagina 3 y el prompt de -Reparar llevan la causa que dejo su Maven (nunca la de una linea
+  de aviso: TRACE, DEBUG, INFO, WARN o WARNING); sin causa, la consola dice en que registros\mvn-<n>-<que>.log mirar, y el fallo lleva 'registro'.
   Con -Job, el JSON lleva ademas lo de los demas jobs tal como estaba (casos, jobs, reparaciones y culpables) si se probo con el mismo
   commit del migrado y del original; con otro commit se descarta y lo dice. La consola solo ensena los jobs de ahora.
 
@@ -348,17 +349,19 @@ function Get-NoGuardados([string]$Nombre, [string]$Job, [string]$Caso) {
 # Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido, con tope (MinutosMaven) y sin
 # saltarse los tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar
 # (Remove-Ruido, de comun.ps1): no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
-# Codigo, Salida, Tope (Invoke-MavenTope, de comun.ps1) y Causa (Get-CausaMaven, tambien con Codigo 0: un caso cuyo job falla o no arranca acaba con
-# Maven en 0 y su causa esta en la salida de Maven).
+# Codigo, Salida, Tope (Invoke-MavenTope, de comun.ps1), Causa (Get-CausaMaven, tambien con Codigo 0: un caso cuyo job falla o no arranca acaba con
+# Maven en 0 y su causa esta en la salida de Maven) y Registro (la ruta de ese registro relativa a prueba-local: registros\mvn-<n>-<que>.log).
 function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
   $script:Mavens++
   $previos = @(Get-Cambios $Dir)
   $antes = $env:JAVA_HOME
   $desde = [DateTime]::UtcNow
   if ($EsOriginal -and $JavaLegacy) { $env:JAVA_HOME = $JavaLegacy }
-  try { $r = Invoke-MavenTope $Dir (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) "Maven, $Que" (Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')) }
+  $registro = 'mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log'
+  try { $r = Invoke-MavenTope $Dir (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) "Maven, $Que" (Join-Path $Registros $registro) }
   finally { $env:JAVA_HOME = $antes }
   Add-Member -InputObject $r -NotePropertyName Causa -NotePropertyValue (Get-CausaMaven $Dir $desde $r.Salida)
+  Add-Member -InputObject $r -NotePropertyName Registro -NotePropertyValue ('registros\' + $registro)
   [void](Remove-Ruido $Dir $previos)
   return $r
 }
@@ -368,6 +371,8 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
 # ultimo 'Caused by:' de $Salida (la de Maven: surefire recorta la traza del informe y Spring la escribe entera en la salida); y si
 # tampoco, la primera linea con texto tras la marca del informe; y si tampoco, la primera linea de $Salida con una excepcion
 # (<paquete>.<Clase>Exception o ...Error), desde la clase. Un informe que no se puede leer cuenta como si no estuviera.
+# Una linea de la salida solo da la causa si no es de aviso (Test-SinNivelDeAviso, sobre lo que hay antes de la causa): Spring escribe como WARN las
+# excepciones que ve al mirar las condiciones de una libreria y sigue, y la causa de verdad esta en una linea ERROR (o sin nivel) mas abajo.
 function Get-CausaMaven([string]$Dir, [DateTime]$Desde, [string[]]$Salida) {
   $causa = ''
   $primera = ''
@@ -384,17 +389,29 @@ function Get-CausaMaven([string]$Dir, [DateTime]$Desde, [string[]]$Salida) {
     }
   }
   catch { }
-  if (-not $causa) { foreach ($x in @($Salida)) { if ($x -match 'Caused by:.*$') { $causa = $Matches[0] } } }
+  if (-not $causa) {
+    foreach ($x in @($Salida)) {
+      if ($x -match 'Caused by:.*$' -and (Test-SinNivelDeAviso $x.Substring(0, $x.Length - $Matches[0].Length))) { $causa = $Matches[0] }
+    }
+  }
   if (-not $causa) { $causa = $primera }
   if (-not $causa) {
     foreach ($x in @($Salida)) {
       $m = [regex]::Match([string]$x, '\b(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*(?:Exception|Error)\b')
-      if ($m.Success) { $causa = ([string]$x).Substring($m.Index); break }
+      if ($m.Success -and (Test-SinNivelDeAviso ([string]$x).Substring(0, $m.Index))) { $causa = ([string]$x).Substring($m.Index); break }
     }
   }
   $causa = $causa.Trim()
   if ($causa.Length -gt 300) { $causa = $causa.Substring(0, 300) }
   return $causa
+}
+
+# $true si el texto $Antes (lo que hay en una linea de log antes de la causa) no lleva un nivel de aviso: el primer nivel que sale (TRACE, DEBUG, INFO,
+# WARN, WARNING, ERROR, FATAL o SEVERE, en mayusculas y entero, sin letra, cifra, _, . ni $ pegados; sirve para '[WARN ]', '  WARN 2192 ---' y
+# '"logLevel":"WARN"') no es TRACE, DEBUG, INFO, WARN ni WARNING. Sin nivel, vale.
+function Test-SinNivelDeAviso([string]$Antes) {
+  $n = [regex]::Match($Antes, '(?<![\w.$])(?:TRACE|DEBUG|INFO|WARNING|WARN|ERROR|FATAL|SEVERE)(?![\w.$])')
+  return (-not $n.Success -or $n.Value -cmatch '^(?:ERROR|FATAL|SEVERE)$')
 }
 
 # La causa de Get-CausaMaven sin el 'Caused by: ' del principio (lo que se ensena y se guarda en el resultado: 'java.lang.X: mensaje').
@@ -527,7 +544,8 @@ function Get-CausaLado([string]$Lado, [string]$Job, [string]$Caso) {
 }
 
 # Los lados de un caso que acaban mal (original y $Nombre, el migrado): estado=FAILED, estado=EXCEPCION o sin estado.txt, cada uno con su causa
-# (la del Maven de esa ejecucion, Get-CausaLado). Es lo que lleva el resultado de un caso en 'fallos', fuera de las carpetas que se comparan.
+# (la del Maven de esa ejecucion, Get-CausaLado) y su registro (el mvn-*.log de esa ejecucion, relativo a prueba-local, haya causa o no; '' si el lado
+# no se ha ejecutado ahora: un original reutilizado). Es lo que lleva el resultado de un caso en 'fallos', fuera de las carpetas que se comparan.
 function Get-Fallos([string]$Nombre, [string]$Job, [string]$Caso) {
   $fallos = @()
   foreach ($lado in @('original', $Nombre)) {
@@ -539,16 +557,20 @@ function Get-Fallos([string]$Nombre, [string]$Job, [string]$Caso) {
     }
     $nombreLado = 'migrado'
     if ($lado -ceq 'original') { $nombreLado = 'original' }
-    $fallos += [ordered]@{ lado = $nombreLado; estado = $estado; causa = (Get-CausaLado $lado $Job $Caso) }
+    $registro = ''
+    if ($script:Maven["$lado|$Job|$Caso"]) { $registro = [string]$script:Maven["$lado|$Job|$Caso"].Registro }
+    $fallos += [ordered]@{ lado = $nombreLado; estado = $estado; causa = (Get-CausaLado $lado $Job $Caso); registro = $registro }
   }
   return $fallos
 }
 
-# 'el migrado acaba FAILED: <causa>' (lo que ensenan la consola y el prompt de -Reparar de un fallo de Get-Fallos).
-function Format-Fallo($F) {
+# 'el migrado acaba FAILED: <causa>' (lo que ensenan la consola y el prompt de -Reparar de un fallo de Get-Fallos). Sin causa, con $ConRegistro (la
+# consola; el prompt de -Reparar no lo lleva) y con registro, dice donde mirar: 'sin causa en la salida de Maven: mira registros\mvn-<n>-<que>.log'.
+function Format-Fallo($F, [switch]$ConRegistro) {
   $que = "el $($F.lado) acaba $($F.estado)"
   if ($F.estado -ceq 'sin estado.txt') { $que = "el $($F.lado) no deja estado.txt" }
   if ($F.causa) { return "${que}: $($F.causa)" }
+  if ($ConRegistro -and $F.registro) { return "${que}: sin causa en la salida de Maven: mira $($F.registro)" }
   return $que
 }
 
@@ -1764,7 +1786,7 @@ function Get-Grupos($Res) {
     [System.Array]::Sort($k, [object[]]$m, [System.StringComparer]::Ordinal)
     $cuantos = "$($m.Count) casos distintos"
     if ($m.Count -eq 1) { $cuantos = '1 caso distinto' }
-    if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0]) }
+    if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0] -ConRegistro) }
     else {
       $lista = @(Sort-Ordinal @($m[0].ent.Keys))
       $desc = "$cuantos, en $($m[0].ent[$lista[0]]): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1)
@@ -1888,7 +1910,7 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
     foreach ($r in @($miembros | Select-Object -First 2)) {
       Fallo "    distinto: $($r.job)/$($r.caso) ($($r.titulo))"
       if ($r.motivo) { Aviso "      $($r.motivo)" }
-      foreach ($f in @($r.fallos)) { Aviso "      $(Format-Fallo $f)" }
+      foreach ($f in @($r.fallos)) { Aviso "      $(Format-Fallo $f -ConRegistro)" }
       foreach ($d in @($r.diferencias | Select-Object -First 3)) {
         if ($d.noGuardado) { Info "      $($d.fichero): original: $($d.original); migrado: $($d.migrado)"; continue }
         Info "      $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"

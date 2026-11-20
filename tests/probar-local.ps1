@@ -4653,7 +4653,7 @@ $Pruebas['m52 (b2) sin causa en 3 casos: un solo grupo (la ruta del registro no 
   $r = Prueba-M50 $e 'solo-avisos'
   Igual 'sale con 2' 2 $r.Codigo
   $g = @(Grupos-M50 $e)
-  Igual 'un grupo con los 3 casos y la firma con causa vacia' '1|fallo|FAILED||3' "$(@($g).Count)|$($g[0].tipo)|$($g[0].firma)|$(@($g[0].casos).Count)"
+  Igual 'un grupo, de fallo, con los 3 casos y la firma con causa vacia' '1|fallo|fallo|FAILED||3' "$(@($g).Count)|$($g[0].tipo)|$($g[0].firma)|$(@($g[0].casos).Count)"
   Comprueba 'la descripcion del grupo (cabecera) lleva el registro del primer caso' ("$($g[0].descripcion)" -cmatch '^3 casos distintos, el migrado acaba FAILED: sin causa en la salida de Maven: mira registros\\mvn-\d+-migrado-cargaJob-caso-01\.log$') "$($g[0].descripcion)"
 }
 
