@@ -551,11 +551,14 @@ function New-ElementoSinCandidatos([int]$Accion) {
 }
 
 # Una tarea comparar-sh por ficha hecha de datos\fichas-sh con acciones comprobadas: el script elige sin IA los ficheros del migrado de cada una;
-# las que no tienen ninguno quedan en falta sin llamada, y una ficha sin ninguna que buscar nace hecha. La huella lleva el commit del migrado.
+# las que no tienen ninguno quedan en falta sin llamada, y una ficha sin ninguna que buscar nace hecha. La huella lleva lo que dice la ficha y, de cada
+# fichero del migrado elegido, su hash de blob en HEAD (Get-ClaveFichero), no el HEAD: un commit que no toca esos ficheros no rehace la comparacion,
+# y si cambia la lista de ficheros o uno de ellos, si. El commit y el momento no entran en la huella: Restore-TareaComparar los pone al de ahora.
 function Get-TareasCompararSh([bool]$ConservarAtascadas, [string]$Base) {
   $head = Get-Head $RepoRoot
   $momento = Get-MomentoRama $Base
   $archivos = $null
+  $blobs = $null
   $tareas = @()
   $dir = Join-Path $Datos 'fichas-sh'
   if (-not (Test-Path -LiteralPath $dir)) { return $tareas }
@@ -564,7 +567,7 @@ function Get-TareasCompararSh([bool]$ConservarAtascadas, [string]$Base) {
     $acciones = @($x.acciones)
     $comparables = @(0..($acciones.Count - 1) | Where-Object { $_ -ge 0 -and $acciones[$_].probado -eq $true })
     if ($comparables.Count -eq 0) { continue }
-    if ($null -eq $archivos) { $archivos = @(Get-ArchivosMigradoSh $RepoRoot) }
+    if ($null -eq $archivos) { $archivos = @(Get-ArchivosMigradoSh $RepoRoot); $blobs = Get-BlobsHead $RepoRoot }
     $indices = @(); $sin = @(); $migrado = @(); $lineas = @(); $todo = @()
     foreach ($i in $comparables) {
       $a = $acciones[$i]
@@ -578,16 +581,18 @@ function Get-TareasCompararSh([bool]$ConservarAtascadas, [string]$Base) {
       $lineas += "   Original: $($x.script):$($a.linea) | cita: $($a.cita)"
       $lineas += '   Busca en: ' + ($cands -join ', ')
     }
+    $texto = $todo -join "`n"
+    $claves = @($migrado | ForEach-Object { Get-ClaveFichero $blobs $RepoRoot $_ })
     $entradas = [pscustomobject]@{
       script = $x.script; migrado = @($migrado); ndatos = $indices.Count; indices = @($indices); sinCandidatos = @($sin); datos = ($lineas -join "`n")
-      huella = (Get-Hash8 (($todo -join "`n") + '|' + $head)); commit = $head.Substring(0, 7); momento = $momento
+      huella = (Get-Hash8 ($texto + '|' + ($claves -join '|'))); commit = $head.Substring(0, 7); momento = $momento
     }
     $t = New-TareaTipo 'comparar-sh' ('comparash-' + $x.id.Substring(3)) $x.id ('datos/comparacion-sh/' + $x.id + '.json') $entradas
     if ($indices.Count -eq 0) {
       $t.estado = 'hecha'
       $t.resultado = [ordered]@{ comparacion = @($sin | ForEach-Object { New-ElementoSinCandidatos $_ }) }
     }
-    $tareas += , (Restore-Tarea $t $ConservarAtascadas)
+    $tareas += , (Restore-TareaComparar $t (Get-Hash8 ($texto + '|' + $head)) $claves $ConservarAtascadas)
   }
   return $tareas
 }

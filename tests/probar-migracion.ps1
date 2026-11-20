@@ -6773,6 +6773,157 @@ $Pruebas['m43 (h) comparar: si cambia la lista de ficheros del migrado de una fi
   Igual 'y la tercera vez no llama' 4 (M43-Llamadas $e).Count
 }
 
+# ============== M44: UN COMMIT QUE NO TOCA LO QUE SE MIRO NO REPITE COMPARAR-SH ==============
+# Como M43 con las clases: la huella de la comparacion de un .sh es lo que dice su ficha mas el contenido (hash de blob en HEAD) de los
+# ficheros del migrado que se le dan, no el HEAD. Una tarea guardada con la huella de antes (ficha y HEAD) vale si el HEAD es el mismo.
+
+# Una corrida hasta comparar con dos scripts, cada uno con su fichero del migrado: recibos.sh (application.yml) y arranque (application-cuotas.yml).
+function M44-Corrida([string]$Nombre) {
+  $e = Escenario-Pasada $Nombre ([ordered]@{ 'bin/recibos.sh' = $FormaB; 'bin/arranque' = $ScriptCuotas })
+  Escribe $e.Migrado 'src/main/resources/application-cuotas.yml' "spring:`n  profiles: cargar_cuotas`n"
+  [void](GitEn $e.Migrado @('add', '--', 'src/main/resources/application-cuotas.yml'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'perfil de cuotas'))
+  return [pscustomobject]@{ E = $e; R = (Migra $e (Basicos $e)) }
+}
+
+function M44-Llamadas($E) { return @(Llamadas-De (Llamadas $E.Wt) 'comparash-') }
+
+function M44-Tarea-De($E, [string]$Script) { return @(Tareas $E 'comparar-sh' | Where-Object { $_.entradas.script -ceq $Script })[0] }
+
+# Lo que lleva la huella de una comparar-sh de la ficha: una linea por accion comprobada de su ficha, con el mismo texto que usa lanzadores.ps1.
+function M44-Todo($E, $T) {
+  $f = Lee-Json (Get-Ruta $E.Out ('datos/fichas-sh/' + $T.ficha + '.json'))
+  return ((@($f.acciones | Where-Object { $_.probado -eq $true } | ForEach-Object { "$($_.que)|$($_.detalle)|$($_.linea)|$($_.cita)" })) -join "`n")
+}
+
+# La huella que le toca a una comparar-sh: la ficha y, de cada fichero del migrado, su blob en el HEAD del worktree.
+function M44-Huella($E, $T) {
+  $partes = @($T.entradas.migrado | ForEach-Object { $_ + '=' + (GitEn $E.Wt @('rev-parse', "HEAD:$_")) })
+  return (Hash8-M43 ((M44-Todo $E $T) + '|' + ($partes -join '|')))
+}
+
+# Deja las tareas de comparar-sh como las dejo la version de antes de M44: la huella era Hash8(ficha | HEAD). Devuelve esas huellas.
+function M44-Huellas-Viejas($E) {
+  $head = GitEn $E.Wt @('rev-parse', 'HEAD')
+  $h = @{}
+  foreach ($t in @(Tareas $E 'comparar-sh')) {
+    $t.entradas.huella = Hash8-M43 ((M44-Todo $E $t) + '|' + $head)
+    $h[$t.id] = $t.entradas.huella
+    Guarda-Json (Get-Ruta $E.Out ('datos/tareas/' + $t.id + '.json')) $t
+  }
+  return $h
+}
+
+$Pruebas['m44 (a) comparar-sh: un commit que solo cambia un fichero de src/test no repite ninguna comparacion: 0 llamadas nuevas, y las tareas llevan la huella del contenido y el commit de ahora'] = {
+  $c = M44-Corrida 'm44-a'
+  $e = $c.E
+  Igual 'la primera sale con 0' 0 $c.R.Codigo
+  Igual 'la primera vez, una llamada de comparar-sh por script' 2 (M44-Llamadas $e).Count
+  $t0 = Tareas $e 'comparar-sh'
+  Igual 'dos tareas, hechas' '2|2' "$($t0.Count)|$(Cuenta-Estado $t0 'hecha')"
+  M43-Commit $e 'src/test/java/com/acme/life/CargaReaderTest.java' "package com.acme.life;`n`nclass CargaReaderTest {`n}`n"
+  $r = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'ninguna llamada nueva de comparar-sh' 2 (M44-Llamadas $e).Count
+  $t1 = Tareas $e 'comparar-sh'
+  Igual 'las tareas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  Igual 'la huella no ha cambiado' ((@($t0 | ForEach-Object { $_.entradas.huella })) -join ',') ((@($t1 | ForEach-Object { $_.entradas.huella })) -join ',')
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M44-Huella $e $_) })
+  Igual 'y es Hash8(ficha | ruta=blob de cada fichero del migrado)' 0 $mal.Count
+  Igual 'el commit que ensenan es el HEAD de ahora' $t1.Count @($t1 | Where-Object { $_.entradas.commit -ceq (Head-Corto $e.Wt) }).Count
+  $r = Migra $e (Basicos $e)
+  Igual 'y una tercera tampoco llama' 2 (M44-Llamadas $e).Count
+}
+
+$Pruebas['m44 (b) comparar-sh: un commit que cambia un fichero que mira un solo script rehace solo esa comparacion, con una llamada'] = {
+  $c = M44-Corrida 'm44-b'
+  $e = $c.E
+  Igual 'la primera vez, dos llamadas' 2 (M44-Llamadas $e).Count
+  $t0 = Tareas $e 'comparar-sh'
+  $cuotas = M44-Tarea-De $e 'bin/arranque'
+  Igual 'la de arranque mira el yml de cuotas' 'src/main/resources/application-cuotas.yml' (@($cuotas.entradas.migrado) -join ',')
+  M43-Commit $e 'src/main/resources/application-cuotas.yml' ((Lee $e.Wt 'src/main/resources/application-cuotas.yml') + "  otro: 1`n")
+  $r = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  $ll = @(M44-Llamadas $e)
+  Igual 'una sola llamada mas' 3 $ll.Count
+  Igual 'y es la de arranque: dos llamadas, y una la otra' $true (@($ll | Where-Object { $_.id -ceq $cuotas.id }).Count -eq 2 -and @($ll | Where-Object { $_.id -cne $cuotas.id }).Count -eq 1)
+  $t1 = Tareas $e 'comparar-sh'
+  Igual 'todas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  $viejas = @{}
+  foreach ($t in $t0) { $viejas[$t.id] = $t.entradas.huella }
+  $distintas = @($t1 | Where-Object { $_.entradas.huella -cne $viejas[$_.id] } | ForEach-Object { $_.entradas.script })
+  Igual 'solo cambia la huella de arranque' 'bin/arranque' ($distintas -join ',')
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M44-Huella $e $_) })
+  Igual 'y todas llevan la huella del contenido de ahora' 0 $mal.Count
+}
+
+$Pruebas['m44 (c) comparar-sh: tareas guardadas con la huella de antes (ficha y HEAD) y el mismo HEAD: ninguna llamada, y quedan con la huella nueva'] = {
+  $c = M44-Corrida 'm44-c'
+  $e = $c.E
+  Igual 'la primera vez, dos llamadas' 2 (M44-Llamadas $e).Count
+  $viejas = M44-Huellas-Viejas $e
+  $r = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'ninguna llamada nueva de comparar-sh' 2 (M44-Llamadas $e).Count
+  $t1 = Tareas $e 'comparar-sh'
+  Igual 'las tareas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  Igual 'ya no llevan la huella vieja' 0 @($t1 | Where-Object { $_.entradas.huella -ceq $viejas[$_.id] }).Count
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M44-Huella $e $_) })
+  Igual 'sino la del contenido' 0 $mal.Count
+  $r = Migra $e (Basicos $e)
+  Igual 'y una tercera tampoco llama' 2 (M44-Llamadas $e).Count
+}
+
+$Pruebas['m44 (d) comparar-sh: tareas guardadas con la huella de antes y otro HEAD: se rehacen todas; el puente no da por buena una comparacion de otro codigo'] = {
+  $c = M44-Corrida 'm44-d'
+  $e = $c.E
+  Igual 'la primera vez, dos llamadas' 2 (M44-Llamadas $e).Count
+  $viejas = M44-Huellas-Viejas $e
+  M43-Commit $e 'src/test/java/com/acme/life/CargaReaderTest.java' "package com.acme.life;`n`nclass CargaReaderTest {`n}`n"
+  $r = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'se vuelven a llamar las dos' 4 (M44-Llamadas $e).Count
+  $t1 = Tareas $e 'comparar-sh'
+  Igual 'quedan hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M44-Huella $e $_) })
+  Igual 'con la huella del contenido' 0 $mal.Count
+}
+
+$Pruebas['m44 (e) comparar-sh: si cambia la lista de ficheros candidatos de un script (un fichero nuevo con su palabra), cambia su huella y se rehace solo esa comparacion'] = {
+  $c = M44-Corrida 'm44-e'
+  $e = $c.E
+  Igual 'la primera vez, dos llamadas' 2 (M44-Llamadas $e).Count
+  $cuotas = M44-Tarea-De $e 'bin/arranque'
+  M43-Commit $e 'src/main/resources/application-cuotas2.yml' "spring:`n  profiles: cargar_cuotas`n"
+  $r = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  $ll = @(M44-Llamadas $e)
+  Igual 'una sola llamada mas' 3 $ll.Count
+  Igual 'la de arranque: dos llamadas, y una la otra' $true (@($ll | Where-Object { $_.id -ceq $cuotas.id }).Count -eq 2 -and @($ll | Where-Object { $_.id -cne $cuotas.id }).Count -eq 1)
+  Igual 'que ahora mira los dos ficheros' 'src/main/resources/application-cuotas.yml,src/main/resources/application-cuotas2.yml' (@((M44-Tarea-De $e 'bin/arranque').entradas.migrado) -join ',')
+  $r = Migra $e (Basicos $e)
+  Igual 'y la tercera vez no llama' 3 (M44-Llamadas $e).Count
+}
+
+$Pruebas['m44 (f) comparar-sh: Get-TareasCompararSh pide los blobs de HEAD una sola vez por lanzamiento, no una por script'] = {
+  $e = Migrado-Sh 'm44-f'
+  $codigo = $script:PreludioComparaSh + "`n" + @'
+$script:PedidosBlobs = 0
+$original = ${function:Get-BlobsHead}
+function Get-BlobsHead([string]$Dir) { $script:PedidosBlobs++; return (& $original $Dir) }
+$t = @(Get-TareasCompararSh $false $Base)
+'N=' + $t.Count
+'BLOBS=' + $script:PedidosBlobs
+'FIN'
+'@
+  $r = En-Biblioteca 'm44-blobs' $codigo.Replace('{{DIR}}', (Join-Path $Dir 'm44-blobs-datos')).Replace('{{MIG}}', $e.Migrado)
+  Igual 'el script de prueba sale con 0' 0 $r.Codigo
+  $v = Claves-De $r.Salida
+  Igual 'dos tareas (cargas.ksh y recibos.sh)' '2' $v['N']
+  Igual 'una sola llamada a Get-BlobsHead' '1' $v['BLOBS']
+}
+
 # ============================ M41: NO SE PIERDE TRABAJO EN LA CARPETA DE RESCATE ============================
 # Al arrancar, lo que haya sin commit en <Migrado>-rescate no se borra nunca: el de un intento cortado (marca .rescate/intento-en-curso.json
 # con el HEAD) va a un git stash y lo demas para el arranque sin tocar nada. Una rama rescate/<rama>-<fecha> sin unir impide crear otra

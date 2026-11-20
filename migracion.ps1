@@ -59,7 +59,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 no hay llamada y sus datos salen 'sin-pieza'. Es una lectura sin cambiar nada. Se rehace solo si cambian los
                 ficheros del migrado que mira (o cuales son), no por cualquier commit nuevo. Con lanzadores hay ademas una tarea por script: la IA busca en el migrado lo que hacia cada accion
                 del .sh (los ficheros donde buscar los elige el script) y dice igual, distinto, falta o no lo se, con citas de los dos
-                lados: datos\comparacion-sh\<id>.json. Las acciones que no se parecen a nada del migrado salen en falta sin llamada.
+                lados: datos\comparacion-sh\<id>.json. Las acciones que no se parecen a nada del migrado salen en falta sin llamada. La de un script se
+                rehace con la misma regla: solo si cambian los ficheros del migrado que mira (o cuales son), no por cualquier commit nuevo.
     practicas   solo con -Practicas, despues de la correccion (y de comparar) y antes de prueba-local: pasa a Lombok los getters y setters
                 escritos a mano (los de datos\practicas-despues.json, o de practicas-antes.json), una tarea por fichero, y solo se
                 queda con el cambio de un fichero si lo compilado queda igual que antes (arreglo-practicas.ps1): un commit por

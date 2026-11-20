@@ -1352,6 +1352,27 @@ function Get-ClaveFichero($Blobs, [string]$Dir, [string]$Rel) {
   return "$Rel=ausente"
 }
 
+# El final comun de las tareas de comparar (comparar-pieza y comparar-sh), con $T ya montada: su huella lleva el hash de blob de cada fichero del
+# migrado ($Claves, de Get-ClaveFichero) y su commit y su momento son los de ahora. Devuelve la tarea que queda (Restore-Tarea). La tarea guardada
+# se reutiliza si esta hecha con esa huella; el commit y el momento no entran en ella, asi que de una reutilizada se ponen al de ahora.
+# Puente de M43 y M44: hasta entonces la huella era Hash8(texto | HEAD) y $HuellaVieja es esa, con el HEAD de ahora. Una tarea guardada con ella,
+# con los mismos ficheros del migrado y todos en HEAD, es de este mismo codigo: se guarda con la huella nueva y Restore-Tarea la reutiliza. Quitalo
+# cuando ningun batch tenga tareas de comparar de antes de M44 (con otro HEAD no vale: no se sabe si los ficheros eran los mismos).
+function Restore-TareaComparar($T, [string]$HuellaVieja, $Claves, [bool]$ConservarAtascadas) {
+  $previa = Get-TareaGuardada $T.id
+  if ($previa -and $previa.entradas.huella -ceq $HuellaVieja -and (@($previa.entradas.migrado) -join '|') -ceq (@($T.entradas.migrado) -join '|') -and @($Claves | Where-Object { $_ -match '=(fuera-|ausente)' }).Count -eq 0) {
+    $previa.entradas.huella = $T.entradas.huella
+    Save-Tarea $previa
+  }
+  $r = Restore-Tarea $T $ConservarAtascadas
+  if ($r.entradas.commit -cne $T.entradas.commit -or $r.entradas.momento -cne $T.entradas.momento) {
+    $r.entradas.commit = $T.entradas.commit
+    $r.entradas.momento = $T.entradas.momento
+    Save-Tarea $r
+  }
+  return $r
+}
+
 # Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea, con el
 # commit del worktree con el que se eligieron y el momento: despues-de-corregir si hay algun commit rescate( entre <Base> y HEAD (lo
 # dice git, no el orden de las fases), antes-de-corregir si no. Sin ficheros no hay llamada: la tarea nace hecha, con todos sus datos
@@ -1386,21 +1407,7 @@ function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
       $t.estado = 'hecha'
       $t.resultado = [ordered]@{ comparacion = @(0..($lista.Count - 1) | ForEach-Object { [ordered]@{ dato = $_; estado = 'sin-pieza'; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false } }) }
     }
-    # Puente de M43: hasta M43 la huella era Hash8(texto | HEAD). Una tarea guardada con esa huella del HEAD de ahora, con los mismos ficheros del migrado
-    # y todos en HEAD, es de este mismo codigo: se guarda con la huella nueva y Restore-Tarea la reutiliza. Quitalo cuando ningun batch tenga tareas de
-    # comparar de antes de M43 (con otro HEAD no vale: no se sabe si los ficheros eran los mismos).
-    $previa = Get-TareaGuardada $t.id
-    if ($previa -and $previa.entradas.huella -ceq (Get-Hash8 ($texto + '|' + $head)) -and (@($previa.entradas.migrado) -join '|') -ceq ($migrado -join '|') -and @($claves | Where-Object { $_ -match '=(fuera-|ausente)' }).Count -eq 0) {
-      $previa.entradas.huella = $entradas.huella
-      Save-Tarea $previa
-    }
-    $r = Restore-Tarea $t $ConservarAtascadas
-    if ($r.entradas.commit -cne $entradas.commit -or $r.entradas.momento -cne $momento) {
-      $r.entradas.commit = $entradas.commit
-      $r.entradas.momento = $momento
-      Save-Tarea $r
-    }
-    $tareas += , $r
+    $tareas += , (Restore-TareaComparar $t (Get-Hash8 ($texto + '|' + $head)) $claves $ConservarAtascadas)
   }
   return $tareas
 }
