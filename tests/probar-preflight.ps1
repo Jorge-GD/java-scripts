@@ -35,12 +35,12 @@ $Inst = Join-Path $Dir 'instalacion'
 function Nueva-Instalacion {
   if (Test-Path -LiteralPath $Inst) { return }
   [void](New-Item -ItemType Directory -Path $Inst -Force)
-  foreach ($f in @('preflight.ps1', 'comun.ps1', 'tareas.ps1', 'analisis.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'rescate.ps1', 'sonar-reglas.ps1', 'migracion.ps1', 'informe.ps1', 'lanzadores.ps1')) {
+  foreach ($f in @('preflight.ps1', 'comun.ps1', 'tareas.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'rescate.ps1', 'sonar-reglas.ps1', 'migracion.ps1', 'informe.ps1', 'lanzadores.ps1')) {
     $de = Join-Path $origen $f
     if ($f -eq 'preflight.ps1') { $de = $Script }
     if (Test-Path -LiteralPath $de) { Copy-Item -LiteralPath $de -Destination (Join-Path $Inst $f) }
   }
-  foreach ($d in @('tareas', 'preflight', 'analisis', 'tests', 'informe')) {
+  foreach ($d in @('tareas', 'preflight', 'tests', 'informe')) {
     $de = Join-Path $origen $d
     if (Test-Path -LiteralPath $de) { Copy-Item -LiteralPath $de -Destination (Join-Path $Inst $d) -Recurse }
   }
@@ -1431,31 +1431,19 @@ $Pruebas['38 lanzar Copilot, bloque 2: solo el banco probar'] = {
   Igual 'fallan: ninguna' 'ninguna' (Valor-De $r 'fallan')
 }
 
-$Pruebas['39 bloque 6: SpotBugs y PMD se pueden descargar; si no, es un aviso y el preflight sigue'] = {
-  $fal = Join-Path $falsos 'analisis-mvn.ps1'
-  # a) el Maven falso "descarga" y analiza
-  $e = Nuevo-Escenario 'analisis-bien' @{ MvnExe = $fal }
-  $r = Pf $e (Todos $e @('-Solo', '6'))
-  Igual 'a) sale con 0' 0 $r.Codigo
-  Comprueba 'a) spotbugs y pmd: si' ((Valor-De $r 'spotbugs y pmd') -match '^si \| \d+ s$') ((Bloque-De $r '6') -join ' / ')
-  Igual 'a) sin ninguna linea de aviso' 0 (Cuenta-Lineas $r '^(aviso|detalle): ')
-  foreach ($p in @('compila y pasa el test', 'jacoco', 'openrewrite')) { Comprueba "a) $p sigue en si" ((Valor-De $r $p) -match '^si \| \d+ s$') ((Bloque-De $r '6') -join ' / ') }
-  Igual 'a) sin fallos' 'ninguno' (Valor-De $r 'bloques con fallo')
-  # b) el plugin no se descarga: aviso, no error, y el bloque no cuenta como fallo
-  $e2 = Nuevo-Escenario 'analisis-aviso' @{ MvnExe = $fal }
-  $texto = 'Plugin com.github.spotbugs:spotbugs-maven-plugin:4.10.5.0 or one of its dependencies could not be resolved: Could not transfer artifact com.github.spotbugs:spotbugs-maven-plugin:pom:4.10.5.0 from/to zorba-nexus (https://nexus.zorba.local/repo): Connect to nexus.zorba.local failed'
-  $r2 = Pf $e2 (Todos $e2 @('-Solo', '6')) '' @{ RESCATE_ANALISIS_ERROR = $texto }
-  Igual 'b) sale con 0' 0 $r2.Codigo
-  Comprueba 'b) spotbugs y pmd: no' ((Valor-De $r2 'spotbugs y pmd') -match '^no \| \d+ s$') ((Bloque-De $r2 '6') -join ' / ')
-  Comprueba 'b) el aviso dice el motivo y que el paso sonar sigue sin ellos' ((Valor-De $r2 'aviso') -ceq 'no se descarga el plugin; el paso sonar funcionara sin ellos') (Valor-De $r2 'aviso')
-  Comprueba 'b) el detalle es el error de Maven, ya filtrado' ((Valor-De $r2 'detalle') -match 'could not be resolved' -and (Valor-De $r2 'detalle') -notmatch '(?i)zorba|nexus') (Valor-De $r2 'detalle')
-  Igual 'b) ninguna linea error:' 0 (Cuenta-Lineas $r2 '^error: ')
-  foreach ($p in @('compila y pasa el test', 'jacoco', 'openrewrite')) { Comprueba "b) $p sigue en si" ((Valor-De $r2 $p) -match '^si \| \d+ s$') ((Bloque-De $r2 '6') -join ' / ') }
-  Igual 'b) sin fallos' 'ninguno' (Valor-De $r2 'bloques con fallo')
-  Sin-Fugas $r2 'b)'
-  # c) con -SinMaven no se prueba nada de esto
-  $r3 = Pf $e2 (Todos $e2 @('-Solo', '6', '-SinMaven'))
-  Igual 'c) -SinMaven: ni rastro de spotbugs y pmd' 0 (Cuenta-Lineas $r3 '^(spotbugs y pmd|aviso|detalle): ')
+$Pruebas['m49 bloque 6: el resultado no tiene la linea del analisis (spotbugs y pmd) ni se llama a Maven para eso'] = {
+  $e = Nuevo-Escenario 'm49-sin-analisis' @{ MvnExe = (Join-Path $falsos 'm49-mvn.ps1') }
+  $llamadas = Join-Path $e.Raiz 'm49-mvn-llamadas.txt'
+  $r = Pf $e (Todos $e @('-Solo', '6')) '' @{ M49_LLAMADAS = $llamadas }
+  Igual 'sale con 0' 0 $r.Codigo
+  foreach ($p in @('compila y pasa el test', 'jacoco', 'openrewrite')) { Comprueba "$p sigue en si" ((Valor-De $r $p) -match '^si \| \d+ s$') ((Bloque-De $r '6') -join ' / ') }
+  Igual 'ninguna linea spotbugs y pmd, ni aviso: ni detalle:' 0 (Cuenta-Lineas $r '^(spotbugs y pmd|aviso|detalle): ')
+  Igual 'ni el resultado ni la consola nombran spotbugs o pmd' 0 ((Cuenta-Lineas $r '(?i)spotbugs|\bpmd\b') + @($r.Salida -split "`n" | Where-Object { $_ -match '(?i)spotbugs|\bpmd\b' }).Count)
+  $ll = @()
+  if (Test-Path -LiteralPath $llamadas) { $ll = @([System.IO.File]::ReadAllLines($llamadas) | Where-Object { $_ }) }
+  Comprueba 'Maven se llamo (compilar, JaCoCo y OpenRewrite)' ($ll.Count -ge 3) ($ll -join ' // ')
+  Igual 'ninguna llamada a Maven lleva spotbugs, pmd, fb-contrib ni el plugin que copiaba su jar' 0 @($ll | Where-Object { $_ -match '(?i)spotbugs|pmd|fb-contrib|maven-dependency-plugin' }).Count
+  Igual 'sin fallos' 'ninguno' (Valor-De $r 'bloques con fallo')
 }
 
 # ===================== M20d: EL DIAGNOSTICO VA SOBRE UN CLON DEL MIGRADO =====================

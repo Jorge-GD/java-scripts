@@ -295,8 +295,3 @@ Lo de la IA queda en `migracion-<batch>\prueba-local\`: `arnes\`, `casos\`, `tar
 
 Banco de pruebas: `tests\probar-local.ps1`, con un Copilot y un Maven de mentira. Solo necesita `git`.
 
-## analisis.ps1
-
-Mide las buenas prácticas de un repo Java con analizadores reales y sin servidor: SpotBugs con fb-contrib (los mismos motores que salen en Sonar) y PMD con un ruleset corto (`analisis\pmd-sonar.xml`, cada regla con la de Sonar a la que equivale). Se lanzan por coordenadas de Maven, sin tocar el pom del repo. Solo son funciones: el preflight comprueba que se pueden descargar y el paso `sonar` las usará para comprobar que un arreglo no crea incidencias nuevas.
-
-Banco de pruebas: `tests\probar-analisis.ps1`, con un Maven de mentira y XML de un análisis real.

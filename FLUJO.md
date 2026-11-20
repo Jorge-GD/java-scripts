@@ -57,7 +57,7 @@ Por eso, de cero va en dos fases:
 .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
 ```
 
-Comprueba que PowerShell, Copilot, Maven, SpotBugs y PMD funcionan en tu equipo. Si algo falla, pega `preflight-resultado.txt` en el chat. Quita rutas, usuario, equipo y correos, pero léelo antes de pegarlo.
+Comprueba que PowerShell, Copilot y Maven funcionan en tu equipo. Si algo falla, pega `preflight-resultado.txt` en el chat. Quita rutas, usuario, equipo y correos, pero léelo antes de pegarlo.
 
 Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primera vez `migracion.ps1` te pregunta con un menú.
 
@@ -79,7 +79,9 @@ Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primer
 | `2-problemas.html` | Los problemas del migrado: estructura, hexagonal, SFTP, configuración, Javadoc, cobertura | Tú |
 | `3-original-vs-migrado.html` | Caso a caso, si el migrado da lo mismo que el original | Tú |
 | `4-correcciones.html` | Qué se ha corregido y qué queda | Tú |
-| `5-buenas-practicas.html` | Las buenas prácticas del migrado (javac, PMD, SpotBugs y Lombok), qué hacer con cada incidencia y cuáles ya están arregladas | Tú |
+| `5-buenas-practicas.html` | Las buenas prácticas del migrado (javac, Lombok y el texto que cambia en Java 21), qué hacer con cada incidencia y cuáles ya están arregladas | Tú |
+
+La página 5 mide solo javac (las APIs marcadas «for removal»), las comprobaciones de Lombok y el texto que cambia en Java 21 (juego de caracteres y formatos de fecha y número). PMD y SpotBugs se quitaron el 20-11: en tu equipo acababan siempre en «no se pudo medir» y costaban dos Maven por medida. Lo que se guardó antes con entradas de PMD o SpotBugs no se enseña.
 
 Carpetas que verás aparecer:
 

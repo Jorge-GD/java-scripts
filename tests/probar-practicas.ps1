@@ -1,8 +1,7 @@
 <#
 probar-practicas.ps1 - Banco de pruebas de practicas.ps1 (BP-0: las buenas practicas dentro del diagnostico, sin IA) y de arreglo-practicas.ps1
 (BP-4: pasar a Lombok los getters y setters escritos a mano, con el Maven de mentira bp4-mvn.ps1 y el Copilot de mentira bp4-copilot.ps1).
-No necesita Maven ni Java: usa el Maven de mentira tests/falsos/bp0-mvn.ps1 (el javac sale de un fichero con lineas como las de Maven; SpotBugs y
-PMD, de los XML reales de tests/datos/analisis) y el javap de mentira tests/falsos/bp0-javap.ps1, cuyos .class de mentira llevan el texto que dio
+No necesita Maven ni Java: usa el Maven de mentira tests/falsos/bp0-mvn.ps1 (el javac sale de un fichero con lineas como las de Maven) y el javap de mentira tests/falsos/bp0-javap.ps1, cuyos .class de mentira llevan el texto que dio
 un javap real (JDK 21, -c -l -p) sobre dos clases de juguete. Nunca llama al Maven ni al JDK reales.
 Vale para Windows PowerShell 5.1 y para PowerShell 7. Solo ASCII a proposito.
 
@@ -21,11 +20,10 @@ $ErrorActionPreference = 'Stop'
 $aqui = Split-Path -Parent $MyInvocation.MyCommand.Path
 $raiz = Split-Path -Parent $aqui
 $falsos = Join-Path $aqui 'falsos'
-$datos = Join-Path (Join-Path $aqui 'datos') 'analisis'
+$datos = Join-Path (Join-Path $aqui 'datos') 'practicas'
 . (Join-Path $aqui 'comun-banco.ps1')
 . (Join-Path $raiz 'comun.ps1')
 . (Join-Path $raiz 'tareas.ps1')
-. (Join-Path $raiz 'analisis.ps1')
 . (Join-Path $raiz 'practicas.ps1')
 . (Join-Path $raiz 'huella.ps1')
 . (Join-Path $raiz 'arreglo-practicas.ps1')
@@ -265,7 +263,7 @@ function Escribe-Salida($E, [string[]]$Lineas) {
   return (Join-Path $E.Raiz 'salida-javac.txt')
 }
 
-# Un escenario: el migrado (un repo git con las dos clases de analisis, mas Remesa y Cliente), la referencia (con o sin Lombok), los .class de
+# Un escenario: el migrado (un repo git con las dos clases del juguete, mas Remesa y Cliente), la referencia (con o sin Lombok), los .class de
 # mentira que 'compila' el Maven falso (en clases/) y las carpetas de datos y registros.
 function Nuevo-Escenario([string]$Nombre, [bool]$RefLombok = $false) {
   $r = Join-Path $Dir $Nombre
@@ -338,9 +336,6 @@ function Hallazgo([string]$Sev, [string]$Fichero, [int]$Linea) {
 # ================================ PRUEBAS ================================
 $Pruebas = [ordered]@{}
 
-# Con 25 s de tope total quedan menos de 30 s para PMD y SpotBugs: no se miden (no medido (tope)) y la prueba no gasta sus 4 llamadas a Maven.
-$Rapido = @{ SegundosPracticas = 25 }
-
 $AvisoTexto = 'viejo() in com.acme.demo.Viejo has been deprecated'
 $FichUtil = 'src/main/java/com/acme/demo/Util.java'
 
@@ -380,7 +375,7 @@ $Pruebas['1 a) javac: un aviso for removal de Spring y otro de java.lang dan dos
   Escribe $E.Repo 'target/classes/viejo/Viejo.class' 'x'
   Escribe $E.Repo 'target/maven-status/viejo.lst' 'x'
   Escribe $E.Repo 'target/reports/queda.txt' 'x'
-  $m = Mide $E @{ BP0_JAVAC_SALIDA = $salida } $Rapido
+  $m = Mide $E @{ BP0_JAVAC_SALIDA = $salida }
   $j = $m.Json
   Comprueba 'deja datos\practicas-antes.json' ($null -ne $j)
   $d = Det $j 'javac'
@@ -404,7 +399,7 @@ $Pruebas['1 a) javac: un aviso for removal de Spring y otro de java.lang dan dos
   Igual 'java.lang: linea' 9 $ja[0].linea
   Igual 'java.lang: sonar S5738' 'S5738' $ja[0].sonar
   $ll = Llamadas-De $E.Llamadas
-  Igual 'Maven se llama una vez (PMD y SpotBugs no caben en el tope)' 1 $ll.Count
+  Igual 'Maven se llama una vez (javac)' 1 $ll.Count
   $c = "$($ll[0])".Split('|')
   Igual 'la llamada: en la carpeta del migrado' $E.Repo $c[0]
   Igual 'la llamada: mvn -B compile, sin -q ni clean' '-B compile' $c[1]
@@ -420,18 +415,18 @@ $Pruebas['2 a) javac: con 100 avisos justos corte es true; con 99, false'] = {
   $l = @()
   for ($i = 1; $i -le 99; $i++) { $l += (Aviso-Javac $FichConfig $i $TextoSpring) }
   $l += (Aviso-Javac $FichUtil 150 $AvisoTexto)
-  $m = Mide $E @{ BP0_JAVAC_SALIDA = (Escribe-Salida $E $l) } $Rapido
+  $m = Mide $E @{ BP0_JAVAC_SALIDA = (Escribe-Salida $E $l) }
   $d = Det $m.Json 'javac'
   Igual '100 avisos de .java (99 for removal y 1 deprecated): corte' $true $d.corte
   Igual 'cada for removal distinto es una incidencia: 99' 99 (Inc $m.Json 'javac').Count
-  $m = Mide $E @{ BP0_JAVAC_SALIDA = (Escribe-Salida $E @($l | Select-Object -First 99)) } $Rapido
+  $m = Mide $E @{ BP0_JAVAC_SALIDA = (Escribe-Salida $E @($l | Select-Object -First 99)) }
   Igual '99 avisos: sin corte' $false (Det $m.Json 'javac').corte
   Igual '99 avisos: 99 incidencias' 99 (Inc $m.Json 'javac').Count
 }
 
 $Pruebas['3 a) javac: si no compila, no se pudo medir con la primera linea [ERROR] y los demas detectores siguen'] = {
   $E = Nuevo-Escenario 'a3' $true
-  $m = Mide $E @{ BP0_JAVAC_ERROR = 'cannot find symbol: class Falta' } $Rapido
+  $m = Mide $E @{ BP0_JAVAC_ERROR = 'cannot find symbol: class Falta' }
   $j = $m.Json
   Comprueba 'el JSON se escribe igual' ($null -ne $j)
   $d = Det $j 'javac'
@@ -449,7 +444,7 @@ $Pruebas['3 a) javac: si no compila, no se pudo medir con la primera linea [ERRO
 
 $Pruebas['4 b) lombok-a-mano: con una referencia con Lombok sale la clase con getters y setters escritos y no la que los tiene en el .class'] = {
   $E = Nuevo-Escenario 'b1' $true
-  $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido
+  $m = Mide $E @{ BP0_CLASES = $E.Clases }
   $j = $m.Json
   $d = Det $j 'lombok-a-mano'
   Igual 'estado' 'ok' $d.estado
@@ -471,7 +466,7 @@ $Pruebas['4 b) lombok-a-mano: con una referencia con Lombok sale la clase con ge
 
 $Pruebas['5 b) lombok-a-mano: si la referencia no usa Lombok, no aplica con su motivo y javap no se llama'] = {
   $E = Nuevo-Escenario 'b2'
-  $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido
+  $m = Mide $E @{ BP0_CLASES = $E.Clases }
   $d = Det $m.Json 'lombok-a-mano'
   Igual 'sin Lombok en la referencia: no aplica' 'no aplica' $d.estado
   Comprueba 'el motivo lo dice' ("$($d.motivo)" -like '*no usa Lombok*') "$($d.motivo)"
@@ -481,16 +476,16 @@ $Pruebas['5 b) lombok-a-mano: si la referencia no usa Lombok, no aplica con su m
   # pom con Lombok pero ningun import: tampoco aplica
   Escribe $E.Ref 'pom.xml' "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme</groupId><artifactId>batch-ejemplo</artifactId><version>1</version><dependencies><dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId></dependency></dependencies></project>`n"
   Escribe $E.Ref 'src/main/java/com/acme/ejemplo/Ref.java' "package com.acme.ejemplo;`npublic class Ref { }`n"
-  $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido 'despues'
+  $m = Mide $E @{ BP0_CLASES = $E.Clases } @{} 'despues'
   Igual 'pom con Lombok y ningun import lombok.: no aplica' 'no aplica' (Det $m.Json 'lombok-a-mano').estado
   # import de Lombok pero sin la dependencia en el pom
   Escribe $E.Ref 'pom.xml' "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme</groupId><artifactId>batch-ejemplo</artifactId><version>1</version></project>`n"
   Escribe $E.Ref 'src/main/java/com/acme/ejemplo/Ref.java' "package com.acme.ejemplo;`nimport lombok.Getter;`npublic class Ref { }`n"
-  $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido 'despues'
+  $m = Mide $E @{ BP0_CLASES = $E.Clases } @{} 'despues'
   Igual 'import lombok. y el pom sin org.projectlombok: no aplica' 'no aplica' (Det $m.Json 'lombok-a-mano').estado
   # la carpeta de la referencia no existe
   Remove-Item -LiteralPath $E.Ref -Recurse -Force
-  $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido
+  $m = Mide $E @{ BP0_CLASES = $E.Clases }
   Igual 'sin carpeta de referencia: no aplica' 'no aplica' (Det $m.Json 'lombok-a-mano').estado
   Igual 'sin carpeta de referencia: el JSON lleva el nombre de la carpeta' 'batch-ejemplo' $m.Json.referencia
 }
@@ -498,7 +493,7 @@ $Pruebas['5 b) lombok-a-mano: si la referencia no usa Lombok, no aplica con su m
 $Pruebas['6 b) lombok-a-mano: javap va en lotes de menos de 8.000 caracteres y no se pierde ninguna clase'] = {
   $E = Nuevo-Escenario 'b3' $true
   for ($i = 1; $i -le 100; $i++) { Escribe $E.Raiz ('clases/com/acme/domain/ClaseDeRelleno{0:D3}.class' -f $i) '' }
-  $m = Mide $E @{ BP0_CLASES = $E.Clases } $Rapido
+  $m = Mide $E @{ BP0_CLASES = $E.Clases }
   Igual 'estado' 'ok' (Det $m.Json 'lombok-a-mano').estado
   $jl = Llamadas-De $E.Javap
   Comprueba 'mas de una llamada (no una por clase, ni todas a la vez)' ($jl.Count -ge 2 -and $jl.Count -le 20) "$($jl.Count) llamadas"
@@ -532,7 +527,7 @@ $Pruebas['7 b) javap: sin JAVA_HOME, sin javap o con javap roto, lombok-a-mano n
   $m = Mide $E @{ BP0_CLASES = $E.Clases } @{ SegundosPracticas = 25; JavapExe = (Join-Path $E.Raiz 'javap-que-no-existe-xq') }
   Igual 'JavapExe que no existe: no se pudo medir' 'no se pudo medir' (Det $m.Json 'lombok-a-mano').estado
   Igual 'y javac sigue ok' 'ok' (Det $m.Json 'javac').estado
-  $m = Mide $E @{ BP0_CLASES = $E.Clases; BP0_JAVAP_ERROR = 'Error: javap de mentira roto' } $Rapido
+  $m = Mide $E @{ BP0_CLASES = $E.Clases; BP0_JAVAP_ERROR = 'Error: javap de mentira roto' }
   $d = Det $m.Json 'lombok-a-mano'
   Igual 'javap que sale con error: no se pudo medir' 'no se pudo medir' $d.estado
   Comprueba 'el motivo trae lo que dijo javap' ("$($d.motivo)" -like '*javap de mentira roto*') "$($d.motivo)"
@@ -541,7 +536,7 @@ $Pruebas['7 b) javap: sin JAVA_HOME, sin javap o con javap roto, lombok-a-mano n
 $Pruebas['8 c) lombok-qualifier: sale sin lombok.config y no sale con copyableAnnotations (carpeta o ancestros)'] = {
   $E = Nuevo-Escenario 'c'
   Escribe $E.Repo 'src/main/java/com/acme/demo/Servicio.java' $FuenteServicio
-  $m = Mide $E @{} $Rapido
+  $m = Mide $E @{}
   $d = Det $m.Json 'lombok-qualifier'
   Igual 'estado: ok aunque la referencia no use Lombok (siempre activo)' 'ok' $d.estado
   $q = Qualifier-De $m.Json
@@ -557,78 +552,60 @@ $Pruebas['8 c) lombok-qualifier: sale sin lombok.config y no sale con copyableAn
   Comprueba 'texto de Value' ("$($q[1].texto)" -like 'Lombok no copia @Value al constructor*Falta lombok.copyableAnnotations') "$($q[1].texto)"
   # lombok.config en la carpeta del fichero: Qualifier cubierto, Value no
   Escribe $E.Repo 'src/main/java/com/acme/demo/lombok.config' "# del paquete`nlombok.copyableAnnotations += org.springframework.beans.factory.annotation.Qualifier`n"
-  $q = Qualifier-De (Mide $E @{} $Rapido).Json
+  $q = Qualifier-De (Mide $E @{}).Json
   Igual 'con copyableAnnotations de Qualifier en la carpeta: solo queda @Value' 1 $q.Count
   Igual 'y es la de Value' 13 $q[0].linea
   # uno en una carpeta intermedia (ni la del fichero ni la raiz) tambien cuenta: com/acme cubre a com/acme/demo
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java/com/acme/demo/lombok.config') -Force
   Escribe $E.Repo 'src/main/java/com/acme/lombok.config' "lombok.copyableAnnotations += org.springframework.beans.factory.annotation.Qualifier`n"
-  $q = Qualifier-De (Mide $E @{} $Rapido).Json
+  $q = Qualifier-De (Mide $E @{}).Json
   Igual 'con copyableAnnotations de Qualifier en una carpeta intermedia (com/acme): solo queda @Value' 1 $q.Count
   Igual 'y es la de Value, en la linea del campo' 13 $q[0].linea
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java/com/acme/lombok.config') -Force
   # el de la raiz cubre las dos
   Escribe $E.Repo 'lombok.config' "config.stopBubbling = true`nlombok.copyableAnnotations += org.springframework.beans.factory.annotation.Qualifier`nlombok.copyableAnnotations += org.springframework.beans.factory.annotation.Value`n"
-  Igual 'lombok.config de la raiz del repo con las dos: ninguna incidencia' 0 (Qualifier-De (Mide $E @{} $Rapido).Json).Count
+  Igual 'lombok.config de la raiz del repo con las dos: ninguna incidencia' 0 (Qualifier-De (Mide $E @{}).Json).Count
   # uno de otra carpeta, o de otra anotacion, no cuenta
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'lombok.config') -Force
   Escribe $E.Repo 'src/main/java/com/acme/otro/lombok.config' "lombok.copyableAnnotations += org.springframework.beans.factory.annotation.Qualifier`n"
   Escribe $E.Repo 'src/main/java/com/acme/lombok.config' "lombok.copyableAnnotations += javax.inject.Named`n"
-  Igual 'config de una carpeta hermana o de otra anotacion: siguen las dos' 2 (Qualifier-De (Mide $E @{} $Rapido).Json).Count
+  Igual 'config de una carpeta hermana o de otra anotacion: siguen las dos' 2 (Qualifier-De (Mide $E @{}).Json).Count
   # AllArgsConstructor cuenta tambien los campos que no son final; una clase sin constructor de Lombok, ninguno
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java/com/acme/otro/lombok.config') -Force
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java/com/acme/lombok.config') -Force
   Escribe $E.Repo 'src/main/java/com/acme/demo/Servicio.java' ($FuenteServicio.Replace('@RequiredArgsConstructor', '@AllArgsConstructor'))
-  $q = Qualifier-De (Mide $E @{} $Rapido).Json
+  $q = Qualifier-De (Mide $E @{}).Json
   Igual '@AllArgsConstructor: tambien el campo @Value que no es final' 3 $q.Count
   Escribe $E.Repo 'src/main/java/com/acme/demo/Servicio.java' ($FuenteServicio.Replace('@RequiredArgsConstructor', '@Service'))
-  Igual 'sin @RequiredArgsConstructor ni @AllArgsConstructor: ninguna' 0 (Qualifier-De (Mide $E @{} $Rapido).Json).Count
+  Igual 'sin @RequiredArgsConstructor ni @AllArgsConstructor: ninguna' 0 (Qualifier-De (Mide $E @{}).Json).Count
 }
 
-$Pruebas['9 d) PMD y SpotBugs: claves de Sonar de pmd-sonar.xml, origen spotbugs y queHago paso2, sonar y mano'] = {
+$Pruebas['9 d) queHago: paso2 si el motor dice ese fichero y esa linea, sonar si no (javac) y mano (Lombok); sonar.reglasAqui es 1 (S5738)'] = {
   $E = Nuevo-Escenario 'd' $true
   $tot = 'src/main/java/com/acme/demo/Totales.java'
   $cla = 'src/main/java/com/acme/demo/Clasificador.java'
   # lo que el motor dejaria en .rescate\hallazgos.json: una matriz de objetos con Cat, Sev, Fichero, Linea y Detalle
   $motor = ConvertTo-Json -InputObject @((Hallazgo 'error' $tot 10), (Hallazgo 'warn' $cla 99)) -Depth 4
   Escribe $E.Raiz 'hallazgos.json' $motor
-  $m = Mide $E @{ BP0_CLASES = $E.Clases }
+  $salida = Escribe-Salida $E @((Aviso-Javac $tot 10 $TextoInteger), (Aviso-Javac $cla 12 $TextoInteger))
+  $m = Mide $E @{ BP0_CLASES = $E.Clases; BP0_JAVAC_SALIDA = $salida }
   $j = $m.Json
-  Igual 'pmd: estado' 'ok' (Det $j 'pmd').estado
-  Igual 'spotbugs: estado' 'ok' (Det $j 'spotbugs').estado
-  $pm = Inc $j 'pmd'
-  $sb = Inc $j 'spotbugs'
-  Igual 'PMD: 2 incidencias' 2 $pm.Count
-  Igual 'SpotBugs: 7 incidencias' 7 $sb.Count
-  Igual 'todas de area java21' 9 @($pm + $sb | Where-Object { $_.area -ceq 'java21' }).Count
-  $c = @($pm | Where-Object { $_.regla -ceq 'CognitiveComplexity' })
-  Igual 'CognitiveComplexity: sonar (de pmd-sonar.xml)' 'S3776' $c[0].sonar
-  Igual 'CognitiveComplexity: origen' 'sonar' $c[0].origen
-  Igual 'CognitiveComplexity: fichero y linea' "$cla|12" "$($c[0].fichero)|$($c[0].linea)"
-  Igual 'CognitiveComplexity: queHago (otra linea en el motor: no es paso2)' 'sonar' $c[0].queHago
-  Comprueba 'CognitiveComplexity: el texto es el de PMD' ("$($c[0].texto)" -like "The method 'clasificar(*cognitive complexity of 20*") "$($c[0].texto)"
-  $u = @($pm | Where-Object { $_.regla -ceq 'UnusedPrivateField' })
-  Igual 'UnusedPrivateField: sonar' 'S1068' $u[0].sonar
-  Igual 'todo PMD lleva origen sonar' 2 @($pm | Where-Object { $_.origen -ceq 'sonar' -and $_.herramienta -ceq 'pmd' }).Count
-  Igual 'todo SpotBugs lleva origen spotbugs' 7 @($sb | Where-Object { $_.origen -ceq 'spotbugs' -and $_.herramienta -ceq 'spotbugs' }).Count
-  Igual 'SpotBugs: sin clave de Sonar' 0 @($sb | Where-Object { $_.sonar -cne '' }).Count
-  $b = @($sb | Where-Object { $_.regla -ceq 'BX_UNBOXING_IMMEDIATELY_REBOXED' })
-  Igual 'BX_UNBOXING: fichero y linea' "$tot|10" "$($b[0].fichero)|$($b[0].linea)"
-  Igual 'BX_UNBOXING: el motor tiene ese fichero y esa linea: paso2' 'paso2' $b[0].queHago
-  $n = @($sb | Where-Object { $_.regla -ceq 'NAB_NEEDLESS_AUTOBOXING_VALUEOF' })
-  Igual 'NAB_NEEDLESS: misma linea 10: paso2' 'paso2' $n[0].queHago
-  $f = @($sb | Where-Object { $_.regla -ceq 'FCBL_FIELD_COULD_BE_LOCAL' -and $_.fichero -ceq $tot })
-  Igual 'FCBL de Totales (linea 15, el motor no lo dice): sonar' 'sonar' $f[0].queHago
-  Igual 'paso2 son exactamente 2 (las dos de la linea 10)' 2 @($j.incidencias | Where-Object { $_.queHago -ceq 'paso2' }).Count
+  Igual 'javac: estado' 'ok' (Det $j 'javac').estado
+  Igual 'javac: 2 incidencias' 2 (Inc $j 'javac').Count
+  $a = @((Inc $j 'javac') | Where-Object { $_.fichero -ceq $tot })
+  Igual 'Totales:10 (el motor tiene ese fichero y esa linea): paso2' 'paso2' $a[0].queHago
+  $b = @((Inc $j 'javac') | Where-Object { $_.fichero -ceq $cla })
+  Igual 'Clasificador:12 (el motor dice otra linea): sonar' 'sonar' $b[0].queHago
+  Igual 'paso2 es exactamente 1' 1 @($j.incidencias | Where-Object { $_.queHago -ceq 'paso2' }).Count
   Igual 'mano: la de Lombok' 1 @($j.incidencias | Where-Object { $_.queHago -ceq 'mano' -and $_.herramienta -ceq 'lombok' }).Count
-  $sonar = @([System.IO.File]::ReadAllText($Cfg.PmdReglas) | Select-String -Pattern '<!-- java:(S\d+) ' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+  Igual 'ninguna incidencia con origen spotbugs' 0 @($j.incidencias | Where-Object { $_.origen -ceq 'spotbugs' }).Count
   Igual 'sonar.reglasWay: 608' 608 $j.sonar.reglasWay
-  Igual 'sonar.reglasAqui: las claves distintas de pmd-sonar.xml mas S5738' ($sonar.Count + 1) $j.sonar.reglasAqui
+  Igual 'sonar.reglasAqui: 1 (S5738, la de javac)' 1 $j.sonar.reglasAqui
   # sin hallazgos del motor, ni una es paso2
   Remove-Item -LiteralPath $E.Hallazgos -Force
-  $m = Mide $E @{ BP0_CLASES = $E.Clases }
+  $m = Mide $E @{ BP0_CLASES = $E.Clases; BP0_JAVAC_SALIDA = $salida }
   Igual 'sin hallazgos del motor: ninguna paso2' 0 @($m.Json.incidencias | Where-Object { $_.queHago -ceq 'paso2' }).Count
-  Igual 'sin hallazgos del motor: BX_UNBOXING pasa a sonar' 'sonar' @($m.Json.incidencias | Where-Object { $_.regla -ceq 'BX_UNBOXING_IMMEDIATELY_REBOXED' })[0].queHago
+  Igual 'sin hallazgos del motor: Totales:10 pasa a sonar' 'sonar' @($m.Json.incidencias | Where-Object { $_.fichero -ceq $tot })[0].queHago
   Comprueba-Formato $m.Json $E
 }
 
@@ -644,7 +621,7 @@ function Comprueba-Formato($J, $E) {
   Igual 'formato: paquete (el prefijo comun de los paquetes de src/main/java)' 'com.acme' $J.paquete
   Igual 'formato: referencia (el nombre de su carpeta)' 'batch-ejemplo' $J.referencia
   Comprueba 'formato: arquitectura existe y es null' ($J.PSObject.Properties.Name -contains 'arquitectura' -and $null -eq $J.arquitectura)
-  Igual 'formato: los 6 detectores en orden' 'javac,pmd,spotbugs,lombok-a-mano,lombok-qualifier,java21-texto' ((@($J.detectores | ForEach-Object { $_.id })) -join ',')
+  Igual 'formato: los 4 detectores en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto' ((@($J.detectores | ForEach-Object { $_.id })) -join ',')
   $mal = @($J.detectores | Where-Object { -not ($_.PSObject.Properties.Name -join ',' -ceq 'id,estado,motivo,segundos,corte') })
   Igual 'formato: cada detector lleva id, estado, motivo, segundos y corte' 0 $mal.Count
   $estados = @('ok', 'no medido (tope)', 'no se pudo medir', 'no aplica')
@@ -658,7 +635,7 @@ function Comprueba-Formato($J, $E) {
   Comprueba 'el registro registros\practicas-antes.log existe' (Test-Path -LiteralPath $reg)
   $txt = ''
   if (Test-Path -LiteralPath $reg) { $txt = [System.IO.File]::ReadAllText($reg) }
-  Comprueba 'el registro lleva la salida de Maven y el resumen de los detectores' ($txt -match 'BUILD SUCCESS' -and $txt -match 'javac' -and $txt -match 'spotbugs' -and $txt -match 'lombok-qualifier' -and $txt -match 'java21-texto') (Cola $txt)
+  Comprueba 'el registro lleva la salida de Maven y el resumen de los detectores' ($txt -match 'BUILD SUCCESS' -and $txt -match 'javac' -and $txt -match 'lombok-qualifier' -and $txt -match 'java21-texto' -and $txt -notmatch 'pmd|spotbugs') (Cola $txt)
 }
 
 $Pruebas['10 d) consola: una linea Info con las incidencias por area y los segundos'] = {
@@ -668,24 +645,21 @@ $Pruebas['10 d) consola: una linea Info con las incidencias por area y los segun
   $m = Mide $E @{ BP0_CLASES = $E.Clases; BP0_JAVAC_SALIDA = $salida }
   $l = @(($m.Texto -split "`n") | Where-Object { $_ -like 'Buenas practicas (antes):*' })
   Igual 'una sola linea de resumen' 1 $l.Count
-  Comprueba 'dice las incidencias por area: java21 9, boot3-batch5 1, lombok 3' ("$($l[0])" -match 'java21: 9' -and "$($l[0])" -match 'boot3-batch5: 1' -and "$($l[0])" -match 'lombok: 3') "$($l[0])"
+  Comprueba 'dice las incidencias por area: boot3-batch5 1, lombok 3 (y java21 ninguna)' ("$($l[0])" -match 'boot3-batch5: 1' -and "$($l[0])" -match 'lombok: 3' -and "$($l[0])" -notmatch 'java21') "$($l[0])"
   Comprueba 'dice los segundos' ("$($l[0])" -match ' en \d+,\d s') "$($l[0])"
   Igual 'ningun Aviso: todos los detectores estan ok' 0 $m.Avisos.Count
 }
 
-$Pruebas['11 e) tope: sin 30 s para PMD y SpotBugs quedan en no medido (tope) y el JSON se escribe igual'] = {
+$Pruebas['11 e) tope: un javac que tarda 5 s cabe en el tope: ok, una sola llamada a Maven y el JSON se escribe'] = {
   $E = Nuevo-Escenario 'e1'
-  $m = Mide $E @{ BP0_JAVAC_ESPERA = '5' } @{ SegundosPracticas = 33 }
+  $m = Mide $E @{ BP0_JAVAC_ESPERA = '5' }
   $j = $m.Json
   Comprueba 'el JSON se escribe' ($null -ne $j)
   Igual 'javac: ok (con su espera)' 'ok' (Det $j 'javac').estado
   Comprueba 'javac: tardo lo que esperaba el falso' ((Det $j 'javac').segundos -ge 5) "$((Det $j 'javac').segundos)"
-  Igual 'pmd: no medido (tope)' 'no medido (tope)' (Det $j 'pmd').estado
-  Igual 'spotbugs: no medido (tope)' 'no medido (tope)' (Det $j 'spotbugs').estado
-  Igual 'pmd: 0 s' 0 (Det $j 'pmd').segundos
   Igual 'lombok-qualifier: ok' 'ok' (Det $j 'lombok-qualifier').estado
-  Igual 'Maven solo se llama para javac: ni SpotBugs ni PMD' 1 (Llamadas-De $E.Llamadas).Count
-  Comprueba 'un Aviso por pmd y otro por spotbugs' (@($m.Avisos | Where-Object { $_ -like '*pmd*' }).Count -ge 1 -and @($m.Avisos | Where-Object { $_ -like '*spotbugs*' }).Count -ge 1) ($m.Avisos -join ' / ')
+  Igual 'Maven solo se llama para javac' 1 (Llamadas-De $E.Llamadas).Count
+  Igual 'ningun Aviso: todos los detectores estan ok' 0 $m.Avisos.Count
   Igual 'MinutosMaven vuelve a lo que era' 30 $Cfg.MinutosMaven
 }
 
@@ -697,45 +671,17 @@ $Pruebas['12 e) tope: un javac que se pasa del tiempo queda en no medido (tope),
   $j = $m.Json
   Comprueba 'el JSON se escribe' ($null -ne $j)
   Igual 'javac: no medido (tope)' 'no medido (tope)' (Det $j 'javac').estado
-  Igual 'pmd: no medido (tope)' 'no medido (tope)' (Det $j 'pmd').estado
-  Igual 'spotbugs: no medido (tope)' 'no medido (tope)' (Det $j 'spotbugs').estado
   Igual 'sin incidencias de javac' 0 (Inc $j 'javac').Count
   Igual 'lombok-a-mano: no se pudo medir (no hay clases)' 'no se pudo medir' (Det $j 'lombok-a-mano').estado
   Igual 'MinutosMaven vuelve a lo que era' 30 $Cfg.MinutosMaven
 }
 
-$Pruebas['13 e) tope: si PMD y SpotBugs se pasan del tiempo que queda, los dos quedan en no medido (tope)'] = {
-  $E = Nuevo-Escenario 'e3'
-  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-  $m = Mide $E @{ RESCATE_ANALISIS_ESPERA = '40' } @{ SegundosPracticas = 8; SegundosMinAnalisis = 1 }
-  Comprueba 'no espero al falso: menos de 30 s' ($reloj.Elapsed.TotalSeconds -lt 30) ([string]$reloj.Elapsed.TotalSeconds)
-  $j = $m.Json
-  Igual 'javac: ok' 'ok' (Det $j 'javac').estado
-  Igual 'pmd: no medido (tope)' 'no medido (tope)' (Det $j 'pmd').estado
-  Igual 'spotbugs: no medido (tope)' 'no medido (tope)' (Det $j 'spotbugs').estado
-  Comprueba 'Maven se llamo para SpotBugs (y se paro)' (@(Llamadas-De $E.Llamadas | Where-Object { "$_" -match 'spotbugs-maven-plugin' }).Count -eq 1)
-  Igual 'MinutosMaven vuelve a lo que era' 30 $Cfg.MinutosMaven
-}
-
-$Pruebas['14 d) PMD y SpotBugs: si Invoke-Analisis no esta ok, los dos detectores copian su estado como motivo'] = {
-  $E = Nuevo-Escenario 'd2'
-  $m = Mide $E @{ RESCATE_ANALISIS_ERROR = 'Plugin com.github.spotbugs:spotbugs-maven-plugin:4.10.5.0 or one of its dependencies could not be resolved' }
-  $j = $m.Json
-  foreach ($id in @('pmd', 'spotbugs')) {
-    $d = Det $j $id
-    Igual "$id`: no se pudo medir" 'no se pudo medir' $d.estado
-    Igual "$id`: el motivo es el estado de Invoke-Analisis" 'no disponible: no se descarga el plugin' $d.motivo
-  }
-  Igual 'ninguna incidencia de PMD ni de SpotBugs' 0 ((Inc $j 'pmd').Count + (Inc $j 'spotbugs').Count)
-  Igual 'javac sigue ok' 'ok' (Det $j 'javac').estado
-}
-
 $Pruebas['15 f) cache: sin cambios no se lanza Maven; con un fichero cambiado vuelve a medir'] = {
   $E = Nuevo-Escenario 'f'
-  $m1 = Mide $E @{} $Rapido 'antes' -ConCache
+  $m1 = Mide $E @{} @{} 'antes' -ConCache
   $n1 = (Llamadas-De $E.Llamadas).Count
   Igual 'la primera vez mide: una llamada a Maven (javac)' 1 $n1
-  $m2 = Mide $E @{} $Rapido 'antes' -ConCache
+  $m2 = Mide $E @{} @{} 'antes' -ConCache
   Igual 'la segunda, sin cambios: ninguna llamada a Maven mas' $n1 (Llamadas-De $E.Llamadas).Count
   Comprueba 'sale una linea Info que dice que ya estaba medido' ("$($m2.Texto)" -match 'ya medidas') $m2.Texto
   Igual 'el JSON es el mismo (medido)' $m1.Json.medido $m2.Json.medido
@@ -744,27 +690,27 @@ $Pruebas['15 f) cache: sin cambios no se lanza Maven; con un fichero cambiado vu
   Escribe $E.Repo 'target/classes/otra.class' 'x'
   Escribe $E.Repo 'migracion-2026-11-19/informe.txt' 'x'
   Escribe $E.Repo '.rescate/hallazgos.json' '[]'
-  [void](Mide $E @{} $Rapido 'antes' -ConCache)
+  [void](Mide $E @{} @{} 'antes' -ConCache)
   Igual 'target, .rescate y migracion-* no cambian la clave: sigue sin llamar' $n1 (Llamadas-De $E.Llamadas).Count
   # un fichero nuevo
   Escribe $E.Repo 'src/main/java/com/acme/demo/Nuevo.java' "package com.acme.demo;`npublic class Nuevo { }`n"
-  $m4 = Mide $E @{} $Rapido 'antes' -ConCache
+  $m4 = Mide $E @{} @{} 'antes' -ConCache
   Igual 'un fichero nuevo: vuelve a medir' ($n1 + 1) (Llamadas-De $E.Llamadas).Count
   Comprueba 'la clave cambia' ($m4.Json.clave -cne $m1.Json.clave) "$($m4.Json.clave)"
   Comprueba 'y ya no dice que estaba medido' ("$($m4.Texto)" -notmatch 'ya medidas')
   # el mismo fichero, con otro contenido: el status es igual, el contenido no
   Escribe $E.Repo 'src/main/java/com/acme/demo/Nuevo.java' "package com.acme.demo;`npublic class Nuevo { int a; }`n"
-  $m5 = Mide $E @{} $Rapido 'antes' -ConCache
+  $m5 = Mide $E @{} @{} 'antes' -ConCache
   Igual 'el mismo fichero con otro contenido: vuelve a medir' ($n1 + 2) (Llamadas-De $E.Llamadas).Count
   Comprueba 'otra clave' ($m5.Json.clave -cne $m4.Json.clave)
   # un commit cambia el HEAD
   [void](GitEn $E.Repo @('add', '-A'))
   [void](GitEn $E.Repo @('commit', '-q', '-m', 'cambio'))
-  $m6 = Mide $E @{} $Rapido 'antes' -ConCache
+  $m6 = Mide $E @{} @{} 'antes' -ConCache
   Igual 'con un commit nuevo: vuelve a medir' ($n1 + 3) (Llamadas-De $E.Llamadas).Count
   Comprueba 'otra clave con otro HEAD' ($m6.Json.clave -cne $m5.Json.clave)
   # <Cuando> distinto: su propio JSON
-  [void](Mide $E @{} $Rapido 'despues' -ConCache)
+  [void](Mide $E @{} @{} 'despues' -ConCache)
   Igual 'despues no usa lo de antes: mide' ($n1 + 4) (Llamadas-De $E.Llamadas).Count
   Comprueba 'y deja practicas-despues.json' (Test-Path -LiteralPath (Join-Path $E.Datos 'practicas-despues.json'))
 }
@@ -779,14 +725,11 @@ $Pruebas['16 g) un detector que falla no para a los demas ni a la medida; nada l
   Igual 'lombok-a-mano: no se pudo medir' 'no se pudo medir' $d.estado
   Comprueba 'con su motivo' ("$($d.motivo)".Length -gt 0) "$($d.motivo)"
   Igual 'javac sigue: ok' 'ok' (Det $j 'javac').estado
-  Igual 'pmd sigue: ok' 'ok' (Det $j 'pmd').estado
-  Igual 'spotbugs sigue: ok' 'ok' (Det $j 'spotbugs').estado
   Igual 'lombok-qualifier sigue: ok' 'ok' (Det $j 'lombok-qualifier').estado
-  Igual 'hallazgos del motor ilegibles: las 9 incidencias de PMD y SpotBugs salen' 9 ((Inc $j 'pmd').Count + (Inc $j 'spotbugs').Count)
   Igual 'hallazgos del motor ilegibles: ninguna paso2' 0 @($j.incidencias | Where-Object { $_.queHago -ceq 'paso2' }).Count
   # un JSON de antes ilegible no impide medir
   Escribe $E.Datos 'practicas-antes.json' 'basura'
-  $m = Mide $E @{} $Rapido 'antes' -ConCache
+  $m = Mide $E @{} @{} 'antes' -ConCache
   Igual 'practicas-antes.json ilegible: mide' 'ok' (Det $m.Json 'javac').estado
   # no se puede escribir el JSON (datos es un fichero, no una carpeta): no lanza, avisa y el registro queda
   $E2 = Nuevo-Escenario 'g2'
@@ -794,7 +737,7 @@ $Pruebas['16 g) un detector que falla no para a los demas ni a la medida; nada l
   Escribe $E2.Raiz 'datos' 'soy un fichero'
   $lanza = $false
   $t = ''
-  try { $t = @(Con-Falso @{} $Rapido { Invoke-Practicas $E2.Repo $E2.Ref 'antes' $E2.Datos $E2.Registros $E2.Hallazgos } 6>&1 | ForEach-Object { "$_" }) -join "`n" } catch { $lanza = $true }
+  try { $t = @(Con-Falso @{} @{} { Invoke-Practicas $E2.Repo $E2.Ref 'antes' $E2.Datos $E2.Registros $E2.Hallazgos } 6>&1 | ForEach-Object { "$_" }) -join "`n" } catch { $lanza = $true }
   Igual 'sin poder escribir el JSON: no lanza excepcion' $false $lanza
   Comprueba 'sin poder escribir el JSON: avisa de que no lo ha escrito' ($t -match 'practicas-antes\.json') $t
   Comprueba 'el registro queda aunque el JSON no' (Test-Path -LiteralPath (Join-Path $E2.Registros 'practicas-antes.log'))
@@ -802,13 +745,14 @@ $Pruebas['16 g) un detector que falla no para a los demas ni a la medida; nada l
   $E3 = Nuevo-Escenario 'g3'
   Remove-Item -LiteralPath $E3.Datos -Recurse -Force
   Remove-Item -LiteralPath $E3.Registros -Recurse -Force
-  [void](Mide $E3 @{} $Rapido)
+  [void](Mide $E3 @{})
   Comprueba 'las carpetas de datos y de registros que faltaban se crean' ((Test-Path -LiteralPath (Join-Path $E3.Datos 'practicas-antes.json')) -and (Test-Path -LiteralPath (Join-Path $E3.Registros 'practicas-antes.log')))
 }
 
 $Pruebas['17 ficheros y ajustes: ASCII, nada de PowerShell 7 y los ajustes en $Cfg'] = {
   Igual 'SegundosPracticas' 300 $Cfg.SegundosPracticas
-  Igual 'SegundosMinAnalisis' 30 $Cfg.SegundosMinAnalisis
+  Igual 'SonarReglasAqui' 1 $Cfg.SonarReglasAqui
+  Comprueba 'SegundosMinAnalisis ya no existe' (-not $Cfg.ContainsKey('SegundosMinAnalisis'))
   foreach ($f in @('practicas.ps1', 'arreglo-practicas.ps1', 'tests/probar-practicas.ps1', 'tests/falsos/bp0-mvn.ps1', 'tests/falsos/bp0-javap.ps1', 'tests/falsos/bp4-mvn.ps1', 'tests/falsos/bp4-copilot.ps1')) {
     $t = [System.IO.File]::ReadAllText((Get-Ruta $raiz $f))
     Comprueba "$f`: solo ASCII" ($t -notmatch '[^\x09\x0A\x0D\x20-\x7E]')
@@ -1344,7 +1288,7 @@ $Pruebas['32 bp4 m) arreglo-practicas.ps1: solo funciones, cabecera, ASCII y nad
   $sueltas = @($ast.EndBlock.Statements | Where-Object { $_ -isnot [System.Management.Automation.Language.FunctionDefinitionAst] })
   Igual 'nada fuera de las funciones' 0 $sueltas.Count
   $otras = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
-  $deMas = @(@('practicas.ps1', 'huella.ps1', 'comun.ps1', 'tareas.ps1', 'analisis.ps1', 'informe.ps1', 'lanzadores.ps1', 'migracion.ps1', 'prueba-local.ps1') | ForEach-Object {
+  $deMas = @(@('practicas.ps1', 'huella.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'migracion.ps1', 'prueba-local.ps1') | ForEach-Object {
       $f = Join-Path $raiz $_
       if (Test-Path -LiteralPath $f) { [regex]::Matches([System.IO.File]::ReadAllText($f), '(?m)^function ([\w-]+)') | ForEach-Object { $_.Groups[1].Value } }
     })
@@ -1545,7 +1489,7 @@ function Lineas6($J, [string]$Fichero, [string]$Regla) {
 function Mide6([string]$Nombre, [hashtable]$Fuentes) {
   $E = Nuevo-Escenario $Nombre
   foreach ($k in $Fuentes.Keys) { Escribe $E.Repo "$Dir6$k.java" $Fuentes[$k] }
-  return [pscustomobject]@{ E = $E; Json = (Mide $E @{} $Rapido).Json }
+  return [pscustomobject]@{ E = $E; Json = (Mide $E @{}).Json }
 }
 
 # Monta las paginas con un practicas-antes.json (el que se da) y devuelve la 5.
@@ -1618,7 +1562,7 @@ $Pruebas['44 bp6 e) formato-cldr: MMM y EEE en el patron literal salen; dd/MM/yy
 $Pruebas['45 bp6 f) en el JSON: java21-texto va el ultimo de detectores con estado ok y sus incidencias llevan el area java21 y su herramienta'] = {
   $x = Mide6 'bp6f' @{ Entrada = $Fuente6Charset; Formatos = $Fuente6Formatos }
   $j = $x.Json
-  Igual 'los detectores, en orden' 'javac,pmd,spotbugs,lombok-a-mano,lombok-qualifier,java21-texto' ((@($j.detectores | ForEach-Object { $_.id })) -join ',')
+  Igual 'los detectores, en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto' ((@($j.detectores | ForEach-Object { $_.id })) -join ',')
   $d = Det $j 'java21-texto'
   Igual 'estado ok' 'ok' $d.estado
   Igual 'motivo vacio' '' $d.motivo
@@ -1650,7 +1594,7 @@ $Pruebas['46 bp6 g) la pagina 5 con ese JSON lleva las incidencias de java21-tex
 $Pruebas['47 bp6 h) sin src/main/java: java21-texto no aplica con su motivo y la pagina 5 lo dice en sus notas de detectores'] = {
   $E = Nuevo-Escenario 'bp6h'
   Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src/main/java') -Recurse -Force
-  $m = Mide $E @{} $Rapido
+  $m = Mide $E @{}
   $d = Det $m.Json 'java21-texto'
   Igual 'estado' 'no aplica' $d.estado
   Igual 'motivo' 'no hay src/main/java' $d.motivo
@@ -1683,7 +1627,7 @@ $Pruebas['50 bp6 k) solo se lee src/main/java: el mismo codigo en src/test/java 
   Escribe $E.Repo "${Dir6}Entrada.java" $Fuente6Charset
   Escribe $E.Repo 'src/test/java/com/acme/texto/EntradaTest.java' $Fuente6Charset
   Escribe $E.Repo 'src/test/java/com/acme/texto/FormatosTest.java' $Fuente6Formatos
-  $j = (Mide $E @{} $Rapido).Json
+  $j = (Mide $E @{}).Json
   Igual 'estado ok' 'ok' (Det $j 'java21-texto').estado
   Igual 'las de src/main/java estan' (Marcadas6 $Fuente6Charset) (Lineas6 $j "${Dir6}Entrada.java" 'charset-por-defecto')
   Igual 'ninguna en src/test/java' 0 @($j.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' -and $_.fichero -like 'src/test/*' }).Count

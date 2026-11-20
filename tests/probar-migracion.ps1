@@ -1715,7 +1715,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1947,7 +1947,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'analisis.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas', 'analisis')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
@@ -5591,8 +5591,8 @@ $Pruebas['m27 pagina 4: las tres ordenes de git, cada una en su linea con git -C
   Comprueba 'sigue sin JavaScript ni nada externo' ($x.P4 -notmatch '(?i)<script' -and $x.P4 -notmatch 'https?://')
 }
 
-$Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus cinco detectores; relanzar no lo repite y una medida que falla no para la migracion'] = {
-  $e = Nuevo-Escenario 'bp0-prac' @('Clase1') @{ MvnExe = (Join-Path $falsos 'analisis-mvn.ps1') }
+$Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus cuatro detectores; relanzar no lo repite y una medida que falla no para la migracion'] = {
+  $e = Nuevo-Escenario 'bp0-prac' @('Clase1')
   $r = Migra $e (Basicos $e)
   Igual 'sale con 0' 0 $r.Codigo
   $ruta = Get-Ruta $e.Out 'datos/practicas-antes.json'
@@ -5600,11 +5600,11 @@ $Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus c
   Comprueba 'existe datos/practicas-antes.json' ($null -ne $p) (Cola $r.Salida)
   if ($null -eq $p) { return }
   Igual 'version y cuando' '1 antes' "$($p.version) $($p.cuando)"
-  Igual 'los seis detectores, en el orden del formato' 'javac pmd spotbugs lombok-a-mano lombok-qualifier java21-texto' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
-  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok ok ok no aplica ok ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
-  Igual 'las 9 incidencias de PMD y SpotBugs (los XML de mentira), todas java21' 9 @($p.incidencias | Where-Object { $_.area -ceq 'java21' }).Count
+  Igual 'los cuatro detectores, en el orden del formato' 'javac lombok-a-mano lombok-qualifier java21-texto' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
+  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok no aplica ok ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
+  Igual 'el juguete no tiene nada que avisar: ninguna incidencia' 0 @($p.incidencias).Count
   Comprueba 'su registro esta en registros/practicas-antes.log' (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/practicas-antes.log'))
-  Comprueba 'la consola dice las buenas practicas' ($r.Salida -match 'Buenas practicas \(antes\): 9 incidencias \(java21: 9\)') (Cola $r.Salida)
+  Comprueba 'la consola dice las buenas practicas' ($r.Salida -match 'Buenas practicas \(antes\): 0 incidencias en ') (Cola $r.Salida)
   Comprueba 'hallazgos-antes.json sigue siendo lo ultimo del diagnostico: esta' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json'))
   Comprueba 'no hay practicas de despues (no se corrigio)' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/practicas-despues.json')))
   # relanzar no repite el diagnostico y, con el, tampoco la medida
@@ -5613,7 +5613,7 @@ $Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus c
   Igual 'el segundo lanzamiento sale con 0' 0 $r2.Codigo
   Igual 'practicas-antes.json no cambia' $h (Hash-De $ruta)
   # una medida que falla (no se puede escribir el JSON) no para la migracion
-  $f = Nuevo-Escenario 'bp0-falla' @('Clase1') @{ MvnExe = (Join-Path $falsos 'analisis-mvn.ps1') }
+  $f = Nuevo-Escenario 'bp0-falla' @('Clase1')
   [void](New-Item -ItemType Directory -Path (Get-Ruta $f.Out 'datos/practicas-antes.json.tmp') -Force)
   $rf = Migra $f (Basicos $f)
   Igual 'con la medida rota, la migracion sale con 0' 0 $rf.Codigo
@@ -5624,8 +5624,8 @@ $Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus c
 }
 
 # ================== BP-2: LA PAGINA 5, BUENAS PRACTICAS ==================
-# Un practicas-<Cuando>.json inventado, con el formato de BP-datos.md: 10 incidencias de las 4 areas, con los 4 queHago y los 3 origenes (4 con regla de
-# Sonar o SpotBugs y 6 de la referencia). javac tiene corte, spotbugs no se midio (tope) y un texto, un motivo y una regla llevan markup. Sin sonar.xlsx.
+# Un practicas-<Cuando>.json inventado, con el formato de BP-datos.md: 10 incidencias de las 4 areas, con los 4 queHago y los 2 origenes (4 con regla de
+# Sonar y 6 de la referencia). javac tiene corte, java21-texto no se midio (tope) y un texto, un motivo y una regla llevan markup. Sin sonar.xlsx.
 function Bp2-Incidencia([string]$Area, [string]$Fichero, [int]$Linea, [string]$Herramienta, [string]$Regla, [string]$Origen, [string]$Sonar, [string]$Texto, [string]$QueHago) {
   return [ordered]@{ area = $Area; fichero = $Fichero; linea = $Linea; herramienta = $Herramienta; regla = $Regla; origen = $Origen; sonar = $Sonar; texto = $Texto; queHago = $QueHago }
 }
@@ -5636,17 +5636,16 @@ function Bp2-Practicas([string]$Cuando = 'antes', [string]$Paquete = 'com.acme.r
     version = 1; cuando = $Cuando; clave = 'a1b2c3d4'; medido = '2026-11-19T11:42:05'; segundos = 14.2; paquete = $Paquete; referencia = 'batch-referencia'
     detectores = @(
       [ordered]@{ id = 'javac'; estado = 'ok'; motivo = ''; segundos = 2.7; corte = $true },
-      [ordered]@{ id = 'pmd'; estado = 'ok'; motivo = ''; segundos = 3.3; corte = $false },
-      [ordered]@{ id = 'spotbugs'; estado = 'no medido (tope)'; motivo = ''; segundos = 0; corte = $false },
       [ordered]@{ id = 'lombok-a-mano'; estado = 'no aplica'; motivo = 'la referencia no usa <i>Lombok</i> & su config'; segundos = 0.6; corte = $false },
-      [ordered]@{ id = 'lombok-qualifier'; estado = 'ok'; motivo = ''; segundos = 0.1; corte = $false }
+      [ordered]@{ id = 'lombok-qualifier'; estado = 'ok'; motivo = ''; segundos = 0.1; corte = $false },
+      [ordered]@{ id = 'java21-texto'; estado = 'no medido (tope)'; motivo = ''; segundos = 0; corte = $false }
     )
-    sonar = [ordered]@{ reglasWay = 608; reglasAqui = 15 }
+    sonar = [ordered]@{ reglasWay = 608; reglasAqui = 1 }
     incidencias = @(
-      (Bp2-Incidencia 'java21' ($p + 'infrastructure/sftp/SubidaTasklet.java') 63 'pmd' 'CloseResource' 'sonar' 'S2095' 'El InputStream de la remesa no se cierra si falla la subida.' 'mano'),
-      (Bp2-Incidencia 'java21' ($p + 'infrastructure/persistence/ReciboDao.java') 58 'pmd' 'EmptyCatchBlock' 'sonar' 'S108' 'Un catch vacio se traga el error.' 'paso2'),
-      (Bp2-Incidencia 'java21' ($p + 'application/usecase/ConciliacionService.java') 77 'spotbugs' 'NP_NULL_ON_SOME_PATH' 'spotbugs' '' 'Cierra <u>antes</u> & <b>despues</b>: puede ser null.' 'sonar'),
-      (Bp2-Incidencia 'java21' ($p + 'domain/service/ReciboValidator.java') 88 'pmd' 'Unused<i>Local</i>Variable' 'referencia' '' 'La variable local pendientes no se usa.' 'mano'),
+      (Bp2-Incidencia 'java21' ($p + 'infrastructure/sftp/SubidaTasklet.java') 63 'java21-texto' 'charset-por-defecto' 'referencia' '' 'Usa el juego de caracteres por defecto en la subida.' 'mano'),
+      (Bp2-Incidencia 'java21' ($p + 'infrastructure/persistence/ReciboDao.java') 58 'java21-texto' 'formato-cldr' 'referencia' '' 'Los nombres de mes salen de CLDR y pueden cambiar.' 'paso2'),
+      (Bp2-Incidencia 'java21' ($p + 'application/usecase/ConciliacionService.java') 77 'javac' 'removal-api' 'sonar' 'S5738' 'Cierra <u>antes</u> & <b>despues</b>: se borrara.' 'sonar'),
+      (Bp2-Incidencia 'java21' ($p + 'domain/service/ReciboValidator.java') 88 'java21-texto' 'charset<i>-por-</i>defecto' 'referencia' '' 'Usa el juego de caracteres por defecto al validar.' 'mano'),
       (Bp2-Incidencia 'boot3-batch5' ($p + 'infrastructure/config/CargaJobConfig.java') 31 'javac' 'removal' 'sonar' 'S5738' 'JobBuilderFactory se borrara en Batch 5.' 'paso2'),
       (Bp2-Incidencia 'boot3-batch5' ($p + 'infrastructure/config/BatchConfig.java') 14 'arquitectura' 'EnableBatchProcessing' 'referencia' '' 'EnableBatchProcessing apaga la configuracion automatica de Boot 3.' 'mano'),
       (Bp2-Incidencia 'lombok' ($p + 'domain/model/Recibo.java') 18 'lombok' 'getter-a-mano' 'referencia' '' '14 metodos get y set escritos a mano.' 'paso2'),
@@ -5713,10 +5712,10 @@ $Pruebas['bp2 (b) los indicadores traen las cifras del JSON: por area, con Sonar
   $son = @($p.incidencias | Where-Object { $_.origen -cne 'referencia' }).Count
   $ref = @($p.incidencias).Count - $son
   $s = Panel-De $x.P5 'ind-sonar'
-  Comprueba "con regla de Sonar: $son de 10 (Sonar y SpotBugs, que el Sonar del equipo lanza)" ($s.Contains("<p class=`"bp-ind-sub`"><b>$son</b> de 10</p>") -and $s.Contains("<b>$son</b></div>")) $s
+  Comprueba "con regla de Sonar: $son de 10" ($s.Contains("<p class=`"bp-ind-sub`"><b>$son</b> de 10</p>") -and $s.Contains("<b>$son</b></div>")) $s
   Comprueba "con regla de Sonar: la leyenda dice $son y $ref de la referencia" ($s -match ('(?s)Con regla de Sonar<b class="bp-ley-n">' + $son + '</b>.*De la referencia<b class="bp-ley-n">' + $ref + '</b>')) $s
   $r = Panel-De $x.P5 'ind-reglas'
-  Comprueba 'reglas de Sonar way: reglasAqui de reglasWay (15 de 608)' ($r.Contains('15 <small>de 608</small>')) $r
+  Comprueba 'reglas de Sonar way: reglasAqui de reglasWay (1 de 608)' ($r.Contains('1 <small>de 608</small>')) $r
   Comprueba 'y la frase: cero incidencias aqui no es un Sonar limpio' ($r -match 'Cero incidencias aqu. no es un Sonar limpio') $r
   Comprueba 'sin sonar.xlsx en el JSON: el indicador del .xlsx no sale, y la fila de indicadores es de tres' ($x.P5 -notmatch 'id="ind-xlsx"' -and $x.P5.Contains('class="bp-ind-fila bp-ind-n3"'))
   $p['sonar']['xlsx'] = [ordered]@{ fichero = 'sonar-2026-11-12.xlsx'; total = 41; resueltas = 30; siguen = 11 }
@@ -5748,12 +5747,12 @@ $Pruebas['bp2 (c) cada incidencia sale una vez en cada vista, con su fichero y s
   $rutas = @([regex]::Matches($x.P5, '<code class="bp-donde">(.*?)</code>') | ForEach-Object { $_.Groups[1].Value })
   Igual 'hay 20 rutas (10 por vista)' 20 $rutas.Count
   Igual 'ninguna / sin su <wbr> detras' 0 @($rutas | Where-Object { $_ -match '/(?!<wbr>)' }).Count
-  Comprueba 'el origen: Sonar con su clave, Sonar (SpotBugs) y de la referencia' ($q.Contains('Sonar S2095') -and $q.Contains('Sonar S5738') -and $q.Contains('Sonar (SpotBugs)') -and $q.Contains('de la referencia'))
+  Comprueba 'el origen: Sonar con su clave y de la referencia, y ninguno de SpotBugs' ($q.Contains('Sonar S5738') -and $q.Contains('de la referencia') -and $q -notmatch 'SpotBugs')
   # los grupos: por que hago en su orden (4, 4, 1 y 1) y por area en el suyo (4, 2, 2 y 2)
   Igual 'grupos por que hago, en orden' 'gq-mano=4 gq-paso2=4 gq-sonar=1 gq-notoca=1' ((@([regex]::Matches($q, '(?s)<section class="bp-grupo" aria-labelledby="(gq-\w+)">.*?<span class="bp-num">(\d+)</span>') | ForEach-Object { $_.Groups[1].Value + '=' + $_.Groups[2].Value })) -join ' ')
   Igual 'grupos por area, en orden' 'ga-java21=4 ga-boot3-batch5=2 ga-lombok=2 ga-arquitectura=2' ((@([regex]::Matches($a, '(?s)<section class="bp-grupo" aria-labelledby="(ga-[\w-]+)">.*?<span class="bp-num">(\d+)</span>') | ForEach-Object { $_.Groups[1].Value + '=' + $_.Groups[2].Value })) -join ' ')
   Comprueba 'las explicaciones de la maqueta: A mano, paso 2, -Sonar y la referencia tampoco' ($q.Contains('Esto lo haces t') -and $q.Contains('Se arregla solo al lanzar el paso 2.') -and $q.Contains('Se arregla con -Sonar, si la regla sale en tu informe de Sonar.') -and $q.Contains('No se toca: la referencia tampoco lo cumple.'))
-  Comprueba 'y las de cada area' ($a.Contains('PMD y SpotBugs sobre el c') -and $a.Contains('Sonar no tiene reglas de Lombok'))
+  Comprueba 'y las de cada area' ($a.Contains('un detector de texto que avisa de lo que cambia en Java 21') -and $a.Contains('Sonar no tiene reglas de Lombok') -and $a -notmatch 'PMD|SpotBugs')
   Comprueba 'el selector de vista es de radios, sin JavaScript' ($x.P5.Contains('id="bp-m-que"') -and $x.P5.Contains('id="bp-m-area"') -and $x.P5 -notmatch '(?i)<script')
 }
 
@@ -5762,12 +5761,12 @@ $Pruebas['bp2 (d) un detector no medido sale con su estado y su motivo y javac c
   $x = Bp2-Salida 'bp2-detectores' $p
   $d = Panel-De $x.P5 'detectores'
   Comprueba 'hay seccion de detectores' ($d.Length -gt 0)
-  Comprueba 'spotbugs sale con su estado: no medido (tope)' ($d -match '<code>spotbugs</code> <b>no medido \(tope\)</b>') $d
+  Comprueba 'java21-texto sale con su estado: no medido (tope)' ($d -match '<code>java21-texto</code> <b>no medido \(tope\)</b>') $d
   Comprueba 'javac sale con corte: 100 o mas' ($d -match '<code>javac</code> <b>100 o m.s</b>') $d
   Comprueba 'lombok-a-mano sale con su estado y su motivo, escapado' ($d.Contains('<code>lombok-a-mano</code> <b>no aplica</b>: la referencia no usa &lt;i&gt;Lombok&lt;/i&gt; &amp; su config')) $d
-  Comprueba 'los que midieron (pmd y lombok-qualifier) no salen' ($d -notmatch '<code>pmd</code>' -and $d -notmatch '<code>lombok-qualifier</code>')
+  Comprueba 'el que midio (lombok-qualifier) no sale' ($d -notmatch '<code>lombok-qualifier</code>')
   Igual 'son tres lineas' 3 ([regex]::Matches($d, '<p class="bp-nota">').Count)
-  Comprueba 'la ficha dice los que midieron: javac, pmd y lombok-qualifier' ($x.P5 -match '(?s)<dt>Midieron</dt>.*?javac.*?pmd.*?lombok-qualifier.*?</dl>')
+  Comprueba 'la ficha dice los que midieron: javac y lombok-qualifier' ($x.P5 -match '(?s)<dt>Midieron</dt>.*?javac.*?lombok-qualifier.*?</dl>')
   # todos midieron y javac no corta: la seccion no sale
   $p['detectores'] = @(@($p.detectores) | ForEach-Object { [ordered]@{ id = $_.id; estado = 'ok'; motivo = ''; segundos = 1; corte = $false } })
   $y = Bp2-Salida 'bp2-detectores-ok' $p
@@ -5801,8 +5800,8 @@ $Pruebas['bp2 (e) con practicas-despues.json se pinta ese y no el de antes; sin 
 
 $Pruebas['bp2 (f) el texto de las herramientas sale escapado: un <b>, un <u> y un & no se pintan como HTML'] = {
   $x = Bp2-Salida 'bp2-escapa' (Bp2-Practicas)
-  Comprueba 'el texto de una incidencia, escapado' ($x.P5.Contains('Cierra &lt;u&gt;antes&lt;/u&gt; &amp; &lt;b&gt;despues&lt;/b&gt;: puede ser null.'))
-  Comprueba 'la regla de una incidencia, escapada' ($x.P5.Contains('pmd Unused&lt;i&gt;Local&lt;/i&gt;Variable'))
+  Comprueba 'el texto de una incidencia, escapado' ($x.P5.Contains('Cierra &lt;u&gt;antes&lt;/u&gt; &amp; &lt;b&gt;despues&lt;/b&gt;: se borrara.'))
+  Comprueba 'la regla de una incidencia, escapada' ($x.P5.Contains('java21-texto charset&lt;i&gt;-por-&lt;/i&gt;defecto'))
   Comprueba 'el motivo de un detector, escapado' ($x.P5.Contains('no usa &lt;i&gt;Lombok&lt;/i&gt; &amp; su config'))
   Comprueba 'ninguna etiqueta <u> ni <i> que no sea de la pagina' ($x.P5 -notmatch '<u>' -and $x.P5 -notmatch '<i>')
   Comprueba 'ni un & suelto' ($x.P5 -notmatch '&(?!amp;|lt;|gt;|quot;|#39;)')
@@ -5837,7 +5836,11 @@ $Pruebas['bp2 (h) la pagina 2 sigue igual: los mismos bytes que antes de la pagi
 }
 
 $Pruebas['bp2 integracion: una corrida real deja la pagina 5 con las incidencias del practicas-antes.json que escribe el diagnostico'] = {
-  $e = Nuevo-Escenario 'bp2-integra' @('Clase1') @{ MvnExe = (Join-Path $falsos 'analisis-mvn.ps1') }
+  $e = Nuevo-Escenario 'bp2-integra' @('Clase1')
+  # una linea con getBytes() sin juego de caracteres: la unica incidencia que el detector de texto de Java 21 encuentra en el migrado
+  Escribe $e.Migrado 'src/main/java/com/acme/life/Carga.java' "package com.acme.life;`n`npublic class Carga {`n    public byte[] lee(String s) {`n        return s.getBytes();`n    }`n}`n"
+  [void](GitEn $e.Migrado @('add', 'src/main/java/com/acme/life/Carga.java'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'carga'))
   $r = Migra $e (Basicos $e)
   Igual 'sale con 0' 0 $r.Codigo
   $p = Lee-Json (Get-Ruta $e.Out 'datos/practicas-antes.json')
@@ -5864,7 +5867,7 @@ function Bp5-Practicas {
   $d = 'src/main/java/com/acme/recibos/domain/model/'
   $mas = @(
     (Bp2-Incidencia 'lombok' ($d + 'Pedido.java') 12 'lombok' 'getter-setter-a-mano' 'referencia' '' '6 getters y 6 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2'),
-    (Bp2-Incidencia 'java21' ($d + 'Pedido.java') 40 'pmd' 'UnusedPrivateField' 'referencia' '' 'El campo observaciones no se usa.' 'mano'),
+    (Bp2-Incidencia 'java21' ($d + 'Pedido.java') 40 'java21-texto' 'charset-por-defecto' 'referencia' '' 'Usa el juego de caracteres por defecto.' 'mano'),
     (Bp2-Incidencia 'lombok' ($d + 'Remesa.java') 9 'lombok' 'getter-setter-a-mano' 'referencia' '' '3 getters y 3 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2'),
     (Bp2-Incidencia 'lombok' ($d + 'Cliente.java') 7 'lombok' 'getter-setter-a-mano' 'referencia' '' '4 getters y 4 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2'),
     (Bp2-Incidencia 'lombok' ($d + 'Tarifa.java') 5 'lombok' 'getter-setter-a-mano' 'referencia' '' '2 getters y 2 setters escritos a mano: con Lombok son @Getter y @Setter' 'paso2')
@@ -5929,7 +5932,8 @@ function Bp5-HashPagina([string]$Html) {
 
 # La pagina 5 de la Bp5-Practicas de despues, sin practicas-arreglos.json, medida con el codigo de antes de BP-5 (9a732e2): cada cambio de la pagina 5 o del marco la cambia.
 # BP-6 cambio la frase bp-area-java21-expl: con la frase de antes da 2DCE51F6...D722 (comprobado el 19-11).
-$Bp5HashSinArreglos = '664229772750EE8F89F4D8BCFFFB9758F2DB07E58412A752B72FE8A50A113003'
+# M49 (20-11) quito PMD y SpotBugs: cambia a proposito la frase de esa area y la fixture (su incidencia de pmd pasa a java21-texto); antes de M49 daba 66422977...3003.
+$Bp5HashSinArreglos = 'B93367626C8D464A16A047410B5F283DAA5B28F627730F0956383A774CBA8046'
 
 $Pruebas['bp5 (a) con el estado en la fase practicas la portada la pone en curso, las de antes hechas y prueba-local en espera; va despues de la correccion y de comparar y antes de prueba-local'] = {
   $x = Bp5-Salida 'bp5-curso' 'practicas'
@@ -7367,6 +7371,74 @@ $Pruebas['m46 (c) cada -Opcion de la seccion Uso diario del README existe en el 
   Comprueba 'da al menos 5 scripts' ($comandos -ge 5) "$comandos scripts"
   Comprueba 'comprueba al menos 8 opciones' ($opciones -ge 8) "$opciones opciones"
   Comprueba 'sin rutas reales: solo C:\ruta\...' ($texto -notmatch '(?i)C:\\(Users|Proyectos|Windows)') $texto
+}
+
+# ===================== M49: PMD Y SPOTBUGS YA NO SE EJECUTAN NI SE ENSENAN =====================
+# El 20-11 se quitaron: en el equipo de la persona acababan siempre en "no se pudo medir" y costaban dos Maven por medida. Las buenas practicas miden javac,
+# Lombok y el texto de Java 21; lo guardado de antes con entradas de pmd o spotbugs no vuelve a ensenarse.
+$Pruebas['m49 (a) una pasada completa con el Maven falso: ninguna llamada a Maven lleva spotbugs, pmd ni fb-contrib, y la consola no tiene lineas pmd: ni spotbugs:'] = {
+  $e = Nuevo-Escenario-Contado 'm49-a' @('Clase1')
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $ll = Llamadas-Mvn $e
+  Comprueba 'Maven se llamo (javac, cobertura...)' ($ll.Count -gt 0) (Cola $r.Salida)
+  $malas = @($ll | Where-Object { $_ -match '(?i)spotbugs|pmd|fb-contrib|maven-dependency-plugin' })
+  Igual 'ninguna llamada a Maven lleva spotbugs, pmd ni fb-contrib' 0 $malas.Count
+  Comprueba 'la consola no tiene ninguna linea pmd: ni spotbugs:' ($r.Salida -notmatch '(?im)\b(pmd|spotbugs)\s*:') (Cola $r.Salida)
+  $p = Lee-Json (Get-Ruta $e.Out 'datos/practicas-antes.json')
+  Comprueba 'las buenas practicas se midieron (datos/practicas-antes.json)' ($null -ne $p) (Cola $r.Salida)
+  if ($null -eq $p) { return }
+  Igual 'sus detectores: javac, lombok-a-mano, lombok-qualifier y java21-texto' 'javac lombok-a-mano lombok-qualifier java21-texto' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
+  $h5 = Pagina $e.Out '5-buenas-practicas.html'
+  Comprueba 'la pagina 5 existe y no nombra ni PMD ni SpotBugs' ($h5.Length -gt 0 -and $h5 -notmatch '(?i)pmd|spotbugs')
+}
+
+$Pruebas['m49 (b) un datos/practicas-antes.json de antes de quitarlos, con sus entradas pmd y spotbugs no disponible: ni la consola ni la pagina 5 las ensenan'] = {
+  $e = Nuevo-Escenario 'm49-b' @('Clase1')
+  $r1 = Migra $e (Basicos $e)
+  Igual 'la primera pasada sale con 0' 0 $r1.Codigo
+  $ruta = Get-Ruta $e.Out 'datos/practicas-antes.json'
+  $nuevo = Lee-Json $ruta
+  Comprueba 'la primera pasada midio las buenas practicas' ($null -ne $nuevo) (Cola $r1.Salida)
+  if ($null -eq $nuevo) { return }
+  $no = 'no disponible: Maven ha salido con error (codigo 1)'
+  $f = 'src/main/java/com/acme/life/Carga.java'
+  # lo que dejaba la version de antes: seis detectores, pmd y spotbugs sin medir; y 2 incidencias suyas de un dia en que si midieron. La clave es la de ahora: la cache lo daria por bueno
+  $viejo = [ordered]@{
+    version = 1; cuando = 'antes'; clave = $nuevo.clave; medido = '2026-11-19T11:42:05'; segundos = 33.1; paquete = 'com.acme.life'; referencia = 'batch-terminado'
+    detectores = @(
+      [ordered]@{ id = 'javac'; estado = 'ok'; motivo = ''; segundos = 2.7; corte = $false },
+      [ordered]@{ id = 'pmd'; estado = 'no se pudo medir'; motivo = $no; segundos = 12.5; corte = $false },
+      [ordered]@{ id = 'spotbugs'; estado = 'no se pudo medir'; motivo = $no; segundos = 14.1; corte = $false },
+      [ordered]@{ id = 'lombok-a-mano'; estado = 'no aplica'; motivo = 'la referencia no usa Lombok'; segundos = 0.1; corte = $false },
+      [ordered]@{ id = 'lombok-qualifier'; estado = 'ok'; motivo = ''; segundos = 0.1; corte = $false },
+      [ordered]@{ id = 'java21-texto'; estado = 'ok'; motivo = ''; segundos = 0.1; corte = $false }
+    )
+    sonar = [ordered]@{ reglasWay = 608; reglasAqui = 15 }
+    incidencias = @(
+      (Bp2-Incidencia 'java21' $f 12 'pmd' 'CloseResource' 'sonar' 'S2095' 'Cierra el recurso.' 'sonar'),
+      (Bp2-Incidencia 'java21' $f 30 'spotbugs' 'NP_NULL_ON_SOME_PATH' 'spotbugs' '' 'Puede ser null.' 'sonar'),
+      (Bp2-Incidencia 'java21' $f 40 'javac' 'removal' 'sonar' 'S5738' 'Integer(int) in java.lang.Integer has been deprecated and marked for removal' 'sonar')
+    )
+    arquitectura = $null
+  }
+  Guarda-Json $ruta $viejo
+  # a) la fase del diagnostico ya esta hecha: relanzar no mide otra vez y la pagina sale de lo guardado
+  $r2 = Migra $e (Basicos $e)
+  Igual 'a) la segunda pasada sale con 0' 0 $r2.Codigo
+  Comprueba 'a) la consola no tiene ninguna linea pmd: ni spotbugs:' ($r2.Salida -notmatch '(?im)\b(pmd|spotbugs)\s*:') (Cola $r2.Salida)
+  $h = Pagina $e.Out '5-buenas-practicas.html'
+  Comprueba 'a) la pagina 5 no nombra ni PMD ni SpotBugs' ($h.Length -gt 0 -and $h -notmatch '(?i)pmd|spotbugs')
+  Comprueba 'a) la unica incidencia que queda es la de javac' ((Panel-De $h 'ind-areas').Contains('<p class="bp-ind-n">1</p>') -and $h.Contains('Integer(int) in java.lang.Integer'))
+  Comprueba 'a) las reglas de Sonar que se miden ya no cuentan las de PMD: 1 de 608' ((Panel-De $h 'ind-reglas').Contains('1 <small>de 608</small>')) (Panel-De $h 'ind-reglas')
+  # b) la fase se hace otra vez con el mismo codigo: la cache de practicas da por medido lo de antes y la pagina tampoco lo ensena
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json') -Force
+  $r3 = Migra $e (Basicos $e)
+  Igual 'b) la tercera pasada sale con 0' 0 $r3.Codigo
+  Comprueba 'b) vuelve a diagnosticar (hay hallazgos-antes.json otra vez)' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json')) (Cola $r3.Salida)
+  Comprueba 'b) la consola no tiene ninguna linea pmd: ni spotbugs:' ($r3.Salida -notmatch '(?im)\b(pmd|spotbugs)\s*:') (Cola $r3.Salida)
+  $h3 = Pagina $e.Out '5-buenas-practicas.html'
+  Comprueba 'b) la pagina 5 no nombra ni PMD ni SpotBugs' ($h3.Length -gt 0 -and $h3 -notmatch '(?i)pmd|spotbugs')
 }
 
 # ================================ LANZADOR ================================

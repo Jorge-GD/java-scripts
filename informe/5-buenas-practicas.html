@@ -133,7 +133,6 @@
     </section><!--FIN-->
 <!--TROZO bp-fila-->        <li class="bp-fila bp-q-{{QUE}}"><div class="bp-fb-c"><code class="bp-donde">{{{DONDE}}}</code></div><div class="bp-fb-o">{{{ORIGEN}}}{{{ARREGLADO}}}<span class="bp-regla">{{REGLA}}</span></div><p class="bp-fb-p">{{TEXTO}}</p><div class="bp-fb-extra">{{{EXTRA}}}</div></li><!--FIN-->
 <!--TROZO bp-origen-sonar--><span class="bp-tag"><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Sonar {{CLAVE}}</span><!--FIN-->
-<!--TROZO bp-origen-spotbugs--><span class="bp-tag"><i class="bp-sw bp-sw-s" aria-hidden="true"></i>Sonar (SpotBugs)</span><!--FIN-->
 <!--TROZO bp-origen-referencia--><span class="bp-tag"><i class="bp-sw bp-sw-r" aria-hidden="true"></i>de la referencia</span><!--FIN-->
 <!--TROZO bp-arreglado--><span class="bp-tag">Arreglado: <code>{{COMMIT}}</code></span><!--FIN-->
 <!--TROZO bp-queHago-mano--><span class="bp-que bp-que-mano"><svg aria-hidden="true"><use href="#e-aviso"/></svg>A mano</span><!--FIN-->
@@ -145,7 +144,7 @@
 <!--TROZO bp-queHago-notoca--><span class="bp-que bp-que-notoca"><svg aria-hidden="true"><use href="#e-tampoco"/></svg>No se toca: la referencia tampoco</span><!--FIN-->
 <!--TROZO bp-queHago-notoca-expl-->No se toca: la referencia tampoco lo cumple.<!--FIN-->
 <!--TROZO bp-area-java21-->Java 21<!--FIN-->
-<!--TROZO bp-area-java21-expl-->PMD y SpotBugs sobre el código del migrado, con la regla de Sonar de cada hallazgo, y un detector de texto que avisa de lo que cambia en Java 21: el juego de caracteres por defecto y los formatos de fecha y número.<!--FIN-->
+<!--TROZO bp-area-java21-expl-->Avisos de javac por APIs del JDK marcadas «for removal» y un detector de texto que avisa de lo que cambia en Java 21: el juego de caracteres por defecto y los formatos de fecha y número.<!--FIN-->
 <!--TROZO bp-area-boot3-batch5-->Spring Boot 3 y Batch 5<!--FIN-->
 <!--TROZO bp-area-boot3-batch5-expl-->Avisos de javac por APIs marcadas «for removal», que se borrarán, y lo que la referencia hace distinto con Boot 3 y Batch 5.<!--FIN-->
 <!--TROZO bp-area-lombok-->Lombok<!--FIN-->

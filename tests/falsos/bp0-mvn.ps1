@@ -1,6 +1,5 @@
-# bp0-mvn.ps1 - Maven de mentira para tests/probar-practicas.ps1 (BP-0) y para el test de punta a punta de tests/probar-migracion.ps1.
-# La llamada de javac de practicas.ps1 es exactamente '-B compile'. Esa la hace este falso; todo lo demas va a analisis-mvn.ps1
-# (que es mvn.ps1 y, con SpotBugs o PMD, deja los XML reales de tests/datos/analisis). Variables:
+# bp0-mvn.ps1 - Maven de mentira para tests/probar-practicas.ps1 (BP-0). La unica llamada que hace practicas.ps1 es la de javac, '-B compile':
+# este falso la apunta (BP0_LLAMADAS) y la contesta; cualquier otra llamada tambien se apunta, y asi las pruebas cuentan las que sobran. Variables:
 #   BP0_LLAMADAS       fichero: cada llamada anade '<carpeta>|<argumentos>|clases-antes=<n>' (n = ficheros en target/classes al llegar).
 #   BP0_JAVAC_SALIDA   fichero con lo que imprime javac; '{{RAIZ}}' se cambia por la carpeta donde se lanza Maven.
 #   BP0_JAVAC_ERROR    no compila: imprime '[ERROR] COMPILATION ERROR :' y '[ERROR] <este texto>' y sale con 1.
@@ -13,10 +12,6 @@ if ($env:BP0_LLAMADAS) {
   $antes = 0
   if (Test-Path -LiteralPath $clases) { $antes = @(Get-ChildItem -LiteralPath $clases -Recurse -File).Count }
   [System.IO.File]::AppendAllText($env:BP0_LLAMADAS, $raiz + '|' + ($args -join ' ') + '|clases-antes=' + $antes + "`n")
-}
-if (-not ($args.Count -eq 2 -and $args[0] -ceq '-B' -and $args[1] -ceq 'compile')) {
-  & (Join-Path $PSScriptRoot 'analisis-mvn.ps1') @args
-  exit $LASTEXITCODE
 }
 if ($env:BP0_JAVAC_ESPERA) { Start-Sleep -Seconds ([int]$env:BP0_JAVAC_ESPERA) }
 '[INFO] Scanning for projects...'
