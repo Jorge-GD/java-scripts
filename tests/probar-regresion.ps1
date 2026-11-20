@@ -332,6 +332,32 @@ $Pruebas['m33 (r) un caso con la fecha, la hora o la ruta de hoy no se commitea,
   }
 }
 
+$Pruebas['m47 (r2) un original guardado de otro dia con su fecha en el nombre sale igual, pero no vale como test fijo: -Regresion lo quita'] = {
+  $e = Escenario-M33 'm47-r2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() '' 'estable-texto'
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  # lo guardado del original pasa a ser de hace dos dias: el nombre de sus ficheros y los dias de originales.json
+  $inv = [System.Globalization.CultureInfo]::InvariantCulture
+  $hoy = (Get-Date).ToString('yyyyMMdd', $inv)
+  $antes = (Get-Date).AddDays(-2)
+  foreach ($n in @('original', 'original-2')) {
+    foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $e.Local "salidas/$n") -Recurse -File -Filter "resultado_$hoy.txt")) { Rename-Item -LiteralPath $f.FullName -NewName "resultado_$($antes.ToString('yyyyMMdd', $inv)).txt" }
+  }
+  $f = Get-Ruta $e.Local 'salidas/originales.json'
+  $o = Lee-Json $f
+  foreach ($c in @($o.casos)) { $c.dias = @($antes.ToString('yyyy-MM-dd', $inv)) }
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $o -Depth 6))
+  $r = Prueba $e @('-Regresion') '' 'estable-texto'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el original se reutiliza' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'los casos salen iguales: cada lado se normaliza con sus dias' 'igual,igual' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.resultado })) -join ',')
+  $j = Lee-Json $e.Regresion
+  Igual 'los dos casos se quitan' 'cargaJob/caso-01,cargaJob/caso-02' ((@($j.quitados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Comprueba 'antes de probarlos: su esperado lleva la fecha de su dia' ($j.quitados[0].motivo -match 'ficheros/salida/resultado.*lleva la fecha') $j.quitados[0].motivo
+  Comprueba 'y no llega a hacer la copia ni a ejecutar Maven con ella' (-not (Test-Path -LiteralPath ($e.Migrado + '-regresion'))) ''
+  Igual 'sin commit' '' $j.commit
+}
+
 $Pruebas['m33 (s) si git commit falla (un hook que no deja): se dice, no hay commit y la rama de rescate queda como estaba, tambien lo que habia en ella'] = {
   $e = Escenario-M33 'm33-s' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   # lo que -Regresion cambiaria o borraria en la rama: unas propiedades de JUnit de otro y un caso de un lanzamiento anterior
