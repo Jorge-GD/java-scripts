@@ -129,7 +129,7 @@ Para encontrar el commit que rompe un caso:
 - `-Desde <tu-rama>` busca entre los commits que la rama de rescate tiene encima de la tuya.
 - Dice «el caso X era igual en <commit> y se rompe en <commit> (<asunto>)».
 - Con `-Deshacer`, hace `git revert` de ese commit (nunca un reset) y vuelve a ejecutar el caso. Si no existe `C:\ruta\migrado-rescate`, el revert va a tu rama.
-- `prueba-local.ps1` lanzado así no rehace las páginas. Para ver la página 3 al día, relanza `migracion.ps1` con las mismas opciones. Con un commit nuevo en la rama de rescate, repite la comparación solo de las fichas cuyos ficheros del migrado han cambiado (tarda y gasta Copilot) y la prueba en local entera. Un commit que no toca esos ficheros, como uno solo de `src/test`, no repite ninguna comparación. Las páginas 2 y 4 no cambian.
+- `prueba-local.ps1` lanzado así no rehace las páginas. Para ver la página 3 al día, relanza `migracion.ps1` con las mismas opciones. Con un commit nuevo en la rama de rescate, repite la comparación solo de las fichas cuyos ficheros del migrado han cambiado (tarda y gasta Copilot) y la prueba en local entera. Un commit que no toca esos ficheros, como uno solo de `src/test`, no repite ninguna comparación, ni la de las clases ni la de los `.sh`. Las páginas 2 y 4 no cambian.
 
 ### Arreglar lo que venía distinto: `-Reparar`
 
