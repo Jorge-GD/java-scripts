@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, analisis.ps1, practicas.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\, informe\ y analisis\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -131,7 +131,6 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'tareas.ps1')
 . (Join-Path $PSScriptRoot 'informe.ps1')
 . (Join-Path $PSScriptRoot 'lanzadores.ps1')
-. (Join-Path $PSScriptRoot 'analisis.ps1')
 . (Join-Path $PSScriptRoot 'practicas.ps1')
 . (Join-Path $PSScriptRoot 'huella.ps1')
 . (Join-Path $PSScriptRoot 'arreglo-practicas.ps1')
@@ -215,7 +214,7 @@ function Select-Modelo {
 # El diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y sus hallazgos se copian a datos\ como
 # hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
 # tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile) y las buenas practicas
-# (datos\practicas-<Cuando>.json y su registro, con Invoke-Practicas de practicas.ps1: javac, Lombok, PMD y SpotBugs, hasta
+# (datos\practicas-<Cuando>.json y su registro, con Invoke-Practicas de practicas.ps1: javac, Lombok y el texto de Java 21, hasta
 # $Cfg.SegundosPracticas s; nunca para el diagnostico: lo que no se pueda medir lo dice el JSON). Si el motor falla, parada 'motor'
 # y devuelve $false.
 function Invoke-DiagnosticoMotor([string]$Cuando) {

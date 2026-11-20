@@ -2,7 +2,7 @@
 preflight.ps1 - Una sola pasada, antes de migracion.ps1, para saber si este equipo, Copilot y
 Maven sirven para lo que viene. Mide y cuenta; no arregla ni cambia ningun repo tuyo.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, analisis.ps1 y las carpetas tareas\, preflight\, analisis\ y tests\ junto a este script.
+Necesita comun.ps1, tareas.ps1 y las carpetas tareas\, preflight\ y tests\ junto a este script.
 
 USO (todo es opcional)
   .\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>
@@ -18,9 +18,9 @@ BLOQUES (cada uno en su try; el fichero se reescribe al acabar cada bloque)
   3 copilot       que banderas conoce (sin llamar a ningun modelo)
   4 aptitud       la ficha de un fichero de juguete, 3 veces + esfuerzo alto + herramientas limitadas
   5 paralelo      4 fichas de juguete a la vez
-  6 maven         compilar, JaCoCo, OpenRewrite, y SpotBugs con PMD, sobre preflight\juguete (Maven de los
+  6 maven         compilar, JaCoCo y OpenRewrite sobre preflight\juguete (Maven de los
                   ajustes, el mvn del PATH o el mvnw de -Migrado, por este orden; la linea 'maven usado' dice
-                  cual). Si SpotBugs y PMD no se descargan es un aviso, no un fallo: el paso sonar va sin ellos
+                  cual)
   7 forma         numeros de los repos (git, tests, pom, sftp, config, ficheros locales) y el
                   diagnostico de rescate.ps1, con cuantas reglas incumple la propia referencia
                   (solo numeros y palabras fijas). El diagnostico corre sobre un clon temporal del
@@ -93,7 +93,6 @@ $script:MavenBien = $null   # el primer paso del bloque 6: $true, $false o $null
 try {
   . (Join-Path $PSScriptRoot 'comun.ps1')
   . (Join-Path $PSScriptRoot 'tareas.ps1')
-  . (Join-Path $PSScriptRoot 'analisis.ps1')
 }
 catch {
   $l = @($Cabecera, '== 1 entorno', "modo de lenguaje: $modo", ('fallo: no se pudo cargar la biblioteca (' + $_.Exception.GetType().Name + ')'), '== fin', 'bloques con fallo: 1', 'duracion: 0 min')
@@ -1061,14 +1060,6 @@ try {
       $msg = Get-ErrorMaven $r.Texto
     }
     Add-PasoMaven 'openrewrite' $bien $seg $msg
-    # SpotBugs (con fb-contrib) y PMD por coordenadas, como el paso sonar de rescate.ps1: si no se descargan es un aviso, no un fallo
-    $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-    $a = Invoke-Analisis $dir
-    Add-Linea ('spotbugs y pmd: ' + (Get-SiNo ($a.Estado -ceq 'ok')) + " | $([int]$reloj.Elapsed.TotalSeconds) s")
-    if ($a.Estado -cne 'ok') {
-      Add-Linea ('aviso: ' + (Get-Seguro ($a.Estado -replace '^no disponible: ', '')) + '; el paso sonar funcionara sin ellos')
-      if ($a.Detalle) { Add-Linea ('detalle: ' + (Get-Seguro $a.Detalle)) }
-    }
   }
 
   # ----------------------------------- 7 -----------------------------------

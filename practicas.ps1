@@ -1,11 +1,11 @@
 <#
 practicas.ps1 - Mide las buenas practicas del repo migrado, sin IA, y deja datos\practicas-<Cuando>.json (el formato esta en
 BP-datos.md). No se ejecuta solo: solo funciones. Se carga con '. (Join-Path $PSScriptRoot 'practicas.ps1')' despues de comun.ps1,
-tareas.ps1 (Write-Json, Read-Json, Get-Hash8) y analisis.ps1 (Invoke-Analisis, Get-RelRepo). Solo ASCII. Vale para Windows
-PowerShell 5.1 y para PowerShell 7.
+tareas.ps1 (Write-Json, Read-Json, Get-Hash8). Solo ASCII. Vale para Windows PowerShell 5.1 y para PowerShell 7. PMD y SpotBugs se
+quitaron el 20-11: en el equipo de la persona acababan siempre en 'no se pudo medir' y costaban dos Maven por medida.
 
   Invoke-Practicas <repo> <referencia> <cuando> <datos> <registros> <hallazgos del motor>
-      Mide el repo migrado con 6 detectores y escribe <datos>\practicas-<cuando>.json y <registros>\practicas-<cuando>.log
+      Mide el repo migrado con 4 detectores y escribe <datos>\practicas-<cuando>.json y <registros>\practicas-<cuando>.log
       (la salida de Maven de javac y, al final, un resumen). Nunca lanza una excepcion ni para el diagnostico: un detector que falla
       queda en 'no se pudo medir' con su motivo y los demas siguen. El JSON se escribe siempre.
         javac            mvn -B compile (sin -q ni clean; antes se borran solo target\classes y target\maven-status). Cada
@@ -15,28 +15,37 @@ PowerShell 5.1 y para PowerShell 7.
                          triviales que ademas estan escritos en el .java (los que genera Lombok solo estan en el .class).
         lombok-qualifier Solo leyendo el codigo: clase con @RequiredArgsConstructor o @AllArgsConstructor y un campo con @Qualifier
                          o @Value sin 'lombok.copyableAnnotations +=' de esa anotacion en ningun lombok.config (carpeta y ancestros).
-        pmd, spotbugs    Invoke-Analisis (analisis.ps1). Las claves de Sonar de PMD salen de analisis\pmd-sonar.xml.
         java21-texto     Solo leyendo el codigo de src\main\java, sin comentarios: lo que cambia de texto en Java 21. charset-por-defecto
                          (JEP 400, Java 18: el juego de caracteres por defecto pasa a UTF-8) y formato-cldr (Java 9: los nombres de mes y
                          dia y los separadores de numeros salen de CLDR). Solo avisa donde mirar; el arreglo depende del servidor.
-  Tope: $Cfg.SegundosPracticas en total. Orden: javac, Lombok y, al final, Invoke-Analisis con lo que quede; si quedan menos de
-  $Cfg.SegundosMinAnalisis s, pmd y spotbugs quedan en 'no medido (tope)'.
+  Tope: $Cfg.SegundosPracticas en total, para javac y Lombok (el que se pasa queda en 'no medido (tope)').
   Cache: la clave es el HEAD del migrado mas su git status --porcelain (sin target, .rescate ni migracion-*) y la huella de cada fichero
   cambiado; si el JSON de ese <cuando> ya tiene la misma clave, no se mide.
-  queHago de cada incidencia: paso2 si el motor ya dice ese fichero y esa linea en sus hallazgos; si no, sonar (origen sonar o
-  spotbugs) o mano (origen referencia). 'notoca' es de BP-1.
+  queHago de cada incidencia: paso2 si el motor ya dice ese fichero y esa linea en sus hallazgos; si no, sonar (origen sonar) o
+  mano (origen referencia). 'notoca' es de BP-1.
+  Un practicas-<Cuando>.json de antes del 20-11 trae los detectores pmd y spotbugs: no se corrige aqui; informe.ps1 los ignora al leerlo.
 #>
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
   SegundosPracticas   = 300    # tope de toda la medida
-  SegundosMinAnalisis = 30     # con menos segundos que estos, PMD y SpotBugs no se lanzan
   JavapExe            = ''     # javap; vacio = el de JAVA_HOME
   LineaMaxJavap       = 7500   # caracteres de argumentos de cada llamada a javap (Windows corta la linea de comandos en 8.191)
   SonarReglasWay      = 608    # reglas del perfil Sonar way de Java: cita [c7] de buenas-practicas/PROPUESTA-fable.md
+  SonarReglasAqui     = 1      # las de Sonar que se miden aqui: S5738 (javac, 'marked for removal'). informe.ps1 pone este 1 a lo guardado antes de quitar PMD
 }
 
 # ============================== UTILIDADES ==============================
+function ConvertTo-RutaBarra([string]$Ruta) { return (($Ruta -replace '\\', '/').TrimEnd('/')) }
+
+# La ruta relativa al repo y con '/', o la misma ruta (con '/') si no cuelga de el.
+function Get-RelRepo([string]$Repo, [string]$Ruta) {
+  $r = ConvertTo-RutaBarra $Repo
+  $x = ConvertTo-RutaBarra $Ruta
+  if ($x.StartsWith($r + '/', [System.StringComparison]::OrdinalIgnoreCase)) { return $x.Substring($r.Length + 1) }
+  return $x
+}
+
 function New-Incidencia([string]$Area, [string]$Fichero, [int]$Linea, [string]$Herramienta, [string]$Regla, [string]$Origen, [string]$Sonar, [string]$Texto) {
   if ($Texto.Length -gt 300) { $Texto = $Texto.Substring(0, 300) }
   return [ordered]@{ area = $Area; fichero = $Fichero; linea = $Linea; herramienta = $Herramienta; regla = $Regla; origen = $Origen; sonar = $Sonar; texto = $Texto; queHago = '' }
@@ -65,21 +74,6 @@ function Invoke-ConTope([double]$Segundos, [scriptblock]$Cuerpo) {
   $Cfg.MinutosMaven = [Math]::Max($Segundos, 1) / 60
   try { return (& $Cuerpo) }
   finally { $Cfg.MinutosMaven = $minutosAntes }
-}
-
-# Las claves de Sonar de pmd-sonar.xml: nombre de la regla de PMD -> 'S1234'. Cada regla lleva en la linea de encima un comentario
-# '<!-- java:S1234 ... -->'. Ese fichero es la fuente; no se copia la lista a otro sitio.
-function Get-ClavesSonar {
-  $claves = @{}
-  $actual = ''
-  foreach ($l in [System.IO.File]::ReadAllLines($Cfg.PmdReglas)) {
-    if ($l -match '<!--\s*java:(S\d+)\b') { $actual = $Matches[1]; continue }
-    if ($l -match '<rule\s+ref="[^"]*/(\w+)"') {
-      if ($actual) { $claves[$Matches[1]] = $actual }
-      $actual = ''
-    }
-  }
-  return $claves
 }
 
 # El paquete comun a todos los .java de src/main/java (por sus carpetas), o '' si no hay.
@@ -426,28 +420,7 @@ function Get-ResultadoJava21Texto([string]$Repo) {
   return @{ Estado = 'ok'; Incidencias = $inc }
 }
 
-# ============================ PMD Y SPOTBUGS ============================
-# Lo que Invoke-Analisis ($A) da de una herramienta ('pmd' o 'spotbugs'). Sin $A (no cabia en el tope) o con tope, no medido (tope); con
-# cualquier otro estado, el estado es el motivo.
-function Get-ResultadoAnalisis($A, [string]$Herramienta) {
-  if ($null -eq $A -or $A.Estado -ceq 'no disponible: tope') { return @{ Estado = 'no medido (tope)' } }
-  if ($A.Estado -cne 'ok') { return @{ Estado = 'no se pudo medir'; Motivo = $A.Estado } }
-  $claves = @{}
-  if ($Herramienta -ceq 'pmd') { $claves = Get-ClavesSonar }
-  $inc = @()
-  foreach ($h in @($A.Hallazgos | Where-Object { $_.Herramienta -ceq $Herramienta })) {
-    $sonar = ''
-    $origen = 'spotbugs'   # SpotBugs y fb-contrib: el Sonar del equipo tambien los lanza
-    if ($Herramienta -ceq 'pmd') {
-      $origen = 'referencia'
-      if ($claves.ContainsKey($h.Regla)) { $sonar = $claves[$h.Regla]; $origen = 'sonar' }
-    }
-    $inc += , (New-Incidencia 'java21' $h.Fichero $h.Linea $Herramienta $h.Regla $origen $sonar $h.Mensaje)
-  }
-  return @{ Estado = 'ok'; Incidencias = $inc }
-}
-
-# queHago: paso2 si los hallazgos del motor dicen el mismo fichero y la misma linea; si no, sonar (origen sonar o spotbugs) o mano.
+# queHago: paso2 si los hallazgos del motor dicen el mismo fichero y la misma linea; si no, sonar (origen sonar) o mano.
 # ('notoca' es de BP-1.) Los hallazgos del motor son una matriz de {Cat, Sev, Fichero, Linea, Detalle}; si no se pueden leer, ninguna es paso2.
 function Set-QueHago($Incidencias, [string]$HallazgosMotor) {
   $motor = @{}
@@ -459,7 +432,7 @@ function Set-QueHago($Incidencias, [string]$HallazgosMotor) {
   }
   foreach ($i in @($Incidencias)) {
     if ($motor.ContainsKey("$($i.fichero)|$($i.linea)")) { $i.queHago = 'paso2' }
-    elseif ($i.origen -ceq 'sonar' -or $i.origen -ceq 'spotbugs') { $i.queHago = 'sonar' }
+    elseif ($i.origen -ceq 'sonar') { $i.queHago = 'sonar' }
     else { $i.queHago = 'mano' }
   }
 }
@@ -467,7 +440,7 @@ function Set-QueHago($Incidencias, [string]$HallazgosMotor) {
 # ================================ MEDIR ================================
 function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [string]$Datos, [string]$Registros, [string]$HallazgosMotor) {
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-  $ids = @('javac', 'pmd', 'spotbugs', 'lombok-a-mano', 'lombok-qualifier', 'java21-texto')   # el orden del JSON
+  $ids = @('javac', 'lombok-a-mano', 'lombok-qualifier', 'java21-texto')   # el orden del JSON
   $json = Join-Path $Datos "practicas-$Cuando.json"
   $registro = Join-Path $Registros "practicas-$Cuando.log"
   $res = @{}
@@ -490,25 +463,6 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     $res['lombok-a-mano'] = Measure-Detector 'lombok-a-mano' { Get-ResultadoLombokAMano $Repo $Referencia $fin }
     $res['lombok-qualifier'] = Measure-Detector 'lombok-qualifier' { Get-ResultadoLombokQualifier $Repo }
     $res['java21-texto'] = Measure-Detector 'java21-texto' { Get-ResultadoJava21Texto $Repo }
-    # PMD y SpotBugs, al final y con el tiempo que quede. Invoke-Analisis no dice cuanto tardo cada uno: SpotBugs deja su registro al acabar.
-    $analisis = $null
-    $segSpotbugs = 0
-    $segPmd = 0
-    $quedan = Get-Quedan $fin
-    if ($quedan -ge [double]$Cfg.SegundosMinAnalisis) {
-      $inicio = Get-Date
-      $analisis = Invoke-ConTope $quedan { Invoke-Analisis $Repo }
-      $total = ((Get-Date) - $inicio).TotalSeconds
-      $segSpotbugs = $total
-      $logSpotbugs = Join-Ruta $Repo 'target/analisis/spotbugs.log'
-      if (Test-Path -LiteralPath $logSpotbugs) {
-        $hasta = ((Get-Item -LiteralPath $logSpotbugs).LastWriteTime - $inicio).TotalSeconds
-        if ($hasta -ge 0 -and $hasta -le $total) { $segSpotbugs = $hasta }
-      }
-      $segPmd = $total - $segSpotbugs
-    }
-    $res['spotbugs'] = Measure-Detector 'spotbugs' { Get-ResultadoAnalisis $analisis 'spotbugs' } $segSpotbugs
-    $res['pmd'] = Measure-Detector 'pmd' { Get-ResultadoAnalisis $analisis 'pmd' } $segPmd
   }
   catch {
     $fallo = $_.Exception.Message
@@ -527,8 +481,6 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     Set-QueHago $incidencias $HallazgosMotor
     $nombreReferencia = ''
     if ($Referencia) { $nombreReferencia = Split-Path ($Referencia.TrimEnd('\', '/')) -Leaf }
-    $claves = @{}
-    try { $claves = Get-ClavesSonar } catch { $claves = @{} }
     $segundos = [Math]::Round($reloj.Elapsed.TotalSeconds, 1)
     $datosJson = [ordered]@{
       version      = 1
@@ -539,7 +491,7 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
       paquete      = (Get-PaqueteBase $Repo)
       referencia   = $nombreReferencia
       detectores   = @($detectores)
-      sonar        = [ordered]@{ reglasWay = [int]$Cfg.SonarReglasWay; reglasAqui = @(@($claves.Values) + 'S5738' | Select-Object -Unique).Count }
+      sonar        = [ordered]@{ reglasWay = [int]$Cfg.SonarReglasWay; reglasAqui = [int]$Cfg.SonarReglasAqui }
       incidencias  = @($incidencias)
       arquitectura = $null
     }

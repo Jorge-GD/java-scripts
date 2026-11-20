@@ -1456,17 +1456,29 @@ function Get-CuerpoCorrecciones($D, $T, [string]$Cuerpo) {
 $AreasPractica = @('java21', 'boot3-batch5', 'lombok', 'arquitectura')
 $QueHagoPractica = @('mano', 'paso2', 'sonar', 'notoca')
 
+# Lo guardado antes del 20-11 trae los detectores pmd y spotbugs (y a veces sus incidencias): se quitaron y la pagina ya no los ensena. Su
+# sonar.reglasAqui contaba las reglas de PMD; ahora solo queda S5738 (la de javac): el mismo 1 que escribe practicas.ps1 (SonarReglasAqui).
+function Remove-AnalisisPractica($P) {
+  $viejos = @(@($P.detectores) | Where-Object { $_ -and @('pmd', 'spotbugs') -ccontains [string]$_.id })
+  if ($viejos.Count -gt 0) {
+    $P.detectores = @(@($P.detectores) | Where-Object { $_ -and @('pmd', 'spotbugs') -cnotcontains [string]$_.id })
+    $P.incidencias = @(@($P.incidencias) | Where-Object { $_ -and @('pmd', 'spotbugs') -cnotcontains [string]$_.herramienta })
+    if ($P.sonar) { $P.sonar.reglasAqui = 1 }
+  }
+  return $P
+}
+
 # datos\practicas-despues.json si existe y se lee y, si no, datos\practicas-antes.json (otro que falte o este roto equivale a no tenerlo). $null si no hay ninguno.
 function Read-Practicas([string]$Datos) {
   foreach ($cuando in @('despues', 'antes')) {
     $p = Read-JsonSuave (Join-Path $Datos "practicas-$cuando.json")
-    if ($p) { return $p }
+    if ($p) { return (Remove-AnalisisPractica $p) }
   }
   return $null
 }
 
 # Las incidencias del JSON con lo que las vistas necesitan: Area, Que (un queHago que no se conoce es "mano": todo lo demas), ConSonar
-# (origen sonar o spotbugs: el Sonar del equipo tambien lanza SpotBugs), Commit (los 7 primeros caracteres del commit con que arreglo-practicas.ps1
+# (origen sonar), Commit (los 7 primeros caracteres del commit con que arreglo-practicas.ps1
 # paso a Lombok el fichero de una incidencia getter-setter-a-mano; '' si no, o si no hay datos\practicas-arreglos.json) e I, la incidencia tal cual.
 function Get-IncidenciasPractica($P, $Arreglos) {
   $commits = @{}
@@ -1480,7 +1492,7 @@ function Get-IncidenciasPractica($P, $Arreglos) {
     if ($QueHagoPractica -cnotcontains $que) { $que = 'mano' }
     $commit = ''
     if ([string]$i.regla -ceq 'getter-setter-a-mano' -and $commits.ContainsKey([string]$i.fichero)) { $commit = $commits[[string]$i.fichero] }
-    $r += [pscustomobject]@{ Area = [string]$i.area; Que = $que; ConSonar = (@('sonar', 'spotbugs') -ccontains [string]$i.origen); Commit = $commit; I = $i }
+    $r += [pscustomobject]@{ Area = [string]$i.area; Que = $que; ConSonar = ([string]$i.origen -ceq 'sonar'); Commit = $commit; I = $i }
   }
   return $r
 }
@@ -1511,7 +1523,6 @@ function Get-DondePractica($T, $I) {
 
 function Get-OrigenPractica($T, $I) {
   if ($I.origen -ceq 'sonar') { return (Format-Trozo $T 'bp-origen-sonar' @{ CLAVE = [string]$I.sonar }) }
-  if ($I.origen -ceq 'spotbugs') { return (Format-Trozo $T 'bp-origen-spotbugs') }
   return (Format-Trozo $T 'bp-origen-referencia')
 }
 
