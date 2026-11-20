@@ -1451,10 +1451,10 @@ $Pruebas['m25 (h) -Reparar: relanzar con el mismo HEAD y la tarea atascada no ll
   $r = Prueba $e @('-Reparar') 'reparar-arregla'
   Igual 'al relanzar sale con 2' 2 $r.Codigo
   Igual 'sin ninguna llamada nueva a reparar' $n (Llamadas-Reparar $e).Count
-  Comprueba 'la consola dice que ya esta probado en este commit' ($r.Salida -match 'ya probado en este commit') (Cola $r.Salida)
+  Comprueba 'la consola dice que ya esta probado con este codigo del migrado' ($r.Salida -match 'ya probado con este codigo del migrado') (Cola $r.Salida)
   $rep = @(Reparaciones $e)
   Igual 'reparaciones sigue con una entrada, no arreglada' 'no arreglado' $rep[0].resultado
-  Comprueba 'con el motivo de antes tras lo de ya probado' ($rep[0].motivo -match '^ya probado en este commit: ' -and $rep[0].motivo.Contains(($motivo -split "`n")[0])) $rep[0].motivo
+  Comprueba 'con el motivo de antes tras lo de ya probado' ($rep[0].motivo -match '^ya probado con este codigo del migrado: ' -and $rep[0].motivo.Contains(($motivo -split "`n")[0])) $rep[0].motivo
 }
 
 $Pruebas['m25 (i) -Reparar: con dos claves se prueba primero la que tienen mas casos; MaxReparaciones corta y la consola dice lo que queda sin probar'] = {
@@ -1862,7 +1862,7 @@ $Pruebas['m29 (c) -RehacerArnes -Reparar: una clave que salio no se arregla se v
   Igual 'con -RehacerArnes -Reparar sale con 2' 2 $r.Codigo
   Igual 'se rehace el arnes del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
   Igual 'y la misma clave se vuelve a probar: otra llamada de reparar' 2 (Llamadas-Reparar $e).Count
-  Comprueba 'no dice que ya estaba probada en este commit' ($r.Salida -notmatch 'ya probado en este commit') (Cola $r.Salida)
+  Comprueba 'no dice que ya estaba probada con este codigo del migrado' ($r.Salida -notmatch 'ya probado con este codigo del migrado') (Cola $r.Salida)
   $rep = @(Reparaciones $e)
   Igual 'sigue una sola reparacion' 1 $rep.Count
   Igual 'la clave vuelve a salir no se arregla' 'no se arregla' $rep[0].resultado
@@ -3483,7 +3483,7 @@ $Pruebas['m43 (e) -Reparar: una clave que salio no se arregla no se vuelve a pro
   $r = Prueba $e @('-Reparar') 'reparar-arregla'
   Igual 'al relanzar sale con 2' 2 $r.Codigo
   Igual 'ninguna llamada nueva a reparar' 1 (Llamadas-Reparar $e).Count
-  Comprueba 'la consola dice que ya esta probado' ($r.Salida -match 'ya probado') (Cola $r.Salida)
+  Comprueba 'la consola dice por que no se arregla, con el motivo de la IA' ($r.Salida -match 'simula el correo') (Cola $r.Salida)
   $t1 = @(Tareas-Reparar-M43 $e)
   Igual 'sigue siendo una sola tarea, con el mismo id' $t0[0].id (($t1 | ForEach-Object { $_.id }) -join ',')
   $rep = @(Reparaciones $e)
@@ -3505,34 +3505,47 @@ $Pruebas['m43 (f) -Reparar: el mismo commit pero en src/main cambia el id: la cl
   Igual 'un commit que cambia el pom.xml tambien cambia el id: otra llamada' 3 (Llamadas-Reparar $e).Count
 }
 
-$Pruebas['m43 (g) -Reparar: una tarea guardada con el id de antes (con el HEAD) y el mismo HEAD: se usa su veredicto sin llamar, y queda con el id nuevo; con otra huella de plantilla no vale'] = {
+# Cambia la tarea de reparar guardada al id que tenia antes de M43 (el HEAD en vez del codigo) y le pone $Huella (la de la plantilla de ahora si
+# no se da). Devuelve la tarea como era, con su id de ahora en idNuevo.
+function M43-Tarea-Vieja($E, [string]$Huella = '') {
+  $t = @(Tareas-Reparar-M43 $E)[0]
+  $idNuevo = $t.id
+  $head = GitEn $E.Wt @('rev-parse', 'HEAD')
+  $hashArnes = Hash8-M43 (Lee $E.Local ('arnes/migrado/' + (Tarea-Arnes $E 'migrado').entradas.test))
+  $viejo = 'reparar-' + (Hash8-M43 "$head|$($t.entradas.job)|$($t.entradas.caso)|$($t.entradas.clave)|$hashArnes")
+  Comprueba 'el id de antes no es el de ahora' ($viejo -cne $idNuevo) $viejo
+  if (-not $Huella) { $Huella = Hash8-M43 (([System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'tareas/reparar.md')) -replace "`r`n", "`n") + '|' + $viejo) }
+  Remove-Item -LiteralPath (Get-Ruta $E.Local ('tareas/' + $idNuevo + '.json'))
+  $t.id = $viejo
+  $t.salida = "prueba-local/reparar/$viejo"
+  $t.entradas.huella = $Huella
+  [System.IO.File]::WriteAllText((Get-Ruta $E.Local ('tareas/' + $viejo + '.json')), (ConvertTo-Json -InputObject $t -Depth 8))
+  return [pscustomobject]@{ IdNuevo = $idNuevo; Tarea = $t }
+}
+
+$Pruebas['m43 (g) -Reparar: una tarea guardada con el id de antes (con el HEAD) y el mismo HEAD: se usa su veredicto sin llamar, y queda con el id nuevo'] = {
   $e = M43-No-Se-Arregla 'm43-g'
-  $t0 = @(Tareas-Reparar-M43 $e)
-  $head = GitEn $e.Wt @('rev-parse', 'HEAD')
-  $arnes = Tarea-Arnes $e 'migrado'
-  $hashArnes = Hash8-M43 (Lee $e.Local ("arnes/migrado/" + $arnes.entradas.test))
-  $viejo = 'reparar-' + (Hash8-M43 "$head|$($t0[0].entradas.job)|$($t0[0].entradas.caso)|$($t0[0].entradas.clave)|$hashArnes")
-  Comprueba 'el id de antes no es el de ahora' ($viejo -cne $t0[0].id) $viejo
-  $plantilla = ([System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'tareas/reparar.md')) -replace "`r`n", "`n")
-  # la tarea de antes: con el id viejo y su huella (plantilla + id); la de ahora, fuera
-  $v = $t0[0]
-  $v.id = $viejo
-  $v.salida = "prueba-local/reparar/$viejo"
-  $v.entradas.huella = Hash8-M43 ($plantilla + '|' + $viejo)
-  Remove-Item -LiteralPath (Get-Ruta $e.Local ('tareas/' + $t0[0].id + '.json'))
-  [System.IO.File]::WriteAllText((Get-Ruta $e.Local ('tareas/' + $viejo + '.json')), (ConvertTo-Json -InputObject $v -Depth 8))
+  $v = M43-Tarea-Vieja $e
   $r = Prueba $e @('-Reparar') 'reparar-arregla'
   Igual 'sale con 2: el veredicto es el de antes' 2 $r.Codigo
   Igual 'ninguna llamada nueva a reparar' 1 (Llamadas-Reparar $e).Count
-  $nuevo = Get-Ruta $e.Local ('tareas/' + $t0[0].id + '.json')
+  $nuevo = Get-Ruta $e.Local ('tareas/' + $v.IdNuevo + '.json')
   Comprueba 'la tarea queda guardada con el id nuevo' (Test-Path -LiteralPath $nuevo) $nuevo
   if (Test-Path -LiteralPath $nuevo) {
     $n = Lee-Json $nuevo
     Igual 'atascada, con el veredicto de antes' 'atascada|no se arregla' "$($n.estado)|$($n.ultimoEstado)"
-    Igual 'y el motivo de antes' $v.motivo $n.motivo
+    Igual 'y el motivo de antes' $v.Tarea.motivo $n.motivo
   }
   $rep = @(Reparaciones $e)
   Igual 'reparaciones dice no se arregla' 'no se arregla' $rep[0].resultado
+}
+
+$Pruebas['m43 (g2) -Reparar: la tarea con el id de antes pero hecha con otra plantilla (otra huella) no vale: la clave se vuelve a probar'] = {
+  $e = M43-No-Se-Arregla 'm43-g2'
+  $v = M43-Tarea-Vieja $e 'plantilla-vieja'
+  $r = Prueba $e @('-Reparar') 'reparar-no'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'una llamada mas a reparar' 2 (Llamadas-Reparar $e).Count
 }
 
 # ================================ LANZADOR ================================
