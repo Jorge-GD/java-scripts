@@ -2444,7 +2444,7 @@ $Pruebas['m32 (d) prueba-local-tiempos.json: una fila por ejecucion de un caso, 
   $antes = $t.Count
   $r = Prueba $e
   $t2 = @(Tiempos $e)
-  Igual 'el segundo lanzamiento anade las suyas (las del original, dos veces, y el migrado) sin pisar las de antes' ($antes + 6) $t2.Count
+  Igual 'el segundo lanzamiento anade las suyas (solo las del migrado: el original no ha cambiado y se reutiliza) sin pisar las de antes' ($antes + 2) $t2.Count
   Igual 'las primeras siguen como estaban' (($t | ForEach-Object { "$($_.lado)|$($_.caso)|$($_.cuando)" }) -join ',') ((@($t2 | Select-Object -First $antes) | ForEach-Object { "$($_.lado)|$($_.caso)|$($_.cuando)" }) -join ',')
   Comprueba 'la media de la consola es la de este lanzamiento' ($r.Salida -match 'Maven por caso: [\d\.]+ s de media; el test 0\.3 s') (Cola $r.Salida)
 }
