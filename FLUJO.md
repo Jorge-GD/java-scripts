@@ -119,6 +119,10 @@ La prueba en local va al final de cada `migracion.ps1`. Mira la página 3 o el r
 | `no determinista` | El original da dos salidas distintas con la misma entrada. No cuenta |
 | `no se pudo preparar` o `sin probar en local` | Ese caso se prueba en pre |
 
+- **Rutas largas.** Windows no pasa de 259 letras en una ruta: un fichero que no cabe en `prueba-local\salidas` se guarda con un nombre corto (`<20 primeras letras>~<hash><extensión>`, el mismo en el original, el original-2, el migrado y el caso vacío), y uno que ni así cabe no se guarda: el caso sale `distinto` con ese fichero y su motivo, y la consola te sugiere mover el proyecto a una carpeta más corta.
+- **Por qué falla un caso.** Cuando un lado acaba `FAILED`, `EXCEPCION` o sin `estado.txt`, la consola, la página 3, `prueba-local.json` y el prompt de `-Reparar` llevan la causa que dejó su Maven (`el migrado acaba FAILED: <causa>`); y si el migrado no arranca ningún caso de un job y el original sí, te dice que relances con `-RehacerArnes`.
+- **Un test del migrado que no arranca el job.** Si con un caso vacío el original arranca el job y el migrado acaba `EXCEPCION`, el test del migrado se rechaza mientras queden intentos (el último, o un test guardado, se acepta con un aviso: puede ser el código).
+
 Para encontrar el commit que rompe un caso:
 
 ```powershell
