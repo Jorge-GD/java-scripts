@@ -34,11 +34,12 @@ function Get-FicherosEsperados([string]$Dir) {
 }
 
 # Por que la salida del original en $Dir no vale como test fijo ('' si vale): lleva algo de esta ejecucion (la fecha de hoy, una hora o la ruta de una
-# copia: lo que Get-Normal quita al comparar), que otro dia ya no saldria igual, y el test de Java compara lo demas byte a byte.
-function Get-MotivoCambiante([string]$Dir, [string[]]$Rels) {
+# copia: lo que Get-Normal quita al comparar), que otro dia ya no saldria igual, y el test de Java compara lo demas byte a byte. $Dias son los dias
+# de la ejecucion que la dejo (por defecto, los de hoy): un original guardado de otro dia lleva la fecha de aquel dia (Get-DiasOriginal).
+function Get-MotivoCambiante([string]$Dir, [string[]]$Rels, $Dias = $null) {
   foreach ($rel in $Rels) {
     $texto = $Latin.GetString([System.IO.File]::ReadAllBytes((Join-Ruta $Dir $rel)))
-    if ((Get-Normal $rel) -cne $rel -or (Get-Normal $texto) -cne $texto) { return "$rel lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion." }
+    if ((Get-Normal $rel $Dias) -cne $rel -or (Get-Normal $texto $Dias) -cne $texto) { return "$rel lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion." }
   }
   return ''
 }
@@ -211,7 +212,7 @@ function Invoke-Regresion($Res) {
   foreach ($r in $iguales) {
     $esperado = Join-Ruta $Local "salidas/original/$($r.job)/$($r.caso)"
     $rels = @(Get-FicherosEsperados $esperado)
-    $motivo = Get-MotivoCambiante $esperado $rels
+    $motivo = Get-MotivoCambiante $esperado $rels (Get-DiasOriginal $r.job $r.caso)
     if ($motivo) { $s.Quitados += [pscustomobject]@{ job = $r.job; caso = $r.caso; motivo = $motivo } }
     else { $s.Casos += [pscustomobject]@{ job = $r.job; caso = $r.caso; rels = $rels } }
   }

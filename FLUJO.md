@@ -161,6 +161,7 @@ Después de cualquier cambio (tuyo, de Sonar, de la cobertura o de un merge), la
 ```
 
 - Ejecuta los mismos casos en el original y en el migrado, y los compara. No vuelve a pedir a Copilot lo que ya hizo (los casos y sus entradas); solo ejecuta y compara.
+- El migrado se ejecuta siempre. El original no se repite mientras no cambie su commit, su test, las entradas del caso ni el JDK o Maven con que corre: la consola dice cuántos casos reutiliza. Para obligar a repetirlo, borra `migracion-<batch>\prueba-local\salidas`.
 - **Prueba el último commit, no lo que tengas sin commit.** Haz commit antes.
 - **Si existe `C:\ruta\migrado-rescate`, prueba esa copia y no tu rama.** Si ya trajiste sus cambios (paso 4), bórrala antes con `git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate`.
 - La respuesta sale en la consola y en `migracion-<batch>\datos\prueba-local.json`. Para ver también la página 3 al día, relanza `migracion.ps1 -SoloInforme` con las mismas opciones del paso 1.

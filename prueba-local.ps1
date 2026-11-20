@@ -37,14 +37,19 @@ QUE HACE
      corrija las entradas) y despues lo acepta; igual con un caso hecho de antes cuya salida guardada del original dice eso.
      Si el caso no corre en el original porque su base no tiene una tabla o una columna (H2: Tabla "X" no encontrada), una tabla del codigo
      queda sin preparar y sin mas intentos (la IA no ve la base del test); una inventada o una columna se le dicen en el reintento.
-  4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). Cada caso, en su Maven
+  4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). El migrado se ejecuta
+     siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
+     de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. Para obligar a
+     repetirlo todo, borra prueba-local\salidas. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
      acabar, dice cuanto es test y cuanto Maven.
   5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
-     fecha de hoy (un caso cuyo migrado no deja ni estado.txt sale distinto, con el motivo de que no lo corrio): igual, distinto,
+     fecha de hoy (en cada lado, los dias de su propia ejecucion: los de hoy en el migrado y los de cuando se ejecuto el original, que
+     puede ser de otro dia; un caso distinto cuyo original es de otro dia se confirma ejecutandolo otra vez; un caso cuyo migrado no deja ni
+     estado.txt sale distinto, con el motivo de que no lo corrio): igual, distinto,
      no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
      o sin probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
      diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
@@ -84,8 +89,9 @@ QUE HACE
      cambia. Antes del commit se prueba en una copia desechable (<Migrado>-regresion): pasa, y con un byte cambiado falla; un caso
      que no pasa o que lleva la fecha, la hora o la ruta de hoy se quita (datos\regresion.json lo cuenta). No cambia la salida.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
-  (salidas\original, original-2 y migrado) y los registros; el resultado, en datos\prueba-local.json. Al relanzar no
-  se repite lo hecho (si no han cambiado sus entradas): solo se vuelve a ejecutar y a comparar.
+  (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
+  resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
+  el migrado y a comparar, y el original solo si ha cambiado algo de lo que entra en su ejecucion.
   Con -Job, el JSON lleva ademas lo de los demas jobs tal como estaba (casos, jobs, reparaciones y culpables) si se probo con el mismo
   commit del migrado y del original; con otro commit se descarta y lo dice. La consola solo ensena los jobs de ahora.
 
@@ -965,7 +971,8 @@ function Get-TareasCasos($Prueba, $JobMapa) {
 }
 
 # Un caso hecho en otro lanzamiento cuyo original dejo estado=EXCEPCION (su salida guardada) y al que nunca se le ha pedido que el job
-# arranque vuelve a pendiente con ese motivo: se rehace una vez (Invoke-Casos acepta la segunda). Dice cuantos son.
+# arranque vuelve a pendiente con ese motivo: se rehace una vez (Invoke-Casos acepta la segunda), y su original se ejecuta otra vez (se quita su
+# entrada de originales.json). Dice cuantos son.
 function Reset-CasosExcepcion($Tareas) {
   $n = 0
   foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' -and -not $_.entradas.excepcionPedida })) {
@@ -975,9 +982,10 @@ function Reset-CasosExcepcion($Tareas) {
     $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = Get-MotivoExcepcion $sal $clase
     $t.entradas.excepcionPedida = $true
     Save-Tarea $t
+    (Get-Originales).Remove("$($t.entradas.job)|$($t.entradas.caso)")   # su original se ejecuta otra vez aunque nada de la clave haya cambiado
     $n++
   }
-  if ($n -gt 0) { Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
+  if ($n -gt 0) { Save-Originales; Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
 }
 
 # Guarda un caso que ha pasado la comprobacion (en prueba-local\casos\<job>\<caso>); si es no-aplica, lo quita de la
@@ -1097,12 +1105,14 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
   if ($Limpiar) { Remove-Carpeta $dest }
   foreach ($j in @($Listas | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
     Info "Ejecutando los casos de $j ($Nombre)..."
-    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
-      $c = $t.entradas.caso
-      $script:Maven["$Nombre|$j|$c"] = Invoke-Job $Dir $EsOriginal $j $c "$Nombre $j $c"
-      Copy-Carpeta (Join-Ruta $Dir "target/prueba-local/$j/$c") (Join-Ruta $dest "$j/$c")
-    }
+    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) { Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $t.entradas.caso }
   }
+}
+
+# Ejecuta un caso en la copia $Dir y guarda lo que deja en prueba-local\salidas\<Nombre>\<job>\<caso>.
+function Invoke-SalidaCaso([string]$Dir, [bool]$EsOriginal, [string]$Nombre, [string]$Job, [string]$Caso) {
+  $script:Maven["$Nombre|$Job|$Caso"] = Invoke-Job $Dir $EsOriginal $Job $Caso "$Nombre $Job $Caso"
+  Copy-Carpeta (Join-Ruta $Dir "target/prueba-local/$Job/$Caso") (Join-Ruta $Local "salidas/$Nombre/$Job/$Caso")
 }
 
 # Ejecuta en la copia del migrado, con el arnes que ya lleva, los casos de $Listas (con sus entradas guardadas) y guarda lo que
@@ -1111,6 +1121,146 @@ function Invoke-Migrado([string]$Nombre, $Listas) {
   Remove-Carpeta (Join-Ruta $CopiaMig $Casos)
   foreach ($t in $Listas) { Copy-Carpeta (Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)") (Join-Ruta $CopiaMig $t.entradas.carpeta) }
   Invoke-Salidas $CopiaMig $false $Nombre $Listas
+}
+
+# ================================ EL ORIGINAL NO SE REPITE ================================
+# Las salidas del original y del original-2 de un caso (prueba-local\salidas\original y \original-2) se guardan con la clave de lo que entro en su
+# ejecucion y los dias en que se ejecuto, en prueba-local\salidas\originales.json. Un lanzamiento con la misma clave no vuelve a ejecutarlas
+# (como la cache de acciones de Bazel o Gradle: la clave es el contenido de todo lo que puede cambiar la salida). El migrado se ejecuta siempre.
+# LO QUE INVALIDA LA REUTILIZACION (lo que lleva la clave; todo lo que llega a la linea de Maven del original, Invoke-MavenCaso):
+#  - $HeadOrig, el commit del original (su codigo, su pom.xml, sus recursos y su .mvn);
+#  - el arnes guardado del original (todos los ficheros de prueba-local\arnes\original: el test PruebaLocalTest y lo que cambia del pom.xml);
+#  - las entradas del caso: toda su carpeta en la copia del original (parametros, ficheros\entrada, datos.sql...);
+#  - el JDK del original: -JavaLegacy o, sin el, JAVA_HOME, y el fichero release de esa carpeta (otra version en la misma ruta);
+#  - lo que dice 'mvn -v' (Maven, Java y la configuracion regional: cubre el mvnw con otro Maven y el java del PATH);
+#  - el Maven que se lanza (Get-Mvn: -MvnExe, mvnw o mvn) y $Cfg.MavenCasoRapido (las propiedades de cada caso);
+#  - las variables de entorno que Maven y la JVM leen (Get-EntornoMaven);
+#  - que falte lo guardado: la carpeta del caso en salidas\original o en salidas\original-2, o su estado.txt (borrar prueba-local\salidas lo repite
+#    todo), o que el original dejara estado=EXCEPCION y el caso vuelva a pendiente (Reset-CasosExcepcion).
+# NO lleva, y no se ve: ~/.m2/settings.xml, los jar de ~/.m2 (un SNAPSHOT que cambia) ni lo que hay fuera (base de datos, SFTP, correo: simulado).
+# Un original que no llega a dejar estado.txt, o que se pasa del tope de Maven, no se guarda: se ejecuta en el siguiente lanzamiento.
+# LAS FECHAS: la salida de un original de otro dia lleva la fecha de su ejecucion. Con la salida se guardan los dias de su ejecucion (desde antes
+# del primer Maven del caso hasta despues del ultimo, Get-Hoy) y Get-Resultado normaliza cada lado con los suyos (Get-DiasOriginal para el
+# original, $Hoy para el migrado): una fecha de la ejecucion del original sigue siendo 'de la ejecucion', y un migrado que escribe una fecha
+# de otro dia (la del original, si no es hoy) sale distinto, que es lo que es. Lo que no se puede normalizar (un valor que sale de la fecha, como
+# los dias de retraso, o un formato de fecha que Get-Normal no conoce) saldria distinto sin serlo: un caso distinto cuyo original es de otro
+# dia se confirma ejecutando el original otra vez (Confirm-OriginalesDeOtroDia) y comparando con lo nuevo.
+
+# El hash (SHA-256, en hexadecimal) de unos bytes.
+function Get-Hash256([byte[]]$Bytes) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { $b = $sha.ComputeHash($Bytes) } finally { $sha.Dispose() }
+  return ((@($b) | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# El hash de lo que hay en una carpeta: cada fichero con su contenido y cada carpeta (una carpeta vacia tambien cambia lo que ve el job), por su
+# ruta relativa y en orden. '' si la carpeta no esta.
+function Get-HashCarpeta([string]$Dir) {
+  if (-not (Test-Path -LiteralPath $Dir)) { return '' }
+  $l = @(Get-ChildItem -LiteralPath $Dir -Recurse | ForEach-Object {
+      $rel = Get-Rel $Dir $_.FullName
+      if ($_.PSIsContainer) { $rel + '/' } else { $rel + '=' + (Get-Hash256 ([System.IO.File]::ReadAllBytes($_.FullName))) }
+    })
+  return (Get-Hash256 ($Utf8.GetBytes((Sort-Ordinal $l) -join "`n")))
+}
+
+# Las variables de entorno que leen Maven y la JVM (opciones, argumentos, zona horaria): cambian lo que sale del original, y la clave las lleva.
+function Get-EntornoMaven {
+  return @('MAVEN_OPTS', 'MAVEN_ARGS', 'MAVEN_CONFIG', 'JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'TZ' | ForEach-Object { $_ + '=' + [Environment]::GetEnvironmentVariable($_) })
+}
+
+# Lo que entra en la ejecucion del original y es igual para todos sus casos (ver arriba), en un hash. Lanza un 'mvn -v' en la copia del original.
+function Get-ClaveBaseOriginal {
+  $v = Invoke-Maven $CopiaOrig $true @('-v') 'la version de Maven y de Java del original'
+  $jdk = $JavaLegacy
+  if (-not $jdk) { $jdk = $env:JAVA_HOME }
+  $release = ''
+  if ($jdk -and (Test-Path -LiteralPath (Join-Path $jdk 'release'))) { $release = [System.IO.File]::ReadAllText((Join-Path $jdk 'release')) }
+  $partes = @($HeadOrig, (Get-HashCarpeta (Join-Ruta $Local 'arnes/original')), [string]$jdk, $release, (Get-Mvn $CopiaOrig), ($Cfg.MavenCasoRapido -join ' '))
+  $partes += @($v.Salida | Where-Object { $_ -cmatch '^(Apache Maven|Maven home|Java version|Default locale)' })
+  $partes += Get-EntornoMaven
+  return (Get-Hash256 ($Utf8.GetBytes($partes -join "`n")))
+}
+
+# Lo guardado de los originales: 'job|caso' -> clave y dias (prueba-local\salidas\originales.json), leido una vez por lanzamiento. Un fichero que no
+# se lee es como si no estuviera: nada se reutiliza.
+function Get-Originales {
+  if ($null -eq $script:Originales) {
+    $script:Originales = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+    $f = Join-Ruta $Local 'salidas/originales.json'
+    if (Test-Path -LiteralPath $f) {
+      try { foreach ($e in @((Read-Json $f).casos)) { $script:Originales["$($e.job)|$($e.caso)"] = $e } }
+      catch { $script:Originales.Clear() }
+    }
+  }
+  return $script:Originales
+}
+
+function Save-Originales {
+  $o = Get-Originales
+  Write-Json (Join-Ruta $Local 'salidas/originales.json') ([ordered]@{ version = 1; casos = @(Sort-Ordinal @($o.Keys) | ForEach-Object { $o[$_] }) })
+}
+
+# Los dias en que se ejecuto el original de un caso (Get-Hoy de su ejecucion), o $null si no se sabe (con $null, Get-Normal usa los de hoy).
+function Get-DiasOriginal([string]$Job, [string]$Caso) {
+  $e = (Get-Originales)["$Job|$Caso"]
+  if (-not $e) { return $null }
+  return @($e.dias | ForEach-Object { [datetime]::ParseExact([string]$_, 'yyyy-MM-dd', $Inv) })
+}
+
+# Ejecuta el original y el original-2 de los casos de $Listas que no tienen guardado lo mismo (clave y carpetas, ver arriba), uno detras de otro:
+# cada caso queda guardado en cuanto acaba, y un corte no pierde lo que ya estaba hecho. Dice cuantos casos se reutilizan y cuantos se ejecutan.
+function Invoke-Originales($Listas) {
+  $o = Get-Originales
+  $base = Get-ClaveBaseOriginal
+  $claves = @{}
+  $ejecutar = @()
+  foreach ($t in $Listas) {
+    $j = $t.entradas.job; $c = $t.entradas.caso
+    $claves["$j|$c"] = Get-Hash256 ($Utf8.GetBytes($base + "`n" + (Get-HashCarpeta (Join-Ruta $CopiaOrig $t.entradas.carpeta))))
+    $hecho = @('original', 'original-2' | Where-Object { Test-Path -LiteralPath (Join-Ruta $Local "salidas/$_/$j/$c/estado.txt") }).Count -eq 2
+    if (-not ($hecho -and $o["$j|$c"] -and $o["$j|$c"].clave -ceq $claves["$j|$c"])) { $ejecutar += $t }
+  }
+  Info "Original: se reutilizan las salidas de $($Listas.Count - $ejecutar.Count) caso(s) y se ejecutan $($ejecutar.Count)."
+  if ($ejecutar.Count -eq 0) { return }
+  # Lo que se va a ejecutar deja de estar guardado antes de empezar: un corte en medio no deja una clave que ya no es de lo que hay.
+  foreach ($t in $ejecutar) {
+    $o.Remove("$($t.entradas.job)|$($t.entradas.caso)")
+    foreach ($n in @('original', 'original-2')) { Remove-Carpeta (Join-Ruta $Local "salidas/$n/$($t.entradas.job)/$($t.entradas.caso)") }
+  }
+  Save-Originales
+  foreach ($j in @($ejecutar | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
+    Info "Ejecutando los casos de $j (original y original-2)..."
+    foreach ($t in @($ejecutar | Where-Object { $_.entradas.job -eq $j })) {
+      $c = $t.entradas.caso
+      $desde = Get-Date
+      foreach ($n in @('original', 'original-2')) { Invoke-SalidaCaso $CopiaOrig $true $n $j $c }
+      $completo = @('original', 'original-2' | Where-Object { -not $script:Maven["$_|$j|$c"].Tope -and (Test-Path -LiteralPath (Join-Ruta $Local "salidas/$_/$j/$c/estado.txt")) }).Count -eq 2
+      if ($completo) {
+        $o["$j|$c"] = [pscustomobject][ordered]@{ job = $j; caso = $c; clave = $claves["$j|$c"]; dias = @(Get-Hoy $desde (Get-Date) | ForEach-Object { $_.ToString('yyyy-MM-dd', $Inv) }) }
+        Save-Originales
+      }
+    }
+  }
+}
+
+# Los casos de $Tareas que salen distintos ($Res, uno por tarea, en el mismo orden) con un original de otro dia (alguno de sus dias no es de hoy): su
+# original se ejecuta otra vez y se comparan de nuevo. Un valor que sale de la fecha de la ejecucion (los dias de retraso, un formato de fecha que
+# Get-Normal no conoce) sale distinto de un original de otro dia sin que el migrado haya hecho nada mal: con el original de hoy se ve si lo es.
+# Devuelve $Res con esos casos al dia.
+function Confirm-OriginalesDeOtroDia($Tareas, $Res) {
+  $dudosos = @()
+  for ($i = 0; $i -lt $Tareas.Count; $i++) {
+    $dias = @(Get-DiasOriginal $Tareas[$i].entradas.job $Tareas[$i].entradas.caso)
+    if ($Res[$i].resultado -eq 'distinto' -and @($dias | Where-Object { $_ -and $Hoy -notcontains $_ }).Count -gt 0) { $dudosos += $i }
+  }
+  if ($dudosos.Count -eq 0) { return $Res }
+  Info "Original de otro dia: $($dudosos.Count) caso(s) sale(n) distinto(s); los ejecuto otra vez para confirmarlo."
+  $o = Get-Originales
+  foreach ($i in $dudosos) { $o.Remove("$($Tareas[$i].entradas.job)|$($Tareas[$i].entradas.caso)") }
+  Invoke-Originales @($dudosos | ForEach-Object { $Tareas[$_] })
+  foreach ($i in $dudosos) { $Res[$i] = Get-Resultado $Tareas[$i] }
+  return $Res
 }
 
 # ================================ COMPARAR ================================
@@ -1128,13 +1278,15 @@ function Get-Hoy([datetime]$Desde, [datetime]$Hasta) {
 # ejecucion ($Hoy: la fecha y la hora juntas pasan a <hora>), las horas sueltas (HH:mm:ss y sus fracciones, sin fecha delante: tambien
 # pasan a <hora>) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato se sigue viendo), con la
 # hora pegada detras (aaaammdd_hhmmss). Una fecha con hora que no es de $Hoy es un dato del negocio y se queda como esta, hora incluida:
-# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta.
-function Get-Normal([string]$Texto) {
+# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. $Dias son los dias de la ejecucion que dejo ese texto (por defecto,
+# $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
+function Get-Normal([string]$Texto, $Dias = $null) {
+  if ($null -eq $Dias) { $Dias = $Hoy }
   $t = $Texto
   foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
-  foreach ($d in $Hoy) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
+  foreach ($d in $Dias) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
   $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
-  foreach ($d in $Hoy) {
+  foreach ($d in $Dias) {
     foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
   }
   return ($t -replace '(<hoy:[^>]+>)[_\-T\. ]?\d{6}(\d{3})?(?!\d)', '$1<hora>')
@@ -1145,8 +1297,8 @@ function Get-Normal([string]$Texto) {
 # tablas\: campos separados por ';', la primera linea con los nombres de las columnas), antes se ordenan las columnas por su nombre y las
 # filas: cada lado crea la tabla con su DDL y lee las filas en el orden que sea, y eso no es una diferencia del batch. Si una fila no
 # tiene tantos campos como la cabecera no se sabe cortarla y el fichero se queda como esta.
-function Get-LineasNormales([string]$Ruta, [bool]$Tabla = $false) {
-  $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta)))) -split '\r?\n')
+function Get-LineasNormales([string]$Ruta, [bool]$Tabla = $false, $Dias = $null) {
+  $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta))) $Dias) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   if ($Tabla -and $l.Count -gt 0) { return @(Sort-Tabla $l) }
   return $l
@@ -1178,13 +1330,13 @@ function Get-Legible([string]$Linea) {
 
 # Si dos ficheros distintos solo cambian en la codificacion (JEP 400: UTF-8 por defecto desde Java 18) o en el formato
 # de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''.
-function Get-NotaJdk([string]$A, [string]$B) {
+function Get-NotaJdk([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   $ba = [System.IO.File]::ReadAllBytes($A)
   $bb = [System.IO.File]::ReadAllBytes($B)
-  $limpio = { param([string]$s) ((Get-Normal $s.TrimStart([char]0xFEFF)) -replace '\r\n', "`n").TrimEnd("`n") }
-  $ua = & $limpio ($Utf8.GetString($ba))
-  $ub = & $limpio ($Utf8.GetString($bb))
-  if ($ua -ceq $ub -or $ua -ceq (& $limpio ($Latin.GetString($bb))) -or (& $limpio ($Latin.GetString($ba))) -ceq $ub) {
+  $limpio = { param([string]$s, $d) ((Get-Normal $s.TrimStart([char]0xFEFF) $d) -replace '\r\n', "`n").TrimEnd("`n") }
+  $ua = & $limpio ($Utf8.GetString($ba)) $DiasA
+  $ub = & $limpio ($Utf8.GetString($bb)) $DiasB
+  if ($ua -ceq $ub -or $ua -ceq (& $limpio ($Latin.GetString($bb)) $DiasB) -or (& $limpio ($Latin.GetString($ba)) $DiasA) -ceq $ub) {
     return 'posible diferencia del JDK: codificacion (JEP 400)'
   }
   $formato = { param([string]$s) (($s -replace '[\u00a0\u202f]', ' ') -replace "(?<=\d)[\.,' ](?=\d)", '' -replace '(?<=[A-Za-z])\.', '').ToLowerInvariant() }
@@ -1194,11 +1346,11 @@ function Get-NotaJdk([string]$A, [string]$B) {
 
 # Compara dos ficheros ('' si falta uno) linea a linea, normalizados (con $Tabla, una tabla sin orden de columnas ni de filas: la linea
 # que se ensena es la ya ordenada). $null si son iguales; si no, Lineas (cuantas son distintas, posicion a posicion), Linea (la
-# primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota.
-function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false) {
+# primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy).
+function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA = $null, $DiasB = $null) {
   $x = @(); $y = @()
-  if ($A) { $x = @(Get-LineasNormales $A $Tabla) }
-  if ($B) { $y = @(Get-LineasNormales $B $Tabla) }
+  if ($A) { $x = @(Get-LineasNormales $A $Tabla $DiasA) }
+  if ($B) { $y = @(Get-LineasNormales $B $Tabla $DiasB) }
   $n = 0
   $primera = -1
   for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count); $i++) {
@@ -1211,7 +1363,7 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false) {
   if ($primera -lt 0) { $primera = 0 }
   $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
-  if ($A -and $B) { $nota = Get-NotaJdk $A $B }
+  if ($A -and $B) { $nota = Get-NotaJdk $A $B $DiasA $DiasB }
   return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
 }
 
@@ -1220,15 +1372,17 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false) {
 # mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
 # Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
 # .csv de tablas\ se comparan sin orden de columnas ni de filas (Get-LineasNormales), y uno que esta en un solo lado y no tiene ninguna fila
-# de datos no es una diferencia.
-function Compare-Caso([string]$A, [string]$B) {
+# de datos no es una diferencia. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy): un original de otro dia no
+# lleva las fechas de hoy. Cada diferencia lleva su clave (Get-Normal de la ruta, con los dias de su lado): la de las diferencias de un mismo
+# fichero en casos con originales de dias distintos es la misma.
+function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   $pares = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-  foreach ($lado in @(@('A', $A), @('B', $B))) {
+  foreach ($lado in @(@('A', $A, $DiasA), @('B', $B, $DiasB))) {
     if (-not (Test-Path -LiteralPath $lado[1])) { continue }
     foreach ($f in @(Get-ChildItem -LiteralPath $lado[1] -Recurse -File)) {
       $rel = Get-Rel $lado[1] $f.FullName
       if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$') { continue }
-      $k = Get-Normal $rel
+      $k = Get-Normal $rel $lado[2]
       if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = ''; B = ''; Rel = $rel } }
       $pares[$k][$lado[0]] = $f.FullName
     }
@@ -1239,8 +1393,8 @@ function Compare-Caso([string]$A, [string]$B) {
     $tabla = ($p.Rel -cmatch '^tablas/.+\.csv$')
     # Una tabla en un solo lado sin ninguna fila de datos (vacia, solo la cabecera o lineas en blanco) es como una tabla que no esta.
     if ($tabla -and -not ($p.A -and $p.B) -and @(Get-LineasNormales ($p.A + $p.B) | Where-Object { $_.Trim() }).Count -le 1) { continue }
-    $c = Compare-Fichero $p.A $p.B $tabla
-    if ($c) { $dif += [ordered]@{ fichero = $p.Rel; lineas = $c.Lineas; linea = $c.Linea; original = $c.Original; migrado = $c.Migrado; nota = $c.Nota } }
+    $c = Compare-Fichero $p.A $p.B $tabla $DiasA $DiasB
+    if ($c) { $dif += [ordered]@{ fichero = $p.Rel; clave = $k; lineas = $c.Lineas; linea = $c.Linea; original = $c.Original; migrado = $c.Migrado; nota = $c.Nota } }
   }
   return $dif
 }
@@ -1249,7 +1403,8 @@ function Compare-Caso([string]$A, [string]$B) {
 # local, con su motivo. Los ficheros que cambian entre las dos ejecuciones del original no se comparan; el resto, si.
 # Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
-# $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde).
+# $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde). Lo del original
+# se normaliza con los dias de su ejecucion (Get-DiasOriginal: puede ser de otro dia) y lo del migrado, con los de hoy.
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
   $script:Hoy = @(Get-Hoy $Inicio (Get-Date))   # la busqueda de -Desde puede pasar de medianoche
   $j = $T.entradas.job
@@ -1263,10 +1418,11 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
   if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j|$c"]); return $o }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
-  $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c"))
-  $sinContar = @($azar | ForEach-Object { Get-Normal $_.fichero })
+  $diasOrig = Get-DiasOriginal $j $c
+  $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c") $diasOrig $diasOrig)
+  $sinContar = @($azar | ForEach-Object { $_.clave })
   if ($azar.Count -gt 0) { $o.motivo = 'No se comparan, porque el original da dos salidas distintas: ' + (@($azar | Select-Object -First 3 | ForEach-Object { $_.fichero }) -join ', ') + '.' }
-  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") | Where-Object { $sinContar -notcontains (Get-Normal $_.fichero) })
+  $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") $diasOrig | Where-Object { $sinContar -notcontains $_.clave })
   if ($d.Count -gt 0) {
     $o.resultado = 'distinto'; $o.diferencias = $d
     # Un migrado que no ha dejado ni estado.txt no ha corrido el caso: la consola lo dice antes de las diferencias, que son todas (no esta)
@@ -1277,7 +1433,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
   $o.resultado = 'igual'
   $vacio = Join-Ruta $Local "salidas/vacio/$j"
-  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio).Count -eq 0) { $o.motivo = $MotivoVacio }
+  if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio $diasOrig $diasOrig).Count -eq 0) { $o.motivo = $MotivoVacio }
   return $o
 }
 
@@ -1538,7 +1694,7 @@ function Get-Puntuacion($R) {
 }
 
 # Las claves de un resultado: el nombre normalizado de cada fichero que sale distinto.
-function Get-Claves($R) { return @(@($R.diferencias) | ForEach-Object { Get-Normal $_.fichero } | Select-Object -Unique) }
+function Get-Claves($R) { return @(@($R.diferencias) | ForEach-Object { $_.clave } | Select-Object -Unique) }
 
 function Get-IndiceCaso($Res, [string]$Job, [string]$Caso) {
   for ($i = 0; $i -lt @($Res).Count; $i++) { if ($Res[$i].job -ceq $Job -and $Res[$i].caso -ceq $Caso) { return $i } }
@@ -1577,8 +1733,8 @@ function Get-CodigoMigrado([string]$Commit) {
 # 'no se arregla' se vuelve a probar). Trabaja en la copia del migrado y puede leer el original y las salidas y entradas del caso.
 function Get-TareaReparar($C, $R, $S) {
   $tc = Get-TareaCaso $C.job $C.caso
-  $d = @($R.diferencias | Where-Object { (Get-Normal $_.fichero) -ceq $C.clave })[0]
-  $otras = @($R.diferencias | Where-Object { (Get-Normal $_.fichero) -cne $C.clave } | Select-Object -First 5 | ForEach-Object { '- `{0}`: {1} lineas distintas; la primera, la {2}: original [{3}], migrado [{4}]' -f $_.fichero, $_.lineas, $_.linea, $_.original, $_.migrado })
+  $d = @($R.diferencias | Where-Object { $_.clave -ceq $C.clave })[0]
+  $otras = @($R.diferencias | Where-Object { $_.clave -cne $C.clave } | Select-Object -First 5 | ForEach-Object { '- `{0}`: {1} lineas distintas; la primera, la {2}: original [{3}], migrado [{4}]' -f $_.fichero, $_.lineas, $_.linea, $_.original, $_.migrado })
   if ($otras.Count -eq 0) { $otras = @('(No hay otras diferencias en este caso.)') }
   $salOrig = Join-Ruta $Local "salidas/original/$($C.job)/$($C.caso)"
   $salMig = Join-Ruta $Local "salidas/$($S.Salidas)/$($C.job)/$($C.caso)"
@@ -1635,7 +1791,7 @@ function Get-Empeora($Antes, $Despues) {
   $caso = "$($Antes.job)/$($Antes.caso)"
   if (-not (Test-Ejecutable $Despues)) { return "El caso $caso ya no se puede ejecutar ($($Despues.resultado)): $(Get-Resumen $Despues.motivo)" }
   $viejas = @(Get-Claves $Antes)
-  $nueva = @($Despues.diferencias | Where-Object { $viejas -cnotcontains (Get-Normal $_.fichero) })[0]
+  $nueva = @($Despues.diferencias | Where-Object { $viejas -cnotcontains $_.clave })[0]
   if ($nueva) { return "El caso $caso sale peor: antes era $($Antes.resultado) y ahora es $($Despues.resultado), con una diferencia nueva en $($nueva.fichero) (linea $($nueva.linea): original [$($nueva.original)], migrado [$($nueva.migrado)])." }
   $antes = Get-Puntuacion $Antes
   $ahora = Get-Puntuacion $Despues
@@ -2103,14 +2259,14 @@ try {
   Save-Copia $CopiaOrig
   Invoke-Casos @($tareasCasos | Where-Object { $_.estado -ne 'hecha' })
 
-  # 4. Ejecutar: el original dos veces y el migrado una, con los mismos casos
+  # 4. Ejecutar: el original dos veces (salvo el que no ha cambiado) y el migrado una, con los mismos casos
   $listas = @($tareasCasos | Where-Object { $_.estado -eq 'hecha' -and -not (Test-Path -LiteralPath (Join-Ruta $Local "casos/$($_.entradas.job)/$($_.entradas.caso)/no-aplica.txt")) })
-  Invoke-Salidas $CopiaOrig $true 'original' $listas
-  Invoke-Salidas $CopiaOrig $true 'original-2' $listas
+  Invoke-Originales $listas
   if ($ArnesMig.estado -eq 'hecha') { Invoke-Migrado 'migrado' $listas }
 
   # 5. Comparar y contar
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
+  $res = @(Confirm-OriginalesDeOtroDia $tareasCasos $res)
   $vacios = @(Get-JobsVacios $res)
   if ($vacios.Count -gt 0) { Stop-Vacios $vacios }
   $o = Save-Resultado $res @()
