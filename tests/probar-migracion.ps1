@@ -6566,15 +6566,17 @@ function M41-Llamadas($E) {
 
 function M41-Hash([string]$Ruta) { return (Get-FileHash -LiteralPath $Ruta -Algorithm SHA256).Hash }
 
-# Una rama rescate/<rama>-<fecha> con un commit suyo y sin worktree, como la que deja un usuario que borra el worktree. Con $Unida, la une a su rama.
-function M41-RamaDeRescate($E, [string]$Rama, [string]$Fecha, [bool]$Unida) {
+# Una rama rescate/<rama>-<fecha> con un commit suyo y sin worktree, como la que deja un usuario que borra el worktree (con $ABasura, borrando su
+# carpeta a mano, que la deja registrada en git). Con $Unida, la une a su rama.
+function M41-RamaDeRescate($E, [string]$Rama, [string]$Fecha, [bool]$Unida, [bool]$ABasura = $false) {
   $nombre = 'rescate/' + ($Rama -replace '[^\w\.\-]', '-') + '-' + $Fecha
-  $wt = Join-Path $E.Raiz 'wt-temporal'
+  $wt = Join-Path $E.Raiz ('wt-temporal-' + $Fecha)
   [void](GitEn $E.Migrado @('worktree', 'add', '-q', '-b', $nombre, $wt, $Rama))
   Escribe $wt 'src/main/java/com/acme/life/Arreglo.java' "package com.acme.life;`n`n/** Arreglo. */`npublic class Arreglo {`n}`n"
   [void](GitEn $wt @('add', '--', 'src/main/java/com/acme/life/Arreglo.java'))
   [void](GitEn $wt @('commit', '-q', '-m', 'rescate(estructura): lote 1, hallazgos 3 a 1'))
-  [void](GitEn $E.Migrado @('worktree', 'remove', '--force', $wt))
+  if ($ABasura) { Remove-Item -LiteralPath $wt -Recurse -Force }
+  else { [void](GitEn $E.Migrado @('worktree', 'remove', '--force', $wt)) }
   if ($Unida) { [void](GitEn $E.Migrado @('merge', '-q', '--no-edit', $nombre)) }
   return $nombre
 }
@@ -6681,9 +6683,11 @@ $Pruebas['m41 (d) una rama rescate/<rama>-<fecha> con un commit sin unir y sin w
     $nom = 'm41-d-' + ($rama -replace '/', '-')
     $e = Nuevo-Escenario $nom @('Clase1')
     if ($rama -ne 'main') { [void](GitEn $e.Migrado @('checkout', '-q', '-b', $rama)) }
-    $vieja = M41-RamaDeRescate $e $rama '20250101-0000' $false
-    $otra = M41-RamaDeRescate $e $rama '20260101-0000' $false
-    $ramas = GitEn $e.Migrado @('branch', '--list')
+    $aMano = ($rama -ne 'main')   # el de feature/x: carpeta borrada a mano, que git sigue teniendo registrada
+    $vieja = M41-RamaDeRescate $e $rama '20250101-0000' $false $aMano
+    $otra = M41-RamaDeRescate $e $rama '20260101-0000' $false $aMano
+    # solo los nombres: git marca con + las ramas de un worktree registrado, y el arranque quita ese registro cuando la carpeta ya no existe
+    $ramas = GitEn $e.Migrado @('branch', '--list', '--format=%(refname:short)')
     $r = Migra $e (Basicos $e)
     Igual "$rama : sale con 1" 1 $r.Codigo
     Comprueba "$rama : nombra las dos, la mas nueva primero, y dice que no crea otra" ($r.Salida.Contains("Hay una rama de rescate con arreglos que no estan en tu rama: $otra, $vieja. No creo otra, para no dejarla olvidada.")) (Cola $r.Salida)
@@ -6691,8 +6695,11 @@ $Pruebas['m41 (d) una rama rescate/<rama>-<fecha> con un commit sin unir y sin w
     Comprueba "$rama : seguir trabajando en ella" ($r.Salida.Contains("Seguir trabajando en ella: git -C `"$($e.Migrado)`" worktree add `"$($e.Wt)`" $otra")) (Cola $r.Salida)
     Comprueba "$rama : no la quieres" ($r.Salida.Contains("No la quieres:           git -C `"$($e.Migrado)`" branch -D $otra")) (Cola $r.Salida)
     Comprueba "$rama : y que despues se lance el mismo comando" ($r.Salida.Contains('Despues, lanza el mismo comando.')) (Cola $r.Salida)
-    Igual "$rama : la lista de ramas no cambia" $ramas (GitEn $e.Migrado @('branch', '--list'))
+    Igual "$rama : la lista de ramas no cambia" $ramas (GitEn $e.Migrado @('branch', '--list', '--format=%(refname:short)'))
     Comprueba "$rama : no hay worktree" (-not (Test-Path -LiteralPath $e.Wt))
+    # la segunda salida del mensaje funciona tal cual, tambien con la carpeta borrada a mano
+    [void](GitEn $e.Migrado @('worktree', 'add', '-q', $e.Wt, $otra))
+    Igual "$rama : seguir trabajando en ella: el worktree vuelve a estar en esa rama" $otra ((GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')).Trim())
   }
 }
 
