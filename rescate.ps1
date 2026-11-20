@@ -3260,18 +3260,13 @@ function Show-SinPasos([string]$Pie) {
 }
 
 # ============================ INTENTO EN CURSO ============================
-# Mientras un lote puede dejar cambios sin commit en el arbol, .rescate/intento-en-curso.json apunta su paso, su lote y el
-# commit del que parte (.rescate no se versiona: la marca no entra en ningun commit). Si el script se corta (Ctrl+C, la
-# ventana, la luz), esos cambios a medias no son de nadie: el arranque siguiente los deshace en vez de guardarlos en la foto.
-function Get-RutaIntento { return (Join-Path $Work 'intento-en-curso.json') }
-
+# La marca (.rescate/intento-en-curso.json), su ruta, su borrado y Undo-IntentoCortado, que la lee al arrancar, estan en comun.ps1: tambien
+# los usa migracion.ps1.
 # La marca lleva tambien los ficheros del lote y las claves de los errores de antes (el modo comprobar los usa para saber que hay de nuevo).
 function Save-Intento([string]$PasoId, [int]$N, [string]$Commit, [string[]]$Ficheros = @(), $Base = $null) {
   $claves = @(); if ($Base) { $claves = @($Base.Keys | Sort-Object) }
   [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit; ficheros = @($Ficheros); base = $claves })))
 }
-
-function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
 
 # El arbol de trabajo de un intento (con los ficheros nuevos, sin lo ignorado) como un commit suelto sobre HEAD, que no esta en ninguna
 # rama ni toca el indice ni el arbol. Devuelve su sha, o '' si no se pudo.
@@ -3299,29 +3294,6 @@ function Restore-ArbolIntento([string]$Rama, [string]$Check, [string]$Sha) {
   $r = Invoke-Git $RepoRoot @('read-tree', '--reset', '-u', $Sha)
   if ($r.Codigo -ne 0) { Aviso ('  No he podido volver a ese arbol: ' + ($r.Salida -join ' ')); Undo-Lote $Rama $Check; return }
   [void](Invoke-Git $RepoRoot @('reset', '-q', '--mixed', $Check))
-}
-
-# Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y
-# lo creado van antes a un git stash (el usuario pudo cortar la pasada y tocar algo a mano). Si la rama ya no esta en ese
-# commit, el usuario hizo el suyo: no se deshace nada.
-function Undo-IntentoCortado([string]$Rama) {
-  $p = Get-RutaIntento
-  if (-not (Test-Path -LiteralPath $p)) { return }
-  try { $m = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { $m = $null }
-  Remove-Intento
-  $c = "$($m.commit)"
-  if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
-  $donde = "paso $($m.paso), lote $($m.lote)"
-  $head = ((Invoke-Git $RepoRoot @('rev-parse', 'HEAD')).Salida -join '').Trim()
-  if ($head -ne $c) { Aviso "Habia un intento cortado ($donde), pero la rama ha avanzado desde entonces: no deshago nada."; return }
-  Info "Habia un intento cortado ($donde): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
-  $cambios = @((Invoke-Git $RepoRoot @('status', '--porcelain', '--untracked-files=all')).Salida | Where-Object { $_ -and $_ -notmatch '^.. "?(target|\.rescate)/' })
-  if ($cambios.Count -gt 0) {
-    $r = Invoke-Git $RepoRoot @('stash', 'push', '--include-untracked', '-m', "rescate: intento cortado ($donde)")
-    if ($r.Codigo -eq 0) { Aviso 'Lo he guardado en git stash (recuperalo con: git stash list / git stash pop).' }
-    else { Aviso ('No he podido guardarlo en un git stash (' + ($r.Salida -join ' ') + '): lo deshago sin guardarlo.') }
-  }
-  Undo-Lote $Rama $c
 }
 
 $ColumnasIntentos = @('fecha', 'paso', 'lote', 'intento', 'ficheros', 'hallazgos', 'reglas', 'seg_copilot', 'seg_maven', 'resultado', 'puerta')

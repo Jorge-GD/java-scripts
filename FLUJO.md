@@ -236,7 +236,7 @@ Para un solo batch: `.\donde-estoy.ps1 -Migrado C:\ruta\migrado`. También puede
 | ¿Cuántos problemas quedan? | `.\rescate.ps1 -Repo C:\ruta\migrado -Plantilla C:\ruta\referencia`: solo diagnostica, no cambia nada |
 | ¿Qué le pidió a Copilot y qué contestó? | `migracion-<batch>\registros\` y `C:\ruta\migrado-rescate\.rescate\lote-*.log` |
 
-**Relanzar el mismo comando siempre es seguro:** salta lo hecho y sigue donde se quedó.
+**Relanzar el mismo comando siempre es seguro:** salta lo hecho y sigue donde se quedó. Es seguro porque **para** antes de borrar nada: si `C:\ruta\migrado-rescate` tiene cambios sin commit (salvo los de un intento cortado, que van a un `git stash`), o si hay una rama `rescate/...` con arreglos que no están en tu rama, lo dice y sale con 1 sin tocar nada.
 
 ### Cuando `migracion.ps1` se para
 
@@ -265,7 +265,7 @@ Sale en rojo (en amarillo si es el tope de tiempo), con el motivo, y la portada 
 
 Al acabar, el motor los lista como «lo único que te toca mirar» y sale con 2. Al relanzar no los reintenta, salvo que el fichero haya cambiado. Dos salidas:
 
-- Arréglalo a mano en `C:\ruta\migrado-rescate` y haz commit allí.
+- Arréglalo a mano en `C:\ruta\migrado-rescate` y termina con un commit allí (`git -C C:\ruta\migrado-rescate add -A` y `git -C C:\ruta\migrado-rescate commit -m "arreglo a mano"`). Sin ese commit, el relanzamiento se para para no perderlo.
 - O reinténtalo: el comando de `rescate.ps1` del paso 2 con `-Reintentar`, y `-ModeloB <id>` si quieres un modelo de reserva.
 | `ALTO:` | Ha cambiado la referencia o el original | Sí: ver `guardas` arriba |
 
@@ -275,7 +275,7 @@ Al acabar, el motor los lista como «lo único que te toca mirar» y sale con 2.
 |---|---|
 | Deshacer el último lote | `.\rescate.ps1 -Modo deshacer -Repo C:\ruta\migrado`. Solo mientras exista `C:\ruta\migrado-rescate`: después del paso 4 no lo uses, porque actuaría sobre tu rama |
 | Quitar un commit concreto | `git -C C:\ruta\migrado-rescate revert <commit>` |
-| Empezar de cero los arreglos | `git -C C:\ruta\migrado worktree remove --force C:\ruta\migrado-rescate`, `git -C C:\ruta\migrado branch -D <rama-rescate>` y borra `migracion-<batch>\datos\correcciones.json` (si no, `-Si` se salta la corrección). Tu rama queda como estaba |
+| Empezar de cero los arreglos | `git -C C:\ruta\migrado worktree remove --force C:\ruta\migrado-rescate`, `git -C C:\ruta\migrado branch -D <rama-rescate>`. Al relanzar con `-Si`, la corrección se hace otra vez porque sus commits ya no están en la carpeta de rescate (y se aparta la de antes en `migracion-<batch>\datos\anterior-<commit>`). Tu rama queda como estaba |
 | Rehacer el informe desde cero | Borra `C:\ruta\migrado\migracion-<batch>\`. Se vuelve a pagar toda la lectura |
 | Rehacer un caso de la prueba en local | Borra su carpeta en `migracion-<batch>\prueba-local\casos\` |
 

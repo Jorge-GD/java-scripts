@@ -2860,7 +2860,7 @@ $Pruebas['93 comparar: un dato distinto sale primero en su job, con las dos cita
   Comprueba 'sin ningun distinto ni falta (la corrida normal) la portada no lo lleva' ((Toca-De (Pagina (Corrida-Comparar '').E.Out 'index.html')) -notmatch 'Diferencias con el original')
 }
 
-$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga un fichero tocado sin commit: la huella es el contenido que hay en HEAD (blob), no el disco (m43)'] = {
+$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga un fichero tocado sin commit de un intento cortado (va a un git stash): la huella es el contenido que hay en HEAD (blob), no el disco (m41, m43)'] = {
   $e = Escenario-Dos 'cmp-relanza'
   Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter')
   $r = Migra $e (Basicos $e) $GuionBase
@@ -2869,8 +2869,11 @@ $Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree
   Igual 'la primera vez, tres llamadas de comparar' 3 $antes.Count
   $t0 = Tareas $e 'comparar-pieza'
   Escribe $e.Wt "$RutaMigrado/CargaReader.java" ((Lee $e.Wt "$RutaMigrado/CargaReader.java") + "// cambiado despues`n")
+  # M41: lo sin commit solo se aparta al arrancar si es de un intento cortado (marca con el commit del HEAD); si no, el arranque se para
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"comparar","lote":1,"commit":"' + (M38-Head $e.Wt) + '"}')
   $r = Migra $e (Basicos $e) $GuionBase
   Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'lo sin commit esta en un git stash y el worktree limpio' '1 ' ((@((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ }).Count).ToString() + ' ' + (GitEn $e.Wt @('status', '--porcelain')))
   $despues = @(Llamadas-De (Llamadas $e.Wt) 'comparar-')
   Igual 'la segunda vez no hay ninguna llamada mas de comparar' 3 $despues.Count
   $t1 = Tareas $e 'comparar-pieza'
@@ -6769,6 +6772,221 @@ $Pruebas['m43 (h) comparar: si cambia la lista de ficheros del migrado de una fi
   $r = Migra $e (Basicos $e) $GuionBase
   Igual 'y la tercera vez no llama' 4 (M43-Llamadas $e).Count
 }
+
+# ============================ M41: NO SE PIERDE TRABAJO EN LA CARPETA DE RESCATE ============================
+# Al arrancar, lo que haya sin commit en <Migrado>-rescate no se borra nunca: el de un intento cortado (marca .rescate/intento-en-curso.json
+# con el HEAD) va a un git stash y lo demas para el arranque sin tocar nada. Una rama rescate/<rama>-<fecha> sin unir impide crear otra
+# (y una correccion hecha en una rama que el worktree no lleva se vuelve a hacer).
+
+$Fichero41 = 'src/main/java/com/acme/life/App.java'
+
+# Un escenario contado que ya hizo su primer lanzamiento (el worktree existe y la prueba de aptitud esta pasada).
+function M41-Primera([string]$Nombre) {
+  $e = Nuevo-Escenario-Contado $Nombre @('Clase1')
+  $r = Migra $e (Basicos $e)
+  Igual "$Nombre : el primer lanzamiento sale con 0" 0 $r.Codigo
+  return $e
+}
+
+# Las llamadas hechas a Copilot (los registros de los falsos, en cualquier carpeta del escenario) y a Maven, juntas.
+function M41-Llamadas($E) {
+  $copilot = @(Get-ChildItem -LiteralPath $E.Raiz -Recurse -File -Force -Filter '*.txt' | Where-Object { $_.DirectoryName -match '[\\/]\.rescate[\\/]falso$' }).Count
+  return ($copilot + (Llamadas-Mvn $E).Count)
+}
+
+function M41-Hash([string]$Ruta) { return (Get-FileHash -LiteralPath $Ruta -Algorithm SHA256).Hash }
+
+# Una rama rescate/<rama>-<fecha> con un commit suyo y sin worktree, como la que deja un usuario que borra el worktree (con $ABasura, borrando su
+# carpeta a mano, que la deja registrada en git). Con $Unida, la une a su rama.
+function M41-RamaDeRescate($E, [string]$Rama, [string]$Fecha, [bool]$Unida, [bool]$ABasura = $false) {
+  $nombre = 'rescate/' + ($Rama -replace '[^\w\.\-]', '-') + '-' + $Fecha
+  $wt = Join-Path $E.Raiz ('wt-temporal-' + $Fecha)
+  [void](GitEn $E.Migrado @('worktree', 'add', '-q', '-b', $nombre, $wt, $Rama))
+  Escribe $wt 'src/main/java/com/acme/life/Arreglo.java' "package com.acme.life;`n`n/** Arreglo. */`npublic class Arreglo {`n}`n"
+  [void](GitEn $wt @('add', '--', 'src/main/java/com/acme/life/Arreglo.java'))
+  [void](GitEn $wt @('commit', '-q', '-m', 'rescate(estructura): lote 1, hallazgos 3 a 1'))
+  if ($ABasura) { Remove-Item -LiteralPath $wt -Recurse -Force }
+  else { [void](GitEn $E.Migrado @('worktree', 'remove', '--force', $wt)) }
+  if ($Unida) { [void](GitEn $E.Migrado @('merge', '-q', '--no-edit', $nombre)) }
+  return $nombre
+}
+
+# Lo que dice una parada de arranque por cambios sin commit: la primera linea y las dos salidas (commit y stash), con la carpeta entre comillas.
+function M41-Comprueba-Parada($E, $R, [string]$Lista) {
+  $wt = $E.Wt
+  Igual 'sale con 1, como las demas paradas de arranque' 1 $R.Codigo
+  Comprueba 'dice que la carpeta de rescate tiene cambios sin commit, con la lista, y que no sigue' ($R.Salida.Contains("La carpeta de rescate tiene cambios sin commit: $Lista. No sigo, para no perderlos.")) (Cola $R.Salida)
+  Comprueba 'primera salida: add y commit' ($R.Salida.Contains("Si son tuyos y los quieres:  git -C `"$wt`" add -A ; git -C `"$wt`" commit -m `"arreglo a mano`"")) (Cola $R.Salida)
+  Comprueba 'segunda salida: stash' ($R.Salida.Contains("Si no los quieres:           git -C `"$wt`" stash push -u -m `"aparte`"")) (Cola $R.Salida)
+  Comprueba 'y que despues se lance el mismo comando' ($R.Salida.Contains('Despues, lanza el mismo comando.')) (Cola $R.Salida)
+}
+
+$Pruebas['m41 (a) un fichero con seguimiento cambiado y sin marca: se para en el arranque con el mensaje, el fichero queda igual byte a byte y no hay llamadas a Copilot ni a Maven'] = {
+  $e = M41-Primera 'm41-a'
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// arreglo a mano`n")
+  $hash = M41-Hash (Get-Ruta $e.Wt $Fichero41)
+  $estado = GitEn $e.Wt @('status', '--porcelain')
+  $json = M41-Hash (Get-Ruta $e.Out 'datos/estado.json')
+  $n = M41-Llamadas $e
+  $r = Migra $e (Basicos $e)
+  M41-Comprueba-Parada $e $r $Fichero41
+  Igual 'el fichero queda igual, byte a byte' $hash (M41-Hash (Get-Ruta $e.Wt $Fichero41))
+  Igual 'git ve lo mismo que antes' $estado (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+  Igual 'ni una llamada mas a Copilot ni a Maven' $n (M41-Llamadas $e)
+  Igual 'estado.json no se ha tocado' $json (M41-Hash (Get-Ruta $e.Out 'datos/estado.json'))
+}
+
+$Pruebas['m41 (b) un fichero nuevo sin seguimiento: la misma parada; con mas de 10 ficheros, salen 10 y cuantos mas'] = {
+  $e = M41-Primera 'm41-b'
+  $nuevo = 'src/main/java/com/acme/life/Nueva.java'
+  Escribe $e.Wt $nuevo "package com.acme.life;`n`n/** Nueva. */`npublic class Nueva {`n}`n"
+  $hash = M41-Hash (Get-Ruta $e.Wt $nuevo)
+  $n = M41-Llamadas $e
+  $r = Migra $e (Basicos $e)
+  M41-Comprueba-Parada $e $r $nuevo
+  Igual 'el fichero queda igual, byte a byte' $hash (M41-Hash (Get-Ruta $e.Wt $nuevo))
+  Igual 'git lo ve como sin seguimiento' "?? $nuevo" (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+  Igual 'ni una llamada mas a Copilot ni a Maven' $n (M41-Llamadas $e)
+  # con 12 ficheros: los 10 primeros (orden de git) y 'y 2 mas'
+  $lista = @()
+  foreach ($i in 1..11) { $f = 'src/main/java/com/acme/life/Extra{0:00}.java' -f $i; Escribe $e.Wt $f "class Extra$i { }`n"; $lista += $f }
+  $r = Migra $e (Basicos $e)
+  $diez = (@($lista | Select-Object -First 10) -join ', ')
+  Comprueba 'con 12 ficheros dice los 10 primeros y y 2 mas' ($r.Salida.Contains("cambios sin commit: $diez y 2 mas. No sigo, para no perderlos.")) (Cola $r.Salida)
+  Comprueba 'y no nombra el undecimo' (-not $r.Salida.Contains('Extra11.java')) (Cola $r.Salida)
+}
+
+$Pruebas['m41 (c) con la marca de un intento cortado y su commit = HEAD: el cambio va a git stash con su mensaje y la pasada sigue'] = {
+  $e = M41-Primera 'm41-c'
+  $head = M38-Head $e.Wt
+  $actualizado = (Estado $e).actualizado
+  $nuevo = 'src/main/java/com/acme/life/AMedias.java'
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// a medias`n")
+  Escribe $e.Wt $nuevo "class AMedias { }`n"
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $head + '"}')
+  $r = Migra $e (Basicos $e)
+  Igual 'la pasada sigue y sale con 0' 0 $r.Codigo
+  $st = @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Igual 'hay un stash' 1 $st.Count
+  Comprueba 'con el paso y el lote en su nombre' ($st.Count -eq 1 -and $st[0] -match 'rescate: intento cortado \(paso estructura, lote 7\)') ($st -join ' / ')
+  Comprueba 'el stash lleva el cambio del fichero tocado' ((GitEn $e.Wt @('show', 'stash@{0}')) -match '// a medias')
+  Comprueba 'y el fichero nuevo' ((GitEn $e.Wt @('show', ('stash@{0}^3:' + $nuevo))) -match 'class AMedias')
+  Comprueba 'el aviso dice como recuperarlo' ($r.Salida -match 'git stash pop') (Cola $r.Salida)
+  Igual 'el worktree queda en el mismo commit' $head (M38-Head $e.Wt)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
+  Comprueba 'la pasada ha seguido: estado.json se ha escrito otra vez' ((Estado $e).actualizado -cne $actualizado) "$actualizado -> $((Estado $e).actualizado)"
+}
+
+$Pruebas['m41 (c2) con una marca vieja (el HEAD ya no es su commit) o un stash que falla, es un cambio de otro: se para y no se toca nada'] = {
+  $e = M41-Primera 'm41-c2'
+  $viejo = M38-Head $e.Wt
+  # el usuario hizo un commit a mano tras el corte y dejo algo sin commit; la marca queda vieja
+  Escribe $e.Wt 'src/main/java/com/acme/life/Suyo.java' "class Suyo { }`n"
+  [void](GitEn $e.Wt @('add', '--', 'src/main/java/com/acme/life/Suyo.java'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano del usuario'))
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// sin commit del usuario`n")
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + $viejo + '"}')
+  $hash = M41-Hash (Get-Ruta $e.Wt $Fichero41)
+  $r = Migra $e (Basicos $e)
+  M41-Comprueba-Parada $e $r $Fichero41
+  Igual 'el fichero queda igual, byte a byte' $hash (M41-Hash (Get-Ruta $e.Wt $Fichero41))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+  Comprueba 'el commit del usuario sigue' ((GitEn $e.Wt @('log', '--format=%s')) -match 'arreglo a mano del usuario')
+  # con la marca al dia pero un git stash que no puede guardar (un cerrojo en refs/stash): tampoco se borra nada
+  $f = M41-Primera 'm41-c2-fallo'
+  Escribe $f.Wt $Fichero41 ((Lee $f.Wt $Fichero41) + "// a medias`n")
+  Escribe $f.Wt '.rescate/intento-en-curso.json' ('{"paso":"estructura","lote":7,"commit":"' + (M38-Head $f.Wt) + '"}')
+  $hash = M41-Hash (Get-Ruta $f.Wt $Fichero41)
+  Escribe $f.Migrado '.git/refs/stash.lock' ''
+  $r = Migra $f (Basicos $f)
+  Remove-Item -LiteralPath (Get-Ruta $f.Migrado '.git/refs/stash.lock') -Force
+  Igual 'con el stash que falla se para con 1' 1 $r.Codigo
+  Comprueba 'dice que no ha podido guardarlo' ($r.Salida -match 'No he podido guardarlo en un git stash') (Cola $r.Salida)
+  Igual 'y el fichero queda igual, byte a byte' $hash (M41-Hash (Get-Ruta $f.Wt $Fichero41))
+}
+
+$Pruebas['m41 (d) una rama rescate/<rama>-<fecha> con un commit sin unir y sin worktree: se para con el mensaje y no se crea ninguna rama (tambien con una rama con /)'] = {
+  foreach ($rama in @('main', 'feature/x')) {
+    $nom = 'm41-d-' + ($rama -replace '/', '-')
+    $e = Nuevo-Escenario $nom @('Clase1')
+    if ($rama -ne 'main') { [void](GitEn $e.Migrado @('checkout', '-q', '-b', $rama)) }
+    $aMano = ($rama -ne 'main')   # el de feature/x: carpeta borrada a mano, que git sigue teniendo registrada
+    $vieja = M41-RamaDeRescate $e $rama '20250101-0000' $false $aMano
+    $otra = M41-RamaDeRescate $e $rama '20260101-0000' $false $aMano
+    # solo los nombres: git marca con + las ramas de un worktree registrado, y el arranque quita ese registro cuando la carpeta ya no existe
+    $ramas = GitEn $e.Migrado @('branch', '--list', '--format=%(refname:short)')
+    $r = Migra $e (Basicos $e)
+    Igual "$rama : sale con 1" 1 $r.Codigo
+    Comprueba "$rama : nombra las dos, la mas nueva primero, y dice que no crea otra" ($r.Salida.Contains("Hay una rama de rescate con arreglos que no estan en tu rama: $otra, $vieja. No creo otra, para no dejarla olvidada.")) (Cola $r.Salida)
+    Comprueba "$rama : unirla a tu rama (la mas nueva)" ($r.Salida.Contains("Unirla a tu rama:        git -C `"$($e.Migrado)`" merge $otra")) (Cola $r.Salida)
+    Comprueba "$rama : seguir trabajando en ella" ($r.Salida.Contains("Seguir trabajando en ella: git -C `"$($e.Migrado)`" worktree add `"$($e.Wt)`" $otra")) (Cola $r.Salida)
+    Comprueba "$rama : no la quieres" ($r.Salida.Contains("No la quieres:           git -C `"$($e.Migrado)`" branch -D $otra")) (Cola $r.Salida)
+    Comprueba "$rama : y que despues se lance el mismo comando" ($r.Salida.Contains('Despues, lanza el mismo comando.')) (Cola $r.Salida)
+    Igual "$rama : la lista de ramas no cambia" $ramas (GitEn $e.Migrado @('branch', '--list', '--format=%(refname:short)'))
+    Comprueba "$rama : no hay worktree" (-not (Test-Path -LiteralPath $e.Wt))
+    # la segunda salida del mensaje funciona tal cual, tambien con la carpeta borrada a mano
+    [void](GitEn $e.Migrado @('worktree', 'add', '-q', $e.Wt, $otra))
+    Igual "$rama : seguir trabajando en ella: el worktree vuelve a estar en esa rama" $otra ((GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')).Trim())
+  }
+}
+
+$Pruebas['m41 (e) la rama de rescate ya unida a la del usuario (o de otra rama, o de una rama de nombre parecido) no para: se crea el worktree como hoy'] = {
+  $e = Nuevo-Escenario 'm41-e' @('Clase1')
+  [void](GitEn $e.Migrado @('branch', 'otra'))
+  [void](GitEn $e.Migrado @('branch', 'main-2'))
+  $unida = M41-RamaDeRescate $e 'main' '20250101-0000' $true
+  $deOtra = M41-RamaDeRescate $e 'otra' '20250101-0000' $false
+  $parecida = M41-RamaDeRescate $e 'main-2' '20250101-0000' $false
+  $r = Migra $e (Basicos $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'se crea el worktree' (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))
+  $nueva = (GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')).Trim()
+  Comprueba 'en una rama nueva rescate/main-<fecha>, no en la unida' ($nueva -match '^rescate/main-\d{8}-\d{4}$' -and $nueva -cne $unida) $nueva
+  Comprueba 'las otras tres siguen donde estaban' (@($unida, $deOtra, $parecida | Where-Object { (GitEn $e.Migrado @('branch', '--list', $_)) -notmatch [regex]::Escape($_) }).Count -eq 0) (GitEn $e.Migrado @('branch', '--list'))
+  Igual 'estado.json lleva la rama nueva' $nueva (Estado $e).rama
+}
+
+$Pruebas['m41 (f) correcciones.json completa con commits que no estan en el HEAD del worktree: la correccion corre otra vez, sale la Info y lo anterior queda apartado'] = {
+  $e = Nuevo-Escenario 'm41-f' @('Clase1')
+  $o = Orden-Base
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  $sis = M38-Sistema
+  $r = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'la primera corrida sale con 0' 0 $r.Codigo
+  $antes = Lee $e.Out 'datos/correcciones.json'
+  $c0 = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  $rama0 = $c0.rama
+  $hash0 = @($c0.commits)[0].hash
+  # el usuario borra el worktree y la rama sin unirla (con -D): los commits del arreglo ya no estan en la carpeta de rescate
+  [void](GitEn $e.Migrado @('worktree', 'remove', '--force', $e.Wt))
+  [void](GitEn $e.Migrado @('branch', '-D', $rama0))
+  # con la respuesta parar (-SoloInforme) no se corrige y no se aparta nada: todo como antes de M41
+  $r1 = Migra-Motor $e $o (Basicos $e) $sis
+  Igual 'con -SoloInforme sale con 0' 0 $r1.Codigo
+  Igual 'no se corrige' 1 @(Llamadas-Motor $e 'fix').Count
+  Igual 'correcciones.json sigue igual' $antes (Lee $e.Out 'datos/correcciones.json')
+  Comprueba 'y no dice nada de la correccion anterior' ($r1.Salida -notmatch 'La correccion anterior hizo sus commits') (Cola $r1.Salida)
+  $r2 = Migra-Motor $e $o (Corrige $e) $sis
+  Igual 'relanzar con -Si sale con 0' 0 $r2.Codigo
+  Comprueba 'sale la Info con la rama de correcciones.json' ($r2.Salida.Contains("La correccion anterior hizo sus commits en otra rama ($rama0), que no esta en la carpeta de rescate: la hago otra vez.")) (Cola $r2.Salida)
+  Igual 'el motor corrige otra vez' 2 @(Llamadas-Motor $e 'fix').Count
+  $ant = Get-Ruta $e.Out ('datos/anterior-' + $hash0.Substring(0, 7))
+  Comprueba 'lo de la correccion anterior queda en datos/anterior-<commit7>: correcciones.json y lo de despues' ((@('correcciones.json', 'hallazgos-despues.json', 'diagnostico-despues.md') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ant $_)) }).Count -eq 0) $ant
+  if (Test-Path -LiteralPath (Join-Path $ant 'correcciones.json')) { Igual 'y es la de antes, tal cual' $antes ([System.IO.File]::ReadAllText((Join-Path $ant 'correcciones.json'))) }
+  Comprueba 'el diagnostico de antes no se aparta' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json'))
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  $rama1 = (GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')).Trim()
+  Comprueba 'correcciones.json es el nuevo: completa, con la rama del worktree nuevo y su commit en el HEAD' ($c.completa -eq $true -and $c.rama -ceq $rama1 -and @($c.commits).Count -eq 1) ($c | ConvertTo-Json -Compress -Depth 5)
+  $lleva = $true
+  try { [void](GitEn $e.Wt @('merge-base', '--is-ancestor', @($c.commits)[0].hash, 'HEAD')) } catch { $lleva = $false }
+  Comprueba 'y el commit esta en la carpeta de rescate' $lleva
+}
+
+# (g) completa con commits que si estan en el HEAD del worktree, o sin commits: se salta como hoy. Ya lo fijan '106 (E2) relanzar' (con un commit de
+# arreglo: "ni vuelve a corregir", 1 fix) y '75 correccion' (sin commits: "el motor no se vuelve a lanzar para fix"), y no se duplica aqui.
 
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

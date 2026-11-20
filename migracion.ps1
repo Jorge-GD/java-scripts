@@ -12,7 +12,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
 
   Arranque: herramientas y repos, batch de referencia (-Plantilla, o el guardado
   en %USERPROFILE%\.rescate\ajustes.json, o se pregunta), modelo, prueba de
-  aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree.
+  aptitud (una ficha de clase sobre un fichero de juguete), pregunta y worktree. No borra nunca lo que haya sin commit en el worktree: lo de un
+  intento cortado va a un git stash y lo demas, o una rama rescate/ sin unir a tu rama, para el arranque (salida 1) sin tocar nada.
   Diagnostico (sin IA, la primera fase): rescate.ps1 -Modo diagnostico mide el migrado y deja datos\hallazgos-antes.json y
   datos\diagnostico-antes.md; su pagina es 2-problemas.html. Lleva el commit del migrado que midio (datos\diagnostico-antes.json): con el
   mismo commit relanzar no repite Maven; con otro (o sin ese dato) se hace otra vez, con cobertura y buenas practicas, y el diagnostico
@@ -270,13 +271,28 @@ function Save-Registro([string]$Ruta, $Salida) {
   [System.IO.File]::WriteAllText($Ruta, ((Get-SinColor $Salida) -join "`n") + "`n", $Utf8)
 }
 
-# Lo que se aparta (rutas desde la carpeta de salida) cuando el diagnostico de antes se hace otra vez: el diagnostico viejo y la
-# correccion anterior con sus registros. Un informe con una correccion de otro punto de partida mezclaria dos cosas.
-$ApartarAlRehacer = @(
-  'datos/diagnostico-antes.json', 'datos/hallazgos-antes.json', 'datos/diagnostico-antes.md', 'datos/cobertura-antes.json', 'datos/practicas-antes.json',
+# Lo que se aparta (rutas desde la carpeta de salida) cuando la correccion se hace otra vez: la correccion anterior con sus datos de despues y sus
+# registros. Cuando se hace otra vez el diagnostico de antes ($ApartarAlRehacer), tambien el diagnostico viejo. Un informe con una correccion
+# de otro punto de partida mezclaria dos cosas.
+$ApartarCorreccion = @(
   'datos/correcciones.json', 'datos/hallazgos-despues.json', 'datos/diagnostico-despues.md', 'datos/cobertura-despues.json', 'datos/practicas-despues.json',
   'registros/correccion.log', 'registros/diagnostico-despues.log', 'registros/cobertura-despues.log', 'registros/practicas-despues.log'
 )
+$ApartarAlRehacer = @(
+  'datos/diagnostico-antes.json', 'datos/hallazgos-antes.json', 'datos/diagnostico-antes.md', 'datos/cobertura-antes.json', 'datos/practicas-antes.json'
+) + $ApartarCorreccion
+
+# Mueve lo que haya de $Rels a datos\anterior-<$V7> (con -2, -3... si ya existe) y devuelve esa carpeta como 'datos\anterior-...'.
+function Move-Apartado([string[]]$Rels, [string]$V7) {
+  $apartado = Join-Path $Datos "anterior-$V7"
+  for ($n = 2; Test-Path -LiteralPath $apartado; $n++) { $apartado = Join-Path $Datos "anterior-$V7-$n" }
+  [void](New-Item -ItemType Directory -Path $apartado)
+  foreach ($rel in $Rels) {
+    $de = Join-Ruta $Salida $rel
+    if (Test-Path -LiteralPath $de) { Move-Item -LiteralPath $de -Destination (Join-Path $apartado (Split-Path $rel -Leaf)) -Force }
+  }
+  return ('datos\' + (Split-Path $apartado -Leaf))
+}
 
 # La fase diagnostico: el diagnostico de antes, con el commit del migrado que midio (datos\diagnostico-antes.json). Se salta si ya esta con el
 # mismo commit (relanzar no repite Maven). Con otro commit, o sin el dato (de antes de guardarlo), se hace otra vez y lo de antes y la
@@ -292,14 +308,7 @@ function Invoke-FaseDiagnostico {
     if ($viejo -ceq $commit) { return }
     $v7 = 'sin-commit'
     if ($viejo.Length -ge 7) { $v7 = $viejo.Substring(0, 7) }
-    $apartado = Join-Path $Datos "anterior-$v7"
-    for ($n = 2; Test-Path -LiteralPath $apartado; $n++) { $apartado = Join-Path $Datos "anterior-$v7-$n" }
-    [void](New-Item -ItemType Directory -Path $apartado)
-    foreach ($rel in $ApartarAlRehacer) {
-      $de = Join-Ruta $Salida $rel
-      if (Test-Path -LiteralPath $de) { Move-Item -LiteralPath $de -Destination (Join-Path $apartado (Split-Path $rel -Leaf)) -Force }
-    }
-    $donde = 'datos\' + (Split-Path $apartado -Leaf)
+    $donde = Move-Apartado $ApartarAlRehacer $v7
     if ($viejo) { Info "Tu rama ha cambiado desde el ultimo diagnostico ($v7 -> $($commit.Substring(0, 7))): lo hago otra vez y lo de la correccion anterior queda en $donde." }
     else { Info "El ultimo diagnostico no dice con que commit se hizo: lo hago otra vez y lo de la correccion anterior queda en $donde." }
     $wt = Get-Head $RepoRoot
@@ -585,8 +594,17 @@ function Invoke-FaseCorreccion {
     $previa = $null
     try { $previa = Read-Json $ruta } catch { $previa = $null }
     if ($previa -and $previa.completa -eq $true) {
+      # completa solo vale si sus commits estan en la carpeta de rescate: si el worktree se rehizo sin unir su rama, los arreglos se quedaron en otra
+      $perdidos = @(@($previa.commits) | Where-Object { $_ -and $_.hash -and (Invoke-Git $RepoRoot @('merge-base', '--is-ancestor', [string]$_.hash, 'HEAD')).Codigo -ne 0 })
+      $rehacer = ($perdidos.Count -gt 0 -and $respuesta -eq 'corregir')
+      if ($rehacer) {
+        $h7 = ([string]$perdidos[0].hash)
+        $donde = Move-Apartado $ApartarCorreccion $h7.Substring(0, [Math]::Min(7, $h7.Length))
+        Info "La correccion anterior hizo sus commits en otra rama ($($previa.rama)), que no esta en la carpeta de rescate: la hago otra vez."
+        Info "Lo de esa correccion queda en $donde."
+      }
       $quedan = @($previa.atascados | Where-Object { $null -ne $_ }).Count
-      if (-not ($Reintentar -and $quedan -gt 0)) {
+      if (-not ($rehacer -or ($Reintentar -and $quedan -gt 0))) {
         $Estado['fase'] = 'correccion'
         Save-Estado
         if ($quedan -gt 0) { Info "La correccion anterior dejo ficheros atascados ($quedan). Para volver a intentarlos: -Reintentar." }
@@ -761,6 +779,18 @@ $dirWt = Get-DirRescate
 if (-not (Test-WorktreeRescate $dirWt)) { New-WorktreeRescate $dirWt }
 $RepoRoot = $dirWt
 Read-Config $RepoRoot $false
+# Lo que haya sin commit en la carpeta de rescate no se borra nunca: lo de un intento cortado va a un git stash (como en rescate.ps1) y todo lo
+# demas (un arreglo a mano, lo de otra herramienta) para el arranque sin tocar nada.
+Undo-IntentoCortado (Get-Rama $RepoRoot)
+$sinCommit = @(Get-SinCommit $RepoRoot)
+if ($sinCommit.Count -gt 0) {
+  $lista = (@($sinCommit | Select-Object -First 10) -join ', ')
+  if ($sinCommit.Count -gt 10) { $lista += " y $($sinCommit.Count - 10) mas" }
+  Stop-Arranque ("La carpeta de rescate tiene cambios sin commit: $lista. No sigo, para no perderlos.`n" +
+    "Si son tuyos y los quieres:  git -C `"$RepoRoot`" add -A ; git -C `"$RepoRoot`" commit -m `"arreglo a mano`"`n" +
+    "Si no los quieres:           git -C `"$RepoRoot`" stash push -u -m `"aparte`"`n" +
+    'Despues, lanza el mismo comando.')
+}
 $Estado = [ordered]@{
   version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
   worktree = $RepoRoot; rama = (Get-Rama $RepoRoot); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; lanzadores = $LanzadoresRoot; modelo = $ModeloElegido; aptitud = $ModeloElegido; respuesta = $respuesta

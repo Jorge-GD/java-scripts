@@ -323,6 +323,61 @@ function Get-Cambios([string]$Dir) {
   return @($r.Salida | Where-Object { $_.Length -gt 3 -and $_[1] -ne ' ' } | ForEach-Object { $_.Substring(3).Trim('"') })
 }
 
+# Todo lo que hay sin commit en una carpeta de git: lo cambiado (este o no en el indice, que Get-Cambios no ve) y lo creado, sin .rescate ni
+# target. Rutas relativas. Con esto se decide si hay trabajo que no se puede perder.
+function Get-SinCommit([string]$Dir) {
+  $r = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'status', '--porcelain', '--untracked-files=all', '--', '.', ':(exclude).rescate', ':(exclude)target')
+  return @($r.Salida | Where-Object { $_.Length -gt 3 } | ForEach-Object { $_.Substring(3).Trim('"') })
+}
+
+# Aparta en un git stash con mensaje todo lo que hay sin commit en $RepoRoot (lo cambiado y lo creado). Devuelve '' si lo ha guardado; si no,
+# lo que ha dicho git (y entonces no ha tocado nada). Es la unica politica ante lo sin commit: nada se borra sin guardarlo antes.
+function Save-Stash([string]$Mensaje) {
+  $r = Invoke-Git $RepoRoot @('stash', 'push', '--include-untracked', '-m', $Mensaje)
+  if ($r.Codigo -eq 0) { return '' }
+  return ($r.Salida -join ' ')
+}
+
+# Lo que haya sin commit en $RepoRoot antes de que una fase automatica lo toque: va a un git stash con $Mensaje y se dice que ficheros y como
+# recuperarlos. Devuelve '' si no habia nada o si lo ha apartado; si no, lo que ha dicho git.
+function Move-SinCommitAStash([string]$Mensaje) {
+  $sucio = @(Get-SinCommit $RepoRoot)
+  if ($sucio.Count -eq 0) { return '' }
+  $mal = Save-Stash $Mensaje
+  if ($mal) { return $mal }
+  Info ('Aparto lo que habia sin confirmar en el worktree (git stash): ' + ($sucio -join ', ') + '. Para recuperarlo: git -C "' + $RepoRoot + '" stash pop')
+  return ''
+}
+
+# ============================ INTENTO EN CURSO ============================
+# Mientras un lote puede dejar cambios sin commit en el arbol, rescate.ps1 apunta en .rescate/intento-en-curso.json su paso, su lote y el commit
+# del que parte (.rescate no se versiona: la marca no entra en ningun commit). Si el script se corta (Ctrl+C, la ventana, la luz), esos cambios a
+# medias no son de nadie: el arranque siguiente (el de rescate.ps1 y el de migracion.ps1) los deshace en vez de guardarlos en la foto.
+function Get-RutaIntento { return (Join-Path (Join-Path $RepoRoot '.rescate') 'intento-en-curso.json') }
+
+function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
+
+# Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y lo creado van antes a
+# un git stash (el usuario pudo cortar la pasada y tocar algo a mano); si el stash falla, no se deshace nada. Si la rama ya no esta en ese
+# commit, el usuario hizo el suyo: no se deshace nada.
+function Undo-IntentoCortado([string]$Rama) {
+  $p = Get-RutaIntento
+  if (-not (Test-Path -LiteralPath $p)) { return }
+  try { $m = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { $m = $null }
+  Remove-Intento
+  $c = "$($m.commit)"
+  if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
+  $donde = "paso $($m.paso), lote $($m.lote)"
+  if ((Get-Head $RepoRoot) -ne $c) { Aviso "Habia un intento cortado ($donde), pero la rama ha avanzado desde entonces: no deshago nada."; return }
+  Info "Habia un intento cortado ($donde): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
+  if (@(Get-SinCommit $RepoRoot).Count -gt 0) {
+    $mal = Save-Stash "rescate: intento cortado ($donde)"
+    if ($mal) { Aviso "No he podido guardarlo en un git stash ($mal): no lo deshago."; return }
+    Aviso 'Lo he guardado en git stash (recuperalo con: git stash list / git stash pop).'
+  }
+  Undo-Lote $Rama $c
+}
+
 # Lo que Maven deja fuera de target (un log, una base en fichero, la salida de un test) no es de la IA. Tras una ejecucion
 # de Maven: borra lo que ha aparecido en ella (lo que no estaba en $Previos, el Get-Cambios de antes de lanzarla) y deshace
 # lo que ha cambiado de lo que git ya tenia. Lo de antes no se toca. Devuelve las rutas que ha quitado.
@@ -512,7 +567,20 @@ function New-WorktreeRescate([string]$Dir) {
   $rama = Get-Rama $OrigenRoot
   if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
   if (Test-Path -LiteralPath $Dir) { Fallo "La carpeta '$Dir' ya existe y no es un worktree de rescate de este repo. Borrala o elige otra con -Worktree."; exit 1 }
-  $nueva = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-' + (Get-Date -Format 'yyyyMMdd-HHmm')
+  [void](Invoke-Git $OrigenRoot @('worktree', 'prune'))   # un worktree borrado a mano sigue registrado: su rama no se podria volver a montar ni borrar
+  $prefijo = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-'
+  # una rama de rescate con commits que no estan en la tuya (el worktree se borro sin unirla): crear otra la dejaria olvidada con sus arreglos
+  $sinUnir = @((Invoke-Git $OrigenRoot @('branch', '--list', ($prefijo + '*'), '--no-merged', $rama, '--format=%(refname:short)')).Salida |
+      Where-Object { $_ -match ('^' + [regex]::Escape($prefijo) + '\d{8}-\d{4}$') } | Sort-Object -Descending)
+  if ($sinUnir.Count -gt 0) {
+    Fallo ('Hay una rama de rescate con arreglos que no estan en tu rama: ' + ($sinUnir -join ', ') + '. No creo otra, para no dejarla olvidada.')
+    Info "Unirla a tu rama:        git -C `"$OrigenRoot`" merge $($sinUnir[0])"
+    Info "Seguir trabajando en ella: git -C `"$OrigenRoot`" worktree add `"$Dir`" $($sinUnir[0])"
+    Info "No la quieres:           git -C `"$OrigenRoot`" branch -D $($sinUnir[0])"
+    Info 'Despues, lanza el mismo comando.'
+    exit 1
+  }
+  $nueva = $prefijo + (Get-Date -Format 'yyyyMMdd-HHmm')
   $sucio = @((Invoke-Git $OrigenRoot @('status', '--porcelain')).Salida | Where-Object { $_ })
   Info "El rescate trabaja en una carpeta aparte (worktree de git): $Dir"
   Info "Rama nueva: '$nueva'. Tu carpeta y tu rama '$rama' no se tocan."

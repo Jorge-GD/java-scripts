@@ -601,15 +601,35 @@ $Pruebas['15 m) un commit que git rechaza (un hook): parada git con su salida, e
   Igual 'cero intentos' 0 $t.intentos
 }
 
-$Pruebas['16 n) lo que habia sin confirmar en el worktree se deshace al empezar, con su aviso'] = {
+$Pruebas['16 n) lo que habia sin confirmar en el worktree se aparta a un git stash al empezar, con su aviso'] = {
   $E = Nuevo-Escenario35 'n' @('importe', 'cliente')
   Escribe $E.Repo "${Ruta35}Recibo.java" ($Fuentes35['Recibo'] + "// resto de una pasada que se corto`n")
   Escribe $E.Repo "${Ruta35}Suelto.java" "class Suelto { }`n"
   $x = Fase35 $E
-  Comprueba 'lo dice, con los dos ficheros' ($x.Texto -match 'Deshago lo que habia sin confirmar' -and $x.Texto.Contains("${Ruta35}Recibo.java") -and $x.Texto.Contains("${Ruta35}Suelto.java")) $x.Texto
+  Comprueba 'lo dice, con los dos ficheros y como recuperarlo (stash pop)' ($x.Texto.Contains('Aparto lo que habia sin confirmar en el worktree (git stash): ') -and $x.Texto.Contains("${Ruta35}Recibo.java") -and $x.Texto.Contains("${Ruta35}Suelto.java") -and $x.Texto.Contains('Para recuperarlo: git -C "' + $E.Repo + '" stash pop')) $x.Texto
+  Comprueba 'ya no dice que lo deshace' ($x.Texto -notmatch 'Deshago lo que habia sin confirmar') $x.Texto
+  $st = @((GitEn $E.Repo @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Igual 'hay un stash' 1 $st.Count
+  Comprueba 'con su mensaje' ($st.Count -eq 1 -and $st[0] -match 'reglas: cambios sin commit de antes') ($st -join ' / ')
+  Comprueba 'el stash lleva el cambio de Recibo' ((GitEn $E.Repo @('show', 'stash@{0}')) -match 'resto de una pasada que se corto')
+  Comprueba 'y el fichero nuevo' ((GitEn $E.Repo @('show', ('stash@{0}^3:' + "${Ruta35}Suelto.java"))) -match 'class Suelto')
   Igual 'src/main queda como en el commit' $true (Main-Igual35 $E)
   Comprueba 'el fichero nuevo ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $E.Repo "${Ruta35}Suelto.java")))
   Igual 'el commit de ReciboValidator y nada mas' ("$Commit35$(Test-De 'ReciboValidator')|inicial") ($x.Commits -join '|')
+  Igual 'el worktree queda limpio' '' (Estado-Git35 $E)
+  # si el git stash no puede guardarlo (un cerrojo en refs/stash), no se borra nada: parada git
+  $E = Nuevo-Escenario35 'n2' @('importe', 'cliente')
+  Escribe $E.Repo "${Ruta35}Recibo.java" ($Fuentes35['Recibo'] + "// resto de una pasada que se corto`n")
+  Escribe $E.Repo '.git/refs/stash.lock' ''   # un cerrojo en refs/stash: git stash falla sin tocar nada
+  $x = Fase35 $E
+  Remove-Item -LiteralPath (Get-Ruta $E.Repo '.git/refs/stash.lock') -Force
+  Igual 'la fase no deja seguir' $false $x.Sigue
+  Igual 'una parada' 1 $script:Paradas.Count
+  if ($script:Paradas.Count -ne 1) { return }
+  Igual 'motivo git' 'git' $script:Paradas[0][0]
+  Comprueba 'el detalle dice que no ha podido apartarlo' ($script:Paradas[0][1] -match 'No he podido apartar con git stash lo que habia sin confirmar') $script:Paradas[0][1]
+  Comprueba 'Recibo sigue con el cambio sin commit' ((Lee $E.Repo "${Ruta35}Recibo.java") -match 'resto de una pasada que se corto')
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
 }
 
 $Pruebas['17 o) -MaxHoras: pasado el tiempo no empieza una ronda nueva y para con tope-de-tiempo'] = {

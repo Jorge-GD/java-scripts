@@ -286,11 +286,8 @@ function Invoke-PracticasLombok([bool]$Conservar) {
   if ($ficheros.Count -gt 0) {
     try { [void](Get-JavapExe) }
     catch { $out.Parada = 'otro'; $out.Detalle = 'No se puede comparar lo compilado: ' + $_.Exception.Message; $out.Registro = $Registros; return $out }
-    $sucio = @(Get-Cambios $RepoRoot)
-    if ($sucio.Count -gt 0) {
-      Info ('Deshago lo que habia sin confirmar en el worktree: ' + ($sucio -join ', '))
-      Undo-Lote (Get-Rama $RepoRoot) (Get-Head $RepoRoot)
-    }
+    $mal = Move-SinCommitAStash 'practicas: cambios sin commit de antes'
+    if ($mal) { $out.Parada = 'git'; $out.Detalle = "No he podido apartar con git stash lo que habia sin confirmar en el worktree: $mal"; $out.Registro = $Registros; return $out }
   }
   $partida = Get-HeadPartida
   $tareas = @(Get-TareasLombok $ficheros $partida $Conservar)
