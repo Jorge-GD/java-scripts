@@ -600,5 +600,30 @@ $Pruebas['m33 (m) la ayuda de prueba-local.ps1 explica -Regresion (cabecera y us
   Comprueba 'y regresion.ps1 solo lleva funciones (nada se ejecuta al cargarlo)' (@($codigo -split "`r?`n" | Where-Object { $_ -match '^[^\s#}]' -and $_ -notmatch '^function ' }).Count -eq 0) ''
 }
 
+# ============================== M48: NOMBRES CORTOS ==============================
+# Un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto (<20 letras>~<hash><ext>): el test de Java compara por nombre y no
+# lo encuentra con ese nombre, asi que el caso no puede ser un test de regresion. Se quita, con ese motivo, y el resto se commitea.
+$Pruebas['m48 (g) un caso con un fichero de nombre corto no se commitea como test de regresion (fallaria siempre): se quita con su motivo y el otro caso si queda'] = {
+  $e = Escenario-M33 'm48-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'm25-copilot.ps1'); MvnExe = (Join-Path $falsos 'm48-mvn.ps1'); SegundosPorLlamada = 60 }))
+  $n = 270 - ($e.Local.Length + 'cargaJob'.Length + 'caso-01'.Length + 41)
+  Comprueba 'la prueba cabe: el nombre largo mide entre 40 y 250 letras' ($n -ge 40 -and $n -le 250) "n=$n, Local=$($e.Local.Length)"
+  $env:RESCATE_M48 = 'largo-fijo:/caso-01'
+  $env:M48_LARGO = "$n"
+  try { $r = Prueba $e @('-Regresion') }
+  finally { $env:RESCATE_M48 = ''; $env:M48_LARGO = '' }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.resultado })) -join ',')
+  $cortos = @(Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/ficheros/logs/jobs') -File | ForEach-Object { $_.Name })
+  Comprueba 'el original guarda el fichero largo con nombre corto (si no, esta prueba no prueba nada)' ($cortos.Count -eq 1 -and $cortos[0] -cmatch '^proceso-largo-nnnnnn~[0-9a-f]{8}\.log$') ($cortos -join ',')
+  $j = Lee-Json $e.Regresion
+  Igual 'regresion.json: solo el caso sin fichero largo queda como test' 'cargaJob/caso-02' ((@($j.casos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Igual 'y uno quitado: el del nombre corto' 'cargaJob/caso-01' ((@($j.quitados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Comprueba 'con el motivo del nombre corto, no con un fallo en la copia' ("$($j.quitados[0].motivo)" -match 'nombre corto' -and "$($j.quitados[0].motivo)" -notmatch 'falla en la copia') "$($j.quitados[0].motivo)"
+  Comprueba 'hay un commit con un solo caso' ($j.commit -and (GitEn $e.Wt @('log', '-1', '--format=%s')) -ceq 'test(regresion): casos de la prueba en local como tests (1 casos, 1 jobs)') ((GitEn $e.Wt @('log', '-1', '--format=%s')))
+  Comprueba 'el caso quitado no esta en la rama de rescate' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt "$Esp/cargaJob/caso-01"))) ''
+  Comprueba 'la consola dice que lo quita' ($r.Salida -match 'quitado: cargaJob/caso-01: ') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas 'tests/probar-regresion.ps1'

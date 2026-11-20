@@ -3855,5 +3855,308 @@ $Pruebas['m47 (j) con -Job las salidas de los otros jobs se quedan, y el siguien
   Igual 'tampoco ejecuta el original' ((@($a[0], $a[1])) -join ',') ((@((Orig-Mvn $e 'cargaJob'), (Orig-Mvn $e 'remesaJob'))) -join ',')
 }
 
+# ===================== M48: un fichero largo no tumba la prueba, un caso que falla dice por que y un test del migrado roto no se acepta =====================
+# m48-mvn.ps1 (sobre m33-mvn.ps1) deja, segun el guion de RESCATE_M48 ('guion:regex sobre job/caso', separados por ';'): ficheros de nombre largo
+# (M48_LARGO letras), un fichero que no cabe ni con nombre corto, un migrado FAILED o EXCEPCION (con su 'Caused by:' en la salida de Maven), un original
+# EXCEPCION, el caso vacio del migrado EXCEPCION (las primeras M48_VACIOS veces) y un fichero donde va una carpeta (M48_OBSTACULO).
+
+# Un escenario con el Copilot de m25 y el Maven de m48; $Mas son otras claves de ajustes.json.
+function Escenario-M48([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm48-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes $aj)
+}
+
+# Lanza con los guiones $Guion de m48-mvn.ps1, las variables de entorno $Env (nombre -> valor) y, con $GuionCopilot, el guion del Copilot falso.
+function Prueba-M48($E, [string]$Guion, [string[]]$A = @(), [string]$GuionCopilot = '', [hashtable]$Env = @{}) {
+  $env:RESCATE_M48 = $Guion
+  foreach ($k in $Env.Keys) { Set-Item -Path "env:$k" -Value ([string]$Env[$k]) }
+  try { return (Prueba $E $A $GuionCopilot) }
+  finally {
+    $env:RESCATE_M48 = ''
+    foreach ($k in $Env.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+  }
+}
+
+# Las letras que tiene que tener el nombre de un fichero de ficheros\logs\jobs\ para que su ruta en salidas\original-2\<job>\<caso> mida $Destino.
+function Largo-M48($E, [string]$Job, [string]$Caso, [int]$Destino) { return ($Destino - ($E.Local.Length + $Job.Length + $Caso.Length + 41)) }
+
+# Los nombres de lo que hay en ficheros\logs\jobs\ de un lado ($Lado: original, original-2, migrado) de un caso.
+function Nombres-M48($E, [string]$Lado, [string]$Job = 'cargaJob', [string]$Caso = 'caso-01') {
+  $d = Get-Ruta $E.Local "salidas/$Lado/$Job/$Caso/ficheros/logs/jobs"
+  if (-not (Test-Path -LiteralPath $d)) { return @() }
+  return @(Get-ChildItem -LiteralPath $d -File | ForEach-Object { $_.Name })
+}
+
+$NombreCorto48 = '^proceso-largo-nnnnnn~[0-9a-f]{8}\.log$'
+
+# Comprueba que original, original-2 y migrado guardan un solo fichero largo con el mismo nombre corto.
+function Comprueba-Corto-M48($E) {
+  $n = @{}
+  foreach ($lado in @('original', 'original-2', 'migrado')) {
+    $n[$lado] = @(Nombres-M48 $E $lado)
+    Igual "$lado guarda un solo fichero en ficheros\logs\jobs" 1 $n[$lado].Count
+    Comprueba "$lado : su nombre es el corto (20 letras, ~, 8 de hash y la extension)" ($n[$lado].Count -eq 1 -and $n[$lado][0] -cmatch $NombreCorto48) ($n[$lado] -join ',')
+  }
+  Comprueba 'el mismo nombre en los tres lados' (($n['original'] -join ',') -ceq ($n['original-2'] -join ',') -and ($n['original'] -join ',') -ceq ($n['migrado'] -join ',')) ("$($n['original']) | $($n['original-2']) | $($n['migrado'])")
+}
+
+$Pruebas['m48 (a) un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto, el mismo en original, original-2 y migrado: el caso sale igual y su original se reutiliza en el siguiente lanzamiento'] = {
+  $e = Escenario-M48 'm48-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $n = Largo-M48 $e 'cargaJob' 'caso-01' 270
+  Comprueba 'la prueba cabe: el nombre largo mide entre 40 y 250 letras' ($n -ge 40 -and $n -le 250) "n=$n, Local=$($e.Local.Length)"
+  $r = Prueba-M48 $e 'largo:/caso-01' @() '' @{ M48_LARGO = $n }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Comprueba-Corto-M48 $e
+  Igual 'el contenido del fichero guardado es el que dejo el job' "ok`n" (Lee $e.Local ('salidas/migrado/cargaJob/caso-01/ficheros/logs/jobs/' + (@(Nombres-M48 $e 'migrado'))[0]))
+  Comprueba 'lo demas del caso se guarda como siempre (estado y resultado)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/estado.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local ('salidas/original/cargaJob/caso-01/ficheros/salida/resultado_' + (Hoy) + '.txt')))) ''
+  Comprueba 'la consola no dice que algun fichero no se guarde' ($r.Salida -notmatch 'no se ha podido guardar' -and $r.Salida -notmatch 'carpeta mas corta') (Cola $r.Salida)
+  Igual 'los dos casos quedan como originales reutilizables' 2 @((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos).Count
+  $o1 = Orig-Mvn $e
+  $r = Prueba-M48 $e 'largo:/caso-01' @() '' @{ M48_LARGO = $n }
+  Comprueba 'el siguiente lanzamiento reutiliza los 2 originales' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'sin otro Maven del original' $o1 (Orig-Mvn $e)
+  Igual 'y sigue igual' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m48 (a2) la decision no depende del lado: un fichero que cabria en el original y en el migrado pero no en la ruta mas larga de salidas (culpable) tambien se guarda con nombre corto, en los tres lados'] = {
+  $e = Escenario-M48 'm48-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $n = Largo-M48 $e 'cargaJob' 'caso-01' 250
+  Comprueba 'la prueba cabe: el nombre largo mide entre 40 y 250 letras' ($n -ge 40 -and $n -le 250) "n=$n, Local=$($e.Local.Length)"
+  $r = Prueba-M48 $e 'largo:/caso-01' @() '' @{ M48_LARGO = $n }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba-Corto-M48 $e
+}
+
+$Pruebas['m48 (a3) el nombre corto: la misma ruta da el mismo nombre en cualquier dia, lo que cabe no cambia, lo que no cabe ni asi no se guarda y regresion.ps1 lo reconoce'] = {
+  $f = Join-Path $Dir 'm48-corto.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @(); $Hoy = @()
+$LimiteRuta = 259
+$Local = 'x' * 150
+$ayer = [datetime]'2026-11-19'; $hoy = [datetime]'2026-11-20'
+$dir = 'ficheros/logs/jobs/'
+$resto = 'proceso-largo-' + ('n' * 60)
+function Salida([string]$K, $V) { if ($null -eq $V) { $V = '(null)' }; $K + ' ' + $V }
+Salida 'A' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261119.log') @($ayer))
+Salida 'B' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261120.log') @($hoy))
+Salida 'C' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261120.log') @($ayer, $hoy))
+Salida 'D' (Get-RelSalida 'cargaJob' 'ficheros/salida/resultado_20261120.txt' @($hoy))
+Salida 'E' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261121.log') @($hoy))
+Salida 'F' (Get-RelSalida 'cargaJob' ('ficheros/' + ('a' * 100) + '/' + ('b' * 100) + '/dato.txt') @($hoy))
+$k = 259 - $Local.Length - 'cargaJob'.Length - 43
+Salida 'G' (Get-RelSalida 'cargaJob' ('a/' + ('b' * $k)) @($hoy)).Length
+Salida 'H' (Get-RelSalida 'cargaJob' ('a/' + ('b' * ($k + 1))) @($hoy))
+Salida 'I' (Get-RelSalida 'cargaJob' ('a/' + ('resultado_20261119_' + ('c' * 120)) + '.txt') @($ayer))
+Salida 'J' (Get-RelSalida 'cargaJob' ('a/' + ('resultado_20261120_' + ('c' * 120)) + '.txt') @($hoy))
+Salida 'K' (Get-RelSalida 'cargaJob' ($dir + $resto + '.log') @($hoy))
+Salida 'L' (Test-NombreCorto (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261120.log') @($hoy)))
+Salida 'M' (Test-NombreCorto 'ficheros/salida/resultado_20261120.txt')
+Salida 'N' ($k + 2)
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-RelSalida', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'tareas.ps1') @('Get-Hash8')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  Igual 'el script de la prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`r?`n")) { if ($l -match '^([A-Z]) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  Comprueba 'A: una ruta larga se guarda con 20 letras, ~, 8 de hash y la extension, en su misma carpeta' ($v['A'] -cmatch '^ficheros/logs/jobs/proceso-largo-nnnnnn~[0-9a-f]{8}\.log$') $r.Salida
+  Igual 'B: el original de ayer (con su fecha y sus dias) y el migrado de hoy dan el mismo nombre' $v['A'] $v['B']
+  Igual 'C: con los dos dias en la lista, el mismo' $v['A'] $v['C']
+  Igual 'D: lo que cabe se queda como estaba' 'ficheros/salida/resultado_20261120.txt' $v['D']
+  Comprueba 'E: una fecha que no es de los dias de la ejecucion es otro dato: otro nombre' ($v['E'] -cmatch '~[0-9a-f]{8}\.log$' -and $v['E'] -cne $v['A']) $r.Salida
+  Igual 'F: ni con nombre corto cabe (la carpeta ya mide demas): no se guarda' '(null)' $v['F']
+  Igual 'G: justo en 259 letras (la ruta mas larga de salidas) cabe y se queda' $v['N'] $v['G']
+  Comprueba 'H: con una letra mas ya no cabe y se acorta' ($v['H'] -cmatch '^a/b{20}~[0-9a-f]{8}$') $r.Salida
+  Igual 'I y J: el prefijo sale del nombre normalizado: la fecha de otro dia no cambia el nombre corto' $v['I'] $v['J']
+  Comprueba 'K: el mismo nombre sin la fecha es otra ruta: otro hash' ($v['K'] -cmatch '~[0-9a-f]{8}\.log$' -and $v['K'] -cne $v['A']) $r.Salida
+  Igual 'L: Test-NombreCorto reconoce un nombre corto' 'True' $v['L']
+  Igual 'M: y no un nombre normal' 'False' $v['M']
+}
+
+$Pruebas['m48 (b) un fichero que no cabe ni con nombre corto no se guarda: el lanzamiento sigue, el caso sale distinto con el fichero y el motivo, la consola sugiere una carpeta mas corta una sola vez, no queda como original reutilizable y -Reparar no lo toca'] = {
+  $e = Escenario-M48 'm48-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00') })
+  $rel = 'ficheros/' + ('a' * 100) + '/' + ('b' * 100) + '/dato.txt'
+  $r = Prueba-M48 $e 'sin-sitio:^cargaJob/caso-01$' @('-Reparar')
+  Igual 'el lanzamiento acaba: sale con 2 (un caso distinto)' 2 $r.Codigo
+  Igual 'el caso con el fichero sale distinto y los demas, iguales' 'distinto,igual,igual' ((Resultados $e) -join ',')
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)
+  Igual 'una diferencia: el fichero' $rel ($d | ForEach-Object { $_.fichero })
+  Comprueba 'con el motivo: no se ha podido guardar y la ruta de tantas letras' ("$($d[0].original)" -match '^no se ha podido guardar: ruta de \d+ letras$' -and "$($d[0].migrado)" -match '^no se ha podido guardar: ruta de \d+ letras$') "$($d[0].original) | $($d[0].migrado)"
+  Comprueba 'la consola dice el fichero y el motivo' ($r.Salida.Contains($rel) -and $r.Salida -match 'no se ha podido guardar: ruta de \d+ letras') (Cola $r.Salida)
+  Igual 'y sugiere una carpeta mas corta una sola vez (aunque falle en tres lados)' 1 @([regex]::Matches($r.Salida, 'carpeta mas corta')).Count
+  Comprueba 'el fichero no esta en ningun lado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local ('salidas/original/cargaJob/caso-01/ficheros/' + ('a' * 100))))) ''
+  Comprueba 'lo demas del caso se guarda (estado.txt en los tres lados)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/estado.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original-2/cargaJob/caso-01/estado.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/estado.txt'))) ''
+  $j = @((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos | ForEach-Object { "$($_.job)/$($_.caso)" })
+  Igual 'el caso con un fichero sin guardar no queda como original reutilizable (los otros dos, si)' 'cargaJob/caso-02,remesaJob/caso-01' ($j -join ',')
+  Comprueba 'con -Reparar, lo salta y lo dice, sin llamar a Copilot para repararlo' ($r.Salida -match 'Salto 1 caso\(s\) distinto\(s\)' -and (Llamadas-Reparar $e).Count -eq 0) (Cola $r.Salida)
+  $r = Prueba-M48 $e 'sin-sitio:^cargaJob/caso-01$'
+  Comprueba 'el siguiente lanzamiento reutiliza 2 originales y ejecuta el del caso sin guardar' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 1\.') (Cola $r.Salida)
+  Igual 'sigue distinto' 'distinto,igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m48 (b2) un error al copiar a salidas (un fichero donde va una carpeta) tambien se apunta, con el mensaje del error: el lanzamiento sigue y el caso sale distinto'] = {
+  $e = Escenario-M48 'm48-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $obstaculo = Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/ficheros'
+  $r = Prueba-M48 $e 'obstaculo:/caso-01' @() '' @{ M48_OBSTACULO = $obstaculo }
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto y el otro, igual' 'distinto,igual' ((Resultados $e) -join ',')
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias | Where-Object { $_.fichero -like 'ficheros/salida/resultado_*' })
+  Igual 'una diferencia: el fichero que no se pudo guardar' 1 $d.Count
+  Comprueba 'su motivo es el mensaje del error, no el de la ruta' ("$($d[0].migrado)" -match '^no se ha podido guardar: .{5,}' -and "$($d[0].migrado)" -notmatch 'ruta de \d+ letras') "$($d[0].migrado)"
+  Comprueba 'el original si lo guardo' ("$($d[0].original)" -notmatch 'no se ha podido guardar') "$($d[0].original)"
+  Comprueba 'la consola lo dice' ($r.Salida -match 'resultado_\d{8}\.txt.*no se ha podido guardar') (Cola $r.Salida)
+  Comprueba 'y no sugiere la carpeta mas corta (no es la ruta)' ($r.Salida -notmatch 'carpeta mas corta') (Cola $r.Salida)
+}
+
+$Pruebas['m48 (c) el migrado acaba FAILED y su Maven escribe la causa: la causa esta en prueba-local.json, en la consola, en el HTML de la comparacion y en el prompt de -Reparar'] = {
+  $e = Escenario-M48 'm48-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M48 $e 'failed-mig:/caso-01' @('-Reparar') 'reparar-no'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto y el otro, igual' 'distinto,igual' ((Resultados $e) -join ',')
+  $f = @((Caso $e 'cargaJob' 'caso-01').fallos)
+  Igual 'prueba-local.json: un fallo, el del migrado, FAILED' 'migrado|FAILED' (($f | ForEach-Object { "$($_.lado)|$($_.estado)" }) -join ',')
+  Igual 'con su causa, sin el Caused by:' 'java.lang.IllegalStateException: sin correo' "$($f[0].causa)"
+  Igual 'el caso igual no lleva fallos' 0 @((Caso $e 'cargaJob' 'caso-02').fallos).Count
+  Comprueba 'la consola: el migrado acaba FAILED y la causa, bajo el caso distinto' ($r.Salida -match 'el migrado acaba FAILED: java\.lang\.IllegalStateException: sin correo') (Cola $r.Salida)
+  Comprueba 'la causa no esta dentro de las carpetas que se comparan' (@(Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'salidas') -Recurse -File | Where-Object { [System.IO.File]::ReadAllText($_.FullName) -match 'sin correo' }).Count -eq 0) ''
+  $p = @(Registros-Reparar $e 1)
+  Comprueba 'hay una llamada de reparar y su prompt lleva la causa del lado que falla' ($p.Count -ge 1 -and $p[0].Contains('el migrado acaba FAILED: java.lang.IllegalStateException: sin correo')) (Cola ($p -join ' '))
+  $g = Join-Path $Dir 'm48-html.ps1'
+  $raiz = Split-Path -Parent $Script
+  $cuerpo = @"
+`$ErrorActionPreference = 'Stop'
+. '$(Join-Path $raiz 'comun.ps1')'
+. '$(Join-Path $raiz 'tareas.ps1')'
+. '$(Join-Path $raiz 'informe.ps1')'
+`$marco = Split-Plantilla (Read-PlantillaInforme 'marco.html')
+`$pl = Split-Plantilla (Read-PlantillaInforme '3-original-vs-migrado.html')
+`$T = Merge-Trozos `$marco.Trozos `$pl.Trozos
+`$c = @((Get-Content -Raw -LiteralPath '$($e.Json)' | ConvertFrom-Json).casos | Where-Object { `$_.caso -eq 'caso-01' })[0]
+Get-CasoLocalHtml `$T `$c
+"@
+  [System.IO.File]::WriteAllText($g, $cuerpo)
+  $h = Lanzar $g @()
+  Igual 'el HTML del caso se monta' 0 $h.Codigo
+  Comprueba 'el HTML dice que el migrado acaba FAILED y la causa' ($h.Salida -match 'migrado' -and $h.Salida -match 'FAILED' -and $h.Salida.Contains('java.lang.IllegalStateException: sin correo')) $h.Salida
+}
+
+$Pruebas['m48 (d) el original de un caso no arranca y Maven dice por que: el motivo del rechazo lleva la causa; la causa de un original reutilizado sigue disponible y la de un caso hecho en otro lanzamiento tambien'] = {
+  $e = Escenario-M48 'm48-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M48 $e 'excepcion-orig'
+  Igual 'sale con 2 (el migrado arranca, el original no)' 2 $r.Codigo
+  $p = Registro-Caso-M36 $e 'cargaJob' '01' 2
+  Comprueba 'el reintento recibe el motivo con la clase y la causa de Maven' ($p.Contains('lanzarlo da BadSqlGrammarException (org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_X" not found). Si el caso no busca justo eso')) (Cola $p)
+  $f = @((Caso $e 'cargaJob' 'caso-01').fallos)
+  Igual 'prueba-local.json: el fallo es el del original, EXCEPCION' 'original|EXCEPCION' (($f | ForEach-Object { "$($_.lado)|$($_.estado)" }) -join ',')
+  Igual 'con la causa de Maven' 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_X" not found' "$($f[0].causa)"
+  Comprueba 'la consola dice que el original acaba EXCEPCION y la causa' ($r.Salida -match 'el original acaba EXCEPCION: org\.h2\.jdbc\.JdbcSQLSyntaxErrorException: Table "T_X" not found') (Cola $r.Salida)
+  $o1 = Orig-Mvn $e
+  $r = Prueba-M48 $e 'excepcion-orig'
+  Comprueba 'el siguiente lanzamiento reutiliza el original' ($r.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'sin otro Maven del original' $o1 (Orig-Mvn $e)
+  $f = @((Caso $e 'cargaJob' 'caso-01').fallos)
+  Igual 'y la causa del original reutilizado sigue en prueba-local.json' 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_X" not found' "$($f[0].causa)"
+  # un caso hecho en otro lanzamiento cuyo original dejo EXCEPCION: el motivo lleva la causa que se guardo con ese original
+  $e2 = Escenario-M48 'm48-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  [void](Prueba-M48 $e2 '')
+  Escribe $e2.Local 'salidas/original/cargaJob/caso-01/estado.txt' "estado=EXCEPCION`nsalida=BadSqlGrammarException`n"
+  $o = Lee-Json (Get-Ruta $e2.Local 'salidas/originales.json')
+  foreach ($c in @($o.casos)) { Add-Member -InputObject $c -NotePropertyName causa -NotePropertyValue 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_X" not found' -Force }
+  [System.IO.File]::WriteAllText((Get-Ruta $e2.Local 'salidas/originales.json'), (ConvertTo-Json -InputObject $o -Depth 6))
+  $r = Prueba-M48 $e2 'excepcion-orig'
+  Comprueba 'la Info dice que se rehace 1 caso' ($r.Salida -match 'Se rehacen 1 caso') (Cola $r.Salida)
+  $p = Registro-Caso-M36 $e2 'cargaJob' '01' 2
+  Comprueba 'y la IA recibe el motivo con la causa que se guardo con el original' ($p.Contains('lanzarlo da BadSqlGrammarException (org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_X" not found).')) (Cola $p)
+}
+
+$MotivoVacio48 = 'Con un caso vacio, el original arranca el job cargaJob (estado=COMPLETED) y con tu test el migrado no: BeanCreationException (org.springframework.beans.factory.BeanCreationException: sin correo). Revisa lo que simula el test y las propiedades que le pasa.'
+
+$Pruebas['m48 (e1) caso vacio: el original acaba COMPLETED y el migrado EXCEPCION: con intentos de sobra se rechaza con la causa y el reintento, que arranca, se acepta'] = {
+  $e = Escenario-M48 'm48-e1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio' @() '' @{ M48_VACIOS = 1 }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el arnes del migrado por eso' ($r.Salida -match 'Arnes del migrado rechazado: Con un caso vacio, el original arranca el job cargaJob \(estado=COMPLETED\) y con tu test el migrado no: BeanCreationException \(org\.springframework\.beans\.factory\.BeanCreationException: sin correo\)') (Cola $r.Salida)
+  $t = Tarea-Arnes $e 'migrado'
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$($t.estado):$($t.intentos)"
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'migrado' 2).Contains($MotivoVacio48)) (Cola (Registro-Arnes $e 'migrado' 2))
+  Igual 'los casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m48 (e2) caso vacio: en el ultimo intento el test se acepta con un aviso (puede ser el codigo del migrado)'] = {
+  $e = Escenario-M48 'm48-e2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio' @() '' @{ M48_VACIOS = 9 }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el primer intento se rechaza' 1 @([regex]::Matches($r.Salida, 'Arnes del migrado rechazado: Con un caso vacio')).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'con el aviso del motivo (ademas del rechazo del primer intento)' 2 @([regex]::Matches($r.Salida, [regex]::Escape($MotivoVacio48))).Count
+  $t = Tarea-Arnes $e 'migrado'
+  Igual 'la tarea queda hecha, con dos intentos' 'hecha:2' "$($t.estado):$($t.intentos)"
+  Comprueba 'el test se guarda' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado')) ''
+  Igual 'los casos se ejecutan' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m48 (e3) caso vacio: un test guardado de otro lanzamiento que da EXCEPCION con el caso vacio se usa, solo con un aviso y sin llamar a Copilot'] = {
+  $e = Escenario-M48 'm48-e3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M48 $e ''
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $n = @(Llamadas $e).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio' @() '' @{ M48_VACIOS = 99 }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'y avisa de lo del caso vacio' ($r.Salida.Contains($MotivoVacio48)) (Cola $r.Salida)
+  Igual 'la tarea queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+}
+
+$Pruebas['m48 (e4) caso vacio: el test que dejo una llamada pasada de tiempo y da EXCEPCION con el caso vacio se rechaza igual, con el motivo de la llamada y el del vacio'] = {
+  $e = Escenario-M48 'm48-e4' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CopilotExe = (Join-Path $falsos 'arnes-copilot.ps1'); SegundosArnes = 10 }
+  $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio' @() 'colgado-bueno:arnes-migrado' @{ M48_VACIOS = 1 }
+  Igual 'sale con 0 (el reintento arranca)' 0 $r.Codigo
+  $p = Registro-Arnes $e 'migrado' 2
+  Comprueba 'hay un reintento (la llamada pasada de tiempo no se acepta aunque dejo un test)' ($p.Length -gt 0) (Cola (Registro-Arnes $e 'migrado' 1))
+  Comprueba 'y su prompt lleva el motivo del caso vacio' ($p.Contains('Con un caso vacio, el original arranca el job cargaJob (estado=COMPLETED) y con tu test el migrado no: BeanCreationException')) (Cola $p)
+  $t = Tarea-Arnes $e 'migrado'
+  Igual 'la tarea queda hecha con dos intentos' 'hecha:2' "$($t.estado):$($t.intentos)"
+}
+
+$Pruebas['m48 (f) si el migrado acaba EXCEPCION en todos los casos de un job y el original no: sale la linea de -RehacerArnes; no sale si falla un solo caso ni si el original tambien acaba EXCEPCION'] = {
+  $e = Escenario-M48 'm48-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'la linea de cargaJob, con la clase y la causa' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Igual 'solo una linea de esas' 1 @([regex]::Matches($r.Salida, 'El migrado no arranca el job')).Count
+  Comprueba 'remesaJob (falla un solo caso) no la lleva' ($r.Salida -notmatch 'no arranca el job remesaJob') (Cola $r.Salida)
+  Comprueba 'tarifaJob (el migrado no arranca en todos, pero el original tampoco en uno) no la lleva' ($r.Salida -notmatch 'no arranca el job tarifaJob') (Cola $r.Salida)
+}
+
+$Pruebas['m48 (h) la clave del original lleva la version del formato de salidas: un original guardado con otra version se ejecuta otra vez, una sola vez'] = {
+  $e = Escenario-M48 'm48-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $raiz = Split-Path -Parent $Script
+  $viejo = Join-Path $Dir 'm48-h-viejo'
+  if (Test-Path -LiteralPath $viejo) { Remove-Item -LiteralPath $viejo -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $viejo -Force)
+  foreach ($x in @('prueba-local.ps1', 'comun.ps1', 'tareas.ps1', 'regresion.ps1', 'tareas', 'regresion')) { Copy-Item -LiteralPath (Join-Path $raiz $x) -Destination $viejo -Recurse -Force }
+  $texto = [System.IO.File]::ReadAllText((Join-Path $viejo 'prueba-local.ps1'))
+  $m = [regex]::Match($texto, '\$VersionSalidas = (\d+)')
+  Comprueba 'prueba-local.ps1 lleva la constante $VersionSalidas, con un numero' $m.Success ''
+  if ($m.Success) { [System.IO.File]::WriteAllText((Join-Path $viejo 'prueba-local.ps1'), $texto.Replace($m.Value, '$VersionSalidas = ' + (([int]$m.Groups[1].Value) - 1))) }
+  $actual = $Script
+  $Script = Join-Path $viejo 'prueba-local.ps1'
+  $r = Prueba-M48 $e ''
+  $Script = $actual
+  Igual 'con el formato anterior sale con 0' 0 $r.Codigo
+  $o1 = Orig-Mvn $e
+  $r = Prueba-M48 $e ''
+  Comprueba 'con el formato de ahora no reutiliza nada y ejecuta los 2 casos' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  Igual 'el original y el original-2 de cada caso se ejecutan otra vez' ($o1 + 4) (Orig-Mvn $e)
+  $r = Prueba-M48 $e ''
+  Comprueba 'y el siguiente lanzamiento ya los reutiliza' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'sin otro Maven del original' ($o1 + 4) (Orig-Mvn $e)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
