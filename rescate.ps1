@@ -3260,13 +3260,8 @@ function Show-SinPasos([string]$Pie) {
 }
 
 # ============================ INTENTO EN CURSO ============================
-# La marca (.rescate/intento-en-curso.json), su ruta, su borrado y Undo-IntentoCortado, que la lee al arrancar, estan en comun.ps1: tambien
-# los usa migracion.ps1.
-# La marca lleva tambien los ficheros del lote y las claves de los errores de antes (el modo comprobar los usa para saber que hay de nuevo).
-function Save-Intento([string]$PasoId, [int]$N, [string]$Commit, [string[]]$Ficheros = @(), $Base = $null) {
-  $claves = @(); if ($Base) { $claves = @($Base.Keys | Sort-Object) }
-  [System.IO.File]::WriteAllText((Get-RutaIntento), (ConvertTo-Json -Compress -InputObject ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit; ficheros = @($Ficheros); base = $claves })))
-}
+# La marca (.rescate/intento-en-curso.json): su ruta, Save-Intento, su borrado y Undo-IntentoCortado, que la lee al arrancar, estan en comun.ps1:
+# tambien las usan migracion.ps1 y las rondas de practicas y de reglas.
 
 # El arbol de trabajo de un intento (con los ficheros nuevos, sin lo ignorado) como un commit suelto sobre HEAD, que no esta en ninguna
 # rama ni toca el indice ni el arbol. Devuelve su sha, o '' si no se pudo.
