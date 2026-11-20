@@ -5953,5 +5953,20 @@ $Pruebas['m41 (h) -Modo fix y -Modo plan con una rama rescate/<rama>-<fecha> sin
   Comprueba 'y crea el worktree' (Test-Path -LiteralPath (Join-Path $e.Wt '.git')) (Cola $r.Salida)
 }
 
+$Pruebas['m41 (i) la rama de rescate sin unir de OTRA rama (main-2, que tambien empieza por rescate/main-) no para a quien esta en main'] = {
+  $e = Nuevo-Escenario 'm41-i'
+  $otra = 'rescate/main-2-20250101-0000'
+  $temporal = Join-Path (Split-Path -Parent $e.Repo) 'wt-temporal'
+  [void](GitEn $e.Repo @('worktree', 'add', '-q', '-b', $otra, $temporal, 'main'))
+  Escribe $temporal 'notas/arreglo.txt' 'arreglo'
+  [void](GitEn $temporal @('add', '--', 'notas/arreglo.txt'))
+  [void](GitEn $temporal @('commit', '-q', '-m', 'rescate(estructura): lote 1, hallazgos 2 a 0'))
+  [void](GitEn $e.Repo @('worktree', 'remove', '--force', $temporal))
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si')
+  Igual 'el fix sale con 0' 0 $r.Codigo
+  Comprueba 'no habla de una rama de rescate sin unir' (-not $r.Salida.Contains('Hay una rama de rescate con arreglos')) (Cola $r.Salida)
+  Comprueba 'y crea el worktree' (Test-Path -LiteralPath (Join-Path $e.Wt '.git')) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
