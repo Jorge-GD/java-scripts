@@ -4097,6 +4097,16 @@ $Pruebas['m48 (e1) caso vacio: el original acaba COMPLETED y el migrado EXCEPCIO
   Igual 'los casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
 }
 
+$Pruebas['m48 (e5) caso vacio: si tampoco arranca en el original (el job necesita algo que el caso vacio no trae), el test del migrado se acepta a la primera y sin aviso'] = {
+  $e = Escenario-M48 'm48-e5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M48 $e 'excepcion-ambos:/vacio'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el caso vacio del original tambien acaba EXCEPCION' ((Lee $e.Local 'salidas/vacio/cargaJob/estado.txt') -match 'estado=EXCEPCION') ''
+  Comprueba 'la consola no rechaza ni avisa por el caso vacio' ($r.Salida -notmatch 'Con un caso vacio, el original arranca') (Cola $r.Salida)
+  $t = Tarea-Arnes $e 'migrado'
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$($t.estado):$($t.intentos)"
+}
+
 $Pruebas['m48 (e2) caso vacio: en el ultimo intento el test se acepta con un aviso (puede ser el codigo del migrado)'] = {
   $e = Escenario-M48 'm48-e2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio' @() '' @{ M48_VACIOS = 9 }
@@ -4145,29 +4155,38 @@ $Pruebas['m48 (f) si el migrado acaba EXCEPCION en todos los casos de un job y e
   Comprueba 'tarifaJob (el migrado no arranca en todos, pero el original tampoco en uno) no la lleva' ($r.Salida -notmatch 'no arranca el job tarifaJob') (Cola $r.Salida)
 }
 
-$Pruebas['m48 (h) la clave del original lleva la version del formato de salidas: un original guardado con otra version se ejecuta otra vez, una sola vez'] = {
-  $e = Escenario-M48 'm48-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+# Un primer lanzamiento con una copia de prueba-local.ps1 (y lo que carga) en la que la constante $Constante vale uno menos, y dos con el de
+# ahora: la clave del original lleva esa constante, asi que el segundo ejecuta otra vez los 2 casos y el tercero ya los reutiliza.
+function Comprueba-Clave-M48($E, [string]$Constante) {
   $raiz = Split-Path -Parent $Script
-  $viejo = Join-Path $Dir 'm48-h-viejo'
+  $viejo = Join-Path $Dir "m48-$Constante-viejo"
   if (Test-Path -LiteralPath $viejo) { Remove-Item -LiteralPath $viejo -Recurse -Force }
   [void](New-Item -ItemType Directory -Path $viejo -Force)
   foreach ($x in @('prueba-local.ps1', 'comun.ps1', 'tareas.ps1', 'regresion.ps1', 'tareas', 'regresion')) { Copy-Item -LiteralPath (Join-Path $raiz $x) -Destination $viejo -Recurse -Force }
   $texto = [System.IO.File]::ReadAllText((Join-Path $viejo 'prueba-local.ps1'))
-  $m = [regex]::Match($texto, '\$VersionSalidas = (\d+)')
-  Comprueba 'prueba-local.ps1 lleva la constante $VersionSalidas, con un numero' $m.Success ''
-  if ($m.Success) { [System.IO.File]::WriteAllText((Join-Path $viejo 'prueba-local.ps1'), $texto.Replace($m.Value, '$VersionSalidas = ' + (([int]$m.Groups[1].Value) - 1))) }
+  $m = [regex]::Match($texto, '\$' + $Constante + ' = (\d+)')
+  Comprueba "prueba-local.ps1 lleva la constante `$$Constante, con un numero" $m.Success ''
+  if ($m.Success) { [System.IO.File]::WriteAllText((Join-Path $viejo 'prueba-local.ps1'), $texto.Replace($m.Value, '$' + $Constante + ' = ' + (([int]$m.Groups[1].Value) - 1))) }
   $actual = $Script
   $Script = Join-Path $viejo 'prueba-local.ps1'
-  $r = Prueba-M48 $e ''
+  $r = Prueba-M48 $E ''
   $Script = $actual
-  Igual 'con el formato anterior sale con 0' 0 $r.Codigo
-  $o1 = Orig-Mvn $e
-  $r = Prueba-M48 $e ''
-  Comprueba 'con el formato de ahora no reutiliza nada y ejecuta los 2 casos' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
-  Igual 'el original y el original-2 de cada caso se ejecutan otra vez' ($o1 + 4) (Orig-Mvn $e)
-  $r = Prueba-M48 $e ''
+  Igual "con otro `$$Constante sale con 0" 0 $r.Codigo
+  $o1 = Orig-Mvn $E
+  $r = Prueba-M48 $E ''
+  Comprueba "con el `$$Constante de ahora no reutiliza nada y ejecuta los 2 casos" ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  Igual 'el original y el original-2 de cada caso se ejecutan otra vez' ($o1 + 4) (Orig-Mvn $E)
+  $r = Prueba-M48 $E ''
   Comprueba 'y el siguiente lanzamiento ya los reutiliza' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
-  Igual 'sin otro Maven del original' ($o1 + 4) (Orig-Mvn $e)
+  Igual 'sin otro Maven del original' ($o1 + 4) (Orig-Mvn $E)
+}
+
+$Pruebas['m48 (h) la clave del original lleva la version del formato de salidas: un original guardado con otra version se ejecuta otra vez, una sola vez'] = {
+  Comprueba-Clave-M48 (Escenario-M48 'm48-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })) 'VersionSalidas'
+}
+
+$Pruebas['m48 (h2) la clave del original lleva el tope de la ruta de salidas (decide los nombres cortos): con otro tope, el original se ejecuta otra vez'] = {
+  Comprueba-Clave-M48 (Escenario-M48 'm48-h2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })) 'LimiteRuta'
 }
 
 # ================================ LANZADOR ================================
