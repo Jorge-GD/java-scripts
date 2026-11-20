@@ -3957,7 +3957,7 @@ Salida 'L' (Test-NombreCorto (Get-RelSalida 'cargaJob' ($dir + $resto + '_202611
 Salida 'M' (Test-NombreCorto 'ficheros/salida/resultado_20261120.txt')
 Salida 'N' ($k + 2)
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-RelSalida', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'tareas.ps1') @('Get-Hash8')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-LargoRuta', 'Get-RelSalida', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'tareas.ps1') @('Get-Hash8')) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   Igual 'el script de la prueba sale con 0' 0 $r.Codigo
   $v = @{}
