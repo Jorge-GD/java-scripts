@@ -7332,5 +7332,39 @@ $Pruebas['m46 (d) sin estado.json de antes (el worktree viene de otra herramient
   Igual 'estado.json queda con el modelo' 'modelo-x' (Estado $e).aptitud
 }
 
+$Pruebas['m46 (c) cada -Opcion de la seccion Uso diario del README existe en el bloque param del script de su comando (mirado con el parser de PowerShell)'] = {
+  $raiz = Split-Path -Parent $Script
+  $readme = [System.IO.File]::ReadAllText((Join-Path $raiz 'README.md'))
+  $sec = [regex]::Match($readme, '(?ms)^## Uso diario\r?\n(.*?)(?=^## |\z)')
+  Comprueba 'el README tiene la seccion Uso diario' $sec.Success
+  if (-not $sec.Success) { return }
+  $texto = $sec.Groups[1].Value
+  $filas = @($texto -split "\r?\n" | Where-Object { $_ -match '^\|' }).Count - 2   # sin la cabecera ni la raya
+  Comprueba 'la tabla tiene de 1 a 5 filas' ($filas -ge 1 -and $filas -le 5) "$filas filas"
+  $antes = [regex]::Match($readme, '(?m)^## ').Index
+  Comprueba 'es la primera seccion del README' ($sec.Index -le $antes) "$($sec.Index) frente a $antes"
+  # por fila: las opciones de toda la fila (en el comando o en el texto) tienen que estar en el param de alguno de sus scripts
+  $comandos = 0
+  $opciones = 0
+  foreach ($fila in @($texto -split "\r?\n" | Where-Object { $_ -match '^\|' })) {
+    $scripts = @([regex]::Matches($fila, '`\.\\([A-Za-z0-9-]+\.ps1)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+    $param = @()
+    foreach ($nombre in $scripts) {
+      $comandos++
+      $ruta = Join-Path $raiz $nombre
+      if (-not (Test-Path -LiteralPath $ruta)) { Comprueba "$nombre existe" $false $ruta; continue }
+      $arbol = [System.Management.Automation.Language.Parser]::ParseFile($ruta, [ref]$null, [ref]$null)
+      $param += @($arbol.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+    }
+    foreach ($o in [regex]::Matches($fila, '(?<=[\s`])-([A-Za-z]+)(?![\w-])')) {
+      $opciones++
+      Comprueba "la fila de $($scripts -join ', ') tiene el parametro -$($o.Groups[1].Value)" ($param -contains $o.Groups[1].Value) ('param: ' + ($param -join ' '))
+    }
+  }
+  Comprueba 'da al menos 5 scripts' ($comandos -ge 5) "$comandos scripts"
+  Comprueba 'comprueba al menos 8 opciones' ($opciones -ge 8) "$opciones opciones"
+  Comprueba 'sin rutas reales: solo C:\ruta\...' ($texto -notmatch '(?i)C:\\(Users|Proyectos|Windows)') $texto
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

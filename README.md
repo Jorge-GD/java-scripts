@@ -6,6 +6,20 @@ Scripts sueltos para trabajar con proyectos Java.
 
 **¿En qué punto va cada batch?** `.\donde-estoy.ps1`. Solo lee y te da el siguiente comando de cada batch. Copilot, abierto en esta carpeta, lo lanza por ti: sigue `AGENTS.md`.
 
+## Uso diario
+
+Cinco situaciones, cinco comandos. Las rutas son un ejemplo: pon las tuyas.
+
+| Situación | Comando |
+|---|---|
+| Primera vez en este equipo | `.\preflight.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Modelo <id>` |
+| Primera pasada de un batch: lee y compara, no cambia código. Para corregir, el mismo comando con `-Si` en vez de `-SoloInforme` | `.\migracion.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -SoloInforme` |
+| Se ha parado, se ha cortado o no sé dónde voy. Te da el comando para seguir. Lanzarlo otra vez es seguro: salta lo hecho | `.\donde-estoy.ps1` |
+| La prueba en local da casos distintos. Si los rompió un arreglo, busca el commit; si ya venían distintos, intenta repararlos | `.\prueba-local.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Desde <tu-rama>`<br>`.\prueba-local.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Reparar` |
+| Deshacer el último lote (solo mientras exista `C:\ruta\migrado-rescate`) | `.\rescate.ps1 -Modo deshacer -Repo C:\ruta\migrado` |
+
+El resto de opciones está más abajo y en [FLUJO.md](FLUJO.md).
+
 ## Antes de la primera vez: preflight
 
 `preflight.ps1` se lanza **una vez**, antes de `migracion.ps1`, en el equipo donde se va a trabajar. Mide si ese equipo, Copilot y Maven sirven: versiones y modo de PowerShell, qué banderas conoce tu Copilot, si el modelo sabe rellenar una ficha de clase (un fichero de juguete y cinco clases tuyas), cuántas llamadas aguanta a la vez y si Maven compila, mide cobertura y refactoriza un proyecto de juguete. Con `-Modelos` hace además un examen de modelos (bloque 9, más abajo). No cambia ningún repo tuyo.
