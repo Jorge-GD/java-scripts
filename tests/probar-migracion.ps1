@@ -7303,6 +7303,9 @@ $Pruebas['m46 (b) tras esa parada estado.json lleva la parada (sin dar por pasad
   Comprueba 'donde-estoy dice que esta parada y por que' ($d.Salida -match 'Punto: .*parada: cambios-sin-commit') (Cola $d.Salida)
   Comprueba 'y no dice terminado en su punto' ($d.Salida -notmatch '(?m)^Punto:\s+terminado') (Cola $d.Salida)
   Comprueba 'trae el texto para pegar en Copilot, con el fichero' (($d.Salida -match 'Para pegar en Copilot') -and $d.Salida.Contains($Fichero41)) (Cola $d.Salida)
+  $portada = Lee $e.Out 'index.html'
+  Comprueba 'la portada explica esta parada: cambios sin commit en la carpeta de rescate' ($portada -match 'La carpeta de rescate tiene cambios sin commit') ''
+  Comprueba 'y no dice que ha fallado el propio script' ($portada -notmatch 'Ha fallado el propio script') ''
   # el usuario hace su commit y relanza: sigue, y ahora si queda el modelo nuevo
   [void](GitEn $e.Wt @('add', '--', $Fichero41))
   [void](GitEn $e.Wt @('commit', '-q', '-m', 'arreglo a mano'))

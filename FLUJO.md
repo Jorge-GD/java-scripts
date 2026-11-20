@@ -257,6 +257,7 @@ Sale en rojo (en amarillo si es el tope de tiempo), con el motivo, y la portada 
 | `lotes-deshechos` | 6 ficheros atascados seguidos, sin ningún arreglo bueno entre medias | Casi siempre es Copilot, Maven o un parámetro, no el código. Mira el último `lote-*.log`. Al relanzar no se reintentan esos ficheros: ver «Ficheros atascados» abajo |
 | `guardas` | Alguien ha cambiado el original o la referencia | `git status` y `git diff` en esa carpeta, déjala como estaba y relanza |
 | `git` | No se ha podido hacer un commit | Mira el mensaje de git en el registro |
+| `cambios-sin-commit` | Al arrancar, la carpeta de rescate tiene cambios sin commit que no son de un intento cortado. Para antes de la prueba de aptitud | Si son tuyos, haz commit allí; si no, `git stash`. Los comandos salen en el mensaje. Relanza |
 | `motor` o `error-interno` | Fallo del script | Pega el mensaje y las últimas líneas del registro en el chat |
 
 ### Mensajes de un lote
