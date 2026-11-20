@@ -3780,6 +3780,7 @@ $Pruebas['m47 (g) otro JDK (-JavaLegacy o su fichero release), otro ajuste de Ma
     Igual 'el mismo MAVEN_OPTS: ninguno' $o (Orig-Mvn $e)
   }
   finally { $env:MAVEN_OPTS = $antes }
+  [void](Prueba $e @('-JavaLegacy', $jdk))   # sin MAVEN_OPTS otra vez: es otra clave, y de aqui en adelante solo cambia MavenCasoRapido
   $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'mvn-local.ps1'); SegundosPorLlamada = 60; MavenCasoRapido = @('-Dm47.skip') }
   Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
   $o = Orig-Mvn $e
