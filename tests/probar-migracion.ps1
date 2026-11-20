@@ -6563,13 +6563,13 @@ $Pruebas['m42 (a) la portada da el comando con -Practicas, -MaxHoras, -Limite y 
   Igual 'el comando de la portada lleva las cuatro y no -Reintentar' ((M42-Base $s) + ' -Practicas -MaxHoras 2 -Limite 5 -SinPruebaLocal') (M42-Comando $e)
 }
 
-$Pruebas['m42 (b) relanzar sin las opciones: estado.json las deja en false o 0 y el comando de la portada ya no las lleva'] = {
+$Pruebas['m42 (b) relanzar sin las opciones (solo con -Reintentar): estado.json las deja en false o 0 y el comando de la portada ya no las lleva'] = {
   $e = Nuevo-Escenario 'm42-b'
   $r = Migra $e ((Basicos $e) + @('-Practicas', '-Reglas', '-MaxHoras', '2', '-Limite', '5'))
   Igual 'la primera sale con 0' 0 $r.Codigo
   Comprueba 'el comando de la primera lleva -Practicas, -Reglas, -MaxHoras y -Limite' ((M42-Comando $e) -cmatch ' -Practicas -Reglas -MaxHoras 2 -Limite 5( |$)') (M42-Comando $e)
-  $r = Migra $e (Basicos $e)
-  Igual 'el relanzamiento sale con 0' 0 $r.Codigo
+  $r = Migra $e ((Basicos $e) + @('-Reintentar'))
+  Igual 'el relanzamiento (solo con -Reintentar, que no se guarda) sale con 0' 0 $r.Codigo
   $s = Estado $e
   Comprueba 'estado.json: practicas y reglas en false, maxHoras y limite en 0' ($s.practicas -eq $false -and $s.reglas -eq $false -and [double]$s.maxHoras -eq 0 -and [int]$s.limite -eq 0) (Lee $e.Out 'datos/estado.json')
   Igual 'el comando de la portada es el de siempre' (M42-Base $s) (M42-Comando $e)
