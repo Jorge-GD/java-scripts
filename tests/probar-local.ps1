@@ -4734,6 +4734,7 @@ Fila 'caused-con-error' @("[ERROR] Caused by: java.lang.A: uno", "[WARN ] Caused
 Fila 'caused-gana-a-la-excepcion' @($X, "Caused by: java.lang.B: dos")
 Fila 'excepcion-tras-aviso' @("[WARN ] aviso $X", "[ERROR] otra java.lang.IllegalArgumentException: dos")
 Fila 'recorte-300' @('[ERROR] x java.lang.IllegalStateException: ' + ('a' * 400))
+Fila 'caused-nivel-en-su-mensaje' @("Caused by: java.lang.A: modo WARN apagado")
 '@
   [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-CausaMaven', 'Test-SinNivelDeAviso')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta')) + "`n" + $cuerpo))
   $r = Lanzar $f @($Dir)
@@ -4769,6 +4770,19 @@ Fila 'recorte-300' @('[ERROR] x java.lang.IllegalStateException: ' + ('a' * 400)
   Igual 'el orden de las reglas no cambia: un Caused by gana a la primera excepcion' 'Caused by: java.lang.B: dos' $v['caused-gana-a-la-excepcion']
   Igual 'la primera excepcion que vale: la del [ERROR], no la del aviso de antes' 'java.lang.IllegalArgumentException: dos' $v['excepcion-tras-aviso']
   Igual 'se recorta a 300' 300 $v['recorte-300'].Length
+  Igual 'un nivel dentro del mensaje de un Caused by (despues de la causa) no cuenta: vale' 'Caused by: java.lang.A: modo WARN apagado' $v['caused-nivel-en-su-mensaje']
+}
+
+# El prompt de -Reparar no lleva la ruta del registro: Copilot trabaja en la rama de rescate y no lee registros\ (solo la consola la dice).
+$Pruebas['m52 (i) -Reparar con un caso sin causa: el prompt dice que el migrado acaba FAILED, sin la ruta del registro; la consola si la dice'] = {
+  $e = Escenario-M50 'm52-i' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $env:RESCATE_M50 = 'solo-avisos'
+  try { $r = Prueba $e @('-Reparar') 'reparar-no' } finally { $env:RESCATE_M50 = '' }
+  Igual 'sale con 2' 2 $r.Codigo
+  $p = @(Registros-Reparar $e 1)
+  Comprueba 'hay una llamada de reparar y su prompt dice que el migrado acaba FAILED' ($p.Count -ge 1 -and $p[0].Contains('el migrado acaba FAILED')) (Cola ($p -join ' '))
+  Comprueba 'sin la ruta del registro' ($p.Count -ge 1 -and -not $p[0].Contains('mira registros')) (Cola ($p -join ' '))
+  Comprueba 'la consola si la dice' ($r.Salida.Contains('sin causa en la salida de Maven: mira registros\mvn-')) (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================
