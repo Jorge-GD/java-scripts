@@ -1718,12 +1718,13 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
 # lo que se mide de el (Add-Hechos). Solo los casos distintos entran en un grupo.
 
 # La causa $Causa del caso $Caso sin lo que cambia de un caso a otro: el nombre del caso (<caso>), @ y hexadecimal (@<id>), las fechas y horas de
-# hoy (Get-Normal), las rutas (<ruta>: algo con \ o / y mas de un segmento) y los numeros de dos cifras o mas (<n>); en 200 letras como mucho.
+# hoy (Get-Normal), las rutas (<ruta>: una palabra con \, o que empieza por / y lleva otra /, o con letra de unidad (C:\ o C:/), o file:, o la de una
+# copia) y los numeros de dos cifras o mas (<n>); en 200 letras como mucho. org/x/Clase (el nombre de una clase que falta, NoClassDefFoundError) no es una ruta.
 function Get-CausaNormal([string]$Causa, [string]$Caso) {
   $t = $Causa
   if ($Caso) { $t = $t.Replace($Caso, '<caso>') }
   $t = (Get-Normal $t) -replace '@[0-9a-fA-F]+\b', '@<id>'
-  $t = $t -replace '(?<!\S)\S*[^\s\\/][\\/]+[^\s\\/]\S*', '<ruta>'
+  $t = $t -replace '(?<!\S)(?:\S*\\\S*|[A-Za-z]:[\\/]\S*|file:\S*|/\S*/\S*|<copia>/\S*)', '<ruta>'
   $t = $t -replace '\d{2,}', '<n>'
   if ($t.Length -gt 200) { $t = $t.Substring(0, 200) }
   return $t
