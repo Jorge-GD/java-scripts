@@ -2191,7 +2191,7 @@ $Pruebas['m8 cortado: con la marca al dia y cambios, van a un stash y el arbol q
   $st = @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ })
   Igual 'hay un stash' 1 $st.Count
   Comprueba 'con el paso y el lote en su nombre' ($st.Count -eq 1 -and $st[0] -match 'rescate: intento cortado \(paso estructura, lote 7\)') ($st -join ' / ')
-  Comprueba 'el aviso dice como recuperarlo' ($r.Salida -match 'Lo he guardado en git stash \(recuperalo con: git stash list / git stash pop\)\.') (Cola $r.Salida)
+  Comprueba 'el aviso dice como recuperarlo, con el hash de ese stash (m45)' ($r.Salida.Contains('Lo he guardado en git stash (recuperalo con: git -C "' + $e.Wt + '" stash apply ' + (GitEn $e.Wt @('rev-parse', 'refs/stash')) + ').')) (Cola $r.Salida)
   Comprueba 'el stash lleva el cambio del fichero tocado' ((GitEn $e.Wt @('show', 'stash@{0}')) -match '// a medias')
   Comprueba 'y el fichero nuevo' ((GitEn $e.Wt @('show', ('stash@{0}^3:' + $nuevo))) -match 'class AMedias')
   Igual 'el arbol queda en el commit de la marca' $partida (GitEn $e.Wt @('rev-parse', 'HEAD'))
@@ -5966,6 +5966,18 @@ $Pruebas['m41 (i) la rama de rescate sin unir de OTRA rama (main-2, que tambien 
   Igual 'el fix sale con 0' 0 $r.Codigo
   Comprueba 'no habla de una rama de rescate sin unir' (-not $r.Salida.Contains('Hay una rama de rescate con arreglos')) (Cola $r.Salida)
   Comprueba 'y crea el worktree' (Test-Path -LiteralPath (Join-Path $e.Wt '.git')) (Cola $r.Salida)
+}
+
+# ============== LA CARPETA DE RESCATE QUE NO ES UN WORKTREE NO SE MANDA BORRAR (m45) ==============
+$Pruebas['m45 (h) una carpeta que ya existe y no es un worktree de rescate: el texto manda mirar si tiene algo tuyo y moverla, no borrarla; la carpeta queda como estaba'] = {
+  $e = Nuevo-Escenario 'm45-h'
+  Escribe $e.Wt 'notas-del-usuario.txt' 'a medias'
+  $r = Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'estructura', '-SinPlan', '-Auto', '-Si')
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que la carpeta ya existe y no es un worktree de rescate de este repo' ($r.Salida.Contains("La carpeta '$($e.Wt)' ya existe y no es un worktree de rescate de este repo.")) (Cola $r.Salida)
+  Comprueba 'manda mirar antes si tiene algo suyo, con la carpeta entre comillas' ($r.Salida.Contains("Mira antes si tiene algo tuyo (git -C `"$($e.Wt)`" status); despues, muevela o elige otra con -Worktree.")) (Cola $r.Salida)
+  Comprueba 'ya no dice Borrala' ($r.Salida -notmatch 'Borrala') (Cola $r.Salida)
+  Igual 'el fichero de la carpeta sigue como estaba' 'a medias' (Lee $e.Wt 'notas-del-usuario.txt')
 }
 
 # ================================ LANZADOR ================================
