@@ -3101,7 +3101,8 @@ $Pruebas['m39 (a) -Job con lo guardado del mismo commit: el JSON lleva el job de
   Igual 'con -Job sale con 0 (cargaJob igual)' 0 $r.Codigo
   Igual 'el JSON lleva los dos jobs' 'cargaJob,remesaJob' (Jobs-M39 $e)
   Igual 'y los tres casos' 'cargaJob/caso-01,cargaJob/caso-02,remesaJob/caso-01' (Casos-M39 $e)
-  Igual 'la fila y el caso del otro job son los de antes, tal cual' $otro (Entradas-M39 $e 'remesaJob')
+  Comprueba 'el caso del otro job llevaba su grupo (el del lanzamiento de antes)' ($otro -match '"grupo":\d+') $otro
+  Igual 'la fila y el caso del otro job son los de antes, tal cual, menos su grupo (que es de otro lanzamiento: M50)' ($otro -replace ',"grupo":\d+', '') (Entradas-M39 $e 'remesaJob')
   Comprueba 'la consola ensena la tabla del job de ahora' ($r.Salida -match 'cargaJob\s+2\s+2\s+0\s+0') (Cola $r.Salida)
   Comprueba 'y nada del otro job' ($r.Salida -notmatch 'remesaJob') (Cola $r.Salida)
   Comprueba 'sin la Info de otro commit' (-not $r.Salida.Contains($AvisoM39)) (Cola $r.Salida)
@@ -4303,7 +4304,7 @@ $Pruebas['m50 (b) 9 casos con la misma causa (cambia un numero y el nombre del c
   Comprueba 'la lista de casos, sin el y N mas (son menos de 10)' ($r.Salida.Contains('casos: cargaJob/caso-01, cargaJob/caso-02, cargaJob/caso-03, cargaJob/caso-04, cargaJob/caso-05, cargaJob/caso-06, cargaJob/caso-07, cargaJob/caso-08, cargaJob/caso-09') -and $r.Salida -match 'caso-09\r?\n') (Cola $r.Salida)
   Igual 'el detalle de 2 casos, no de los 9' 2 @([regex]::Matches($r.Salida, 'distinto: cargaJob/caso-\d\d \(')).Count
   Comprueba 'que son los dos primeros' ($r.Salida.Contains('distinto: cargaJob/caso-01 (') -and $r.Salida.Contains('distinto: cargaJob/caso-02 (') -and -not $r.Salida.Contains('distinto: cargaJob/caso-03 (')) (Cola $r.Salida)
-  Comprueba 'cada uno con su fallo' (@([regex]::Matches($r.Salida, 'el migrado acaba FAILED: java\.lang\.IllegalStateException: no hay datos para caso-0[12] ')).Count -eq 2) (Cola $r.Salida)
+  Comprueba 'cada uno con su fallo, en su linea (la cabecera no cuenta)' (@([regex]::Matches($r.Salida, '(?m)^\s+el migrado acaba FAILED: java\.lang\.IllegalStateException: no hay datos para caso-0[12] ')).Count -eq 2) (Cola $r.Salida)
   $g = @(Grupos-M50 $e)
   Igual 'prueba-local.json lleva un grupo' 1 $g.Count
   Igual 'con numero, tipo y firma (la causa normalizada)' '1|fallo|fallo|FAILED|java.lang.IllegalStateException: no hay datos para <caso> (id <n>)' "$($g[0].numero)|$($g[0].tipo)|$($g[0].firma)"
