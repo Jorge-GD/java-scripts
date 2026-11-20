@@ -4340,10 +4340,10 @@ $Pruebas['m50 (b3) dos causas de fallo y una de fichero: los grupos van primero 
   Igual 'el 2: fallo, 2 casos (no hay datos)' '2|fallo|2|fallo|FAILED|java.lang.IllegalStateException: no hay datos para <caso> (id <n>)' "$($g[1].numero)|$($g[1].tipo)|$(@($g[1].casos).Count)|$($g[1].firma)"
   Igual 'el 3: fichero, 4 casos, aunque tiene mas casos que los de fallo' '3|fichero|4' "$($g[2].numero)|$($g[2].tipo)|$(@($g[2].casos).Count)"
   $s = $r.Salida
-  $i1 = $s.IndexOf('Grupo 1: 3 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: sin correo', [System.StringComparison]::Ordinal)
-  $i2 = $s.IndexOf('Grupo 2: 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-04 (id 104)', [System.StringComparison]::Ordinal)
-  $i3 = $s.IndexOf('Grupo 3: 4 casos distintos, en ficheros/salida/resultado_', [System.StringComparison]::Ordinal)
-  Comprueba 'la consola los saca en ese orden, con la cabecera de cada uno' ($i1 -ge 0 -and $i2 -gt $i1 -and $i3 -gt $i2) "$i1 $i2 $i3 | $(Cola $s)"
+  $i1 = [regex]::Match($s, [regex]::Escape('Grupo 1: 3 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: sin correo')).Index
+  $i2 = [regex]::Match($s, [regex]::Escape('Grupo 2: 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-04 (id 104)')).Index
+  $i3 = [regex]::Match($s, [regex]::Escape('Grupo 3: 4 casos distintos, en ficheros/salida/resultado_')).Index
+  Comprueba 'la consola los saca en ese orden, con la cabecera de cada uno' ($i1 -gt 0 -and $i2 -gt $i1 -and $i3 -gt $i2) "$i1 $i2 $i3 | $(Cola $s)"
   Comprueba 'el de fichero dice el fichero y el tipo' ($s -match 'Grupo 3: 4 casos distintos, en ficheros/salida/resultado_\d{8}\.txt: contenido\r?\n') (Cola $s)
   Igual 'cada caso con su grupo' '1,1,1,2,2,3,3,3,3' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
 }
