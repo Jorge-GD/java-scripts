@@ -8,6 +8,14 @@
 #     otra         el migrado acaba FAILED con 'Caused by: java.lang.IllegalStateException: sin correo'
 #     tipo         el migrado acaba FAILED con 'Caused by: java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present'
 #     tipo2        el migrado acaba FAILED con 'Caused by: java.lang.ClassNotFoundException: io.micrometer.observation.ObservationRegistry'
+#     avisos-error     el migrado acaba FAILED y Maven escribe, en este orden: un aviso de Spring Boot (WARN, el formato por defecto) con una TypeNotPresentException, un
+#                      aviso [WARN ] de Logback con otra, una linea JSON con "logLevel":"INFO" y un [ERROR] de AbstractStep con una NullPointerException (la causa de verdad)
+#     solo-avisos      como avisos-error, sin el [ERROR]: ninguna linea de nivel ERROR (el migrado acaba FAILED y no hay causa)
+#     aviso-caused     el migrado acaba FAILED con un aviso [WARN ] que lleva 'Caused by: java.lang.ClassNotFoundException: com.acme.X' dentro y, despues, una linea
+#                      sin nivel con 'java.lang.IllegalStateException: sin datos'
+#     json-error       el migrado acaba FAILED con una linea JSON con "logLevel":"ERROR" y una IllegalArgumentException dentro de "log"
+#     json-warn        la misma linea con "logLevel":"WARN"
+#     error-info       el migrado acaba FAILED con un [ERROR] que dice INFO.txt antes de una FileNotFoundException (el primer nivel es ERROR)
 #     tabla-igual  tablas/CLIENTES.csv con las mismas columnas y datos en otro orden en cada lado y un valor con ';' dentro (a@x;b@x)
 #     tabla-dato   como tabla-igual, con un nombre distinto en el migrado
 #     tabla-dos    ';' dentro de un valor en dos columnas distintas (correos en una fila, nombre en otra): ninguna columna da las dos tablas iguales
@@ -56,12 +64,25 @@ if ($env:RESCATE_M50 -and $codigo -eq 0 -and $caso -and (Test-Path -LiteralPath 
       [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
       [System.IO.File]::WriteAllText($f, $Texto)
     }
-    if (-not $original -and @('numero', 'otra', 'tipo', 'tipo2') -contains $guion) {
+    if (-not $original -and @('numero', 'otra', 'tipo', 'tipo2', 'avisos-error', 'solo-avisos', 'aviso-caused', 'json-error', 'json-warn', 'error-info') -contains $guion) {
       Escribe-Salida 'estado.txt' "estado=FAILED`nsalida=FAILED`n"
       if ($guion -eq 'numero') { 'Caused by: java.lang.IllegalStateException: no hay datos para ' + $caso + ' (id ' + (100 + [int]($caso -replace '\D', '')) + ')' }
       if ($guion -eq 'otra') { 'Caused by: java.lang.IllegalStateException: sin correo' }
       if ($guion -eq 'tipo') { 'Caused by: java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present' }
       if ($guion -eq 'tipo2') { 'Caused by: java.lang.ClassNotFoundException: io.micrometer.observation.ObservationRegistry' }
+      if ($guion -in @('avisos-error', 'solo-avisos')) {
+        '2026-11-20T13:53:58.154+01:00  WARN 2192 --- [app] [main] o.s.c.a.MergedAnnotation : Failed to introspect meta-annotation @ConditionalOnClass on class com.acme.kafka.Receptor: java.lang.TypeNotPresentException: Type com.acme.kafka.FaltaUno not present'
+        '[WARN ] 2026-11-20 02:00:17.145 [main] MergedAnnotation - Failed to introspect meta-annotation @ConditionalOnClass on class com.acme.kafka.Emisor: java.lang.TypeNotPresentException: Type com.acme.kafka.FaltaDos not present'
+        '{"timestamp":"2026-11-20T13:54:11.500+01:00","environment":"LOCAL","userId":"","logLevel":"INFO","log":"Finished Step: pasoDoce with status: FAILED","error":"false"}'
+      }
+      if ($guion -eq 'avisos-error') { '[ERROR] 2026-11-20 13:54:11.894 [main] abc123 abc123 AbstractStep - Encountered an error executing step pasoDoce in job cargaJob java.lang.NullPointerException: Cannot invoke "org.springframework.batch.core.step.StepExecution.getExecutionContext()" because "this.stepExecution" is null' }
+      if ($guion -eq 'aviso-caused') {
+        '[WARN ] 2026-11-20 02:00:17.145 [main] Cargador - No se pudo cargar la clase. Caused by: java.lang.ClassNotFoundException: com.acme.X'
+        'java.lang.IllegalStateException: sin datos'
+      }
+      if ($guion -eq 'json-error') { '{"timestamp":"2026-11-20T13:54:11.500+01:00","environment":"LOCAL","userId":"","logLevel":"ERROR","log":"Fallo al leer la remesa java.lang.IllegalArgumentException: importe no valido","error":"false"}' }
+      if ($guion -eq 'json-warn') { '{"timestamp":"2026-11-20T13:54:11.500+01:00","environment":"LOCAL","userId":"","logLevel":"WARN","log":"Fallo al leer la remesa java.lang.IllegalArgumentException: importe no valido","error":"false"}' }
+      if ($guion -eq 'error-info') { '[ERROR] 2026-11-20 13:54:11.894 [main] Lector - no se pudo leer INFO.txt java.io.FileNotFoundException: INFO.txt' }
     }
     if ($guion -like 'tabla-*') {
       $tabla = "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x;maria`n"
