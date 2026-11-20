@@ -620,17 +620,18 @@ function Get-CuentasTareas($Tareas) {
 
 function Save-Tarea($T) { Write-Json (Join-Path (Join-Path $Datos 'tareas') ($T.id + '.json')) $T }
 
+# La tarea que hay guardada con ese id (de un lanzamiento anterior), o $null si no hay o no se puede leer.
+function Get-TareaGuardada([string]$Id) {
+  $f = Join-Path (Join-Path $Datos 'tareas') ($Id + '.json')
+  if (-not (Test-Path -LiteralPath $f)) { return $null }
+  try { return (Read-Json $f) } catch { return $null }
+}
+
 # Guarda la tarea y devuelve la que queda: la de un lanzamiento anterior si esta hecha (o atascada, con
 # $ConservarAtascadas) y sus entradas siguen siendo las mismas (huella); si no, la nueva.
 function Restore-Tarea($T, [bool]$ConservarAtascadas) {
-  $previa = Join-Path (Join-Path $Datos 'tareas') ($T.id + '.json')
-  if (Test-Path -LiteralPath $previa) {
-    try {
-      $p = Read-Json $previa
-      if (($p.estado -eq 'hecha' -or ($ConservarAtascadas -and $p.estado -eq 'atascada')) -and $p.entradas.huella -eq $T.entradas.huella) { $T = $p }
-    }
-    catch { }
-  }
+  $p = Get-TareaGuardada $T.id
+  if ($p -and ($p.estado -eq 'hecha' -or ($ConservarAtascadas -and $p.estado -eq 'atascada')) -and $p.entradas.huella -eq $T.entradas.huella) { $T = $p }
   Save-Tarea $T
   return $T
 }
@@ -1332,15 +1333,37 @@ function Get-MomentoRama([string]$Base) {
   return 'antes-de-corregir'
 }
 
+# Ruta -> hash de blob de todo lo que lleva HEAD en $Dir, con una sola llamada a git (ls-tree -r) para todos los ficheros. Vacio si git no contesta.
+function Get-BlobsHead([string]$Dir) {
+  $blobs = @{}
+  $ls = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'ls-tree', '-r', 'HEAD')
+  if ($ls.Codigo -eq 0) {
+    foreach ($l in @($ls.Salida)) { if ($l -match '^\d+ blob ([0-9a-f]+)\t(.+)$') { $blobs[$Matches[2]] = $Matches[1] } }
+  }
+  return $blobs
+}
+
+# Lo que vale un fichero de $Dir en una clave que sigue al contenido: ruta=blob (su hash en HEAD). Si HEAD no lo tiene (sin seguimiento, o git sin
+# contestar), ruta=fuera-<hash de lo que hay en el disco>: cambia con el contenido y nunca vale de mas. Si ya no esta, ruta=ausente.
+function Get-ClaveFichero($Blobs, [string]$Dir, [string]$Rel) {
+  if ($Blobs.ContainsKey($Rel)) { return "$Rel=$($Blobs[$Rel])" }
+  $ruta = Join-Ruta $Dir $Rel
+  if (Test-Path -LiteralPath $ruta -PathType Leaf) { return "$Rel=fuera-" + (Get-Hash8 ([System.IO.File]::ReadAllText($ruta))) }
+  return "$Rel=ausente"
+}
+
 # Una tarea por ficha de clase con datos. Los ficheros del migrado los elige el script y quedan en las entradas de la tarea, con el
 # commit del worktree con el que se eligieron y el momento: despues-de-corregir si hay algun commit rescate( entre <Base> y HEAD (lo
 # dice git, no el orden de las fases), antes-de-corregir si no. Sin ficheros no hay llamada: la tarea nace hecha, con todos sus datos
-# 'sin-pieza'. La huella lleva el HEAD ademas de los datos de la ficha: con un commit nuevo la comparacion se rehace y con el mismo no.
+# 'sin-pieza'. La huella lleva los datos de la ficha y, de cada fichero del migrado elegido, su hash de blob en HEAD (Get-ClaveFichero), no el
+# HEAD: un commit que no toca esos ficheros no rehace la comparacion, y si cambia la lista de ficheros o uno de ellos, si. El commit y el momento
+# no entran en la huella: una tarea que se reutiliza los pone al de ahora, porque lo que dice vale tambien para este HEAD.
 function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
   $java = @(Get-JavaOriginal $RepoRoot)
   $mapa = Get-MapaMovidos $RepoRoot $Base
   $head = Get-Head $RepoRoot
   $momento = Get-MomentoRama $Base
+  $blobs = Get-BlobsHead $RepoRoot
   $tareas = @()
   foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $Datos 'fichas') -File -Filter 'clase-*.json' | Sort-Object Name)) {
     $x = Read-Json $f.FullName
@@ -1353,16 +1376,31 @@ function Get-TareasComparar([bool]$ConservarAtascadas, [string]$Base) {
     }
     $texto = $lineas -join "`n"
     $migrado = @(Select-FicherosMigrado $x.clase $java $mapa)
+    $claves = @($migrado | ForEach-Object { Get-ClaveFichero $blobs $RepoRoot $_ })
     $entradas = [pscustomobject]@{
       clase = $x.clase; fichero = $x.fichero; migrado = $migrado; ndatos = $lista.Count; datos = $texto
-      huella = (Get-Hash8 ($texto + '|' + $head)); commit = $head.Substring(0, 7); momento = $momento
+      huella = (Get-Hash8 ($texto + '|' + ($claves -join '|'))); commit = $head.Substring(0, 7); momento = $momento
     }
     $t = New-TareaTipo 'comparar-pieza' ('comparar-' + $x.id) $x.id ('datos/comparacion/' + $x.id + '.json') $entradas
     if ($migrado.Count -eq 0) {
       $t.estado = 'hecha'
       $t.resultado = [ordered]@{ comparacion = @(0..($lista.Count - 1) | ForEach-Object { [ordered]@{ dato = $_; estado = 'sin-pieza'; fichero = ''; linea = 0; cita = ''; nota = ''; probado = $false } }) }
     }
-    $tareas += , (Restore-Tarea $t $ConservarAtascadas)
+    # Puente de M43: hasta M43 la huella era Hash8(texto | HEAD). Una tarea guardada con esa huella del HEAD de ahora, con los mismos ficheros del migrado
+    # y todos en HEAD, es de este mismo codigo: se guarda con la huella nueva y Restore-Tarea la reutiliza. Quitalo cuando ningun batch tenga tareas de
+    # comparar de antes de M43 (con otro HEAD no vale: no se sabe si los ficheros eran los mismos).
+    $previa = Get-TareaGuardada $t.id
+    if ($previa -and $previa.entradas.huella -ceq (Get-Hash8 ($texto + '|' + $head)) -and (@($previa.entradas.migrado) -join '|') -ceq ($migrado -join '|') -and @($claves | Where-Object { $_ -match '=(fuera-|ausente)' }).Count -eq 0) {
+      $previa.entradas.huella = $entradas.huella
+      Save-Tarea $previa
+    }
+    $r = Restore-Tarea $t $ConservarAtascadas
+    if ($r.entradas.commit -cne $entradas.commit -or $r.entradas.momento -cne $momento) {
+      $r.entradas.commit = $entradas.commit
+      $r.entradas.momento = $momento
+      Save-Tarea $r
+    }
+    $tareas += , $r
   }
   return $tareas
 }
