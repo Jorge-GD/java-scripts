@@ -4252,9 +4252,9 @@ $Pruebas['m50 (a3) filas con ; en dos columnas distintas (correos en una, nombre
   Igual 'con la nota' $NotaTabla50 "$($d[0].nota)"
 }
 
-$Pruebas['m50 (a4) Compare-Fichero con tablas: la columna con ; en cualquier sitio (primera, ultima), 1 o 2 campos de mas por fila, un lado u otro, cabeceras con otros nombres, filas con menos campos'] = {
-  $f = Join-Path $Dir 'm50-tablas.ps1'
-  $raizCmp = Join-Path $Dir 'm50-tablas'
+# Compara con Compare-Fichero (como tabla) los pares de contenidos de $Casos (lineas "Caso '<id>' <A> <B>"): devuelve id -> 'igual' o 'distinto [<nota>]'.
+function Tablas-M50([string]$Nombre, [string]$Casos) {
+  $f = Join-Path $Dir "$Nombre.ps1"
   $cuerpo = @'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $RutasCopia = @()
@@ -4267,6 +4267,17 @@ function Caso([string]$Id, [string]$A, [string]$B) {
   $c = Compare-Fichero $pa $pb $true
   if ($c) { 'R ' + $Id + ' distinto [' + $c.Nota + ']' } else { 'R ' + $Id + ' igual' }
 }
+
+'@ + "`n" + $Casos
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
+  $r = Lanzar $f @((Join-Path $Dir $Nombre))
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  return $v
+}
+
+$Pruebas['m50 (a4) Compare-Fichero con tablas: la columna con ; en cualquier sitio (primera, ultima), 1 o 2 campos de mas por fila, un lado u otro, cabeceras con otros nombres, filas con menos campos'] = {
+  $v = Tablas-M50 'm50-tablas' @'
 Caso 'sin-punto-y-coma' "ID;NOMBRE`n1;ana`n" "NOMBRE;ID`nana;1`n"
 Caso 'primera-columna' "CORREOS;ID`na@x;b@x;1`n" "ID;CORREOS`n1;a@x;b@x`n"
 Caso 'ultima-columna' "ID;CORREOS`n1;a@x;b@x`n" "CORREOS;ID`na@x;b@x;1`n"
@@ -4278,10 +4289,6 @@ Caso 'dos-columnas-con-punto-y-coma' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x;lo
 Caso 'nombre-repetido-en-la-cabecera' "ID;V;V`n1;x;y;z`n" "V;V;ID`nx;y;z;1`n"
 Caso 'iguales-en-bruto-con-ancho' "ID;CORREOS`n1;a;b`n" "ID;CORREOS`n1;a;b`n"
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
-  $r = Lanzar $f @($raizCmp)
-  $v = @{}
-  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
   Igual 'sin ; de mas: se ordenan las columnas, como siempre' 'igual' $v['sin-punto-y-coma']
   Igual 'la columna con ; es la primera' 'igual' $v['primera-columna']
   Igual 'la columna con ; es la ultima' 'igual' $v['ultima-columna']
@@ -4292,6 +4299,16 @@ Caso 'iguales-en-bruto-con-ancho' "ID;CORREOS`n1;a;b`n" "ID;CORREOS`n1;a;b`n"
   Igual 'cabeceras con otros nombres: distinto y sin nota (no se prueba nada)' 'distinto []' $v['cabeceras-con-otros-nombres']
   Comprueba 'una fila con menos campos: ninguna columna sirve; distinto con la nota (la primera fila con otro numero de campos, la 2)' ($v['fila-con-menos-campos'] -ceq "distinto [la tabla tiene ';' dentro de algun valor (fila 2: 4 campos; la cabecera, 3): no se han podido ordenar sus columnas]") "$($v['fila-con-menos-campos'])"
   Igual 'dos columnas con ; en filas distintas: distinto, con la nota' "distinto [la tabla tiene ';' dentro de algun valor (fila 2: 4 campos; la cabecera, 3): no se han podido ordenar sus columnas]" $v['dos-columnas-con-punto-y-coma']
+}
+
+
+$Pruebas['m50 (a5) tablas con un valor con ; dentro: una fila con menos campos que la cabecera no se rellena con un campo vacio, ni con el mismo numero de filas'] = {
+  $v = Tablas-M50 'm50-tablas-corta' @'
+Caso 'corta-frente-a-completa-con-vacio' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x`n" "NOMBRE;ID;CORREOS`nana;1;a@x;b@x`n;2;c@x`n"
+Caso 'la-misma-con-el-campo-escrito' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x;maria`n" "NOMBRE;ID;CORREOS`nana;1;a@x;b@x`nmaria;2;c@x`n"
+'@
+  Igual 'la fila 2 del original tiene un campo menos (2 de 3) y la del migrado lo tiene vacio: distinto, con la nota de la primera fila con otro numero de campos (la 2, de 4 campos)' "distinto [$NotaTabla50]" $v['corta-frente-a-completa-con-vacio']
+  Igual 'con el campo escrito en los dos lados, igual (la prueba del helper y de la columna con ;)' 'igual' $v['la-misma-con-el-campo-escrito']
 }
 
 $Pruebas['m50 (b) 9 casos con la misma causa (cambia un numero y el nombre del caso): un grupo, una cabecera, el detalle de 2 casos, grupos en prueba-local.json y grupo en cada caso'] = {
@@ -4374,6 +4391,8 @@ Prueba 'numeros' 'Error 5 de 12 en la linea 345 (1234)'
 Prueba 'caso' 'no hay datos para caso-07 y para caso-07'
 Prueba 'rutas' 'No existe /home/ana/datos/in.csv ni C:\datos\in.csv ni \\srv\comp\x'
 Prueba 'ruta-corta' 'En /tmp no hay nada y a/b si'
+Prueba 'ruta-jvm' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA y (org/x/b/ClaseB)'
+Prueba 'ruta-ejemplos' 'En C:\datos\x\caso.txt y /tmp/a/b y C:/datos/x y file:///x/y'
 Prueba 'copia' 'No existe /copia/x/src/main/A.java'
 Prueba 'hex' 'Bean@1a2b3c4d no es Bean@FF00AA ni ana@acme.com'
 Prueba 'fechas' 'En 2026-11-20 10:20:30 y a las 10:20:30 y el 2026-11-18'
@@ -4389,7 +4408,9 @@ Prueba 'vacia' ''
   Igual 'los numeros de 2 cifras o mas, a <n>; el de una, no' 'Error 5 de <n> en la linea <n> (<n>)' $v['numeros']
   Igual 'el nombre del caso, a <caso>' 'no hay datos para <caso> y para <caso>' $v['caso']
   Igual 'las rutas (con / o con \, y mas de un segmento), a <ruta>' 'No existe <ruta> ni <ruta> ni <ruta>' $v['rutas']
-  Igual 'una palabra con una sola barra al principio no es una ruta; a/b si' 'En /tmp no hay nada y <ruta> si' $v['ruta-corta']
+  Igual 'una sola barra al principio (/tmp) no es una ruta, ni a/b: sin \ y sin barra inicial no es una ruta (cambia a proposito: antes a/b salia <ruta>)' 'En /tmp no hay nada y a/b si' $v['ruta-corta']
+  Igual 'el nombre de una clase con barras (NoClassDefFoundError) no es una ruta: dos clases distintas, dos causas' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA y (org/x/b/ClaseB)' $v['ruta-jvm']
+  Igual 'es ruta C:\... y C:/... (unidad), /a/b, y file:' 'En <ruta> y <ruta> y <ruta> y <ruta>' $v['ruta-ejemplos']
   Igual 'la ruta de la copia (<copia>) con lo que sigue, una sola ruta' 'No existe <ruta>' $v['copia']
   Igual '@ y hexadecimal, a @<id>; un correo no' 'Bean@<id> no es Bean@<id> ni ana@acme.com' $v['hex']
   Igual 'fechas y horas como Get-Normal: la de hoy con hora y la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
@@ -4438,6 +4459,26 @@ foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## 
   Igual '3: de fallo, sin estado.txt y sin causa' '3 ## fallo ## fallo|sin estado.txt| ## cargaJob/caso-05 ## 1 caso distinto, el migrado no deja estado.txt' $g[2]
   Igual '4: de fichero (2 casos, el mismo de dos jobs): la lista ordenada de clave:tipo (sobra, falta, contenido, noGuardado) y la cabecera con el primero y los que faltan' '4 ## fichero ## fichero|a.txt:sobra|b.txt:falta|c.txt:contenido|d.txt:noGuardado ## cargaJob/caso-02,remesaJob/caso-02 ## 2 casos distintos, en a.txt: sobra y 3 ficheros mas' $g[3]
   Igual '5: de fichero: un caso con fallo del migrado y del original, y otro con fallo solo del original, no son de fallo' '5 ## fichero ## fichero|e.txt:contenido ## cargaJob/caso-03,cargaJob/caso-04 ## 2 casos distintos, en e.txt: contenido' $g[4]
+}
+
+$Pruebas['m50 (b7) dos clases distintas que faltan (NoClassDefFoundError con barras): dos grupos, no uno'] = {
+  $f = Join-Path $Dir 'm50-clases.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-20')
+function Caso-M([string]$Caso, [string]$Causa) {
+  [ordered]@{ job = 'cargaJob'; caso = $Caso; titulo = 't'; resultado = 'distinto'; motivo = ''; diferencias = @(); fallos = @([ordered]@{ lado = 'migrado'; estado = 'FAILED'; causa = $Causa }) }
+}
+$res = @((Caso-M 'caso-01' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'), (Caso-M 'caso-02' 'java.lang.NoClassDefFoundError: org/x/a/ClaseB'), (Caso-M 'caso-03' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'))
+foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') }
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  Igual 'dos grupos' 2 $g.Count
+  Igual 'el 1: la clase A, con sus dos casos, y la barra de la clase en la firma' '1 ## fallo|FAILED|java.lang.NoClassDefFoundError: org/x/a/ClaseA ## cargaJob/caso-01,cargaJob/caso-03' $g[0]
+  Igual 'el 2: la clase B' '2 ## fallo|FAILED|java.lang.NoClassDefFoundError: org/x/a/ClaseB ## cargaJob/caso-02' $g[1]
 }
 
 $Pruebas['m50 (c) causa de dependencias (TypeNotPresentException de org.springframework.kafka): un solo dependency:tree aunque haya dos grupos, dependencias.txt guardado y el hecho con las lineas del prefijo'] = {
