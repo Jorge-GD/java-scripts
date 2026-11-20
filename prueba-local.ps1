@@ -92,6 +92,9 @@ QUE HACE
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
   el migrado y a comparar, y el original solo si ha cambiado algo de lo que entra en su ejecucion.
+  Rutas largas: un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto (20 letras, ~ y un hash), el mismo en todos los
+  lados; uno que ni asi cabe no se guarda y su caso sale distinto, con ese fichero. Cuando un lado de un caso acaba FAILED, EXCEPCION o sin
+  estado.txt, el resultado (campo fallos), la consola, la pagina 3 y el prompt de -Reparar llevan la causa que dejo su Maven.
   Con -Job, el JSON lleva ademas lo de los demas jobs tal como estaba (casos, jobs, reparaciones y culpables) si se probo con el mismo
   commit del migrado y del original; con otro commit se descarta y lo dice. La consola solo ensena los jobs de ahora.
 
@@ -160,6 +163,12 @@ $Latin = [System.Text.Encoding]::GetEncoding(28591)
 $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
 $RutasCopia = @()   # las rutas de las dos copias, en sus formas: Get-Normal las cambia por <copia>
 $Hoy = @()          # las fechas de la ejecucion (Get-Hoy): Get-Resultado las pone al dia en cada comparacion
+# Windows PowerShell 5.1 no pasa de 260 letras en una ruta (MAX_PATH: 259 y el fin de cadena). La misma regla vale en todos los sistemas, para
+# que se pruebe en Linux y no cambie de una maquina a otra (ver Get-RelSalida).
+$LimiteRuta = 259
+# La version del formato de lo que se guarda en prueba-local\salidas (los nombres de sus ficheros, ver Get-RelSalida): va en la clave del original
+# (Get-ClaveBaseOriginal). Sube cada vez que cambia ese formato: lo guardado con otro se ejecuta otra vez, una vez, y no se compara con lo de ahora.
+$VersionSalidas = 2
 $script:Base = @{}  # por copia: el commit y el arbol que se dieron por buenos (Save-Copia)
 
 # ================================ COPIAS ================================
@@ -226,7 +235,19 @@ function Undo-Copia([string]$Dir) {
   [void](Invoke-Git $Dir @('clean', '-fdq', '--', '.', ':(exclude).rescate', ':(exclude)target'))
 }
 
-function Remove-Carpeta([string]$Dir) { if (Test-Path -LiteralPath $Dir) { Remove-Item -LiteralPath $Dir -Recurse -Force } }
+# Borra una carpeta con lo que lleva. En Windows, si Remove-Item no puede (una ruta de mas de 259 letras, de un fichero que dejo un job), lo
+# intenta con 'rd /s /q' y la ruta con el prefijo \\?\, que no tiene ese limite; si tampoco, lo dice en un aviso y sigue.
+function Remove-Carpeta([string]$Dir) {
+  if (-not (Test-Path -LiteralPath $Dir)) { return }
+  try { Remove-Item -LiteralPath $Dir -Recurse -Force }
+  catch {
+    $error1 = $_.Exception.Message
+    if ([System.IO.Path]::DirectorySeparatorChar -ne '\') { throw }
+    $largo = '\\?\' + ([System.IO.Path]::GetFullPath($Dir) -replace '/', '\')
+    try { $null = & cmd.exe /c ('rd /s /q "' + $largo + '"') 2>&1 } catch { }
+    if (Test-Path -LiteralPath $Dir) { Aviso "No he podido borrar ${Dir}: $error1" }
+  }
+}
 
 function Copy-Fichero([string]$De, [string]$A) {
   $d = Split-Path $A -Parent
@@ -240,11 +261,95 @@ function Copy-Carpeta([string]$De, [string]$A) {
   foreach ($f in @(Get-ChildItem -LiteralPath $De -Recurse -File)) { Copy-Fichero $f.FullName (Join-Ruta $A (Get-Rel $De $f.FullName)) }
 }
 
+# ============================ NOMBRES DE SALIDAS ============================
+# Lo que se guarda en prueba-local\salidas\<lado>\<job>\<caso>\ puede pasar de 259 letras: el job escribe un fichero con la fecha en el nombre y la carpeta
+# del usuario ya es profunda. Un fichero que no cabe se guarda en la misma carpeta con un nombre corto, '<20 primeras letras del nombre>~<hash de
+# su ruta><extension>', y uno que ni asi cabe no se guarda: se apunta y el caso sale distinto (Copy-Salida y Get-Resultado).
+# LA MISMA REGLA EN TODOS LOS LADOS: lo que decide si un fichero cabe no es el lado donde se guarda (original, original-2, migrado, vacio...),
+# sino la ruta mas larga que puede tener en salidas: salidas\culpable\<12 letras>\<job>\caso-000\<ruta>. Si cabe ahi, cabe en todos y se guarda
+# con su nombre; si no, se guarda con el nombre corto en todos. Asi un mismo fichero tiene el mismo nombre en todos los lados y se empareja
+# al comparar. El hash y el prefijo salen de la ruta ya normalizada (Get-Normal, con los dias de la ejecucion que dejo el fichero): un original de
+# otro dia y el migrado de hoy, con la fecha de su dia en el nombre, dan el mismo nombre corto.
+# Coste: un fichero que cabria en original o migrado pero no en esa ruta (hasta ~12 letras de margen) tambien se guarda con el nombre corto.
+
+# Las letras de la ruta mas larga de salidas de un fichero de $Rel del job $Job, con el prefijo de la carpeta del proyecto ($Local).
+function Get-LargoRuta([string]$Job, [string]$Rel) {
+  return ($Local.Length + $Job.Length + 41 + $Rel.Length)   # <Local>/salidas/culpable/000000000000/<Job>/caso-000/<Rel>
+}
+
+# $Rel con su nombre acortado: '<20 primeras letras del nombre normalizado, sin los signos que Windows no admite>~<Get-Hash8 de la ruta normalizada>
+# <extension>' (la extension, si no pasa de 10 letras). $Dias son los dias de la ejecucion que dejo el fichero (Get-Normal).
+function Get-NombreCorto([string]$Rel, $Dias) {
+  $normal = Get-Normal $Rel $Dias
+  $i = $normal.LastIndexOf('/')
+  $nombre = $normal.Substring($i + 1)
+  $ext = ''
+  $m = [regex]::Match($nombre, '\.[^.]*$')
+  if ($m.Success) { $ext = $m.Value; $nombre = $nombre.Substring(0, $m.Index) }
+  $limpia = '[<>:"|?*\\/]'
+  $nombre = $nombre -replace $limpia, ''
+  $ext = $ext -replace $limpia, ''
+  if ($nombre.Length -gt 20) { $nombre = $nombre.Substring(0, 20) }
+  if ($ext.Length -gt 11) { $ext = '' }
+  $j = $Rel.LastIndexOf('/')
+  return ($Rel.Substring(0, $j + 1) + $nombre + '~' + (Get-Hash8 $normal) + $ext)
+}
+
+# Es $Rel un nombre de los de Get-NombreCorto? (regresion.ps1: ese fichero no se puede dejar como test, ver Get-MotivoCambiante)
+function Test-NombreCorto([string]$Rel) { return ($Rel -cmatch '~[0-9a-f]{8}(\.[^/.]*)?$') }
+
+# La ruta con la que se guarda en salidas el fichero $Rel del job $Job: la misma si cabe (ver arriba), la del nombre corto si no, o $null si ni asi.
+function Get-RelSalida([string]$Job, [string]$Rel, $Dias) {
+  if ((Get-LargoRuta $Job $Rel) -le $LimiteRuta) { return $Rel }
+  $corto = Get-NombreCorto $Rel $Dias
+  if ((Get-LargoRuta $Job $corto) -le $LimiteRuta) { return $corto }
+  return $null
+}
+
+# Copia los ficheros de la carpeta $De a $A (una carpeta de prueba-local\salidas del job $Job), con la ruta de Get-RelSalida, y devuelve los que no ha
+# podido guardar: un objeto con fichero (su ruta), clave (la normal, con los dias $Dias), destino (la clave de donde iria, o '' si no cabe) y motivo.
+# Un fichero que no se guarda no para nada: se apunta, se dice en la consola ($Donde: de que caso y lado) y sigue con el siguiente. La primera
+# vez que no cabe uno, la consola sugiere una carpeta mas corta.
+function Copy-Salida([string]$De, [string]$A, [string]$Job, [string]$Donde, $Dias) {
+  $no = @()
+  if (-not (Test-Path -LiteralPath $De)) { return $no }
+  foreach ($f in @(Get-ChildItem -LiteralPath $De -Recurse -File)) {
+    $rel = Get-Rel $De $f.FullName
+    $destino = Get-RelSalida $Job $rel $Dias
+    $motivo = ''
+    if ($null -eq $destino) {
+      $motivo = 'ruta de ' + (Get-LargoRuta $Job (Get-NombreCorto $rel $Dias)) + ' letras'
+      if (-not $script:AvisoCarpetaCorta) {
+        $script:AvisoCarpetaCorta = $true
+        Aviso "Hay ficheros que no caben en una ruta de $LimiteRuta letras ni con nombre corto. Mueve el proyecto a una carpeta mas corta (o usa un -Migrado con una ruta menos profunda) y repite."
+      }
+    }
+    else {
+      try { Copy-Fichero $f.FullName (Join-Ruta $A $destino) }
+      catch { $motivo = ($_.Exception.Message -replace '\s+', ' ').Trim() }
+    }
+    if (-not $motivo) { continue }
+    Aviso "${Donde}: ${rel}: no se ha podido guardar: $motivo"
+    $d = ''
+    if ($null -ne $destino) { $d = Get-Normal $destino $Dias }
+    $no += [pscustomobject]@{ fichero = $rel; clave = (Get-Normal $rel $Dias); destino = $d; motivo = $motivo }
+  }
+  return $no
+}
+
+# Lo que no se pudo guardar de un lado de un caso en este lanzamiento (lo de Copy-Salida), o nada.
+function Get-NoGuardados([string]$Nombre, [string]$Job, [string]$Caso) {
+  $k = "$Nombre|$Job|$Caso"
+  if ($script:NoGuardados.ContainsKey($k)) { return @($script:NoGuardados[$k]) }
+  return @()
+}
+
 # ================================ MAVEN ================================
 # Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido, con tope (MinutosMaven) y sin
 # saltarse los tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar
 # (Remove-Ruido, de comun.ps1): no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
-# Codigo, Salida y Tope (Invoke-MavenTope, de comun.ps1).
+# Codigo, Salida, Tope (Invoke-MavenTope, de comun.ps1) y Causa (Get-CausaMaven, tambien con Codigo 0: un caso cuyo job falla o no arranca acaba con
+# Maven en 0 y su causa esta en la salida de Maven).
 function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
   $script:Mavens++
   $previos = @(Get-Cambios $Dir)
@@ -253,9 +358,7 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
   if ($EsOriginal -and $JavaLegacy) { $env:JAVA_HOME = $JavaLegacy }
   try { $r = Invoke-MavenTope $Dir (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) "Maven, $Que" (Join-Path $Registros ('mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log')) }
   finally { $env:JAVA_HOME = $antes }
-  $causa = ''
-  if ($r.Codigo -ne 0) { $causa = Get-CausaMaven $Dir $desde $r.Salida }
-  Add-Member -InputObject $r -NotePropertyName Causa -NotePropertyValue $causa
+  Add-Member -InputObject $r -NotePropertyName Causa -NotePropertyValue (Get-CausaMaven $Dir $desde $r.Salida)
   [void](Remove-Ruido $Dir $previos)
   return $r
 }
@@ -263,7 +366,8 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
 # La causa de un Maven que ha fallado, recortada a 300 caracteres ('' si no hay): el ultimo 'Caused by:' de los informes de surefire de la
 # copia $Dir escritos desde $Desde (los de antes pueden ser de otro caso), en el primero que tenga <<< ERROR! o <<< FAILURE!; si no hay, el
 # ultimo 'Caused by:' de $Salida (la de Maven: surefire recorta la traza del informe y Spring la escribe entera en la salida); y si
-# tampoco, la primera linea con texto tras la marca del informe. Un informe que no se puede leer cuenta como si no estuviera.
+# tampoco, la primera linea con texto tras la marca del informe; y si tampoco, la primera linea de $Salida con una excepcion
+# (<paquete>.<Clase>Exception o ...Error), desde la clase. Un informe que no se puede leer cuenta como si no estuviera.
 function Get-CausaMaven([string]$Dir, [DateTime]$Desde, [string[]]$Salida) {
   $causa = ''
   $primera = ''
@@ -282,10 +386,19 @@ function Get-CausaMaven([string]$Dir, [DateTime]$Desde, [string[]]$Salida) {
   catch { }
   if (-not $causa) { foreach ($x in @($Salida)) { if ($x -match 'Caused by:.*$') { $causa = $Matches[0] } } }
   if (-not $causa) { $causa = $primera }
+  if (-not $causa) {
+    foreach ($x in @($Salida)) {
+      $m = [regex]::Match([string]$x, '\b(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*(?:Exception|Error)\b')
+      if ($m.Success) { $causa = ([string]$x).Substring($m.Index); break }
+    }
+  }
   $causa = $causa.Trim()
   if ($causa.Length -gt 300) { $causa = $causa.Substring(0, 300) }
   return $causa
 }
+
+# La causa de Get-CausaMaven sin el 'Caused by: ' del principio (lo que se ensena y se guarda en el resultado: 'java.lang.X: mensaje').
+function Get-CausaCorta([string]$Causa) { return ($Causa -replace '^\s*Caused by:\s*', '').Trim() }
 
 # Lo que sirve para entender un fallo de Maven (lo que da Invoke-Maven): pasado el tope, el mensaje; si no, las primeras
 # lineas [ERROR] o, si no hay, las ultimas, y, si hay, la causa de verdad, de su informe de surefire o de la salida (Get-CausaMaven).
@@ -393,14 +506,62 @@ function Get-Excepcion([string]$Sal) {
   return 'una excepcion'
 }
 
-# Lo que se le dice a la IA de un caso cuyo original no arranca ($Clase es lo de Get-Excepcion de $Sal): la primera linea de la causa (error.txt), si hay.
-function Get-MotivoExcepcion([string]$Sal, [string]$Clase) {
-  $causa = ''
+# El estado (la linea estado=) del estado.txt de $Sal, o '' si no hay fichero o no lo dice.
+function Get-Estado([string]$Sal) {
+  $ruta = Join-Path $Sal 'estado.txt'
+  if (-not (Test-Path -LiteralPath $ruta)) { return '' }
+  $l = @([System.IO.File]::ReadAllLines($ruta) | ForEach-Object { $_.Trim() } | Where-Object { $_ -cmatch '^estado=' } | Select-Object -First 1)
+  return (($l -join '') -replace '^estado=', '')
+}
+
+# La causa (corta) de un lado de un caso ($Lado: 'original' o el nombre de salidas del migrado): la de su Maven de este lanzamiento y, si el original
+# no se ha ejecutado ahora (se reutiliza, Invoke-Originales), la que se guardo con el en originales.json. '' si no la hay.
+function Get-CausaLado([string]$Lado, [string]$Job, [string]$Caso) {
+  $m = $script:Maven["$Lado|$Job|$Caso"]
+  if ($m) { return (Get-CausaCorta $m.Causa) }
+  if ($Lado -ceq 'original') {
+    $g = (Get-Originales)["$Job|$Caso"]
+    if ($g -and $null -ne $g.PSObject.Properties['causa']) { return [string]$g.causa }
+  }
+  return ''
+}
+
+# Los lados de un caso que acaban mal (original y $Nombre, el migrado): estado=FAILED, estado=EXCEPCION o sin estado.txt, cada uno con su causa
+# (la del Maven de esa ejecucion, Get-CausaLado). Es lo que lleva el resultado de un caso en 'fallos', fuera de las carpetas que se comparan.
+function Get-Fallos([string]$Nombre, [string]$Job, [string]$Caso) {
+  $fallos = @()
+  foreach ($lado in @('original', $Nombre)) {
+    $sal = Join-Ruta $Local "salidas/$lado/$Job/$Caso"
+    $estado = 'sin estado.txt'
+    if (Test-Path -LiteralPath (Join-Path $sal 'estado.txt')) {
+      $estado = Get-Estado $sal
+      if ($estado -cne 'FAILED' -and $estado -cne 'EXCEPCION') { continue }
+    }
+    $nombreLado = 'migrado'
+    if ($lado -ceq 'original') { $nombreLado = 'original' }
+    $fallos += [ordered]@{ lado = $nombreLado; estado = $estado; causa = (Get-CausaLado $lado $Job $Caso) }
+  }
+  return $fallos
+}
+
+# 'el migrado acaba FAILED: <causa>' (lo que ensenan la consola y el prompt de -Reparar de un fallo de Get-Fallos).
+function Format-Fallo($F) {
+  $que = "el $($F.lado) acaba $($F.estado)"
+  if ($F.estado -ceq 'sin estado.txt') { $que = "el $($F.lado) no deja estado.txt" }
+  if ($F.causa) { return "${que}: $($F.causa)" }
+  return $que
+}
+
+# Lo que se le dice a la IA de un caso cuyo original no arranca ($Clase es lo de Get-Excepcion de $Sal): la primera linea de la causa (error.txt),
+# si hay; si no, $Causa (la de Maven de esa ejecucion, Get-CausaCorta), si hay.
+function Get-MotivoExcepcion([string]$Sal, [string]$Clase, [string]$Causa = '') {
+  $detalle = ''   # (ojo: $detalle y no $causa: PowerShell no distingue $Causa de $causa)
   if (Test-Path -LiteralPath (Join-Path $Sal 'error.txt')) {
     $p = (((Get-Porque $Sal $null) -split "`n")[0]).TrimEnd()
-    if ($p -cne 'error.txt:') { $causa = " ($p)" }
+    if ($p -cne 'error.txt:') { $detalle = " ($p)" }
   }
-  return "En el original el job no llega a arrancar: lanzarlo da $Clase$causa. Si el caso no busca justo eso, corrige las entradas (parametros, datos.sql...) para que el job arranque y haga lo que dice el titulo."
+  if (-not $detalle -and $Causa) { $detalle = " ($Causa)" }
+  return "En el original el job no llega a arrancar: lanzarlo da $Clase$detalle. Si el caso no busca justo eso, corrige las entradas (parametros, datos.sql...) para que el job arranque y haga lo que dice el titulo."
 }
 
 # ================================ TAREAS ================================
@@ -817,6 +978,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   if ($r.Codigo -ne 0) { return ("El test no compila (mvn test-compile). Maven dice:`n" + (Get-FalloMaven $r)) }
   foreach ($j in $Jobs) { foreach ($c in @('vacio', 'otro')) { [void](New-Item -ItemType Directory -Path (Join-Ruta $dir "$Casos/$j/$c") -Force) } }
   Remove-Carpeta (Join-Ruta $dir 'target/prueba-local')
+  $desdeVacio = Get-Date
   $r = Invoke-Maven $dir $esOrig @('test', '-Dtest=PruebaLocalTest', '-Dprueba.local.caso=vacio', "-Dsurefire.timeout=$($Cfg.SegundosTestArnes)") "arnes $($T.entradas.repo), caso vacio"
   Remove-Carpeta (Join-Ruta $dir $Casos)
   # Surefire mata el fork pasado el tiempo y Maven acaba con 'There was a timeout in the fork' (en Surefire 2.x, '... timeout or other error in the fork'): SurefireHelper.createErrorMessage
@@ -828,13 +990,29 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
     if (Test-Path -LiteralPath (Join-Ruta $dir "target/prueba-local/$j/otro")) { return "Con -Dprueba.local.caso=vacio, el test ha ejecutado tambien $Casos/$j/otro. Si la propiedad prueba.local.caso tiene valor, ejecuta solo los casos con ese nombre: cada caso se lanza en su propio Maven." }
   }
+  # Con un caso vacio, el original arranca el job y el migrado no (estado=EXCEPCION): el test del migrado no simula lo que el job necesita, o le pasa
+  # mal las propiedades. Como la puerta de las tablas: se rechaza mientras quedan intentos y, en el ultimo o con un test guardado, se acepta con un
+  # aviso (puede ser el codigo del migrado).
+  if (-not $esOrig) {
+    foreach ($j in $Jobs) {
+      $estadoOrig = Get-Estado (Join-Ruta $Local "salidas/vacio/$j")
+      $clase = Get-Excepcion (Join-Ruta $dir "target/prueba-local/$j/vacio")
+      if (-not $estadoOrig -or $estadoOrig -ceq 'EXCEPCION' -or -not $clase) { continue }
+      $causa = Get-CausaCorta $r.Causa
+      if ($causa) { $clase = "$clase ($causa)" }
+      $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $clase. Revisa lo que simula el test y las propiedades que le pasa."
+      if (-not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) { return $roto }
+      Aviso $roto
+      break
+    }
+  }
   $faltan = @(Get-TablasFaltan $dir $Jobs)
   if ($faltan.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
     return "La base de prueba no tiene estas tablas que usa el batch: $(Get-ListaTablas $faltan). Crealas en el paso de la base limpia con las columnas que usa el codigo."
   }
   if ($esOrig) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
-    foreach ($j in $Jobs) { Copy-Carpeta (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") }
+    foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
   }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original." }
   return ''
@@ -979,7 +1157,10 @@ function Reset-CasosExcepcion($Tareas) {
     $sal = Join-Ruta $Local "salidas/original/$($t.entradas.job)/$($t.entradas.caso)"
     $clase = Get-Excepcion $sal
     if (-not $clase) { continue }
-    $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = Get-MotivoExcepcion $sal $clase
+    $guardado = (Get-Originales)["$($t.entradas.job)|$($t.entradas.caso)"]
+    $causa = ''
+    if ($guardado -and $null -ne $guardado.PSObject.Properties['causa']) { $causa = [string]$guardado.causa }   # la de Maven, guardada con su original (Invoke-Originales)
+    $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = Get-MotivoExcepcion $sal $clase $causa
     $t.entradas.excepcionPedida = $true
     Save-Tarea $t
     (Get-Originales).Remove("$($t.entradas.job)|$($t.entradas.caso)")   # su original se ejecuta otra vez aunque nada de la clave haya cambiado
@@ -1083,7 +1264,7 @@ function Invoke-Casos($Tareas) {
         # y despues se acepta tal cual.
         $clase = Get-Excepcion $sal
         if ($clase) {
-          if (-not $t.entradas.excepcionPedida -and ($t.intentos + 1) -lt [int]$Cfg.Intentos) { $motivos[$t.id] = Get-MotivoExcepcion $sal $clase }
+          if (-not $t.entradas.excepcionPedida -and ($t.intentos + 1) -lt [int]$Cfg.Intentos) { $motivos[$t.id] = Get-MotivoExcepcion $sal $clase (Get-CausaCorta $r.Causa) }
           $t.entradas.excepcionPedida = $true
         }
       }
@@ -1109,10 +1290,12 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
   }
 }
 
-# Ejecuta un caso en la copia $Dir y guarda lo que deja en prueba-local\salidas\<Nombre>\<job>\<caso>.
+# Ejecuta un caso en la copia $Dir y guarda lo que deja en prueba-local\salidas\<Nombre>\<job>\<caso> (con los nombres de Get-RelSalida; lo que no
+# se pueda guardar queda en $script:NoGuardados).
 function Invoke-SalidaCaso([string]$Dir, [bool]$EsOriginal, [string]$Nombre, [string]$Job, [string]$Caso) {
+  $desde = Get-Date
   $script:Maven["$Nombre|$Job|$Caso"] = Invoke-Job $Dir $EsOriginal $Job $Caso "$Nombre $Job $Caso"
-  Copy-Carpeta (Join-Ruta $Dir "target/prueba-local/$Job/$Caso") (Join-Ruta $Local "salidas/$Nombre/$Job/$Caso")
+  $script:NoGuardados["$Nombre|$Job|$Caso"] = @(Copy-Salida (Join-Ruta $Dir "target/prueba-local/$Job/$Caso") (Join-Ruta $Local "salidas/$Nombre/$Job/$Caso") $Job "$Job/$Caso ($Nombre)" @(Get-Hoy $desde (Get-Date)))
 }
 
 # Ejecuta en la copia del migrado, con el arnes que ya lleva, los casos de $Listas (con sus entradas guardadas) y guarda lo que
@@ -1131,6 +1314,7 @@ function Invoke-Migrado([string]$Nombre, $Listas) {
 #  - $HeadOrig, el commit del original (su codigo, su pom.xml, sus recursos y su .mvn);
 #  - el arnes guardado del original (todos los ficheros de prueba-local\arnes\original: el test PruebaLocalTest y lo que cambia del pom.xml);
 #  - las entradas del caso: toda su carpeta en la copia del original (parametros, ficheros\entrada, datos.sql...);
+#  - el formato de lo que se guarda en salidas ($VersionSalidas) y la longitud de la ruta de prueba-local (los nombres de Get-RelSalida dependen de ella);
 #  - el JDK del original: -JavaLegacy o, sin el, JAVA_HOME, y el fichero release de esa carpeta (otra version en la misma ruta);
 #  - lo que dice 'mvn -v' (Maven, Java y la configuracion regional: cubre el mvnw con otro Maven y el java del PATH);
 #  - el Maven que se lanza (Get-Mvn: -MvnExe, mvnw o mvn) y $Cfg.MavenCasoRapido (las propiedades de cada caso);
@@ -1138,7 +1322,10 @@ function Invoke-Migrado([string]$Nombre, $Listas) {
 #  - que falte lo guardado: la carpeta del caso en salidas\original o en salidas\original-2, o su estado.txt (borrar prueba-local\salidas lo repite
 #    todo), o que el original dejara estado=EXCEPCION y el caso vuelva a pendiente (Reset-CasosExcepcion).
 # NO lleva, y no se ve: ~/.m2/settings.xml, los jar de ~/.m2 (un SNAPSHOT que cambia) ni lo que hay fuera (base de datos, SFTP, correo: simulado).
-# Un original que no llega a dejar estado.txt, o que se pasa del tope de Maven, no se guarda: se ejecuta en el siguiente lanzamiento.
+# Un original que no llega a dejar estado.txt, o que se pasa del tope de Maven, o con un fichero que no se pudo guardar en salidas (Copy-Salida), no
+# se guarda: se ejecuta en el siguiente lanzamiento. Con cada original se guarda la causa de su Maven (la de un job que no arranca o que falla: Get-CausaLado).
+# $VersionSalidas (la version del formato de lo que se guarda en salidas) y la longitud de la ruta de prueba-local (cambia los nombres de Get-RelSalida)
+# van en la clave: lo guardado con otro formato o en otra carpeta se ejecuta otra vez.
 # LAS FECHAS: la salida de un original de otro dia lleva la fecha de su ejecucion. Con la salida se guardan los dias de su ejecucion (desde antes
 # del primer Maven del caso hasta despues del ultimo, Get-Hoy) y Get-Resultado normaliza cada lado con los suyos (Get-DiasOriginal para el
 # original, $Hoy para el migrado): una fecha de la ejecucion del original sigue siendo 'de la ejecucion', y un migrado que escribe una fecha
@@ -1179,6 +1366,7 @@ function Get-ClaveBaseOriginal {
   $partes = @($HeadOrig, (Get-HashCarpeta (Join-Ruta $Local 'arnes/original')), [string]$jdk, $release, (Get-Mvn $CopiaOrig), ($Cfg.MavenCasoRapido -join ' '))
   $partes += @($v.Salida | Where-Object { $_ -cmatch '^(Apache Maven|Maven home|Java version|Default locale)' })
   $partes += Get-EntornoMaven
+  $partes += @("salidas-v$VersionSalidas", "ruta-local=$($Local.Length)/$LimiteRuta")   # el formato de los nombres de salidas (Get-RelSalida) y lo que lo decide
   return (Get-Hash256 ($Utf8.GetBytes($partes -join "`n")))
 }
 
@@ -1236,8 +1424,12 @@ function Invoke-Originales($Listas) {
       $desde = Get-Date
       foreach ($n in @('original', 'original-2')) { Invoke-SalidaCaso $CopiaOrig $true $n $j $c }
       $completo = @('original', 'original-2' | Where-Object { -not $script:Maven["$_|$j|$c"].Tope -and (Test-Path -LiteralPath (Join-Ruta $Local "salidas/$_/$j/$c/estado.txt")) }).Count -eq 2
+      # Un caso con un fichero que no se pudo guardar no queda reutilizable: se ejecuta otra vez en el siguiente lanzamiento
+      if (@('original', 'original-2' | Where-Object { @(Get-NoGuardados $_ $j $c).Count -gt 0 }).Count -gt 0) { $completo = $false }
       if ($completo) {
-        $o["$j|$c"] = [pscustomobject][ordered]@{ job = $j; caso = $c; clave = $claves["$j|$c"]; dias = @(Get-Hoy $desde (Get-Date) | ForEach-Object { $_.ToString('yyyy-MM-dd', $Inv) }) }
+        $causa = Get-CausaCorta $script:Maven["original|$j|$c"].Causa
+        if (-not $causa) { $causa = Get-CausaCorta $script:Maven["original-2|$j|$c"].Causa }
+        $o["$j|$c"] = [pscustomobject][ordered]@{ job = $j; caso = $c; clave = $claves["$j|$c"]; dias = @(Get-Hoy $desde (Get-Date) | ForEach-Object { $_.ToString('yyyy-MM-dd', $Inv) }); causa = $causa }
         Save-Originales
       }
     }
@@ -1399,17 +1591,39 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   return $dif
 }
 
+# Lo que no se pudo guardar de un caso en sus lados (original, original-2 y $Nombre, el migrado; Copy-Salida): uno por fichero (por su ruta
+# normalizada, que es la misma en todos los lados), con fichero, clave, destino (la clave de donde habria ido, para quitar la diferencia que
+# Compare-Caso ve por faltar en un lado) y, en original y migrado, el motivo del lado que fallo o '(guardado)'.
+function Get-SinGuardar([string]$Nombre, [string]$Job, [string]$Caso) {
+  $por = [ordered]@{}
+  foreach ($lado in @('original', 'original-2', $Nombre)) {
+    foreach ($n in @(Get-NoGuardados $lado $Job $Caso)) {
+      if (-not $por.Contains($n.clave)) { $por[$n.clave] = [pscustomobject]@{ fichero = $n.fichero; clave = $n.clave; destino = $n.destino; original = ''; migrado = '' } }
+      $x = $por[$n.clave]
+      $texto = "no se ha podido guardar: $($n.motivo)"
+      if ($lado -ceq $Nombre) { $x.migrado = $texto } elseif (-not $x.original) { $x.original = $texto }
+    }
+  }
+  foreach ($x in @($por.Values)) {
+    if (-not $x.original) { $x.original = '(guardado)' }
+    if (-not $x.migrado) { $x.migrado = '(guardado)' }
+  }
+  return @($por.Values)
+}
+
 # El resultado de un caso: igual, distinto (con sus diferencias), no determinista, no se pudo preparar o sin probar en
 # local, con su motivo. Los ficheros que cambian entre las dos ejecuciones del original no se comparan; el resto, si.
 # Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
+# 'fallos' dice, de original y migrado, cual acaba FAILED, EXCEPCION o sin estado.txt y por que (Get-Fallos). Un caso con un fichero que no se
+# pudo guardar sale distinto, con ese fichero entre las diferencias (noGuardado).
 # $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde). Lo del original
 # se normaliza con los dias de su ejecucion (Get-DiasOriginal: puede ser de otro dia) y lo del migrado, con los de hoy.
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
   $script:Hoy = @(Get-Hoy $Inicio (Get-Date))   # la busqueda de -Desde puede pasar de medianoche
   $j = $T.entradas.job
   $c = $T.entradas.caso
-  $o = [ordered]@{ job = $j; caso = $c; titulo = $T.entradas.titulo; resultado = 'no se pudo preparar'; motivo = ''; diferencias = @() }
+  $o = [ordered]@{ job = $j; caso = $c; titulo = $T.entradas.titulo; resultado = 'no se pudo preparar'; motivo = ''; diferencias = @(); fallos = @() }
   $s1 = Join-Ruta $Local "salidas/original/$j/$c"
   $noAplica = Join-Ruta $Local "casos/$j/$c/no-aplica.txt"
   $parado = @(@('original', 'original-2', $Nombre) | ForEach-Object { $script:Maven["$_|$j|$c"] } | Where-Object { $_ -and $_.Tope })
@@ -1418,11 +1632,19 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
   if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j|$c"]); return $o }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
+  $o.fallos = @(Get-Fallos $Nombre $j $c)
   $diasOrig = Get-DiasOriginal $j $c
   $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c") $diasOrig $diasOrig)
   $sinContar = @($azar | ForEach-Object { $_.clave })
   if ($azar.Count -gt 0) { $o.motivo = 'No se comparan, porque el original da dos salidas distintas: ' + (@($azar | Select-Object -First 3 | ForEach-Object { $_.fichero }) -join ', ') + '.' }
   $d = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") $diasOrig | Where-Object { $sinContar -notcontains $_.clave })
+  # Un fichero que no se pudo guardar en algun lado no se puede comparar: el caso nunca sale igual. Su diferencia sustituye a la de que falte en un lado.
+  $sg = @(Get-SinGuardar $Nombre $j $c)
+  if ($sg.Count -gt 0) {
+    $destinos = @($sg | ForEach-Object { $_.destino } | Where-Object { $_ })
+    $d = @($sg | ForEach-Object { [ordered]@{ fichero = $_.fichero; clave = $_.clave; lineas = 1; linea = 1; original = $_.original; migrado = $_.migrado; nota = ''; noGuardado = $true } }) + @($d | Where-Object { $destinos -notcontains $_.clave })
+    $o.motivo = ($o.motivo + " No se han podido guardar $($sg.Count) fichero(s) de salidas: el caso no se da por igual.").Trim()
+  }
   if ($d.Count -gt 0) {
     $o.resultado = 'distinto'; $o.diferencias = $d
     # Un migrado que no ha dejado ni estado.txt no ha corrido el caso: la consola lo dice antes de las diferencias, que son todas (no esta)
@@ -1449,7 +1671,9 @@ function Show-Resultado($Res, $PorJob) {
     if ($r.resultado -eq 'distinto') {
       Fallo "  distinto: $donde"
       if ($r.motivo) { Aviso "    $($r.motivo)" }
+      foreach ($f in @($r.fallos)) { Aviso "    $(Format-Fallo $f)" }
       foreach ($d in @($r.diferencias | Select-Object -First 3)) {
+        if ($d.noGuardado) { Info "    $($d.fichero): original: $($d.original); migrado: $($d.migrado)"; continue }
         Info "    $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"
         Info "      original: $($d.original)"
         Info "      migrado:  $($d.migrado)"
@@ -1457,6 +1681,27 @@ function Show-Resultado($Res, $PorJob) {
       }
     }
     else { Aviso "  $($r.resultado): $donde. $(($r.motivo -split "`n")[0])" }
+  }
+  Show-MigradoNoArranca $Res
+}
+
+# Los jobs cuyo migrado acaba EXCEPCION en todos los casos que se han comparado mientras el original no (en ninguno): lo normal es que sea el test
+# del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes. Una linea por job, con la clase y la causa del primer caso.
+function Show-MigradoNoArranca($Res) {
+  foreach ($j in @($Res | ForEach-Object { $_.job } | Select-Object -Unique)) {
+    $casos = @($Res | Where-Object { $_.job -eq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
+    if ($casos.Count -eq 0) { continue }
+    $roto = @($casos | Where-Object {
+        $mig = @($_.fallos | Where-Object { $_.lado -eq 'migrado' -and $_.estado -eq 'EXCEPCION' })
+        $orig = @($_.fallos | Where-Object { $_.lado -eq 'original' -and $_.estado -eq 'EXCEPCION' })
+        $mig.Count -gt 0 -and $orig.Count -eq 0
+      })
+    if ($roto.Count -ne $casos.Count) { continue }
+    $clase = Get-Excepcion (Join-Ruta $Local "salidas/migrado/$j/$($casos[0].caso)")
+    $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
+    $detalle = $clase
+    if ($causa) { $detalle = "${clase}: $causa" }
+    Aviso "El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes."
   }
 }
 
@@ -1498,9 +1743,8 @@ function Get-EstadoEn([string]$Commit, $T) {
   $nombre = 'culpable/' + $Commit.Substring(0, 12)
   $dest = Join-Ruta $Local "salidas/$nombre/$j/$c"
   Remove-Carpeta $dest
-  $mvn = Invoke-Job $CopiaMig $false $j $c "$nombre $j $c"
-  $script:Maven["$nombre|$j|$c"] = $mvn
-  Copy-Carpeta (Join-Ruta $CopiaMig "target/prueba-local/$j/$c") $dest
+  Invoke-SalidaCaso $CopiaMig $false $nombre $j $c
+  $mvn = $script:Maven["$nombre|$j|$c"]
   $res = Get-Resultado $T $nombre
   $malo = (Test-Malo $res)
   $motivo = ''
@@ -1734,6 +1978,10 @@ function Get-CodigoMigrado([string]$Commit) {
 function Get-TareaReparar($C, $R, $S) {
   $tc = Get-TareaCaso $C.job $C.caso
   $d = @($R.diferencias | Where-Object { $_.clave -ceq $C.clave })[0]
+  # Si un lado del caso acaba FAILED o EXCEPCION (o sin estado.txt), la causa de su Maven (Get-Fallos): una linea mas en el prompt
+  $fallo = (@($R.fallos | ForEach-Object { Format-Fallo $_ }) -join '; ')
+  $siCausa = ''
+  if (-not $fallo) { $siCausa = $MarcaNo }
   $otras = @($R.diferencias | Where-Object { $_.clave -cne $C.clave } | Select-Object -First 5 | ForEach-Object { '- `{0}`: {1} lineas distintas; la primera, la {2}: original [{3}], migrado [{4}]' -f $_.fichero, $_.lineas, $_.linea, $_.original, $_.migrado })
   if ($otras.Count -eq 0) { $otras = @('(No hay otras diferencias en este caso.)') }
   $salOrig = Join-Ruta $Local "salidas/original/$($C.job)/$($C.caso)"
@@ -1743,7 +1991,7 @@ function Get-TareaReparar($C, $R, $S) {
   $id = 'reparar-' + (Get-Hash8 ((Get-CodigoMigrado $headMig) + '|' + $resto))
   $prompt = [pscustomobject]@{
     JOB = $C.job; CASO = $C.caso; TITULO = [string]$tc.entradas.titulo; ENTRADA = [string]$tc.entradas.prompt.ENTRADA; ESPERADO = [string]$tc.entradas.prompt.ESPERADO
-    FICHERO = $d.fichero; LINEAS = "$($d.lineas)"; LINEA = "$($d.linea)"; ORIGINAL = [string]$d.original; MIGRADO = [string]$d.migrado; OTRAS = ($otras -join "`n")
+    FICHERO = $d.fichero; LINEAS = "$($d.lineas)"; LINEA = "$($d.linea)"; ORIGINAL = [string]$d.original; MIGRADO = [string]$d.migrado; SI_CAUSA = $siCausa; CAUSA = $fallo; OTRAS = ($otras -join "`n")
     RUTA_ORIGINAL = $LegacyRoot; SAL_ORIGINAL = $salOrig; SAL_MIGRADO = $salMig; ENTRADAS = $entradas; DIFF = ''
   }
   $e = [pscustomobject]@{ job = $C.job; caso = $C.caso; clave = $C.clave; copia = $CopiaMig; dirs = @($LegacyRoot, $salOrig, $salMig, $entradas); huella = (Get-Hash8 ((Get-Plantilla 'reparar') + '|' + $id)); prompt = $prompt }
@@ -1978,6 +2226,10 @@ function Invoke-Reparaciones($Res) {
   # Con estado=EXCEPCION en el original el job ni arranca: no hay salida que copiar. Esos casos no se reparan y su resultado no cambia.
   $saltar = @($Res | Where-Object { $_.resultado -eq 'distinto' -and (Get-Excepcion (Join-Ruta $Local "salidas/original/$($_.job)/$($_.caso)")) } | ForEach-Object { "$($_.job)`t$($_.caso)" })
   if ($saltar.Count -gt 0) { Info "Salto $($saltar.Count) caso(s) distinto(s) cuyo original da estado=EXCEPCION: el job no arranca en el original y no hay salida que copiar." }
+  # Con un fichero que no se pudo guardar en salidas tampoco: la diferencia es de la ruta y no del codigo del migrado, y no hay salida que copiar.
+  $sinGuardar = @($Res | Where-Object { $_.resultado -eq 'distinto' -and @($_.diferencias | Where-Object { $_.noGuardado }).Count -gt 0 } | ForEach-Object { "$($_.job)`t$($_.caso)" } | Where-Object { $saltar -cnotcontains $_ })
+  if ($sinGuardar.Count -gt 0) { Info "Salto $($sinGuardar.Count) caso(s) distinto(s) con un fichero que no se ha podido guardar en salidas: no hay salida que comparar ni copiar." }
+  $saltar = @($saltar) + @($sinGuardar)
   if (@($Res | Where-Object { $_.resultado -eq 'distinto' }).Count -eq $saltar.Count) { return @() }
   Remove-Carpeta (Join-Ruta $Local 'salidas/reparar')
   Save-Copia $CopiaMig   # la copia ya lleva el arnes y los casos que dejo Invoke-Migrado: son su base
@@ -2170,6 +2422,8 @@ $script:Llamadas = 0
 $script:Racha = 0
 $script:Mavens = 0
 $script:Maven = @{}
+$script:NoGuardados = @{}   # por (lado|job|caso): los ficheros que no se pudieron guardar en salidas (Copy-Salida)
+$script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sale una sola vez
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
 $script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
 $script:InventarioOrig = $null   # las tablas que usa el codigo del original (Get-TablasBatch), la primera vez que hacen falta (Get-MotivoBase)

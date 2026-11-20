@@ -36,8 +36,11 @@ function Get-FicherosEsperados([string]$Dir) {
 # Por que la salida del original en $Dir no vale como test fijo ('' si vale): lleva algo de esta ejecucion (la fecha de hoy, una hora o la ruta de una
 # copia: lo que Get-Normal quita al comparar), que otro dia ya no saldria igual, y el test de Java compara lo demas byte a byte. $Dias son los dias
 # de la ejecucion que la dejo (por defecto, los de hoy): un original guardado de otro dia lleva la fecha de aquel dia (Get-DiasOriginal).
+# Un fichero con nombre corto (Test-NombreCorto, de prueba-local.ps1: su ruta en salidas no cabia y se guardo con otro nombre) tampoco vale: el test de Java
+# lo busca por el nombre que escribe el job y no lo encontraria, y el caso fallaria siempre.
 function Get-MotivoCambiante([string]$Dir, [string[]]$Rels, $Dias = $null) {
   foreach ($rel in $Rels) {
+    if (Test-NombreCorto $rel) { return "$rel tiene un nombre corto (su ruta no cabia en salidas y se guardo con otro nombre): el test de Java no lo encontraria con el nombre que escribe el job." }
     $texto = $Latin.GetString([System.IO.File]::ReadAllBytes((Join-Ruta $Dir $rel)))
     if ((Get-Normal $rel $Dias) -cne $rel -or (Get-Normal $texto $Dias) -cne $texto) { return "$rel lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion." }
   }

@@ -20,6 +20,7 @@ En el fichero `{{FICHERO}}` hay {{LINEAS}} líneas distintas. La primera, la {{L
 
 - original: {{ORIGINAL}}
 - migrado: {{MIGRADO}}
+{{SI_CAUSA}}- fallo: {{CAUSA}}
 
 Otras diferencias de este mismo caso (hasta 5; si arreglas la causa, es probable que se arreglen también):
 
