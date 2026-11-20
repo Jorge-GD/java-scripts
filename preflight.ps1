@@ -105,7 +105,7 @@ catch {
 # ================================== SALIDA ==================================
 function Add-Linea([string]$Texto) { $script:Lineas.Add($Texto) }
 
-function Save-Resultado {
+function Save-ResultadoPreflight {
   try { [System.IO.File]::WriteAllLines($Salida, [string[]]$script:Lineas.ToArray(), $Utf8) }
   catch { $script:NoEscribe = $true }
 }
@@ -466,7 +466,7 @@ function Invoke-Bloque([int]$N, [string]$Nombre, [int]$Minutos, [scriptblock]$Cu
   }
   finally { Stop-Latido $latido }
   if ($bien) { Write-Host 'hecho' } else { Write-Host 'fallo' }
-  Save-Resultado
+  Save-ResultadoPreflight
 }
 
 # ============================ EXAMEN DE MODELOS (bloque 9) ============================
@@ -816,7 +816,7 @@ if ($noExisten.Count -gt 0) {
     Write-Host "No existe la carpeta de $n. Revisa la ruta y vuelve a lanzar."
   }
   Add-Linea '== fin'
-  Save-Resultado
+  Save-ResultadoPreflight
   exit 1
 }
 
@@ -1216,7 +1216,7 @@ try {
         $vista = Get-Seguro $m
         Add-Linea "modelo $vista | esfuerzo $e"
         $c = Invoke-Combinacion $k $m $vista $e ($bandera -eq 'si') $claves $plan
-        Save-Resultado
+        Save-ResultadoPreflight
         # un modelo que no existe se salta entero: sus otros esfuerzos no se prueban
         if ($c.SinModelo) { break }
         $combos += $c
@@ -1234,7 +1234,7 @@ finally {
   if ($script:Fallos.Count -gt 0) { $conFallo = ($script:Fallos -join ' ') }
   Add-Linea "bloques con fallo: $conFallo"
   Add-Linea ('duracion: ' + [int]((Get-Date) - $Inicio).TotalMinutes + ' min')
-  Save-Resultado
+  Save-ResultadoPreflight
   [void](Set-Despierto $false)
   try { Remove-Item -LiteralPath $Tmp -Recurse -Force } catch { }
   Write-Host ''
