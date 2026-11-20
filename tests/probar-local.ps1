@@ -4593,5 +4593,183 @@ $Pruebas['m50 (g) con -Job los grupos son solo de este lanzamiento: los casos de
   Igual 'remesaJob (de antes) no lleva grupo: apuntaria a otro grupo' 0 @((Caso $e 'remesaJob' 'caso-01').PSObject.Properties | Where-Object { $_.Name -eq 'grupo' }).Count
 }
 
+# ===================== M52: la causa de un caso nunca sale de una linea de aviso; sin causa, se dice donde esta el registro =====================
+# m50-mvn.ps1 deja, segun el guion de RESCATE_M50, un migrado FAILED y en la salida de Maven lineas de log con su nivel (avisos de Spring con una
+# TypeNotPresentException, un [ERROR] con una NullPointerException, lineas JSON...). Los nombres son inventados (com.acme, pasoDoce, cargaJob).
+
+$NpeCausa52 = 'java.lang.NullPointerException: Cannot invoke "org.springframework.batch.core.step.StepExecution.getExecutionContext()" because "this.stepExecution" is null'
+
+# El fallo del migrado de un caso (de prueba-local.json): lado, estado, causa y registro.
+function Fallo-M52($E, [string]$Job, [string]$Caso) { return @((Caso $E $Job $Caso).fallos | Where-Object { $_.lado -ceq 'migrado' })[0] }
+
+# La ruta de registro que dice la consola ('registros\mvn-<n>-<que>.log'), la primera que sale.
+function Registro-Consola-M52([string]$Salida) { return [regex]::Match($Salida, 'sin causa en la salida de Maven: mira (registros\\mvn-[^\s)]+\.log)').Groups[1].Value }
+
+$Pruebas['m52 (a) avisos de Spring con TypeNotPresentException, un INFO y un [ERROR] con NullPointerException: la causa es la del ERROR, en la consola y en el JSON'] = {
+  $e = Escenario-M50 'm52-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'avisos-error'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M52 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: FAILED, con la causa del NullPointerException (de la clase, sin el [ERROR] ni la hora)' "FAILED|$NpeCausa52" "$($f.estado)|$($f.causa)"
+  Igual 'dos veces en la consola (la cabecera y el detalle)' 2 (Veces-M50 $r.Salida "el migrado acaba FAILED: $NpeCausa52")
+  Comprueba 'la consola no dice TypeNotPresentException' ($r.Salida -notmatch 'TypeNotPresentException') (Cola $r.Salida)
+}
+
+$Pruebas['m52 (a2) la misma causa en 3 casos: un solo grupo, con la firma del NullPointerException, y ningun dependency:tree'] = {
+  $e = Escenario-M50 'm52-a2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M50 $e 'avisos-error'
+  Igual 'sale con 2' 2 $r.Codigo
+  $g = @(Grupos-M50 $e)
+  Igual 'un grupo' 1 $g.Count
+  Igual 'con la firma del NullPointerException' "fallo|FAILED|$NpeCausa52" "$($g[0].firma)"
+  Igual 'con los 3 casos' 3 @($g[0].casos).Count
+  Igual 'ningun dependency:tree (el hecho de dependencias no salta)' 0 (Arboles-M50 $e)
+  Comprueba 'ni dependencias.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'dependencias.txt'))) ''
+  Igual 'el grupo sin hechos' 0 @($g[0].hechos).Count
+  Comprueba 'la consola no dice medido:' ($r.Salida -notmatch 'medido:') (Cola $r.Salida)
+}
+
+$Pruebas['m52 (b) solo avisos con excepciones y ningun ERROR: sin causa; la consola dice donde esta el registro de Maven del caso y ese fichero existe'] = {
+  $e = Escenario-M50 'm52-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'solo-avisos'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M52 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: FAILED y causa vacia' 'FAILED|' "$($f.estado)|$($f.causa)"
+  Comprueba 'la consola dice sin causa en la salida de Maven: mira registros\mvn-' ($r.Salida.Contains('sin causa en la salida de Maven: mira registros\mvn-')) (Cola $r.Salida)
+  $reg = Registro-Consola-M52 $r.Salida
+  Comprueba 'con el nombre del fichero de este caso (mvn-<n>-migrado-cargaJob-caso-01.log)' ($reg -cmatch '^registros\\mvn-\d+-migrado-cargaJob-caso-01\.log$') $reg
+  $ruta = Get-Ruta $e.Local ('registros/' + $reg.Substring('registros\'.Length))
+  Comprueba 'ese fichero existe en la carpeta prueba-local' (Test-Path -LiteralPath $ruta) $ruta
+  Comprueba 'y es la salida de Maven de ese caso (lleva los avisos)' ((Test-Path -LiteralPath $ruta) -and ([System.IO.File]::ReadAllText($ruta)).Contains('com.acme.kafka.FaltaDos')) $ruta
+  Igual 'dos veces en la consola (la cabecera del grupo y el detalle del caso)' 2 (Veces-M50 $r.Salida "el migrado acaba FAILED: sin causa en la salida de Maven: mira $reg")
+  Comprueba 'la consola no dice TypeNotPresentException' ($r.Salida -notmatch 'TypeNotPresentException') (Cola $r.Salida)
+  $g = @(Grupos-M50 $e)
+  Igual 'un grupo, con la firma de siempre con causa vacia (la ruta no entra en la firma)' 'fallo|FAILED|' "$($g[0].firma)"
+  Igual 'ningun dependency:tree' 0 (Arboles-M50 $e)
+}
+
+$Pruebas['m52 (b2) sin causa en 3 casos: un solo grupo (la ruta del registro no entra en la firma) y la cabecera apunta al registro del primero'] = {
+  $e = Escenario-M50 'm52-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M50 $e 'solo-avisos'
+  Igual 'sale con 2' 2 $r.Codigo
+  $g = @(Grupos-M50 $e)
+  Igual 'un grupo, de fallo, con los 3 casos y la firma con causa vacia' '1|fallo|fallo|FAILED||3' "$(@($g).Count)|$($g[0].tipo)|$($g[0].firma)|$(@($g[0].casos).Count)"
+  Comprueba 'la descripcion del grupo (cabecera) lleva el registro del primer caso' ("$($g[0].descripcion)" -cmatch '^3 casos distintos, el migrado acaba FAILED: sin causa en la salida de Maven: mira registros\\mvn-\d+-migrado-cargaJob-caso-01\.log$') "$($g[0].descripcion)"
+}
+
+$Pruebas['m52 (c) un aviso WARN con Caused by dentro y, despues, una linea sin nivel con IllegalStateException: la causa es la de IllegalStateException'] = {
+  $e = Escenario-M50 'm52-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'aviso-caused'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'la causa' 'java.lang.IllegalStateException: sin datos' "$((Fallo-M52 $e 'cargaJob' 'caso-01').causa)"
+  Comprueba 'la consola no dice ClassNotFoundException ni sin causa' ($r.Salida -notmatch 'ClassNotFoundException' -and $r.Salida -notmatch 'sin causa en la salida') (Cola $r.Salida)
+}
+
+$Pruebas['m52 (d) linea JSON con logLevel ERROR y una excepcion en log: es la causa; con logLevel WARN, no'] = {
+  $e = Escenario-M50 'm52-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M50 $e 'json-error:/caso-01$;json-warn:/caso-02$'
+  Igual 'sale con 2' 2 $r.Codigo
+  $error52 = (Fallo-M52 $e 'cargaJob' 'caso-01').causa
+  Comprueba 'caso-01 (ERROR): la causa es la IllegalArgumentException, desde la clase' ("$error52".StartsWith('java.lang.IllegalArgumentException: importe no valido')) "$error52"
+  $warn52 = Fallo-M52 $e 'cargaJob' 'caso-02'
+  Igual 'caso-02 (WARN): sin causa' '' "$($warn52.causa)"
+  Comprueba 'y la consola dice donde esta su registro' ($r.Salida -cmatch 'sin causa en la salida de Maven: mira registros\\mvn-\d+-migrado-cargaJob-caso-02\.log') (Cola $r.Salida)
+}
+
+$Pruebas['m52 (e) [ERROR] que dice INFO.txt antes de una FileNotFoundException: es la causa (el primer nivel es ERROR)'] = {
+  $e = Escenario-M50 'm52-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M50 $e 'error-info'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'la causa' 'java.io.FileNotFoundException: INFO.txt' "$((Fallo-M52 $e 'cargaJob' 'caso-01').causa)"
+}
+
+$Pruebas['m52 (f) registro en el JSON de un fallo con causa y de uno sin causa: la ruta relativa de su mvn-*.log, que existe y es el de ese caso'] = {
+  $e = Escenario-M50 'm52-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M50 $e 'avisos-error:/caso-01$;solo-avisos:/caso-02$'
+  Igual 'sale con 2' 2 $r.Codigo
+  $con = Fallo-M52 $e 'cargaJob' 'caso-01'
+  $sin = Fallo-M52 $e 'cargaJob' 'caso-02'
+  Comprueba 'el de caso-01 (con causa) lleva registro: registros\mvn-<n>-migrado-cargaJob-caso-01.log' ("$($con.registro)" -cmatch '^registros\\mvn-\d+-migrado-cargaJob-caso-01\.log$') "$($con.registro)"
+  Comprueba 'el de caso-02 (sin causa) lleva el suyo' ("$($sin.registro)" -cmatch '^registros\\mvn-\d+-migrado-cargaJob-caso-02\.log$') "$($sin.registro)"
+  Comprueba 'el de caso-01 existe y lleva el NullPointerException de su caso' ((Lee $e.Local ('registros/' + "$($con.registro)".Substring('registros\'.Length))).Contains('StepExecution.getExecutionContext()')) "$($con.registro)"
+  Comprueba 'el de caso-02 existe y no lo lleva' ((Test-Path -LiteralPath (Get-Ruta $e.Local ('registros/' + "$($sin.registro)".Substring('registros\'.Length)))) -and -not (Lee $e.Local ('registros/' + "$($sin.registro)".Substring('registros\'.Length))).Contains('StepExecution.getExecutionContext()')) "$($sin.registro)"
+  Comprueba 'la consola de caso-01 (con causa) no dice sin causa' (-not $r.Salida.Contains('sin causa en la salida de Maven: mira ' + $con.registro)) (Cola $r.Salida)
+  Comprueba 'la del caso sin causa dice el suyo' ($r.Salida.Contains('sin causa en la salida de Maven: mira ' + $sin.registro)) (Cola $r.Salida)
+}
+
+# Get-CausaMaven con salidas de Maven inventadas (sin informes de surefire: la carpeta no existe), una fila por salida: 'R <id> <causa>'.
+$Pruebas['m52 (h) Get-CausaMaven: el primer nivel antes de la causa (TRACE, DEBUG, INFO, WARN, WARNING no dan causa; sin nivel, ERROR, FATAL y SEVERE, si; en mayusculas y entero)'] = {
+  $f = Join-Path $Dir 'm52-niveles.ps1'
+  $cuerpo = @'
+$ErrorActionPreference = 'Stop'
+$Desde = [datetime]'2026-11-20'
+function Fila([string]$Id, [string[]]$Salida) { 'R ' + $Id + ' ' + (Get-CausaMaven (Join-Path $Raiz 'no-existe') $Desde $Salida) }
+$X = 'java.lang.IllegalStateException: uno'
+Fila 'sin-nivel' @($X)
+Fila 'error-maven' @("[ERROR] $X")
+Fila 'fatal' @("FATAL $X")
+Fila 'severe' @("SEVERE: $X")
+Fila 'warn-spring' @("2026-11-20T13:53:58.154+01:00  WARN 2192 --- [app] [main] o.s.c.a.MergedAnnotation : Failed to introspect $X")
+Fila 'warn-logback' @("[WARN ] 2026-11-20 02:00:17.145 [main] MergedAnnotation - $X")
+Fila 'warning-maven' @("[WARNING] $X")
+Fila 'warning-java-util' @("WARNING: $X")
+Fila 'info-maven' @("[INFO] $X")
+Fila 'debug' @("DEBUG $X")
+Fila 'trace' @("[TRACE] $X")
+Fila 'json-info' @('{"logLevel":"INFO","log":"x java.lang.IllegalStateException: uno","error":"false"}')
+Fila 'json-warn' @('{"logLevel":"WARN","log":"x java.lang.IllegalStateException: uno","error":"false"}')
+Fila 'json-error' @('{"logLevel":"ERROR","log":"x java.lang.IllegalStateException: uno"}')
+Fila 'minuscula' @("warn $X")
+Fila 'pegado-letra' @("AWARN $X")
+Fila 'pegado-cifra' @("WARN2 $X")
+Fila 'pegado-guion-bajo' @("WARN_MODE $X")
+Fila 'pegado-punto' @("INFO.txt $X")
+Fila 'pegado-dolar' @("INFO`$1 $X")
+Fila 'error-y-luego-info' @("[ERROR] leyendo INFO java.io.FileNotFoundException: INFO.txt")
+Fila 'info-y-luego-error' @("[INFO] ERROR $X")
+Fila 'nivel-despues-de-la-causa' @("$X WARN")
+Fila 'caused-en-warn' @("[WARN ] aviso Caused by: java.lang.A: uno", "[INFO] Caused by: java.lang.B: dos")
+Fila 'caused-sin-nivel-despues-de-warn' @("[WARN ] aviso Caused by: java.lang.A: uno", "    Caused by: java.lang.B: dos", "[WARN ] otro Caused by: java.lang.C: tres")
+Fila 'caused-con-error' @("[ERROR] Caused by: java.lang.A: uno", "[WARN ] Caused by: java.lang.B: dos")
+Fila 'caused-gana-a-la-excepcion' @($X, "Caused by: java.lang.B: dos")
+Fila 'excepcion-tras-aviso' @("[WARN ] aviso $X", "[ERROR] otra java.lang.IllegalArgumentException: dos")
+Fila 'recorte-300' @('[ERROR] x java.lang.IllegalStateException: ' + ('a' * 400))
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-CausaMaven', 'Test-SinNivelDeAviso')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($Dir)
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  $x = 'java.lang.IllegalStateException: uno'
+  Igual 'sin nivel: vale' $x $v['sin-nivel']
+  Igual '[ERROR] de Maven: vale' $x $v['error-maven']
+  Igual 'FATAL: vale' $x $v['fatal']
+  Igual 'SEVERE: vale' $x $v['severe']
+  Igual 'WARN de Spring Boot (por defecto): no' '' $v['warn-spring']
+  Igual '[WARN ] de Logback: no' '' $v['warn-logback']
+  Igual '[WARNING] de Maven: no' '' $v['warning-maven']
+  Igual 'WARNING de java.util.logging: no' '' $v['warning-java-util']
+  Igual '[INFO]: no' '' $v['info-maven']
+  Igual 'DEBUG: no' '' $v['debug']
+  Igual '[TRACE]: no' '' $v['trace']
+  Igual 'JSON con logLevel INFO: no' '' $v['json-info']
+  Igual 'JSON con logLevel WARN: no' '' $v['json-warn']
+  Igual 'JSON con logLevel ERROR: vale, desde la clase hasta el final de la linea' 'java.lang.IllegalStateException: uno"}' $v['json-error']
+  Igual 'warn en minusculas no es un nivel: vale' $x $v['minuscula']
+  Igual 'AWARN (letra pegada) no es un nivel: vale' $x $v['pegado-letra']
+  Igual 'WARN2 (cifra pegada): vale' $x $v['pegado-cifra']
+  Igual 'WARN_MODE (guion bajo pegado): vale' $x $v['pegado-guion-bajo']
+  Igual 'INFO.txt (punto pegado): vale' $x $v['pegado-punto']
+  Igual 'INFO$1 (dolar pegado): vale' $x $v['pegado-dolar']
+  Igual 'el primer nivel es ERROR aunque despues venga INFO: vale' 'java.io.FileNotFoundException: INFO.txt' $v['error-y-luego-info']
+  Igual 'el primer nivel es INFO aunque despues venga ERROR: no' '' $v['info-y-luego-error']
+  Igual 'un nivel despues de la causa no cuenta: vale, con ese WARN' "$x WARN" $v['nivel-despues-de-la-causa']
+  Igual 'Caused by en lineas de aviso: no se usa ninguno' '' $v['caused-en-warn']
+  Igual 'el ultimo Caused by que vale, no el de una linea de aviso' 'Caused by: java.lang.B: dos' $v['caused-sin-nivel-despues-de-warn']
+  Igual 'Caused by en un [ERROR] vale y el ultimo que vale gana' 'Caused by: java.lang.A: uno' $v['caused-con-error']
+  Igual 'el orden de las reglas no cambia: un Caused by gana a la primera excepcion' 'Caused by: java.lang.B: dos' $v['caused-gana-a-la-excepcion']
+  Igual 'la primera excepcion que vale: la del [ERROR], no la del aviso de antes' 'java.lang.IllegalArgumentException: dos' $v['excepcion-tras-aviso']
+  Igual 'se recorta a 300' 300 $v['recorte-300'].Length
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
