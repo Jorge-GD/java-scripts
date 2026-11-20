@@ -444,11 +444,8 @@ function Invoke-TestsReglas([bool]$Conservar) {
   $out = [pscustomobject]@{ Parada = ''; Detalle = ''; Registro = ''; Tareas = @() }
   if (-not (Test-Path -LiteralPath (Join-Path $Datos 'comparacion') -PathType Container)) { Aviso 'No hay datos/comparacion: no se sabe donde esta cada regla en el migrado.'; return $out }
   if ((Get-ReglasComparadas).Count -gt 0) {
-    $sucio = @(Get-Cambios $RepoRoot)
-    if ($sucio.Count -gt 0) {
-      Info ('Deshago lo que habia sin confirmar en el worktree: ' + ($sucio -join ', '))
-      Undo-Lote (Get-Rama $RepoRoot) (Get-Head $RepoRoot)
-    }
+    $mal = Move-SinCommitAStash 'reglas: cambios sin commit de antes'
+    if ($mal) { $out.Parada = 'git'; $out.Detalle = "No he podido apartar con git stash lo que habia sin confirmar en el worktree: $mal"; $out.Registro = $Registros; return $out }
   }
   $tareas = @(Get-TareasReglas $Conservar)
   $out.Tareas = $tareas
