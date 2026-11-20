@@ -1485,25 +1485,35 @@ function Get-Normal([string]$Texto, $Dias = $null) {
 }
 
 # Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
-# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este. Con $Tabla (un .csv de
-# tablas\: campos separados por ';', la primera linea con los nombres de las columnas), antes se ordenan las columnas por su nombre y las
-# filas: cada lado crea la tabla con su DDL y lee las filas en el orden que sea, y eso no es una diferencia del batch. Si una fila no
-# tiene tantos campos como la cabecera no se sabe cortarla y el fichero se queda como esta.
-function Get-LineasNormales([string]$Ruta, [bool]$Tabla = $false, $Dias = $null) {
+# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
+function Get-LineasNormales([string]$Ruta, $Dias = $null) {
   $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta))) $Dias) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
-  if ($Tabla -and $l.Count -gt 0) { return @(Sort-Tabla $l) }
   return $l
 }
 
-# Las lineas $L de una tabla con las columnas ordenadas por su nombre (ordinal; a igual nombre, como estaban) y las filas ordenadas
-# (String.CompareOrdinal), o $L tal cual si alguna fila no tiene tantos campos como la cabecera.
-function Sort-Tabla([string[]]$L) {
+# Las lineas $L de una tabla (un .csv de tablas\: campos separados por ';', la primera linea con los nombres de las columnas) con las
+# columnas ordenadas por su nombre (ordinal; a igual nombre, como estaban) y las filas ordenadas (String.CompareOrdinal): cada lado crea la
+# tabla con su DDL y lee las filas en el orden que sea, y eso no es una diferencia del batch. $null si una fila no tiene tantos campos
+# como la cabecera. Con $Col (el nombre de una columna), una fila con campos de mas los lleva a la primera columna con ese nombre: su valor
+# lleva ';' dentro (la IA escribe los valores tal cual, sin comillas) y esa columna se queda con tantos campos como sobran; una fila con
+# menos campos que la cabecera sigue sin valer.
+function Sort-Tabla([string[]]$L, [string]$Col = '') {
   $cab = $L[0].Split(';')
+  $c = -1
+  if ($Col) { $c = [System.Array]::IndexOf($cab, $Col) }
   $filas = @()
   foreach ($x in @($L | Select-Object -Skip 1)) {
     $f = $x.Split(';')
-    if ($f.Count -ne $cab.Count) { return $L }
+    $mas = $f.Count - $cab.Count
+    if ($mas -ne 0 -and ($c -lt 0 -or $mas -lt 0)) { return $null }
+    if ($mas -gt 0) {
+      $celdas = New-Object 'System.Collections.Generic.List[string]'
+      for ($i = 0; $i -lt $f.Count; $i++) {
+        if ($i -gt $c -and $i -le $c + $mas) { $celdas[$celdas.Count - 1] += ';' + $f[$i] } else { $celdas.Add($f[$i]) }
+      }
+      $f = $celdas.ToArray()
+    }
     $filas += , $f
   }
   $claves = New-Object 'string[]' $cab.Count
@@ -1513,6 +1523,42 @@ function Sort-Tabla([string[]]$L) {
   $cuerpo = [string[]]@($filas | ForEach-Object { $f = $_; (@($orden | ForEach-Object { $f[$_] }) -join ';') })
   [System.Array]::Sort($cuerpo, [System.StringComparer]::Ordinal)
   return @((@($orden | ForEach-Object { $cab[$_] }) -join ';')) + $cuerpo
+}
+
+# Las lineas de las dos tablas $X (original) e $Y (migrado), ordenadas (Sort-Tabla), y la nota que dice por que no se han podido ordenar, si es
+# el caso: X, Y y Nota. Una tabla con una fila que no tiene tantos campos como su cabecera se queda como esta, como siempre. Salvo si las dos
+# cabeceras tienen los mismos nombres y alguna fila tiene campos de mas (un valor con ';' dentro, como una lista de correos a@x;b@x): se
+# prueba cada nombre de columna, en orden ordinal, como la columna que se lleva los de mas en todas las filas de las dos tablas, y se queda
+# la primera con la que las dos salen iguales. El supuesto: los ';' de mas de todas las filas son de la misma columna, en los dos lados. Si
+# ninguna sirve, las tablas se quedan como estan y la nota dice la primera fila con otro numero de campos (del original o, si no, del migrado).
+function Resolve-ParTablas([string[]]$X, [string[]]$Y) {
+  $sx = $null; $sy = $null
+  if ($X.Count -gt 0) { $sx = Sort-Tabla $X }
+  if ($Y.Count -gt 0) { $sy = Sort-Tabla $Y }
+  $r = [pscustomobject]@{ X = $X; Y = $Y; Nota = '' }
+  if ($null -ne $sx) { $r.X = $sx }
+  if ($null -ne $sy) { $r.Y = $sy }
+  if ($X.Count -eq 0 -or $Y.Count -eq 0 -or ($null -ne $sx -and $null -ne $sy)) { return $r }
+  $nombres = [string[]]@($X[0].Split(';'))
+  $otros = [string[]]@($Y[0].Split(';'))
+  if ((@(Sort-Ordinal $nombres) -join ';') -cne (@(Sort-Ordinal $otros) -join ';')) { return $r }
+  $ancha = $false
+  foreach ($lado in @(@{ L = $X; N = $nombres.Count }, @{ L = $Y; N = $otros.Count })) {
+    for ($i = 1; $i -lt $lado.L.Count; $i++) {
+      $m = $lado.L[$i].Split(';').Count
+      if ($m -gt $lado.N) { $ancha = $true }
+      if ($m -ne $lado.N -and -not $r.Nota) { $r.Nota = "la tabla tiene ';' dentro de algun valor (fila $($i + 1): $m campos; la cabecera, $($lado.N)): no se han podido ordenar sus columnas" }
+    }
+  }
+  if (-not $ancha) { $r.Nota = ''; return $r }
+  $orden = @(Sort-Ordinal $nombres)
+  for ($i = 0; $i -lt $orden.Count; $i++) {
+    if ($i -gt 0 -and $orden[$i] -ceq $orden[$i - 1]) { continue }
+    $tx = Sort-Tabla $X $orden[$i]
+    $ty = Sort-Tabla $Y $orden[$i]
+    if ($null -ne $tx -and $null -ne $ty -and (@($tx) -join "`n") -ceq (@($ty) -join "`n")) { return [pscustomobject]@{ X = $tx; Y = $ty; Nota = '' } }
+  }
+  return $r
 }
 
 # Una linea leida byte a byte, para ensenarla: en UTF-8 si lo es; si no, tal cual (Latin-1).
@@ -1536,13 +1582,19 @@ function Get-NotaJdk([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   return ''
 }
 
-# Compara dos ficheros ('' si falta uno) linea a linea, normalizados (con $Tabla, una tabla sin orden de columnas ni de filas: la linea
-# que se ensena es la ya ordenada). $null si son iguales; si no, Lineas (cuantas son distintas, posicion a posicion), Linea (la
-# primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy).
+# Compara dos ficheros ('' si falta uno) linea a linea, normalizados (con $Tabla, una tabla sin orden de columnas ni de filas, y con un
+# valor con ';' dentro si hace falta: Resolve-ParTablas; la linea que se ensena es la ya ordenada). $null si son iguales; si no, Lineas
+# (cuantas son distintas, posicion a posicion), Linea (la primera, desde 1), Original y Migrado (esa linea en cada lado) y Nota (la de la
+# tabla, si la hay, y la del JDK). $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy).
 function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA = $null, $DiasB = $null) {
   $x = @(); $y = @()
-  if ($A) { $x = @(Get-LineasNormales $A $Tabla $DiasA) }
-  if ($B) { $y = @(Get-LineasNormales $B $Tabla $DiasB) }
+  if ($A) { $x = @(Get-LineasNormales $A $DiasA) }
+  if ($B) { $y = @(Get-LineasNormales $B $DiasB) }
+  $notaTabla = ''
+  if ($Tabla) {
+    $t = Resolve-ParTablas $x $y
+    $x = @($t.X); $y = @($t.Y); $notaTabla = $t.Nota
+  }
   $n = 0
   $primera = -1
   for ($i = 0; $i -lt [Math]::Max($x.Count, $y.Count); $i++) {
@@ -1556,6 +1608,7 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
   $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
   if ($A -and $B) { $nota = Get-NotaJdk $A $B $DiasA $DiasB }
+  $nota = (@($notaTabla, $nota) | Where-Object { $_ }) -join '; '
   return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
 }
 
@@ -1563,7 +1616,7 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
 # Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
 # mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
 # Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
-# .csv de tablas\ se comparan sin orden de columnas ni de filas (Get-LineasNormales), y uno que esta en un solo lado y no tiene ninguna fila
+# .csv de tablas\ se comparan sin orden de columnas ni de filas (Resolve-ParTablas), y uno que esta en un solo lado y no tiene ninguna fila
 # de datos no es una diferencia. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy): un original de otro dia no
 # lleva las fechas de hoy. Cada diferencia lleva su clave (Get-Normal de la ruta, con los dias de su lado): la de las diferencias de un mismo
 # fichero en casos con originales de dias distintos es la misma.
