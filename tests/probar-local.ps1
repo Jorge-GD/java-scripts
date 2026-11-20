@@ -3548,5 +3548,311 @@ $Pruebas['m43 (g2) -Reparar: la tarea con el id de antes pero hecha con otra pla
   Igual 'una llamada mas a reparar' 2 (Llamadas-Reparar $e).Count
 }
 
+# ===================== M47: el original no se ejecuta otra vez si no ha cambiado nada de lo que entra en su ejecucion =====================
+# El original y el original-2 de cada caso se guardan en salidas\ con una clave (HEAD del original, su arnes, las entradas del caso, el JDK,
+# Maven y sus ajustes) y los dias de su ejecucion (salidas\originales.json). Un relanzamiento con la misma clave los reutiliza; el migrado
+# se ejecuta siempre. mvn.log (RESCATE_LLAMADAS) apunta cada Maven: aqui se cuentan los del original.
+
+# Los Maven de casos hechos en la copia del original ($Job y $Caso son regex: por defecto, todos).
+function Orig-Mvn($E, [string]$Job = '[^ ]+', [string]$Caso = 'caso-\d+') {
+  return @(Mavens-Con $E ('^' + [regex]::Escape($E.CopiaOrig + '|') + '.* -Dprueba\.local\.job=' + $Job + ' -Dprueba\.local\.caso=' + $Caso + '( |$)')).Count
+}
+
+# Los Maven de casos hechos en la copia del migrado.
+function Mig-Mvn($E) { return @(Mavens-Con $E ('^' + [regex]::Escape($E.CopiaMig + '|') + '.* -Dprueba\.local\.caso=caso-')).Count }
+
+# Deja lo guardado del original (original y original-2) como si se hubiera ejecutado hace $Dias dias: el nombre y la fecha de hoy de sus ficheros
+# pasan a ser los de ese dia y la ventana de salidas\originales.json, solo ese dia.
+function Envejece-M47($E, [int]$Dias) {
+  $inv = [System.Globalization.CultureInfo]::InvariantCulture
+  $lat = [System.Text.Encoding]::GetEncoding(28591)
+  $hoy = Get-Date
+  $antes = $hoy.AddDays(-$Dias)
+  foreach ($n in @('original', 'original-2')) {
+    foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local "salidas/$n") -Recurse -File -Filter 'resultado_*.txt')) {
+      [System.IO.File]::WriteAllText($f.FullName, ([System.IO.File]::ReadAllText($f.FullName, $lat).Replace($hoy.ToString('dd/MM/yyyy', $inv), $antes.ToString('dd/MM/yyyy', $inv))), $lat)
+      Rename-Item -LiteralPath $f.FullName -NewName $f.Name.Replace($hoy.ToString('yyyyMMdd', $inv), $antes.ToString('yyyyMMdd', $inv))
+    }
+  }
+  $j = Get-Ruta $E.Local 'salidas/originales.json'
+  $o = Lee-Json $j
+  foreach ($c in @($o.casos)) { $c.dias = @($antes.ToString('yyyy-MM-dd', $inv)) }
+  [System.IO.File]::WriteAllText($j, (ConvertTo-Json -InputObject $o -Depth 6))
+}
+
+$Pruebas['m47 (a) relanzar sin cambiar nada: ni el original ni el original-2 se ejecutan, el migrado si, y los resultados son los mismos'] = {
+  $e = Nuevo-Escenario 'm47-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=5.00'); remesaJob = @('importe=40.00') }) 'minimo=5.00' 'minimo=5.01'
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 2 (el caso del limite sale distinto)' 2 $r.Codigo
+  Comprueba 'dice que ejecuta los 3 casos y no reutiliza ninguno' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 3\.') (Cola $r.Salida)
+  Comprueba 'las salidas guardadas llevan su clave y sus dias en originales.json' (@((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos).Count -eq 3) ''
+  $o1 = Orig-Mvn $e
+  $m1 = Mig-Mvn $e
+  $antes = (Resultados $e) -join ','
+  $r = Prueba $e
+  Igual 'el relanzamiento sale con 2' 2 $r.Codigo
+  Igual 'ninguna ejecucion mas del original ni del original-2' $o1 (Orig-Mvn $e)
+  Igual 'el migrado, una mas por caso' ($m1 + 3) (Mig-Mvn $e)
+  Igual 'los mismos resultados' $antes ((Resultados $e) -join ',')
+  Comprueba 'la consola lo dice en una linea: 3 reutilizados y 0 ejecutados' ($r.Salida -match 'Original: se reutilizan las salidas de 3 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'el distinto sigue con sus lineas' 'importe=5.00 -> aceptado|importe=5.00 -> rechazado' ((@((Caso $e 'cargaJob' 'caso-02').diferencias)[0] | ForEach-Object { "$($_.original)|$($_.migrado)" }))
+}
+
+$Pruebas['m47 (b) un commit en el original: sus casos se ejecutan otra vez y el resultado es el nuevo'] = {
+  $e = Nuevo-Escenario 'm47-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'el primero sale con 0' 0 $r.Codigo
+  $o1 = Orig-Mvn $e
+  [void](Commit-En $e.Legacy 'regla.txt' "minimo=15.00`n" 'sube el minimo del original')
+  $r = Prueba $e
+  Igual 'sale con 2 (el original ahora rechaza el importe de 10)' 2 $r.Codigo
+  Comprueba 'el original y el original-2 de los dos casos se ejecutan otra vez' ((Orig-Mvn $e) -ge ($o1 + 4)) "antes $o1, ahora $(Orig-Mvn $e)"
+  Igual 'caso-01 distinto y caso-02 igual' 'distinto,igual' ((Resultados $e) -join ',')
+  Comprueba 'la consola dice 0 reutilizados' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+}
+
+$Pruebas['m47 (c) otro arnes del original: se ejecuta otra vez; -RehacerArnes (que solo rehace el del migrado): no'] = {
+  $e = Nuevo-Escenario 'm47-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  [void](Prueba $e)
+  $o1 = Orig-Mvn $e
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  Igual 'el original no se ejecuta otra vez (su arnes no cambia)' $o1 (Orig-Mvn $e)
+  $t = 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'
+  Escribe $e.Local $t ((Lee $e.Local $t) + "// otro arnes`n")
+  $r = Prueba $e
+  Igual 'con otro test del original sale con 0' 0 $r.Codigo
+  Igual 'sus dos casos se ejecutan otra vez, el original y el original-2' ($o1 + 4) (Orig-Mvn $e)
+  Comprueba 'la consola lo dice' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  $o2 = Orig-Mvn $e
+  [void](Prueba $e)
+  Igual 'y al relanzar con ese arnes, otra vez nada' $o2 (Orig-Mvn $e)
+}
+
+$Pruebas['m47 (d) las entradas de un caso cambian: se ejecuta solo ese caso'] = {
+  $e = Nuevo-Escenario 'm47-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  [void](Prueba $e)
+  $antes = @(1, 2, 3 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) })
+  Escribe $e.Local 'casos/cargaJob/caso-02/ficheros/entrada/datos.txt' "importe=2.00`n"
+  $r = Prueba $e
+  Igual 'sale con 0 (las dos lados rechazan el 2.00)' 0 $r.Codigo
+  Igual 'caso-01 y caso-03 no se ejecutan; caso-02, el original y el original-2' ((@($antes[0], ($antes[1] + 2), $antes[2])) -join ',') ((@(1, 2, 3 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) })) -join ',')
+  Igual 'los tres salen iguales (el original de caso-02 es el de las entradas nuevas)' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'la consola dice 2 reutilizados y 1 ejecutado' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 1\.') (Cola $r.Salida)
+  Comprueba 'la salida guardada de caso-02 es la nueva' ((Lee $e.Local ('salidas/original/cargaJob/caso-02/ficheros/salida/resultado_' + (Hoy) + '.txt')) -match 'importe=2\.00 -> rechazado') ''
+}
+
+$Pruebas['m47 (e) fechas: el original de hace dias sale igual que el migrado de hoy con el mismo dato; una fecha de negocio distinta sigue saliendo distinta'] = {
+  $e = Nuevo-Escenario 'm47-e' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=10.00 vence=1980-05-12 00:00:00') }) 'minimo=5.00' "minimo=5.00`nreescribe=1980-05-12 00:00:00=>1980-05-11 23:00:00"
+  Ajustes-M20b $e
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 2 (la fecha de negocio cambia en el migrado)' 2 $r.Codigo
+  Envejece-M47 $e 3
+  $rel = 'cargaJob/caso-01/ficheros/salida/resultado_' + (Get-Date).AddDays(-3).ToString('yyyyMMdd') + '.txt'
+  Comprueba 'el original guardado lleva la fecha de hace tres dias en su nombre y en su texto' ((Lee $e.Local "salidas/original/$rel") -match ('hecho el ' + (Get-Date).AddDays(-3).ToString('dd/MM/yyyy'))) ''
+  $o1 = @(Orig-Mvn $e 'cargaJob' 'caso-01'; Orig-Mvn $e 'cargaJob' 'caso-02')
+  $r = Prueba $e
+  Igual 'el relanzamiento sale con 2' 2 $r.Codigo
+  Igual 'el original de hace tres dias (su fecha y la de hoy con el mismo dato) sale igual' 'igual' (Caso $e 'cargaJob' 'caso-01').resultado
+  Igual 'y no se ha ejecutado otra vez' $o1[0] (Orig-Mvn $e 'cargaJob' 'caso-01')
+  $c = Caso $e 'cargaJob' 'caso-02'
+  Igual 'la fecha de negocio que cambia sigue saliendo distinta' 'distinto' $c.resultado
+  $d = @($c.diferencias)[0]
+  Comprueba 'con la fecha de antes en el original' ("$($d.original)" -match '1980-05-12 00:00:00') "$($d.original)"
+  Comprueba 'y la de despues en el migrado' ("$($d.migrado)" -match '1980-05-11 23:00:00') "$($d.migrado)"
+}
+
+$Pruebas['m47 (e2) fechas: un migrado que escribe la fecha de la ejecucion del original (no la de hoy) sale distinto, no igual'] = {
+  $e = Nuevo-Escenario 'm47-e2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  [void](Prueba $e)
+  Envejece-M47 $e 3
+  [void](Commit-En $e.Wt 'regla.txt' "minimo=5.00`nsegundos=-259200`n" 'el migrado escribe la fecha de hace tres dias')
+  $r = Prueba $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto: la fecha de hace tres dias del migrado no es de la ejecucion de hoy' 'distinto' (Caso $e 'cargaJob' 'caso-01').resultado
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)[0]
+  Comprueba 'y la linea distinta es la de la fecha' ("$($d.migrado)" -match 'hecho el ' + (Get-Date).AddDays(-3).ToString('dd/MM/yyyy')) "$($d.migrado)"
+}
+
+$Pruebas['m47 (e3) Compare-Caso y Get-MotivoCambiante con los dias de cada lado: cada salida se normaliza con los dias de su ejecucion'] = {
+  $f = Join-Path $Dir 'm47-comparar.ps1'
+  $raizCmp = Join-Path $Dir 'm47-comparar'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$d17 = @([datetime]'2026-11-17')
+$d20 = @([datetime]'2026-11-20')
+$Hoy = $d20
+function Lado([string]$Id, [string]$Lado, [hashtable]$Ficheros) {
+  $d = Join-Path (Join-Path $Raiz $Id) $Lado
+  foreach ($k in $Ficheros.Keys) {
+    $p = Join-Path $d $k
+    [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+    [System.IO.File]::WriteAllText($p, $Ficheros[$k])
+  }
+  return $d
+}
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B, $DiasA = $null, $DiasB = $null) {
+  $dirA = Lado $Id 'A' $A
+  $dirB = Lado $Id 'B' $B
+  if ($null -eq $DiasA) { 'R ' + $Id + ' ' + (@(Compare-Caso $dirA $dirB | ForEach-Object { $_.fichero }) -join ',') }
+  else { 'R ' + $Id + ' ' + (@(Compare-Caso $dirA $dirB $DiasA $DiasB | ForEach-Object { $_.fichero }) -join ',') }
+}
+$n17 = 'ficheros/resultado_20261117.txt'
+$n20 = 'ficheros/resultado_20261120.txt'
+# el original se ejecuto el 17 y el migrado el 20, con el mismo dato
+Caso 'misma-ventana' @{ $n17 = "fecha 17/11/2026 y 2026-11-17 10:00:00`n" } @{ $n20 = "fecha 20/11/2026 y 2026-11-20 11:30:00`n" } $d17 $d20
+Caso 'sin-ventana' @{ $n17 = "fecha 17/11/2026`n" } @{ $n20 = "fecha 20/11/2026`n" }
+Caso 'ventana-del-original-en-el-migrado' @{ $n17 = "fecha 17/11/2026`n" } @{ $n20 = "fecha 17/11/2026`n" } $d17 $d20
+Caso 'ventana-de-hoy-en-el-original' @{ $n17 = "fecha 20/11/2026`n" } @{ $n20 = "fecha 20/11/2026`n" } $d17 $d20
+Caso 'dato-de-negocio' @{ $n17 = "vence 2026-11-18 00:00:00`n" } @{ $n20 = "vence 2026-11-19 00:00:00`n" } $d17 $d20
+Caso 'dato-de-negocio-igual' @{ $n17 = "vence 2026-11-18 00:00:00`n" } @{ $n20 = "vence 2026-11-18 00:00:00`n" } $d17 $d20
+Caso 'nombre-con-otro-dia' @{ $n17 = "x`n" } @{ 'ficheros/resultado_20261119.txt' = "x`n" } $d17 $d20
+$o = Join-Path $Raiz 'cambiante'
+[void](New-Item -ItemType Directory -Path $o -Force)
+[System.IO.File]::WriteAllText((Join-Path $o 'x.txt'), "fecha 2026-11-17`n")
+'M dias-del-original [' + (Get-MotivoCambiante $o @('x.txt') $d17) + ']'
+'M dias-de-hoy [' + (Get-MotivoCambiante $o @('x.txt')) + ']'
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  $r = Lanzar $f @($raizCmp)
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) {
+    if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() }
+    if ($l -cmatch '^M (\S+) \[(.*)\]$') { $v['M-' + $Matches[1]] = $Matches[2] }
+  }
+  Igual 'cada salida con los dias de su ejecucion: el 17 del original y el 20 del migrado, igual' '' $v['misma-ventana']
+  Comprueba 'sin dias por lado, con los de hoy en los dos, el 17 es un dato y sale distinto' ($v['sin-ventana'] -ne '') (Cola $r.Salida)
+  Igual 'un migrado que escribe el 17 (no es de su ejecucion) sale distinto' 'ficheros/resultado_20261117.txt' $v['ventana-del-original-en-el-migrado']
+  Igual 'un original que escribe el 20 (no es de su ejecucion) tambien' 'ficheros/resultado_20261117.txt' $v['ventana-de-hoy-en-el-original']
+  Comprueba 'un dato de negocio con otra fecha sale distinto' ($v['dato-de-negocio'] -ne '') (Cola $r.Salida)
+  Igual 'y el mismo dato de negocio, igual' '' $v['dato-de-negocio-igual']
+  Comprueba 'un nombre con otro dia que el de la ejecucion sale distinto' ($v['nombre-con-otro-dia'] -ne '') (Cola $r.Salida)
+  Comprueba 'una salida con una fecha de su ejecucion no vale como test fijo (Get-MotivoCambiante con los dias del original)' ($v['M-dias-del-original'] -match 'fecha de hoy') (Cola $r.Salida)
+  Igual 'con los de hoy, esa fecha es un dato y vale' '' $v['M-dias-de-hoy']
+}
+
+$Pruebas['m47 (f) sin la carpeta de salidas de un caso (o de un original-2, o de todas): se ejecutan esos casos'] = {
+  $e = Nuevo-Escenario 'm47-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  [void](Prueba $e)
+  $n = { @(1, 2, 3 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ',' }
+  $a = @(1, 2, 3 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) })
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-02') -Recurse -Force
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas/original-2/cargaJob/caso-03') -Recurse -Force
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'caso-02 (sin original) y caso-03 (sin original-2) se ejecutan; caso-01 no' ((@($a[0], ($a[1] + 2), ($a[2] + 2))) -join ',') (& $n)
+  Igual 'los tres iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'la consola dice 1 reutilizado y 2 ejecutados' ($r.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  $a = @(1, 2, 3 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) })
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas') -Recurse -Force
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin salidas\ se ejecutan los tres (borrar prueba-local\salidas repite el original)' ((@(($a[0] + 2), ($a[1] + 2), ($a[2] + 2))) -join ',') (& $n)
+  Comprueba 'y originales.json vuelve a tener los tres' (@((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos).Count -eq 3) ''
+}
+
+$Pruebas['m47 (g) otro JDK (-JavaLegacy o su fichero release), otro ajuste de Maven (variables de entorno, MavenCasoRapido): se ejecuta otra vez; lo mismo, no'] = {
+  $e = Nuevo-Escenario 'm47-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $jdk = Join-Path $e.Raiz 'jdk-viejo'
+  Escribe $jdk 'release' "JAVA_VERSION=`"1.8.0_392`"`n"
+  [void](Prueba $e)
+  $o = Orig-Mvn $e
+  [void](Prueba $e @('-JavaLegacy', $jdk))
+  Igual 'con -JavaLegacy, otro JDK: se ejecutan los dos casos' ($o + 4) (Orig-Mvn $e)
+  $o = Orig-Mvn $e
+  [void](Prueba $e @('-JavaLegacy', $jdk))
+  Igual 'con el mismo -JavaLegacy, ninguno' $o (Orig-Mvn $e)
+  Escribe $jdk 'release' "JAVA_VERSION=`"1.8.0_402`"`n"
+  [void](Prueba $e @('-JavaLegacy', $jdk))
+  Igual 'la misma carpeta con otra version en su release: se ejecutan' ($o + 4) (Orig-Mvn $e)
+  $o = Orig-Mvn $e
+  $antes = $env:MAVEN_OPTS
+  $env:MAVEN_OPTS = '-Duser.timezone=UTC'
+  try {
+    [void](Prueba $e @('-JavaLegacy', $jdk))
+    Igual 'otro MAVEN_OPTS: se ejecutan' ($o + 4) (Orig-Mvn $e)
+    $o = Orig-Mvn $e
+    [void](Prueba $e @('-JavaLegacy', $jdk))
+    Igual 'el mismo MAVEN_OPTS: ninguno' $o (Orig-Mvn $e)
+  }
+  finally { $env:MAVEN_OPTS = $antes }
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'mvn-local.ps1'); SegundosPorLlamada = 60; MavenCasoRapido = @('-Dm47.skip') }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $o = Orig-Mvn $e
+  [void](Prueba $e @('-JavaLegacy', $jdk))
+  Igual 'otra lista de MavenCasoRapido: se ejecutan' ($o + 4) (Orig-Mvn $e)
+}
+
+$Pruebas['m47 (g2) otra version de Java o de Maven en lo que dice mvn -v: se ejecuta otra vez; la misma, no'] = {
+  $e = Nuevo-Escenario 'm47-g2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm47-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $antes = $env:M47_JAVA
+  try {
+    $env:M47_JAVA = '1.8.0_392'
+    [void](Prueba $e)
+    $o = Orig-Mvn $e
+    [void](Prueba $e)
+    Igual 'la misma version: ninguno' $o (Orig-Mvn $e)
+    $env:M47_JAVA = '1.8.0_402'
+    $r = Prueba $e
+    Igual 'otra version de Java: se ejecutan los dos casos' ($o + 4) (Orig-Mvn $e)
+    Comprueba 'la consola dice 0 reutilizados' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  }
+  finally { $env:M47_JAVA = $antes }
+}
+
+$Pruebas['m47 (h) un original de otro dia que sale distinto se ejecuta otra vez para confirmarlo; uno de hoy no'] = {
+  $e = Nuevo-Escenario 'm47-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  [void](Prueba $e)
+  # el original guardado de caso-01 dice otra cosa (lo que dejaria uno viejo con algo que la clave no ve): original y original-2 de acuerdo
+  foreach ($n in @('original', 'original-2')) {
+    $f = "salidas/$n/cargaJob/caso-01/ficheros/salida/resultado_$(Hoy).txt"
+    Escribe $e.Local $f ((Lee $e.Local $f).Replace('importe=10.00 -> aceptado', 'importe=10.00 -> rechazado'))
+  }
+  $a = @(Orig-Mvn $e 'cargaJob' 'caso-01'; Orig-Mvn $e 'cargaJob' 'caso-02')
+  $r = Prueba $e
+  Igual 'con el original de hoy sale con 2 (distinto)' 2 $r.Codigo
+  Igual 'caso-01 distinto: el de hoy no se confirma' 'distinto,igual' ((Resultados $e) -join ',')
+  Igual 'y no se ejecuta ninguno' ($a[0] + $a[1]) ((Orig-Mvn $e 'cargaJob' 'caso-01') + (Orig-Mvn $e 'cargaJob' 'caso-02'))
+  Envejece-M47 $e 2
+  $r = Prueba $e
+  Igual 'con el original de hace dos dias, el distinto se confirma y sale con 0' 0 $r.Codigo
+  Igual 'los dos iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'caso-01 se ejecuta otra vez en el original (original y original-2); caso-02, no' ((@(($a[0] + 2), $a[1])) -join ',') ((@((Orig-Mvn $e 'cargaJob' 'caso-01'), (Orig-Mvn $e 'cargaJob' 'caso-02'))) -join ',')
+  Comprueba 'la consola lo dice' ($r.Salida -match 'Original de otro dia: 1 caso\(s\) sale\(n\) distinto\(s\); los ejecuto otra vez para confirmarlo\.') (Cola $r.Salida)
+  $dias = @((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos | Where-Object { $_.caso -eq 'caso-01' })[0].dias
+  Igual 'y su ventana guardada es la de hoy' ((Get-Date).ToString('yyyy-MM-dd')) (@($dias)[0])
+}
+
+$Pruebas['m47 (i) un caso hecho cuyo original dejo EXCEPCION vuelve a pendiente y su original se ejecuta otra vez aunque las entradas sean las mismas'] = {
+  $e = Escenario-M36 'm47-i' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
+  [void](Prueba-M36 $e '')
+  Escribe $e.Local 'salidas/original/cargaJob/caso-01/estado.txt' "estado=EXCEPCION`nsalida=IllegalStateException`n"
+  $a = @(Orig-Mvn $e 'cargaJob'; Orig-Mvn $e 'remesaJob')
+  $r = Prueba-M36 $e 'excepcion:^cargaJob/'
+  Comprueba 'la Info dice que se rehace 1 caso' ($r.Salida -match 'Se rehacen 1 caso') (Cola $r.Salida)
+  Igual 'cargaJob: el original se ejecuta otra vez (en la preparacion, el original y el original-2); remesaJob, no' ((@(($a[0] + 3), $a[1])) -join ',') ((@((Orig-Mvn $e 'cargaJob'), (Orig-Mvn $e 'remesaJob'))) -join ',')
+  Comprueba 'la salida guardada es la nueva' ((Lee $e.Local 'salidas/original/cargaJob/caso-01/estado.txt') -match 'salida=') ''
+}
+
+$Pruebas['m47 (j) con -Job las salidas de los otros jobs se quedan, y el siguiente lanzamiento sin -Job las reutiliza'] = {
+  $e = Nuevo-Escenario 'm47-j' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=20.00') })
+  [void](Prueba $e)
+  $a = @(Orig-Mvn $e 'cargaJob'; Orig-Mvn $e 'remesaJob')
+  $r = Prueba $e @('-Job', 'cargaJob')
+  Igual 'con -Job sale con 0' 0 $r.Codigo
+  Igual 'no ejecuta el original de nadie' ((@($a[0], $a[1])) -join ',') ((@((Orig-Mvn $e 'cargaJob'), (Orig-Mvn $e 'remesaJob'))) -join ',')
+  Comprueba 'las salidas del otro job siguen en salidas\original' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/remesaJob/caso-01/estado.txt')) ''
+  Comprueba 'y su clave en originales.json' (@((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos).Count -eq 2) ''
+  $r = Prueba $e
+  Igual 'sin -Job sale con 0' 0 $r.Codigo
+  Igual 'tampoco ejecuta el original' ((@($a[0], $a[1])) -join ',') ((@((Orig-Mvn $e 'cargaJob'), (Orig-Mvn $e 'remesaJob'))) -join ',')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
