@@ -3841,6 +3841,18 @@ $Pruebas['m47 (i) un caso hecho cuyo original dejo EXCEPCION vuelve a pendiente 
   Comprueba 'la salida guardada es la nueva' ((Lee $e.Local 'salidas/original/cargaJob/caso-01/estado.txt') -match 'salida=') ''
 }
 
+$Pruebas['m47 (k) un original que deja su estado.txt pero se pasa del tope de Maven no queda guardado para reutilizar'] = {
+  $e = Nuevo-Escenario 'm47-k' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $env:RESCATE_MVN_ESCRIBE = '1'
+  try { $r = Prueba-Con-Tope $e ([regex]::Escape($e.CopiaOrig) + '\|.*-Dprueba\.local\.caso=caso-01( |$)') }
+  finally { $env:RESCATE_MVN_ESCRIBE = '' }
+  Comprueba 'el original de caso-01 dejo su estado.txt antes de colgarse' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/estado.txt')) ''
+  $guardados = @(@((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos) | ForEach-Object { "$($_.job)|$($_.caso)" })
+  Comprueba 'caso-01 no queda en originales.json' ($guardados -notcontains 'cargaJob|caso-01') ($guardados -join ', ')
+  Comprueba 'caso-02 si' ($guardados -contains 'cargaJob|caso-02') ($guardados -join ', ')
+  Comprueba-Tope $r.Pids $r.Segundos 90 (Registro-Del-Tope "$((Caso $e 'cargaJob' 'caso-01').motivo)")
+}
+
 $Pruebas['m47 (j) con -Job las salidas de los otros jobs se quedan, y el siguiente lanzamiento sin -Job las reutiliza'] = {
   $e = Nuevo-Escenario 'm47-j' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=20.00') })
   [void](Prueba $e)

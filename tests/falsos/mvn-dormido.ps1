@@ -26,6 +26,12 @@ if (-not $cuelga) {
 }
 $seg = 40
 if ($env:RESCATE_MVN_SEGUNDOS) { $seg = [int]$env:RESCATE_MVN_SEGUNDOS }
+# RESCATE_MVN_ESCRIBE=1: antes de colgarse hace lo del otro falso (el caso deja su estado.txt), como un test que acaba y no suelta la JVM.
+if ($env:RESCATE_MVN_ESCRIBE -eq '1') {
+  $otro = 'mvn.ps1'
+  if ($env:RESCATE_MVN_FALSO) { $otro = $env:RESCATE_MVN_FALSO }
+  & (Join-Path $PSScriptRoot $otro) @args | Out-Null
+}
 '[INFO] Running com.ejemplo.CuelgaTest'
 # El mismo PowerShell que corre este falso; si pwsh esta instalado como herramienta de dotnet, el proceso se llama 'dotnet'
 # y se busca en el PATH (como tests/comun-banco.ps1).
