@@ -80,8 +80,11 @@
   <header class="pg-cab"><h3><code>{{JOB}}</code> <code>{{CASO}}</code> {{TITULO}}</h3></header>
   <ul class="filas">
 {{{DIFERENCIAS}}}
+{{{FALLOS}}}
   </ul>
 </article><!--FIN-->
+<!--TROZO pl-fallo-->    <li class="fila s-aviso"><span class="sev sev-aviso"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Fallo</span><span class="d">{{TEXTO}}</span></li><!--FIN-->
+<!--TROZO pl-dif-sin-guardar-->    <li class="fila s-error">{{{ESTADO}}}<span class="d"><code>{{FICHERO}}</code>: no se ha podido guardar en salidas</span><div class="q"><span class="dif-l"><b>Original:</b> <code>{{ORIGINAL}}</code></span><span class="dif-l"><b>Migrado:</b> <code>{{MIGRADO}}</code></span></div></li><!--FIN-->
 <!--TROZO pl-dif-->    <li class="fila s-error">{{{ESTADO}}}<span class="d"><code>{{FICHERO}}</code>: {{LINEAS}} {{{LINEAS_TEXTO}}}; la primera, la {{LINEA}}</span><div class="q"><span class="dif-l"><b>Original:</b> <code>{{ORIGINAL}}</code></span><span class="dif-l"><b>Migrado:</b> <code>{{MIGRADO}}</code></span>{{{NOTA}}}</div></li><!--FIN-->
 <!--TROZO pl-lineas-una-->línea distinta<!--FIN-->
 <!--TROZO pl-lineas-otras-->líneas distintas<!--FIN-->

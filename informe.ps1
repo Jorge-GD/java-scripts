@@ -786,7 +786,18 @@ function Get-CuentasLocal($PL) {
   return $c
 }
 
+# Un lado de un caso que acaba FAILED, EXCEPCION o sin estado.txt, con la causa de su Maven (el 'fallos' de prueba-local.json).
+function Get-FalloLocalHtml($T, $F) {
+  $texto = "El $($F.lado) acaba $($F.estado)"
+  if ($F.estado -ceq 'sin estado.txt') { $texto = "El $($F.lado) no deja estado.txt" }
+  if ($F.causa) { $texto += ": $($F.causa)" }
+  return (Format-Trozo $T 'pl-fallo' @{ TEXTO = $texto })
+}
+
 function Get-DifLocalHtml($T, $Dif) {
+  if ($Dif.noGuardado) {
+    return (Format-Trozo $T 'pl-dif-sin-guardar' @{ ESTADO = (Format-Trozo $T 'comp-est-distinto'); FICHERO = $Dif.fichero; ORIGINAL = $Dif.original; MIGRADO = $Dif.migrado })
+  }
   $nota = ''
   if ($Dif.nota) { $nota = Format-Trozo $T 'pl-nota' @{ NOTA = $Dif.nota } }
   $lineas = Format-Trozo $T 'pl-lineas-otras'
@@ -799,7 +810,8 @@ function Get-DifLocalHtml($T, $Dif) {
 
 function Get-CasoLocalHtml($T, $C) {
   $difs = @($C.diferencias | Where-Object { $null -ne $_ } | ForEach-Object { Get-DifLocalHtml $T $_ })
-  return (Format-Trozo $T 'pl-caso' @{ JOB = $C.job; CASO = $C.caso; TITULO = $C.titulo; DIFERENCIAS = ($difs -join "`n") })
+  $fallos = @($C.fallos | Where-Object { $null -ne $_ } | ForEach-Object { Get-FalloLocalHtml $T $_ })
+  return (Format-Trozo $T 'pl-caso' @{ JOB = $C.job; CASO = $C.caso; TITULO = $C.titulo; DIFERENCIAS = ($difs -join "`n"); FALLOS = ($fallos -join "`n") })
 }
 
 # Los casos que no son iguales (sin probar, no deterministas...) y los iguales que traen un motivo, plegados.
