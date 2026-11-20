@@ -129,7 +129,7 @@ Para encontrar el commit que rompe un caso:
 - `-Desde <tu-rama>` busca entre los commits que la rama de rescate tiene encima de la tuya.
 - Dice «el caso X era igual en <commit> y se rompe en <commit> (<asunto>)».
 - Con `-Deshacer`, hace `git revert` de ese commit (nunca un reset) y vuelve a ejecutar el caso. Si no existe `C:\ruta\migrado-rescate`, el revert va a tu rama.
-- `prueba-local.ps1` lanzado así no rehace las páginas. Para ver la página 3 al día, relanza `migracion.ps1` con las mismas opciones. Con un commit nuevo en la rama de rescate, repite la comparación leyendo código (tarda y gasta Copilot) y la prueba en local. Las páginas 2 y 4 no cambian.
+- `prueba-local.ps1` lanzado así no rehace las páginas. Para ver la página 3 al día, relanza `migracion.ps1` con las mismas opciones. Con un commit nuevo en la rama de rescate, repite la comparación solo de las fichas cuyos ficheros del migrado han cambiado (tarda y gasta Copilot) y la prueba en local entera. Un commit que no toca esos ficheros, como uno solo de `src/test`, no repite ninguna comparación. Las páginas 2 y 4 no cambian.
 
 ### Arreglar lo que venía distinto: `-Reparar`
 
@@ -140,6 +140,7 @@ Para encontrar el commit que rompe un caso:
 - Hace la prueba de siempre y, si hay casos `distinto`, Copilot escribe arreglos en `src/main/` de la copia del migrado. Una diferencia (la clave) cada vez, empezando por la que tienen más casos, y como mucho 8 por lanzamiento (`MaxReparaciones`). Lo que no se prueba, lo dice.
 - El script solo da por bueno un arreglo si pasa seis puertas, de la más barata a la más cara: la llamada acaba bien; Copilot no dice que no se arregla; solo cambia `src/main/`; el caso mejora; ningún otro caso empeora; y los tests unitarios del proyecto no fallan más ni se ejecutan menos que al empezar.
 - Lo que pasa va a la rama de rescate, en un commit por arreglo (`rescate(local): <job>/<caso> <clave>`). Lo que no pasa se deshace y se reintenta una vez, con el motivo y el diff rechazado. Tu carpeta y tu rama no se tocan.
+- Una clave que ya se probó no se vuelve a probar mientras no cambien `src/main/` ni el `pom.xml` del migrado (ni su test del arnés). Un commit que solo toca `src/test`, como el de `-Regresion`, no la hace volver a gastar Copilot.
 - Revisa esos commits (`git log`, `git show`) antes del `git merge` del paso 4. Con `-Job <job>` solo se miran los casos de ese job, también al comprobar que nada empeora. Si un arreglo deja menos líneas distintas pero la clave sigue distinta, sale «Mejorado», no «Arreglado».
 - No se combina con `-Desde` ni con `-Deshacer`. Pide que exista `C:\ruta\migrado-rescate` y que no tenga cambios sin commit.
 - **No promete nada sobre el entorno real.** Si un caso sale distinto solo porque la prueba local simula algo (la base de datos, el correo, el SFTP), Copilot lo dice y no cambia nada. Un arreglo que iguala la salida de la prueba local se revisa, y se prueba en pre.
