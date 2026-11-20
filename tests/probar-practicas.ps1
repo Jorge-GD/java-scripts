@@ -1262,7 +1262,7 @@ $Pruebas['36 bp4 s) lo que habia sin confirmar en el worktree se aparta a un git
   Escribe $E.Repo "${Ruta4}Delta.java" ((Fuente-P4 'Delta') + "// resto de una pasada que se corto`n")
   Escribe $E.Repo "${Ruta4}Suelto.java" "class Suelto { }`n"
   $x = Fase4 $E
-  Comprueba 'lo dice, con los dos ficheros y como recuperarlo (stash pop)' ($x.Texto.Contains('Aparto lo que habia sin confirmar en el worktree (git stash): ') -and $x.Texto.Contains("${Ruta4}Delta.java") -and $x.Texto.Contains("${Ruta4}Suelto.java") -and $x.Texto.Contains('Para recuperarlo: git -C "' + $E.Repo + '" stash pop')) $x.Texto
+  Comprueba 'lo dice, con los dos ficheros y como recuperarlo (stash apply <hash>, m45)' ($x.Texto.Contains('Aparto lo que habia sin confirmar en el worktree (git stash): ') -and $x.Texto.Contains("${Ruta4}Delta.java") -and $x.Texto.Contains("${Ruta4}Suelto.java") -and $x.Texto.Contains('Para recuperarlo: git -C "' + $E.Repo + '" stash apply ' + (GitEn $E.Repo @('rev-parse', 'refs/stash')))) $x.Texto
   Comprueba 'ya no dice que lo deshace' ($x.Texto -notmatch 'Deshago lo que habia sin confirmar') $x.Texto
   $st = @((GitEn $E.Repo @('stash', 'list')) -split "`n" | Where-Object { $_ })
   Igual 'hay un stash' 1 $st.Count
@@ -1687,6 +1687,94 @@ $Pruebas['50 bp6 k) solo se lee src/main/java: el mismo codigo en src/test/java 
   Igual 'estado ok' 'ok' (Det $j 'java21-texto').estado
   Igual 'las de src/main/java estan' (Marcadas6 $Fuente6Charset) (Lineas6 $j "${Dir6}Entrada.java" 'charset-por-defecto')
   Igual 'ninguna en src/test/java' 0 @($j.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' -and $_.fichero -like 'src/test/*' }).Count
+}
+
+# ================================ M45: LA MARCA DE INTENTO EN CADA RONDA ================================
+# m45-copilot.ps1 apunta, en cada llamada a Copilot, el HEAD y la marca .rescate/intento-en-curso.json que ve, y pasa la llamada a bp4-copilot.ps1.
+# Un hook pre-commit apunta lo mismo en cada commit de la fase (lo que corre entre un commit y el siguiente).
+$Aj45 = @{ CopilotExe = (Join-Path $falsos 'm45-copilot.ps1') }
+
+function Entorno45([string]$Marcas) { return @{ M45_DELEGA = (Join-Path $falsos 'bp4-copilot.ps1'); M45_MARCAS = $Marcas } }
+
+# Lo apuntado: una fila por llamada (Quien: copilot o commit), con su carpeta, su HEAD y su marca ($null si no habia).
+function Marcas45([string]$Fichero) {
+  if (-not (Test-Path -LiteralPath $Fichero)) { return @() }
+  return @([System.IO.File]::ReadAllLines($Fichero) | Where-Object { $_ } | ForEach-Object {
+      $p = $_ -split '\|', 4
+      $m = $null
+      if ($p[3] -cne '-') { $m = $p[3] | ConvertFrom-Json }
+      [pscustomobject]@{ Quien = $p[0]; Dir = $p[1]; Head = $p[2]; Marca = $m }
+    })
+}
+
+function Hook45($E) {
+  [void](GitEn $E.Repo @('config', 'core.hooksPath', '.git/hooks'))   # el global del usuario, si lo hay, no cuenta aqui
+  $h = @('#!/bin/sh', 'm=-', '[ -f .rescate/intento-en-curso.json ] && m=$(cat .rescate/intento-en-curso.json)', 'printf ''commit|%s|%s|%s\n'' "$PWD" "$(git rev-parse HEAD)" "$m" >> "$M45_MARCAS"', '')
+  Escribe $E.Repo '.git/hooks/pre-commit' ($h -join "`n")
+  if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x (Get-Ruta $E.Repo '.git/hooks/pre-commit') }
+}
+
+function HayMarca45($E) { return (Test-Path -LiteralPath (Get-Ruta $E.Repo '.rescate/intento-en-curso.json')) }
+
+$Pruebas['m45 (a)(c) practicas: cada llamada a Copilot de la ronda ve la marca (paso practicas, ronda 1, commit = el HEAD de antes) y al acabar la fase no queda marca'] = {
+  $E = Nuevo-Escenario4 'm45a' @('Alfa', 'Beta')
+  $head0 = GitEn $E.Repo @('rev-parse', 'HEAD')
+  $marcas = Join-Path $E.Raiz 'marcas.txt'
+  $x = Fase4 $E (Entorno45 $marcas) $Aj45
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'los dos commits de siempre' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  $l = @(Marcas45 $marcas | Where-Object { $_.Quien -ceq 'copilot' })
+  Igual 'dos llamadas a Copilot' 2 $l.Count
+  foreach ($m in $l) {
+    Comprueba 'la llamada ve la marca' ($null -ne $m.Marca)
+    if ($null -eq $m.Marca) { continue }
+    Igual 'su paso es practicas' 'practicas' $m.Marca.paso
+    Igual 'su numero es el de la ronda' 1 $m.Marca.lote
+    Igual 'su commit es el HEAD de antes de la ronda' $head0 $m.Marca.commit
+    Igual 'y la llamada ve ese HEAD' $head0 $m.Head
+  }
+  Comprueba 'al acabar la fase no hay marca' (-not (HayMarca45 $E))
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+}
+
+$Pruebas['m45 (b) practicas: tras cada commit de la ronda la marca pasa al HEAD nuevo (lo ve el hook de cada commit)'] = {
+  $E = Nuevo-Escenario4 'm45b' @('Alfa', 'Beta')
+  Hook45 $E
+  $head0 = GitEn $E.Repo @('rev-parse', 'HEAD')
+  $marcas = Join-Path $E.Raiz 'marcas.txt'
+  $x = Fase4 $E (Entorno45 $marcas) $Aj45
+  Igual 'los dos commits de siempre' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  $c = @(Marcas45 $marcas | Where-Object { $_.Quien -ceq 'commit' })
+  Igual 'el hook ha visto dos commits' 2 $c.Count
+  if ($c.Count -ne 2) { return }
+  Comprueba 'antes del primero hay marca y su commit es el HEAD de antes' ($null -ne $c[0].Marca -and $c[0].Head -ceq $head0 -and $c[0].Marca.commit -ceq $head0) (($c[0] | ConvertTo-Json -Compress -Depth 3))
+  $nuevo = GitEn $E.Repo @('rev-parse', 'HEAD~1')
+  Comprueba 'antes del segundo el HEAD ya es el del primer commit' ($c[1].Head -ceq $nuevo -and $nuevo -cne $head0) "$($c[1].Head) frente a $nuevo"
+  Comprueba 'y la marca ya lleva ese HEAD nuevo, no el de antes' ($null -ne $c[1].Marca -and $c[1].Marca.commit -ceq $nuevo) (($c[1] | ConvertTo-Json -Compress -Depth 3))
+  Comprueba 'al acabar no hay marca' (-not (HayMarca45 $E))
+}
+
+$Pruebas['m45 (c) practicas: la ronda no deja marca al acabar, sea cual sea su final (la IA hace un commit, no cambia nada, rompe lo compilado o falla)'] = {
+  foreach ($g in @('commit', 'nada', 'codigo', 'falla')) {
+    $E = Nuevo-Escenario4 "m45c-$g" @('Alfa', 'Beta')
+    $marcas = Join-Path $E.Raiz 'marcas.txt'
+    $x = Fase4 $E ((Entorno45 $marcas) + @{ RESCATE_FALSO = $g }) $Aj45
+    $l = @(Marcas45 $marcas | Where-Object { $_.Quien -ceq 'copilot' -and $null -ne $_.Marca })
+    Comprueba "$g : las llamadas vieron la marca" ($l.Count -gt 0 -and $l.Count -eq @(Marcas45 $marcas).Count) "con marca $($l.Count) de $(@(Marcas45 $marcas).Count)"
+    Comprueba "$g : al acabar no hay marca" (-not (HayMarca45 $E))
+    Igual "$g : el worktree queda limpio" '' (Estado-Git4 $E)
+  }
+}
+
+$Pruebas['m45 (i) practicas: la Info de lo apartado lista como mucho 10 ficheros y dice y N mas'] = {
+  $E = Nuevo-Escenario4 'm45i' @('Alfa')
+  $lista = @()
+  foreach ($i in 1..12) { $f = '{0}Extra{1:00}.java' -f $Ruta4, $i; Escribe $E.Repo $f "class Extra$i { }`n"; $lista += $f }
+  $x = Fase4 $E
+  $diez = (@($lista | Select-Object -First 10) -join ', ')
+  Comprueba 'dice los 10 primeros y y 2 mas' ($x.Texto.Contains("(git stash): $diez y 2 mas. Para recuperarlo:")) $x.Texto
+  Comprueba 'y no nombra el undecimo' (-not $x.Texto.Contains('Extra11.java')) $x.Texto
+  Igual 'los 12 ficheros estan en el stash' 12 @((GitEn $E.Repo @('show', '--name-only', '--format=', 'stash@{0}^3')) -split "`n" | Where-Object { $_ }).Count
 }
 
 # ================================ LANZADOR ================================

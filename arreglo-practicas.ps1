@@ -141,7 +141,7 @@ function Undo-FicheroLombok([string]$Fichero) { [void](Invoke-Git $RepoRoot @('c
 function Save-CommitLombok($R) {
   $f = $R.Tarea.entradas.fichero
   $c = Invoke-Git $RepoRoot (@('commit', '-q') + @($Cfg.CommitArgs) + @('-m', (Get-AsuntoLombok $f), '--', $f))
-  if ($c.Codigo -eq 0) { $R.Commit = Get-Head $RepoRoot; return }
+  if ($c.Codigo -eq 0) { $R.Commit = Get-Head $RepoRoot; Update-Intento $R.Commit; return }
   Undo-FicheroLombok $f
   $R.Estado = 'git'
   $R.Motivo = (@($c.Salida) -join ' / ')
@@ -206,10 +206,11 @@ function Confirm-CandidatosLombok($Cand) {
   }
 }
 
-# Una ronda: una llamada por tarea de $Lote, todas a la vez, en el mismo worktree. Despues: lo que la IA haya hecho fuera de su fichero se deshace,
-# lo que no ha cambiado queda 'sin cambios' y el resto se comprueba. Devuelve por tarea: Tarea, Estado (ok, sin-cambios, invalida, fallo, tiempo o
-# git), Motivo y Commit.
-function Invoke-RondaLombok($Lote) {
+# Una ronda ($N es su numero): una llamada por tarea de $Lote, todas a la vez, en el mismo worktree. Despues: lo que la IA haya hecho fuera de su
+# fichero se deshace, lo que no ha cambiado queda 'sin cambios' y el resto se comprueba. Devuelve por tarea: Tarea, Estado (ok, sin-cambios,
+# invalida, fallo, tiempo o git), Motivo y Commit.
+# La marca de intento (comun.ps1) va desde antes de las llamadas hasta que todo esta commiteado o deshecho; Save-CommitLombok la lleva al HEAD nuevo.
+function Invoke-RondaLombok($Lote, [int]$N) {
   $items = @()
   foreach ($t in $Lote) {
     $motivo = ''
@@ -218,6 +219,7 @@ function Invoke-RondaLombok($Lote) {
   }
   $head = Get-Head $RepoRoot
   $rama = Get-Rama $RepoRoot
+  Save-Intento 'practicas' $N $head @($Lote | ForEach-Object { $_.entradas.fichero })
   $llamadas = @(Invoke-Llamadas $items)
   $res = @()
   for ($i = 0; $i -lt $Lote.Count; $i++) {
@@ -254,6 +256,7 @@ function Invoke-RondaLombok($Lote) {
   }
   $cand = @($res | Where-Object { $_.Estado -eq 'ok' })
   if ($cand.Count -gt 0) { Confirm-CandidatosLombok $cand }
+  Remove-Intento   # todo commiteado o deshecho; nunca en un finally (con Ctrl+C se ejecuta y la marca tiene que quedar)
   return $res
 }
 
@@ -308,7 +311,7 @@ function Invoke-PracticasLombok([bool]$Conservar) {
     $lote = @($pend | Select-Object -First ([int]$Cfg.Paralelo))
     Info ('Ronda de buenas practicas: ' + $lote.Count + ' llamadas a la vez (quedan ' + $pend.Count + ' ficheros)...')
     $rondas++
-    $res = @(Invoke-RondaLombok $lote)
+    $res = @(Invoke-RondaLombok $lote $rondas)
     foreach ($o in $res) {
       if ($o.Estado -eq 'git') { continue }
       $t = $o.Tarea

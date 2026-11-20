@@ -354,6 +354,7 @@ function Invoke-Fase($Tareas) {
     $head = Get-Head $RepoRoot
     $rondaRama = Get-Rama $RepoRoot
     Info ('Ronda: ' + $lote.Count + ' llamadas a la vez (quedan ' + $pend.Count + ' tareas)...')
+    Save-Intento 'lectura' ($script:Rondas + 1) $head   # si el script se corta con la IA leyendo, lo que haya tocado no es de nadie: el arranque siguiente lo aparta
     $res = @(Invoke-Ronda $lote $RepoRoot $LegacyRoot)
     $script:Rondas++
 
@@ -362,6 +363,7 @@ function Invoke-Fase($Tareas) {
     # un commit de la IA deja el worktree limpio: se ve porque el HEAD o la rama ya no son los de antes de la ronda
     $movido = ((Get-Head $RepoRoot) -cne $head -or (Get-Rama $RepoRoot) -cne $rondaRama)
     if ($sucio.Count -gt 0 -or $movido) { Undo-Lote $rondaRama $head }
+    Remove-Intento   # todo deshecho o limpio; nunca en un finally (con Ctrl+C se ejecuta y la marca tiene que quedar)
     if ((Get-Huella $LegacyRoot) -ne $H0.Legacy -or (Get-Huella $PlantillaRoot) -ne $H0.Plantilla) {
       Set-Parada 'guardas' 'Ha cambiado el original o la referencia durante una lectura. Esa carpeta no se deshace desde aqui: mira con git status y git diff, y vuelve a lanzar.' $res[0].Registro
       $script:Parada = $true
@@ -785,9 +787,7 @@ Read-Config $RepoRoot $false
 Undo-IntentoCortado (Get-Rama $RepoRoot)
 $sinCommit = @(Get-SinCommit $RepoRoot)
 if ($sinCommit.Count -gt 0) {
-  $lista = (@($sinCommit | Select-Object -First 10) -join ', ')
-  if ($sinCommit.Count -gt 10) { $lista += " y $($sinCommit.Count - 10) mas" }
-  Stop-Arranque ("La carpeta de rescate tiene cambios sin commit: $lista. No sigo, para no perderlos.`n" +
+  Stop-Arranque ("La carpeta de rescate tiene cambios sin commit: $(Get-ListaFicheros $sinCommit). No sigo, para no perderlos.`n" +
     "Si son tuyos y los quieres:  git -C `"$RepoRoot`" add -A ; git -C `"$RepoRoot`" commit -m `"arreglo a mano`"`n" +
     "Si no los quieres:           git -C `"$RepoRoot`" stash push -u -m `"aparte`"`n" +
     'Despues, lanza el mismo comando.')

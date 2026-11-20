@@ -330,12 +330,31 @@ function Get-SinCommit([string]$Dir) {
   return @($r.Salida | Where-Object { $_.Length -gt 3 } | ForEach-Object { $_.Substring(3).Trim('"') })
 }
 
+# El stash de arriba de la lista (su hash), o '' si no hay ninguno. refs/stash es de todo el repo, no de un worktree: lo guardado en la carpeta del
+# usuario y en la de rescate comparte lista, y por eso se recupera por su hash y no con stash pop.
+function Get-HashStash { return ((Invoke-Git $RepoRoot @('rev-parse', '-q', '--verify', 'refs/stash')).Salida -join '').Trim() }
+
 # Aparta en un git stash con mensaje todo lo que hay sin commit en $RepoRoot (lo cambiado y lo creado). Devuelve '' si lo ha guardado; si no,
-# lo que ha dicho git (y entonces no ha tocado nada). Es la unica politica ante lo sin commit: nada se borra sin guardarlo antes.
+# lo que ha dicho git (y entonces no ha tocado nada). Es la unica politica ante lo sin commit: nada se borra sin guardarlo antes. Un stash que
+# sale con 0 sin crear ninguno (p. ej. cambios dentro de un submodulo) no vale: el hash que se diria despues seria el de otro.
 function Save-Stash([string]$Mensaje) {
+  $antes = Get-HashStash
   $r = Invoke-Git $RepoRoot @('stash', 'push', '--include-untracked', '-m', $Mensaje)
-  if ($r.Codigo -eq 0) { return '' }
-  return ($r.Salida -join ' ')
+  if ($r.Codigo -ne 0) { return ($r.Salida -join ' ') }
+  if ((Get-HashStash) -ceq $antes) { return ('git no ha guardado nada: ' + ($r.Salida -join ' ')) }
+  return ''
+}
+
+# La orden que devuelve lo del ultimo Save-Stash a la carpeta de rescate: stash apply con su hash, que saca ese stash y no otro aunque el usuario
+# haya guardado algo suyo despues.
+function Get-OrdenRecuperarStash { return ('git -C "' + $RepoRoot + '" stash apply ' + (Get-HashStash)) }
+
+# Los ficheros de un mensaje: como mucho 10 y, si hay mas, 'y N mas'.
+function Get-ListaFicheros([string[]]$Ficheros) {
+  $f = @($Ficheros)
+  $lista = (@($f | Select-Object -First 10) -join ', ')
+  if ($f.Count -gt 10) { $lista += " y $($f.Count - 10) mas" }
+  return $lista
 }
 
 # Lo que haya sin commit en $RepoRoot antes de que una fase automatica lo toque: va a un git stash con $Mensaje y se dice que ficheros y como
@@ -345,37 +364,65 @@ function Move-SinCommitAStash([string]$Mensaje) {
   if ($sucio.Count -eq 0) { return '' }
   $mal = Save-Stash $Mensaje
   if ($mal) { return $mal }
-  Info ('Aparto lo que habia sin confirmar en el worktree (git stash): ' + ($sucio -join ', ') + '. Para recuperarlo: git -C "' + $RepoRoot + '" stash pop')
+  Info ('Aparto lo que habia sin confirmar en el worktree (git stash): ' + (Get-ListaFicheros $sucio) + '. Para recuperarlo: ' + (Get-OrdenRecuperarStash))
   return ''
 }
 
 # ============================ INTENTO EN CURSO ============================
-# Mientras un lote puede dejar cambios sin commit en el arbol, rescate.ps1 apunta en .rescate/intento-en-curso.json su paso, su lote y el commit
-# del que parte (.rescate no se versiona: la marca no entra en ningun commit). Si el script se corta (Ctrl+C, la ventana, la luz), esos cambios a
-# medias no son de nadie: el arranque siguiente (el de rescate.ps1 y el de migracion.ps1) los deshace en vez de guardarlos en la foto.
+# Mientras una ronda o un lote puede dejar cambios sin commit en el arbol (las llamadas a Copilot, el motor de rescate.ps1), el script apunta en
+# .rescate/intento-en-curso.json su paso, su lote o ronda y el commit del que parte (.rescate no se versiona: la marca no entra en ningun commit).
+# Si el script se corta (Ctrl+C, la ventana, la luz), esos cambios a medias no son de nadie: el arranque siguiente (el de rescate.ps1 y el de
+# migracion.ps1) los aparta a un git stash y sigue, en vez de guardarlos en la foto o parar.
+# Quien la escribe la borra al acabar la ronda (todo commiteado o deshecho), y nunca en un finally: PowerShell los ejecuta con Ctrl+C, y la marca
+# tiene que quedar justo cuando se corta. Si la ronda hace commits (practicas, reglas), la marca sigue al HEAD nuevo con Update-Intento.
 function Get-RutaIntento { return (Join-Path (Join-Path $RepoRoot '.rescate') 'intento-en-curso.json') }
 
 function Remove-Intento { Remove-Item -LiteralPath (Get-RutaIntento) -Force -ErrorAction SilentlyContinue }
 
-# Si hay marca, borra la marca y, si la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y lo creado van antes a
-# un git stash (el usuario pudo cortar la pasada y tocar algo a mano); si el stash falla, no se deshace nada. Si la rama ya no esta en ese
-# commit, el usuario hizo el suyo: no se deshace nada.
+# Escribe la marca en un fichero temporal y lo mueve: un corte no deja una marca a medias.
+function Write-Intento($Marca) {
+  $p = Get-RutaIntento
+  $d = Split-Path $p -Parent
+  if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+  [System.IO.File]::WriteAllText(($p + '.tmp'), (ConvertTo-Json -Compress -InputObject $Marca))
+  Move-Item -LiteralPath ($p + '.tmp') -Destination $p -Force
+}
+
+# La marca lleva tambien los ficheros del lote y las claves de los errores de antes (el modo comprobar de rescate.ps1 los usa para saber que hay
+# de nuevo).
+function Save-Intento([string]$PasoId, [int]$N, [string]$Commit, [string[]]$Ficheros = @(), $Base = $null) {
+  $claves = @(); if ($Base) { $claves = @($Base.Keys | Sort-Object) }
+  Write-Intento ([ordered]@{ paso = $PasoId; lote = $N; commit = $Commit; ficheros = @($Ficheros); base = $claves })
+}
+
+# Tras un commit del propio script dentro de una ronda: la marca parte ahora del HEAD nuevo. Sin marca, no hace nada.
+function Update-Intento([string]$Commit) {
+  if (-not (Test-Path -LiteralPath (Get-RutaIntento))) { return }
+  $m = [System.IO.File]::ReadAllText((Get-RutaIntento)) | ConvertFrom-Json
+  $m.commit = $Commit
+  Write-Intento $m
+}
+
+# Si hay marca y la rama sigue en el commit de partida, la deja limpia en el: lo cambiado sin commit y lo creado van antes a un git stash (el
+# usuario pudo cortar la pasada y tocar algo a mano); si el stash falla, no se deshace nada y la marca se queda: el arranque para y el siguiente
+# lo vuelve a intentar. La marca se borra la ultima: un corte entre el stash y el deshacer deja la marca, y repetirlo sobre un arbol limpio no
+# hace dano. Si la rama ya no esta en ese commit (el usuario hizo el suyo) o la marca no vale, no se deshace nada y se borra.
 function Undo-IntentoCortado([string]$Rama) {
   $p = Get-RutaIntento
   if (-not (Test-Path -LiteralPath $p)) { return }
   try { $m = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { $m = $null }
-  Remove-Intento
   $c = "$($m.commit)"
-  if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
+  if (-not $c -or (Invoke-Git $RepoRoot @('cat-file', '-e', $c)).Codigo -ne 0) { Remove-Intento; Aviso 'La marca del intento en curso no vale: la ignoro.'; return }
   $donde = "paso $($m.paso), lote $($m.lote)"
-  if ((Get-Head $RepoRoot) -ne $c) { Aviso "Habia un intento cortado ($donde), pero la rama ha avanzado desde entonces: no deshago nada."; return }
+  if ((Get-Head $RepoRoot) -ne $c) { Remove-Intento; Aviso "Habia un intento cortado ($donde), pero la rama ha avanzado desde entonces: no deshago nada."; return }
   Info "Habia un intento cortado ($donde): lo deshago y sigo desde $($c.Substring(0, [Math]::Min(7, $c.Length)))."
   if (@(Get-SinCommit $RepoRoot).Count -gt 0) {
     $mal = Save-Stash "rescate: intento cortado ($donde)"
     if ($mal) { Aviso "No he podido guardarlo en un git stash ($mal): no lo deshago."; return }
-    Aviso 'Lo he guardado en git stash (recuperalo con: git stash list / git stash pop).'
+    Aviso ('Lo he guardado en git stash (recuperalo con: ' + (Get-OrdenRecuperarStash) + ').')
   }
   Undo-Lote $Rama $c
+  Remove-Intento
 }
 
 # Lo que Maven deja fuera de target (un log, una base en fichero, la salida de un test) no es de la IA. Tras una ejecucion
@@ -566,7 +613,7 @@ function Show-Ignorados {
 function New-WorktreeRescate([string]$Dir) {
   $rama = Get-Rama $OrigenRoot
   if ($rama -eq 'HEAD' -or -not $rama) { Fallo 'El repo no esta en una rama (detached HEAD).'; exit 1 }
-  if (Test-Path -LiteralPath $Dir) { Fallo "La carpeta '$Dir' ya existe y no es un worktree de rescate de este repo. Borrala o elige otra con -Worktree."; exit 1 }
+  if (Test-Path -LiteralPath $Dir) { Fallo "La carpeta '$Dir' ya existe y no es un worktree de rescate de este repo. Mira antes si tiene algo tuyo (git -C `"$Dir`" status); despues, muevela o elige otra con -Worktree."; exit 1 }
   [void](Invoke-Git $OrigenRoot @('worktree', 'prune'))   # un worktree borrado a mano sigue registrado: su rama no se podria volver a montar ni borrar
   $prefijo = 'rescate/' + ($rama -replace '[^\w\.\-]', '-') + '-'
   # una rama de rescate con commits que no estan en la tuya (el worktree se borro sin unirla): crear otra la dejaria olvidada con sus arreglos

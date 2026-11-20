@@ -299,7 +299,7 @@ function Save-CommitReglas($R) {
   $f = $R.Tarea.entradas.test
   $c = Invoke-Git $RepoRoot @('add', '--', $f)
   if ($c.Codigo -eq 0) { $c = Invoke-Git $RepoRoot (@('commit', '-q') + @($Cfg.CommitArgs) + @('-m', (Get-AsuntoReglas $f), '--', $f)) }
-  if ($c.Codigo -eq 0) { $R.Commit = Get-Head $RepoRoot; return }
+  if ($c.Codigo -eq 0) { $R.Commit = Get-Head $RepoRoot; Update-Intento $R.Commit; return }
   [void](Invoke-Git $RepoRoot @('reset', '-q', '--', $f))
   Remove-TestReglas $f
   $R.Estado = 'git'
@@ -360,10 +360,11 @@ function Get-SpringReglas([string]$Texto) {
   return ''
 }
 
-# Una ronda: una llamada por tarea de $Lote, todas a la vez, en el mismo worktree. Despues: lo que la IA haya hecho fuera de su test se deshace, el
-# test que falta o que arranca Spring se rechaza y el resto se comprueba. Devuelve por tarea: Tarea, Estado (ok, invalida, fallo, tiempo o git), Motivo,
-# Commit y Reglas (el resultado de cada regla, si se llego a los cambios).
-function Invoke-RondaReglas($Lote) {
+# Una ronda ($N es su numero): una llamada por tarea de $Lote, todas a la vez, en el mismo worktree. Despues: lo que la IA haya hecho fuera de su
+# test se deshace, el test que falta o que arranca Spring se rechaza y el resto se comprueba. Devuelve por tarea: Tarea, Estado (ok, invalida, fallo,
+# tiempo o git), Motivo, Commit y Reglas (el resultado de cada regla, si se llego a los cambios).
+# La marca de intento (comun.ps1) va desde antes de las llamadas hasta que todo esta commiteado o deshecho; Save-CommitReglas la lleva al HEAD nuevo.
+function Invoke-RondaReglas($Lote, [int]$N) {
   $items = @()
   foreach ($t in $Lote) {
     $motivo = ''
@@ -372,6 +373,7 @@ function Invoke-RondaReglas($Lote) {
   }
   $head = Get-Head $RepoRoot
   $rama = Get-Rama $RepoRoot
+  Save-Intento 'reglas' $N $head @($Lote | ForEach-Object { $_.entradas.test })
   $llamadas = @(Invoke-Llamadas $items)
   $res = @()
   for ($i = 0; $i -lt $Lote.Count; $i++) {
@@ -406,6 +408,7 @@ function Invoke-RondaReglas($Lote) {
   $cand = @($res | Where-Object { $_.Estado -eq 'ok' })
   if ($cand.Count -gt 0) { Confirm-CandidatosReglas $cand }
   foreach ($r in $res) { if (-not $r.Commit) { Remove-TestReglas $r.Tarea.entradas.test } }
+  Remove-Intento   # todo commiteado o deshecho; nunca en un finally (con Ctrl+C se ejecuta y la marca tiene que quedar)
   return $res
 }
 
@@ -465,7 +468,7 @@ function Invoke-TestsReglas([bool]$Conservar) {
     $lote = @($pend | Select-Object -First ([int]$Cfg.Paralelo))
     Info ('Ronda de tests de reglas: ' + $lote.Count + ' llamadas a la vez (quedan ' + $pend.Count + ' clases)...')
     $rondas++
-    $res = @(Invoke-RondaReglas $lote)
+    $res = @(Invoke-RondaReglas $lote $rondas)
     foreach ($o in $res) {
       if ($o.Estado -eq 'git') { continue }
       $t = $o.Tarea

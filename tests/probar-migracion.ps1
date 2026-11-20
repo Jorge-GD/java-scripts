@@ -7024,7 +7024,7 @@ $Pruebas['m41 (c) con la marca de un intento cortado y su commit = HEAD: el camb
   Comprueba 'con el paso y el lote en su nombre' ($st.Count -eq 1 -and $st[0] -match 'rescate: intento cortado \(paso estructura, lote 7\)') ($st -join ' / ')
   Comprueba 'el stash lleva el cambio del fichero tocado' ((GitEn $e.Wt @('show', 'stash@{0}')) -match '// a medias')
   Comprueba 'y el fichero nuevo' ((GitEn $e.Wt @('show', ('stash@{0}^3:' + $nuevo))) -match 'class AMedias')
-  Comprueba 'el aviso dice como recuperarlo' ($r.Salida -match 'git stash pop') (Cola $r.Salida)
+  Comprueba 'el aviso dice como recuperarlo, con el hash de ese stash (m45)' ($r.Salida.Contains('recuperalo con: git -C "' + $e.Wt + '" stash apply ' + (GitEn $e.Wt @('rev-parse', 'refs/stash')) + ').')) (Cola $r.Salida)
   Igual 'el worktree queda en el mismo commit' $head (M38-Head $e.Wt)
   Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
   Comprueba 'la marca ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Wt '.rescate/intento-en-curso.json')))
@@ -7138,6 +7138,123 @@ $Pruebas['m41 (f) correcciones.json completa con commits que no estan en el HEAD
 
 # (g) completa con commits que si estan en el HEAD del worktree, o sin commits: se salta como hoy. Ya lo fijan '106 (E2) relanzar' (con un commit de
 # arreglo: "ni vuelve a corregir", 1 fix) y '75 correccion' (sin commits: "el motor no se vuelve a lanzar para fix"), y no se duplica aqui.
+
+# ================================ M45: LA MARCA DE INTENTO EN CADA RONDA ================================
+# m45-copilot.ps1 apunta, en cada llamada a Copilot, la carpeta, el HEAD y la marca .rescate/intento-en-curso.json que ve, y pasa la llamada a copilot.ps1.
+function M45-Marcas([string]$Fichero) {
+  if (-not (Test-Path -LiteralPath $Fichero)) { return @() }
+  return @([System.IO.File]::ReadAllLines($Fichero) | Where-Object { $_ } | ForEach-Object {
+      $p = $_ -split '\|', 4
+      $m = $null
+      if ($p[3] -cne '-') { $m = $p[3] | ConvertFrom-Json }
+      [pscustomobject]@{ Quien = $p[0]; Dir = $p[1]; Head = $p[2]; Marca = $m }
+    })
+}
+
+function M45-HayMarca($E) { return (Test-Path -LiteralPath (Get-Ruta $E.Wt '.rescate/intento-en-curso.json')) }
+
+$Segundo45 = 'src/main/java/com/acme/life/Otra.java'
+
+# Un escenario con dos ficheros con seguimiento en el migrado, que ya hizo su primer lanzamiento, y el estado en que lo deja una ronda de practicas
+# cortada: la marca (paso practicas, ronda 2, commit = el HEAD) y los dos ficheros cambiados sin commit, mas uno nuevo.
+function M45-Corte([string]$Nombre) {
+  $e = Nuevo-Escenario-Contado $Nombre @('Clase1')
+  Escribe $e.Migrado $Segundo45 "package com.acme.life;`n`n/** Otra. */`npublic class Otra {`n}`n"
+  [void](GitEn $e.Migrado @('add', '--', $Segundo45))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'otra clase'))
+  $r = Migra $e (Basicos $e)
+  Igual "$Nombre : el primer lanzamiento sale con 0" 0 $r.Codigo
+  $head = M38-Head $e.Wt
+  Escribe $e.Wt $Fichero41 ((Lee $e.Wt $Fichero41) + "// a medias`n")
+  Escribe $e.Wt $Segundo45 ((Lee $e.Wt $Segundo45) + "// a medias tambien`n")
+  Escribe $e.Wt 'src/main/java/com/acme/life/Nueva.java' "class Nueva { }`n"
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"practicas","lote":2,"commit":"' + $head + '","ficheros":[],"base":[]}')
+  return $e
+}
+
+$Pruebas['m45 (d) la ronda de lectura: cada llamada a Copilot en el worktree ve la marca (paso lectura, commit = HEAD) y al acabar la pasada no queda marca'] = {
+  $e = Nuevo-Escenario-Contado 'm45-d' @('Clase1', 'Clase2') @{ CopilotExe = (Join-Path $falsos 'm45-copilot.ps1') }
+  $marcas = Get-Ruta $e.Raiz 'marcas.txt'
+  $r = Con-Entorno @{ M45_DELEGA = (Join-Path $falsos 'copilot.ps1'); M45_MARCAS = $marcas } { Migra $e (Basicos $e) }
+  Igual 'sale con 0' 0 $r.Codigo
+  $head = M38-Head $e.Wt
+  $l = @(M45-Marcas $marcas | Where-Object { $_.Dir -ceq $e.Wt })
+  Comprueba 'hay llamadas a Copilot en el worktree (una por ficha de clase, al menos)' ($l.Count -ge 2) "$($l.Count) llamadas: $(@(M45-Marcas $marcas | ForEach-Object { $_.Dir }) -join ', ')"
+  foreach ($m in $l) {
+    Comprueba 'la llamada ve la marca' ($null -ne $m.Marca)
+    if ($null -eq $m.Marca) { continue }
+    Igual 'su paso es lectura' 'lectura' $m.Marca.paso
+    Comprueba 'con el numero de la ronda' ([int]$m.Marca.lote -ge 1) "$($m.Marca.lote)"
+    Igual 'su commit es el HEAD del worktree' $head $m.Marca.commit
+    Igual 'y la llamada ve ese HEAD' $head $m.Head
+  }
+  Igual 'la primera ronda es la 1' 1 $l[0].Marca.lote
+  Comprueba 'al acabar la pasada no hay marca' (-not (M45-HayMarca $e))
+  Igual 'el worktree queda limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m45 (e) un corte en una ronda de practicas (marca practicas con el HEAD y dos ficheros cambiados sin commit): el relanzamiento no para, lo aparta a un git stash y deja el worktree limpio'] = {
+  $e = M45-Corte 'm45-e'
+  $head = M38-Head $e.Wt
+  $r = Migra $e (Basicos $e)
+  Igual 'el relanzamiento sale con 0, sin parar' 0 $r.Codigo
+  Comprueba 'no dice que haya cambios sin commit' (-not $r.Salida.Contains('tiene cambios sin commit')) (Cola $r.Salida)
+  $st = @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Igual 'hay un stash' 1 $st.Count
+  Comprueba 'con el paso y la ronda en su nombre' ($st.Count -eq 1 -and $st[0] -match 'rescate: intento cortado \(paso practicas, lote 2\)') ($st -join ' / ')
+  $dentro = @((GitEn $e.Wt @('show', '--name-only', '--format=', 'stash@{0}')) -split "`n" | Where-Object { $_ })
+  Igual 'el stash lleva los dos ficheros cambiados' ((@($Fichero41, $Segundo45) | Sort-Object) -join '|') (($dentro | Sort-Object) -join '|')
+  Comprueba 'y el nuevo' ((GitEn $e.Wt @('show', 'stash@{0}^3:src/main/java/com/acme/life/Nueva.java')) -match 'class Nueva')
+  Igual 'el worktree queda en el mismo commit' $head (M38-Head $e.Wt)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'la marca ya no esta' (-not (M45-HayMarca $e))
+}
+
+$Pruebas['m45 (f) el texto de recuperar lleva stash apply <hash>: tras un git stash del usuario en su carpeta, el comando saca lo del script y no lo del usuario'] = {
+  $e = M45-Corte 'm45-f'
+  $r = Migra $e (Basicos $e)
+  Igual 'el relanzamiento sale con 0' 0 $r.Codigo
+  $m = [regex]::Match($r.Salida, 'recuperalo con: git -C "(?<d>[^"]+)" stash apply (?<h>[0-9a-f]{40,64})\)\.')
+  Comprueba 'el aviso dice git -C "<worktree>" stash apply <hash>' $m.Success (Cola $r.Salida)
+  if (-not $m.Success) { return }
+  Igual 'con la carpeta de rescate' $e.Wt $m.Groups['d'].Value
+  Comprueba 'y no habla de stash pop ni de stash list' ($r.Salida -notmatch 'stash pop|stash list') (Cola $r.Salida)
+  Igual 'el hash es el del stash del script' (GitEn $e.Wt @('rev-parse', 'stash@{0}')) $m.Groups['h'].Value
+  # el usuario guarda lo suyo en su carpeta con un git stash: la lista de stash es la misma para los dos worktrees y el suyo queda encima
+  Escribe $e.Migrado $Fichero41 ((Lee $e.Migrado $Fichero41) + "// WIP del usuario`n")
+  [void](GitEn $e.Migrado @('stash'))
+  Igual 'ahora hay dos stash' 2 @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ }).Count
+  [void](GitEn $m.Groups['d'].Value @('stash', 'apply', $m.Groups['h'].Value))
+  Comprueba 'el comando del texto devuelve el fichero del script' ((Lee $e.Wt $Fichero41) -match '// a medias') (Lee $e.Wt $Fichero41)
+  Comprueba 'y no lo del usuario' ((Lee $e.Wt $Fichero41) -notmatch 'WIP del usuario')
+  Comprueba 'tambien su segundo fichero y el nuevo' ((Lee $e.Wt $Segundo45) -match '// a medias tambien' -and (Test-Path -LiteralPath (Get-Ruta $e.Wt 'src/main/java/com/acme/life/Nueva.java')))
+  $lista = @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ })
+  Comprueba 'el WIP del usuario sigue encima en su stash (apply no lo toca)' ($lista.Count -eq 2 -and $lista[0] -match 'WIP on') ($lista -join ' / ')
+  Igual 'y la carpeta del usuario sigue limpia' '' (GitEn $e.Migrado @('status', '--porcelain'))
+}
+
+$Pruebas['m45 (g) un stash que falla (cerrojo en refs/stash) con la marca de un intento: el arranque para, la marca sigue ahi y el siguiente lo vuelve a intentar y lo aparta'] = {
+  $e = M45-Corte 'm45-g'
+  $head = M38-Head $e.Wt
+  $hash = M41-Hash (Get-Ruta $e.Wt $Fichero41)
+  $marca = Lee $e.Wt '.rescate/intento-en-curso.json'
+  Escribe $e.Migrado '.git/refs/stash.lock' ''
+  $r = Migra $e (Basicos $e)
+  Remove-Item -LiteralPath (Get-Ruta $e.Migrado '.git/refs/stash.lock') -Force
+  Igual 'con el stash que falla se para con 1' 1 $r.Codigo
+  Comprueba 'dice que no ha podido guardarlo' ($r.Salida -match 'No he podido guardarlo en un git stash') (Cola $r.Salida)
+  Comprueba 'y que el worktree tiene cambios sin commit' ($r.Salida.Contains('La carpeta de rescate tiene cambios sin commit')) (Cola $r.Salida)
+  Comprueba 'la marca sigue ahi' (M45-HayMarca $e)
+  Igual 'y es la misma' $marca (Lee $e.Wt '.rescate/intento-en-curso.json')
+  Igual 'el fichero queda igual, byte a byte' $hash (M41-Hash (Get-Ruta $e.Wt $Fichero41))
+  Igual 'no hay stash' '' (GitEn $e.Wt @('stash', 'list'))
+  # sin el cerrojo, el siguiente arranque lo vuelve a intentar: lo aparta y quita la marca
+  $r = Migra $e (Basicos $e)
+  Igual 'el relanzamiento sale con 0' 0 $r.Codigo
+  Igual 'hay un stash' 1 @((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ }).Count
+  Igual 'el worktree queda limpio, en el mismo commit' "$head|" ((M38-Head $e.Wt) + '|' + (GitEn $e.Wt @('status', '--porcelain')))
+  Comprueba 'y la marca ya no esta' (-not (M45-HayMarca $e))
+}
 
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

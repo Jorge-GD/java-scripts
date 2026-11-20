@@ -238,6 +238,8 @@ Para un solo batch: `.\donde-estoy.ps1 -Migrado C:\ruta\migrado`. También puede
 
 **Relanzar el mismo comando siempre es seguro:** salta lo hecho y sigue donde se quedó. Es seguro porque **para** antes de borrar nada: si `C:\ruta\migrado-rescate` tiene cambios sin commit (salvo los de un intento cortado, que van a un `git stash`), o si hay una rama `rescate/...` con arreglos que no están en tu rama, lo dice y sale con 1 sin tocar nada.
 
+Un corte (Ctrl+C, la ventana, la luz) en mitad de una ronda de lectura, de buenas prácticas o de tests de reglas no hace falta que lo arregles: lo que Copilot dejó a medias en `C:\ruta\migrado-rescate` va a un `git stash` al relanzar (el aviso trae la orden `git -C ... stash apply <hash>` para recuperarlo) y la pasada sigue sola. **Mientras corre una pasada, no edites esa carpeta:** una ronda deshace lo que no reconoce como suyo, y eso incluye lo que tú toques a mano.
+
 ### Cuando `migracion.ps1` se para
 
 Sale en rojo (en amarillo si es el tope de tiempo), con el motivo, y la portada trae un texto listo para pegar en Copilot en otra ventana. Arregla la causa y relanza el mismo comando.
