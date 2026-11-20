@@ -2251,7 +2251,7 @@ function Get-Cuenta($Hall, [string]$Cat, [string]$Sev = 'error') {
 }
 
 # Primer paso con errores pendientes (sin contar lo que ya se dio por atascado).
-function Get-SiguientePaso($Hall) {
+function Get-SiguientePasoMotor($Hall) {
   foreach ($c in $Cfg.Orden) {
     if ($c -eq 'cobertura' -and $script:CobHecha) { continue }   # una pasada por ejecucion: lo que le falte sale en su resumen
     $f = @($Hall | Where-Object { $_.Cat -eq $c -and $_.Sev -eq 'error' } | ForEach-Object { $_.Fichero } | Select-Object -Unique)
@@ -3195,7 +3195,7 @@ function Invoke-Pre {
 # fichero, commit en el que se atasco y, si lo hay, el consejo) para no gastar llamadas en el en la pasada siguiente:
 # se vuelve a intentar con -Reintentar, si el fichero ha cambiado o si desde entonces hay un commit que no es de un
 # lote del script (la pieza que faltaba la puede poner una persona en otro fichero). $script:Atascados (paso ->
-# ficheros) es lo que saltan los lotes y Get-SiguientePaso; $script:AtascadosInfo ('paso|fichero' -> entrada) es lo
+# ficheros) es lo que saltan los lotes y Get-SiguientePasoMotor; $script:AtascadosInfo ('paso|fichero' -> entrada) es lo
 # que se guarda.
 function Get-HuellaFichero([string]$Rel) {
   $p = Join-Ruta $RepoRoot $Rel
@@ -3651,7 +3651,7 @@ function Invoke-Fix {
   Show-Resumen $hall
 
   $paso = $Paso
-  if (-not $paso) { $paso = Get-SiguientePaso $hall }
+  if (-not $paso) { $paso = Get-SiguientePasoMotor $hall }
   if (-not $paso) { $script:Siguiente = ''; Show-SinPasos 'Revisa los avisos del informe y pasa tu pipeline.'; if ($Sonar) { Write-SonarFaltan }; return }
   if ($paso -ne 'build' -and -not $script:Build.Compila) {
     if ($script:Atascados.ContainsKey('build')) { Fallo "El proyecto no compila y 'build' se ha quedado atascado: no sigo con '$paso'."; $script:Parar = $true; return }
@@ -4132,7 +4132,7 @@ function Invoke-Fix {
   Show-Resumen $hall
   if ($esSonar) { Write-SonarFaltan }
   if ($esCob) { Write-CoberturaFaltan }
-  $sig = Get-SiguientePaso $hall
+  $sig = Get-SiguientePasoMotor $hall
   $script:Siguiente = $sig
   if ($sig) { Info "Siguiente paso pendiente: $sig  ->  vuelve a lanzar con -Modo fix (o -Paso $sig)" }
   elseif (-not $esCob) { Show-SinPasos 'Revisa los avisos del informe, el diff completo de la rama y pasa tu pipeline.' }
@@ -4284,7 +4284,7 @@ switch ($Modo) {
     $hall = @(Invoke-Diagnostico (-not $SinBuild) (-not $SinTests))
     Write-Informe $hall
     Show-Resumen $hall
-    $sig = Get-SiguientePaso $hall
+    $sig = Get-SiguientePasoMotor $hall
     if ($sig) { Info "Siguiente paso recomendado: $sig  ->  -Modo fix -Paso $sig" } else { Bien 'Sin errores.' }
   }
   'pre' { Invoke-Pre }
