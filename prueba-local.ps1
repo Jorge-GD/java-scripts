@@ -1563,9 +1563,18 @@ function Find-Clave($Res, $Probadas) {
   return [pscustomobject]@{ clave = $clave; job = $j; caso = $c; casos = @($casos[$clave]).Count }
 }
 
+# El codigo del migrado en $Commit que cuenta para la clave de una tarea de reparar: el arbol de src/main y el pom.xml (los dos en la raiz de
+# la carpeta, que es donde los busca todo este script: Test-Arreglo solo deja cambiar src/main/ y Save-Arreglo solo lleva src/main). Un commit
+# que solo toca src/test no los cambia. Si falta alguno, vale el commit entero: la clave cambia con cualquier commit, nunca vale de mas.
+function Get-CodigoMigrado([string]$Commit) {
+  $r = Invoke-Git $DirRama @('rev-parse', "${Commit}:src/main", "${Commit}:pom.xml")
+  if ($r.Codigo -ne 0 -or @($r.Salida).Count -ne 2) { return $Commit }
+  return (@($r.Salida) -join '|')
+}
+
 # La tarea de IA que arregla la clave $C en su primer caso, con el resultado $R de ahora, o la de otro lanzamiento si quedo atascada con
-# este mismo HEAD y con este mismo test del migrado (el id lleva los dos: con otro arnes, una clave que salio 'no se arregla' se vuelve a
-# probar). Trabaja en la copia del migrado y puede leer el original y las salidas y entradas del caso.
+# este mismo codigo del migrado (Get-CodigoMigrado) y con este mismo test del migrado (el id lleva los dos: con otro arnes, una clave que salio
+# 'no se arregla' se vuelve a probar). Trabaja en la copia del migrado y puede leer el original y las salidas y entradas del caso.
 function Get-TareaReparar($C, $R, $S) {
   $tc = Get-TareaCaso $C.job $C.caso
   $d = @($R.diferencias | Where-Object { (Get-Normal $_.fichero) -ceq $C.clave })[0]
@@ -1574,14 +1583,27 @@ function Get-TareaReparar($C, $R, $S) {
   $salOrig = Join-Ruta $Local "salidas/original/$($C.job)/$($C.caso)"
   $salMig = Join-Ruta $Local "salidas/$($S.Salidas)/$($C.job)/$($C.caso)"
   $entradas = Join-Ruta $Local "casos/$($C.job)/$($C.caso)"
-  $id = 'reparar-' + (Get-Hash8 "$headMig|$($C.job)|$($C.caso)|$($C.clave)|$(Get-HashGuardado 'migrado' $ArnesMig.entradas.test)")
+  $resto = "$($C.job)|$($C.caso)|$($C.clave)|$(Get-HashGuardado 'migrado' $ArnesMig.entradas.test)"
+  $id = 'reparar-' + (Get-Hash8 ((Get-CodigoMigrado $headMig) + '|' + $resto))
   $prompt = [pscustomobject]@{
     JOB = $C.job; CASO = $C.caso; TITULO = [string]$tc.entradas.titulo; ENTRADA = [string]$tc.entradas.prompt.ENTRADA; ESPERADO = [string]$tc.entradas.prompt.ESPERADO
     FICHERO = $d.fichero; LINEAS = "$($d.lineas)"; LINEA = "$($d.linea)"; ORIGINAL = [string]$d.original; MIGRADO = [string]$d.migrado; OTRAS = ($otras -join "`n")
     RUTA_ORIGINAL = $LegacyRoot; SAL_ORIGINAL = $salOrig; SAL_MIGRADO = $salMig; ENTRADAS = $entradas; DIFF = ''
   }
   $e = [pscustomobject]@{ job = $C.job; caso = $C.caso; clave = $C.clave; copia = $CopiaMig; dirs = @($LegacyRoot, $salOrig, $salMig, $entradas); huella = (Get-Hash8 ((Get-Plantilla 'reparar') + '|' + $id)); prompt = $prompt }
-  $t = Restore-Tarea (New-TareaTipo 'reparar' $id '' "prueba-local/reparar/$id" $e) $true
+  $t = New-TareaTipo 'reparar' $id '' "prueba-local/reparar/$id" $e
+  # Puente de M43: hasta M43 el id llevaba el HEAD en vez del codigo del migrado. Una tarea guardada con ese id del HEAD de ahora (y la plantilla de
+  # ahora: su huella la lleva) es del mismo codigo: se guarda con el id nuevo, con su veredicto, y Restore-Tarea la reutiliza. Quitalo cuando ningun
+  # batch tenga tareas de reparar de antes de M43 (con otro HEAD no vale: no se sabe si el codigo era el mismo).
+  $idViejo = 'reparar-' + (Get-Hash8 "$headMig|$resto")
+  $viejo = Get-TareaGuardada $idViejo
+  if ($idViejo -cne $id -and $viejo -and -not (Get-TareaGuardada $id) -and $viejo.entradas.huella -ceq (Get-Hash8 ((Get-Plantilla 'reparar') + '|' + $idViejo))) {
+    $viejo.id = $id
+    $viejo.salida = $t.salida
+    $viejo.entradas = $e
+    Save-Tarea $viejo
+  }
+  $t = Restore-Tarea $t $true
   $t.entradas.copia = $CopiaMig   # la de ahora, aunque la tarea venga de otro lanzamiento
   return $t
 }
@@ -1735,7 +1757,7 @@ function Repair-Clave($C, $S) {
   $o = [ordered]@{ clave = $C.clave; job = $C.job; caso = $C.caso; casos = $C.casos; resultado = 'no arreglado'; commit = ''; asunto = ''; intentos = 0; motivo = '' }
   if ($t.estado -eq 'atascada') {
     $o.intentos = $t.intentos
-    if ($t.ultimoEstado -eq 'no se arregla') { $o.resultado = 'no se arregla'; $o.motivo = $t.motivo } else { $o.motivo = "ya probado en este commit: $($t.motivo)" }
+    if ($t.ultimoEstado -eq 'no se arregla') { $o.resultado = 'no se arregla'; $o.motivo = $t.motivo } else { $o.motivo = "ya probado con este codigo del migrado: $($t.motivo)" }
     Aviso "$($C.job)/$($C.caso) $($C.clave): $($o.motivo)"
     return $o
   }

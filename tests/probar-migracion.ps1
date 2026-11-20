@@ -2860,7 +2860,7 @@ $Pruebas['93 comparar: un dato distinto sale primero en su job, con las dos cita
   Comprueba 'sin ningun distinto ni falta (la corrida normal) la portada no lo lleva' ((Toca-De (Pagina (Corrida-Comparar '').E.Out 'index.html')) -notmatch 'Diferencias con el original')
 }
 
-$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga cambios sin commit (un fichero tocado y otro movido): la huella es el commit, no los ficheros'] = {
+$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga un fichero tocado sin commit: la huella es el contenido que hay en HEAD (blob), no el disco (m43)'] = {
   $e = Escenario-Dos 'cmp-relanza'
   Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter')
   $r = Migra $e (Basicos $e) $GuionBase
@@ -2869,8 +2869,6 @@ $Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree
   Igual 'la primera vez, tres llamadas de comparar' 3 $antes.Count
   $t0 = Tareas $e 'comparar-pieza'
   Escribe $e.Wt "$RutaMigrado/CargaReader.java" ((Lee $e.Wt "$RutaMigrado/CargaReader.java") + "// cambiado despues`n")
-  [void](GitEn $e.Wt @('mv', "$RutaMigrado/InformeWriter.java", "$RutaMigrado/InformeWriterMovido.java"))
-  [void](GitEn $e.Wt @('add', '-A'))
   $r = Migra $e (Basicos $e) $GuionBase
   Igual 'la segunda sale con 0' 0 $r.Codigo
   $despues = @(Llamadas-De (Llamadas $e.Wt) 'comparar-')
@@ -3313,7 +3311,7 @@ $Pruebas['104 (E2) con corregir, comparar va despues del arreglo: la consola lo 
   Igual 'la fase acaba en hecha' 'hecha' (Estado $e).fase
 }
 
-$Pruebas['105 (E2) con -SoloInforme, comparar va antes de lectura-hecha y dice antes-de-corregir; si luego se corrige se rehace, y una relanzada con -SoloInforme tras corregir sigue diciendo despues'] = {
+$Pruebas['105 (E2) con -SoloInforme, comparar va antes de lectura-hecha y dice antes-de-corregir; si luego se corrige se rehace lo que el arreglo toca (m43: no todo), y una relanzada con -SoloInforme tras corregir sigue diciendo despues'] = {
   $e = Nuevo-Escenario 'orden' @('Utils', 'Conexion')
   Migrado-Con $e @('Utils', 'Conexion')
   $o = Orden-Base
@@ -3331,13 +3329,14 @@ $Pruebas['105 (E2) con -SoloInforme, comparar va antes de lectura-hecha y dice a
   Comprueba 'la comparacion sale antes que el paso de la correccion, que va despues de lectura-hecha' ($cmp -ge 0 -and $par -gt $cmp) (Cola $r.Salida)
   Igual 'la fase acaba en hecha' 'hecha' (Estado $e).fase
   $antes = Llamadas-Comparar $e
-  # ahora se corrige: la comparacion se rehace con el HEAD nuevo y dice despues
+  # ahora se corrige, y el arreglo cambia Utils: se rehace la comparacion de Utils (m43: solo esa, antes eran todas) y todas dicen despues con el HEAD nuevo
+  $o.ficheros = [ordered]@{ "$RutaMigrado/Utils.java" = ((Clase-Migrada 'Utils') + "// arreglado`n") }
   $r = Migra-Motor $e $o (Corrige $e)
   Igual 'corregir despues sale con 0' 0 $r.Codigo
   $fin = Head-Corto $e.Wt
   $cs = @(Comparaciones $e)
   Igual 'ahora el momento es despues-de-corregir' $cs.Count @($cs | Where-Object { $_.momento -ceq 'despues-de-corregir' -and $_.commit -ceq $fin }).Count
-  Comprueba 'se llamo otra vez a Copilot para comparar' ((Llamadas-Comparar $e) -gt $antes) "$antes -> $(Llamadas-Comparar $e)"
+  Igual 'se llamo otra vez a Copilot para comparar una sola vez: la de Utils, el fichero que toca el arreglo (m43; antes, las dos)' ($antes + 1) (Llamadas-Comparar $e)
   $antes = Llamadas-Comparar $e
   # relanzada con -SoloInforme tras una correccion completa: el momento sale de git, no del orden de las fases
   $r = Migra-Motor $e $o (Basicos $e)
@@ -3347,7 +3346,7 @@ $Pruebas['105 (E2) con -SoloInforme, comparar va antes de lectura-hecha y dice a
   Igual 'y no vuelve a llamar a Copilot' $antes (Llamadas-Comparar $e)
 }
 
-$Pruebas['106 (E2) relanzar: el mismo comando no vuelve a comparar; con un commit nuevo en el worktree la comparacion se rehace'] = {
+$Pruebas['106 (E2) relanzar: el mismo comando no vuelve a comparar; un commit nuevo que no toca los ficheros del migrado tampoco (m43); uno que toca un fichero rehace solo su comparacion'] = {
   $e = Nuevo-Escenario 'relanza' @('Utils', 'Conexion')
   Migrado-Con $e @('Utils', 'Conexion')
   $o = Orden-Base
@@ -3363,9 +3362,14 @@ $Pruebas['106 (E2) relanzar: el mismo comando no vuelve a comparar; con un commi
   [void](GitEn $e.Wt @('commit', '-q', '--allow-empty', '-m', 'rescate(estructura): otro arreglo'))
   $r = Migra-Motor $e $o (Corrige $e)
   Igual 'la tercera sale con 0' 0 $r.Codigo
-  Igual 'con un commit nuevo se vuelven a llamar las mismas tareas' (2 * $n1) (Llamadas-Comparar $e)
+  Igual 'con un commit nuevo que no toca los ficheros del migrado no se llama a Copilot (m43; antes se llamaban las mismas tareas)' $n1 (Llamadas-Comparar $e)
   $cs = @(Comparaciones $e)
-  Igual 'y llevan el commit nuevo' $cs.Count @($cs | Where-Object { $_.commit -ceq (Head-Corto $e.Wt) }).Count
+  Igual 'y las comparaciones llevan el commit nuevo' $cs.Count @($cs | Where-Object { $_.commit -ceq (Head-Corto $e.Wt) }).Count
+  Escribe $e.Wt "$RutaMigrado/Utils.java" ((Lee $e.Wt "$RutaMigrado/Utils.java") + "// toca Utils`n")
+  [void](GitEn $e.Wt @('commit', '-q', '-a', '-m', 'rescate(estructura): toca Utils'))
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'la cuarta sale con 0' 0 $r.Codigo
+  Igual 'con un commit que toca Utils se llama una vez mas, la de Utils' ($n1 + 1) (Llamadas-Comparar $e)
 }
 
 $Pruebas['107 (E2) parada en la correccion: no hay comparar despues, sale con 2 y fin lleva la hora'] = {
@@ -6625,6 +6629,145 @@ $Pruebas['m42 (d) ajustes.json con claves de rescate.ps1, prueba-local.ps1 o pre
     }
     Comprueba 'y no lleva una clave inventada' (-not ($claves -ccontains 'Modeloo'))
   }
+}
+
+# ===================== M43: UN COMMIT QUE NO TOCA LO QUE SE MIRO NO REPITE COMPARAR =====================
+# La huella de una comparacion es la ficha mas el contenido de los ficheros del migrado que se le dan (su hash de blob en el HEAD del
+# worktree), no el HEAD: un commit que no toca esos ficheros no repite la llamada a Copilot. Una tarea guardada con la huella de antes
+# (ficha y HEAD) vale si el HEAD es el mismo.
+
+function Hash8-M43([string]$Texto) {
+  $sha = [System.Security.Cryptography.SHA1]::Create()
+  try { $b = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Texto)) } finally { $sha.Dispose() }
+  return ((@($b[0..3]) | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# Una corrida hasta comparar: tres clases migradas (CargaReader, CargaValidator, InformeWriter), una llamada de comparar por cada una.
+function M43-Corrida([string]$Nombre) {
+  $e = Escenario-Dos $Nombre
+  Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter')
+  return [pscustomobject]@{ E = $e; R = (Migra $e (Basicos $e) $GuionBase) }
+}
+
+function M43-Llamadas($E) { return @(Llamadas-De (Llamadas $E.Wt) 'comparar-') }
+
+# Un commit en el worktree con $Rel = $Texto.
+function M43-Commit($E, [string]$Rel, [string]$Texto) {
+  Escribe $E.Wt $Rel $Texto
+  [void](GitEn $E.Wt @('add', '--', $Rel))
+  [void](GitEn $E.Wt @('commit', '-q', '-m', "m43: $Rel"))
+}
+
+# La huella que le toca a una tarea de comparar: el texto de la ficha y, de cada fichero del migrado, su blob en el HEAD del worktree.
+function M43-Huella($E, $T) {
+  $partes = @($T.entradas.migrado | ForEach-Object { $_ + '=' + (GitEn $E.Wt @('rev-parse', "HEAD:$_")) })
+  return (Hash8-M43 (($T.entradas.datos + '|' + ($partes -join '|'))))
+}
+
+# Deja las tareas de comparar como las dejo la version de antes de M43: la huella era Hash8(texto | HEAD). Devuelve esas huellas.
+function M43-Huellas-Viejas($E) {
+  $head = GitEn $E.Wt @('rev-parse', 'HEAD')
+  $h = @{}
+  foreach ($t in @(Tareas $E 'comparar-pieza')) {
+    $t.entradas.huella = Hash8-M43 ($t.entradas.datos + '|' + $head)
+    $h[$t.id] = $t.entradas.huella
+    Guarda-Json (Get-Ruta $E.Out ('datos/tareas/' + $t.id + '.json')) $t
+  }
+  return $h
+}
+
+$PruebaM43 = "package com.acme.life;`n`nclass CargaReaderTest {`n}`n"
+
+$Pruebas['m43 (a) comparar: un commit que solo cambia un fichero de src/test no repite ninguna comparacion: 0 llamadas nuevas, y las tareas llevan la huella del contenido y el commit de ahora'] = {
+  $c = M43-Corrida 'm43-a'
+  $e = $c.E
+  Igual 'la primera sale con 0' 0 $c.R.Codigo
+  Igual 'la primera vez, tres llamadas de comparar' 3 (M43-Llamadas $e).Count
+  $t0 = Tareas $e 'comparar-pieza'
+  M43-Commit $e 'src/test/java/com/acme/life/CargaReaderTest.java' $PruebaM43
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'ninguna llamada nueva de comparar' 3 (M43-Llamadas $e).Count
+  $t1 = Tareas $e 'comparar-pieza'
+  Igual 'las tareas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  Igual 'la huella no ha cambiado' ((@($t0 | ForEach-Object { $_.entradas.huella })) -join ',') ((@($t1 | ForEach-Object { $_.entradas.huella })) -join ',')
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M43-Huella $e $_) })
+  Igual 'y es Hash8(texto | ruta=blob de cada fichero del migrado)' 0 $mal.Count
+  Igual 'el commit que ensenan es el HEAD de ahora' $t1.Count @($t1 | Where-Object { $_.entradas.commit -ceq (Head-Corto $e.Wt) }).Count
+}
+
+$Pruebas['m43 (b) comparar: un commit que cambia un fichero del migrado que mira una sola ficha rehace solo esa comparacion, con una llamada'] = {
+  $c = M43-Corrida 'm43-b'
+  $e = $c.E
+  Igual 'la primera vez, tres llamadas de comparar' 3 (M43-Llamadas $e).Count
+  $t0 = Tareas $e 'comparar-pieza'
+  $lector = Tarea-Clase $e 'CargaReader'
+  M43-Commit $e "$RutaMigrado/CargaReader.java" ((Lee $e.Wt "$RutaMigrado/CargaReader.java") + "// cambiado despues`n")
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  $ll = @(M43-Llamadas $e)
+  Igual 'una sola llamada mas' 4 $ll.Count
+  Igual 'y es la de la ficha de CargaReader: dos llamadas, y una cada una de las otras' $true (@($ll | Where-Object { $_.id -ceq $lector.id }).Count -eq 2 -and @($ll | Where-Object { $_.id -cne $lector.id }).Count -eq 2)
+  $t1 = Tareas $e 'comparar-pieza'
+  Igual 'todas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  $viejas = @{}
+  foreach ($t in $t0) { $viejas[$t.id] = $t.entradas.huella }
+  $distintas = @($t1 | Where-Object { $_.entradas.huella -cne $viejas[$_.id] } | ForEach-Object { $_.entradas.clase })
+  Igual 'solo cambia la huella de CargaReader' 'CargaReader' ($distintas -join ',')
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M43-Huella $e $_) })
+  Igual 'y todas llevan la huella del contenido de ahora' 0 $mal.Count
+}
+
+$Pruebas['m43 (c) comparar: tareas guardadas con la huella de antes (texto y HEAD) y el mismo HEAD: ninguna llamada, y quedan con la huella nueva'] = {
+  $c = M43-Corrida 'm43-c'
+  $e = $c.E
+  Igual 'la primera vez, tres llamadas de comparar' 3 (M43-Llamadas $e).Count
+  $viejas = M43-Huellas-Viejas $e
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'ninguna llamada nueva de comparar' 3 (M43-Llamadas $e).Count
+  $t1 = Tareas $e 'comparar-pieza'
+  Igual 'las tareas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  Igual 'ya no llevan la huella vieja' 0 @($t1 | Where-Object { $_.entradas.huella -ceq $viejas[$_.id] }).Count
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M43-Huella $e $_) })
+  Igual 'sino la del contenido' 0 $mal.Count
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'y una tercera tampoco llama' 3 (M43-Llamadas $e).Count
+}
+
+$Pruebas['m43 (d) comparar: tareas guardadas con la huella de antes y otro HEAD: se rehacen todas; el puente no da por buena una comparacion de otro codigo'] = {
+  $c = M43-Corrida 'm43-d'
+  $e = $c.E
+  Igual 'la primera vez, tres llamadas de comparar' 3 (M43-Llamadas $e).Count
+  $viejas = M43-Huellas-Viejas $e
+  M43-Commit $e 'src/test/java/com/acme/life/CargaReaderTest.java' $PruebaM43
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'se vuelven a llamar las tres' 6 (M43-Llamadas $e).Count
+  $t1 = Tareas $e 'comparar-pieza'
+  Igual 'quedan hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  $mal = @($t1 | Where-Object { $_.entradas.huella -cne (M43-Huella $e $_) })
+  Igual 'con la huella del contenido' 0 $mal.Count
+}
+
+$Pruebas['m43 (h) comparar: si cambia la lista de ficheros del migrado de una ficha (un fichero movido y commiteado), cambia su huella y se rehace solo esa comparacion'] = {
+  $c = M43-Corrida 'm43-h'
+  $e = $c.E
+  Igual 'la primera vez, tres llamadas de comparar' 3 (M43-Llamadas $e).Count
+  $t0 = Tareas $e 'comparar-pieza'
+  [void](GitEn $e.Wt @('mv', "$RutaMigrado/InformeWriter.java", "$RutaMigrado/InformeWriterMovido.java"))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'm43: mueve InformeWriter'))
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  $ll = @(M43-Llamadas $e)
+  Igual 'una sola llamada mas' 4 $ll.Count
+  $informe = Tarea-Clase $e 'InformeWriter'
+  Igual 'la de la ficha de InformeWriter: dos llamadas, y una cada una de las otras' $true (@($ll | Where-Object { $_.id -ceq $informe.id }).Count -eq 2 -and @($ll | Where-Object { $_.id -cne $informe.id }).Count -eq 2)
+  Igual 'que ahora mira el fichero nuevo' "$RutaMigrado/InformeWriterMovido.java" (@($informe.entradas.migrado) -join ',')
+  $t1 = Tareas $e 'comparar-pieza'
+  Igual 'todas siguen hechas' $t1.Count (Cuenta-Estado $t1 'hecha')
+  $r = Migra $e (Basicos $e) $GuionBase
+  Igual 'y la tercera vez no llama' 4 (M43-Llamadas $e).Count
 }
 
 # ================================ LANZADOR ================================
