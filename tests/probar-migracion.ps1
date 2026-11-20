@@ -2860,7 +2860,7 @@ $Pruebas['93 comparar: un dato distinto sale primero en su job, con las dos cita
   Comprueba 'sin ningun distinto ni falta (la corrida normal) la portada no lo lleva' ((Toca-De (Pagina (Corrida-Comparar '').E.Out 'index.html')) -notmatch 'Diferencias con el original')
 }
 
-$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga cambios sin commit (un fichero tocado y otro movido): la huella es el commit, no los ficheros'] = {
+$Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree tenga los cambios sin commit de un intento cortado (un fichero tocado y otro movido, que van a un git stash): la huella es el commit, no los ficheros'] = {
   $e = Escenario-Dos 'cmp-relanza'
   Migrado-Con $e @('CargaReader', 'CargaValidator', 'InformeWriter')
   $r = Migra $e (Basicos $e) $GuionBase
@@ -2871,8 +2871,11 @@ $Pruebas['94 comparar: relanzar no repite ninguna tarea hecha aunque el worktree
   Escribe $e.Wt "$RutaMigrado/CargaReader.java" ((Lee $e.Wt "$RutaMigrado/CargaReader.java") + "// cambiado despues`n")
   [void](GitEn $e.Wt @('mv', "$RutaMigrado/InformeWriter.java", "$RutaMigrado/InformeWriterMovido.java"))
   [void](GitEn $e.Wt @('add', '-A'))
+  # M41: lo sin commit solo se aparta al arrancar si es de un intento cortado (marca con el commit del HEAD); si no, el arranque se para
+  Escribe $e.Wt '.rescate/intento-en-curso.json' ('{"paso":"comparar","lote":1,"commit":"' + (M38-Head $e.Wt) + '"}')
   $r = Migra $e (Basicos $e) $GuionBase
   Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'lo sin commit esta en un git stash y el worktree limpio' '1 ' ((@((GitEn $e.Wt @('stash', 'list')) -split "`n" | Where-Object { $_ }).Count).ToString() + ' ' + (GitEn $e.Wt @('status', '--porcelain')))
   $despues = @(Llamadas-De (Llamadas $e.Wt) 'comparar-')
   Igual 'la segunda vez no hay ninguna llamada mas de comparar' 3 $despues.Count
   $t1 = Tareas $e 'comparar-pieza'
