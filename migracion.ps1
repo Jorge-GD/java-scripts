@@ -56,8 +56,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 renombrado o por las lineas que se llevaron; y si no, los que comparten palabras con la clase) y dice, dato a
                 dato, si estan igual, distintos o faltan; las citas las comprueba el script: datos\comparacion\<ficha>.json, con el
                 commit del worktree y el momento (antes-de-corregir o despues-de-corregir, segun git). Sin ficheros del migrado
-                no hay llamada y sus datos salen 'sin-pieza'. Es una lectura sin cambiar nada. Se rehace si el worktree tiene un
-                commit nuevo. Con lanzadores hay ademas una tarea por script: la IA busca en el migrado lo que hacia cada accion
+                no hay llamada y sus datos salen 'sin-pieza'. Es una lectura sin cambiar nada. Se rehace solo si cambian los
+                ficheros del migrado que mira (o cuales son), no por cualquier commit nuevo. Con lanzadores hay ademas una tarea por script: la IA busca en el migrado lo que hacia cada accion
                 del .sh (los ficheros donde buscar los elige el script) y dice igual, distinto, falta o no lo se, con citas de los dos
                 lados: datos\comparacion-sh\<id>.json. Las acciones que no se parecen a nada del migrado salen en falta sin llamada.
     practicas   solo con -Practicas, despues de la correccion (y de comparar) y antes de prueba-local: pasa a Lombok los getters y setters
