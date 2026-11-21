@@ -1,7 +1,7 @@
 <#
 revision.ps1 - Revision del arbol final por flujos (pieza C3 del cierre): una llamada pequena a Copilot por unidad (un step con sus piezas, o un
 fichero suelto) que revisa solo contra un catalogo cerrado de reglas y devuelve como mucho 5 hallazgos con cita. El script tira lo que no se puede
-comprobar. Solo lee: no cambia codigo. No se ejecuta solo: solo funciones. Se carga con '. (Join-Path $PSScriptRoot 'revision.ps1')' despues de
+comprobar. Solo lee: no cambia codigo (la plantilla lo dice; lo que toque una ronda lo deshace Invoke-Fase). No se ejecuta solo: solo funciones. Se carga con '. (Join-Path $PSScriptRoot 'revision.ps1')' despues de
 comun.ps1, tareas.ps1 y practicas.ps1 (Get-JavaFiles, Get-Rel, Join-Ruta, Invoke-Git, Get-Head, Get-NombreJob, Get-ClaveFichero, Get-BlobsHead,
 Restore-Tarea, Set-CitasProbadas, Test-LineaCita, Get-JavaSinComentarios, Get-ArgumentosLlamada). Solo ASCII: los textos con tilde van como \uXXXX.
 Vale para Windows PowerShell 5.1 y para PowerShell 7. Es un tipo de tarea mas del motor de tareas.ps1: 'revision-flujo' (plantilla tareas\revision-flujo.md).
@@ -11,14 +11,13 @@ Vale para Windows PowerShell 5.1 y para PowerShell 7. Es un tipo de tarea mas de
   Get-UnidadesRevision      las unidades { id, tipo (step o fichero), nombre, ficheros, sinResolver }, en orden estable.
   Get-TareasRevision        las tareas revision-flujo (con huella: una tarea hecha con la misma huella no se vuelve a pedir).
   Test-Revision             la comprobacion de lo que escribe Copilot (la llama Test-Salida de tareas.ps1).
-  Save-Revision             datos\revision.json.
+  Save-Revision             datos\revision.json, con un hallazgo por regla, fichero y linea (el de la primera unidad).
   Get-AvisoRevision         el aviso de antes de empezar.
   Get-LineaRevision         la linea de consola de despues.
-  Restore-ArbolRevision     deja el worktree como en HEAD tras una ronda (la IA solo lee).
 
   Unidades. Un step es cada 'new StepBuilder(' de un .java de src/main/java (sin comentarios): su nombre es el primer argumento si es una cadena
-  literal y, si no, <Fichero>-<n>; su cadena va hasta el primer '.build()' (o ';') al nivel de la cadena, sin contar los de dentro de un
-  argumento. De cada .reader(, .processor(, .writer(, .tasklet( y .listener( de la cadena sale un nombre (de 'new X(...)', X; de 'x(...)' o 'x', x),
+  literal y, si no, <Fichero>-<n>; su cadena va hasta el primer ';' al nivel de la cadena (o hasta el siguiente step), sin contar los de dentro de un
+  argumento ni de una lambda. De cada .reader(, .processor(, .writer(, .tasklet( y .listener( de la cadena sale un nombre (de 'new X(...)', X; de 'x(...)' o 'x', x),
   que se resuelve a un fichero por (a) la clase X o x con la primera en mayuscula, (b) un metodo @Bean x (la clase de su tipo de vuelta o, si no esta,
   el fichero del metodo), (c) un campo o parametro 'Tipo x' del mismo fichero; si no, va a sinResolver. Como mucho 6 ficheros por step (el del
   step primero); los demas, si estan en el alcance, van sueltos. Los .java del alcance que no estan en ningun step son unidades 'fichero'.
@@ -109,14 +108,12 @@ function Test-PapelRevision([string]$Codigo) {
   return ($Codigo -cmatch '\b(?:implements|extends)\s+[^{;]*?\b(?:\w*Item(?:Reader|Processor|Writer)|ItemStream\w*|Tasklet|\w*Listener)\b|@(?:Configuration|StepScope|JobScope|BeforeStep|AfterStep|BeforeJob|AfterJob)\b|\bnew\s+(?:StepBuilder|JobBuilder)\s*\(')
 }
 
-# De la '(' de 'new StepBuilder(' en $Ini (sobre codigo sin comentarios) hasta $Tope: donde acaba la cadena del step (el primer '.build()' o ';' al
-# nivel de la cadena: ni los de dentro de un argumento ni los de una lambda la cortan) y sus llamadas .reader(, .processor(, .writer(, .tasklet( y
-# .listener( de ese nivel, con el indice de su '('.
+# Las llamadas .reader(, .processor(, .writer(, .tasklet( y .listener( de la cadena del step que empieza en $Ini (la '(' de 'new StepBuilder(', sobre codigo
+# sin comentarios), cada una con el indice de su '('. Solo las del nivel de la cadena (ni las de dentro de un argumento ni las de una lambda cuentan), hasta
+# el primer ';' a ese nivel o hasta $Tope.
 function Get-CadenaStep([string]$T, [int]$Ini, [int]$Tope) {
-  $rxFin = [regex]'\G\.\s*build\s*\(\s*\)'
   $rxLlamada = [regex]'\G\.\s*(?:reader|processor|writer|tasklet|listener)\s*\('
   $llamadas = @()
-  $fin = $Tope
   $nivel = 0
   $i = $Ini
   while ($i -lt $Tope) {
@@ -127,16 +124,14 @@ function Get-CadenaStep([string]$T, [int]$Ini, [int]$Tope) {
     }
     elseif ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $nivel++ }
     elseif ($c -eq ')' -or $c -eq ']' -or $c -eq '}') { $nivel-- }
-    elseif ($nivel -eq 0 -and $c -eq ';') { $fin = $i; break }
+    elseif ($nivel -eq 0 -and $c -eq ';') { break }
     elseif ($nivel -eq 0 -and $c -eq '.') {
-      $b = $rxFin.Match($T, $i)
-      if ($b.Success) { $fin = $i + $b.Length; break }
       $m = $rxLlamada.Match($T, $i)
       if ($m.Success) { $llamadas += $m.Index + $m.Length - 1 }
     }
     $i++
   }
-  return [pscustomobject]@{ Fin = $fin; Llamadas = @($llamadas) }
+  return $llamadas
 }
 
 # El nombre que sale de un argumento: de 'new X(...)', X; de 'x(...)' o 'x' (con o sin 'esto.' delante), x. '' si no es ninguna de las dos formas (una lambda...).
@@ -159,9 +154,10 @@ function Get-StepsFichero($F) {
     $a = Get-ArgumentosLlamada $t ($m.Index + $m.Length - 1)
     if ($null -ne $a -and @($a).Count -gt 0 -and $a[0] -cmatch '^"((?:[^"\\]|\\.)*)"$') { $nombre = $Matches[1] }
     $tope = $t.Length
+    # la cadena no pasa del siguiente 'new StepBuilder(': acota lo que se recorre (sin ';' al nivel de la cadena seguiria hasta el final del fichero)
     if ($i + 1 -lt $abre.Count) { $tope = $abre[$i + 1].Index }
     $nombres = @()
-    foreach ($abrePieza in @((Get-CadenaStep $t $m.Index $tope).Llamadas)) {
+    foreach ($abrePieza in @(Get-CadenaStep $t $m.Index $tope)) {
       $arg = Get-ArgumentosLlamada $t $abrePieza
       if ($null -eq $arg -or @($arg).Count -eq 0) { continue }
       $n = Get-NombreArgumento $arg[0]
@@ -228,7 +224,7 @@ function Get-UnidadesRevision([string]$Dir, [string]$Base, [bool]$Todo, [string[
       }
       $ficheros = @($ficheros | Select-Object -First ([int]$Cfg.RevisionFicherosMax))
       foreach ($x in $ficheros) { $enStep[$x] = $true }
-      if (@($ficheros | Where-Object { $enAlcance.ContainsKey($_) }).Count -gt 0) { $crudas += [pscustomobject]@{ tipo = 'step'; nombre = $s.Nombre; ficheros = $ficheros; sinResolver = $sin } }
+      $crudas += [pscustomobject]@{ tipo = 'step'; nombre = $s.Nombre; ficheros = $ficheros; sinResolver = $sin }
     }
   }
   foreach ($f in $fuentes) {
@@ -329,43 +325,45 @@ function Test-Revision($T, [string]$Dir) {
 }
 
 # ================================ SALIDA ================================
-# Cuantos hallazgos (los que se quedan) y cuantos descartados llevan las tareas hechas de $Tareas.
-function Get-CuentasRevision($Tareas) {
-  $h = 0
-  $d = 0
-  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
-    foreach ($x in $t.resultado.hallazgos) { $h++ }
-    foreach ($x in $t.resultado.descartados) { $d++ }
-  }
-  return [pscustomobject]@{ Hallazgos = $h; Descartados = $d }
-}
-
-# Escribe datos\revision.json con lo de las tareas hechas: los hallazgos en orden de unidad, de fichero dentro de la unidad y de linea. Sin tareas hechas,
-# los hallazgos van vacios y quedan las cuentas.
-function Save-Revision($Tareas) {
-  $todas = @($Tareas | Where-Object { $null -ne $_ })
-  $catalogo = @(Get-ReglasRevision)
+# Los hallazgos de las tareas hechas para revision.json, en orden de unidad (el de las tareas), de fichero dentro de la unidad y de linea, y uno solo por regla,
+# fichero y linea: un fichero que esta en dos steps sale en las dos unidades con el mismo hallazgo, y se queda el de la primera.
+function Get-HallazgosRevision($Tareas) {
   $titulos = @{}
-  foreach ($r in $catalogo) { $titulos[$r.id] = $r.titulo }
-  $hallazgos = @()
-  foreach ($t in @($todas | Where-Object { $_.estado -eq 'hecha' })) {
+  foreach ($r in @(Get-ReglasRevision)) { $titulos[$r.id] = $r.titulo }
+  $vistos = New-Object 'System.Collections.Generic.HashSet[string]'
+  $lista = @()
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
     $orden = @($t.entradas.ficheros)
-    $lista = @()
+    $suyos = @()
     $n = 0
-    foreach ($h in $t.resultado.hallazgos) { $lista += [pscustomobject]@{ H = $h; F = [array]::IndexOf($orden, [string]$h.fichero); L = [int]$h.linea; N = $n }; $n++ }
-    foreach ($x in @($lista | Sort-Object F, L, N)) {
+    foreach ($h in $t.resultado.hallazgos) { $suyos += [pscustomobject]@{ H = $h; F = [array]::IndexOf($orden, [string]$h.fichero); L = [int]$h.linea; N = $n }; $n++ }
+    foreach ($x in @($suyos | Sort-Object F, L, N)) {
       $h = $x.H
-      $hallazgos += [ordered]@{ regla = $h.regla; titulo = $titulos[[string]$h.regla]; fichero = $h.fichero; linea = [int]$h.linea; cita = $h.cita; texto = $h.texto; unidad = $t.id; probado = $true }
+      if (-not $vistos.Add("$($h.regla)|$($h.fichero)|$([int]$h.linea)")) { continue }
+      $lista += [ordered]@{ regla = $h.regla; titulo = $titulos[[string]$h.regla]; fichero = $h.fichero; linea = [int]$h.linea; cita = $h.cita; texto = $h.texto; unidad = $t.id; probado = $true }
     }
   }
+  return $lista
+}
+
+# Cuantos hallazgos (los que quedan en revision.json) y cuantos descartados llevan las tareas hechas de $Tareas.
+function Get-CuentasRevision($Tareas) {
+  $d = 0
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) { foreach ($x in $t.resultado.descartados) { $d++ } }
+  return [pscustomobject]@{ Hallazgos = @(Get-HallazgosRevision $Tareas).Count; Descartados = $d }
+}
+
+# Escribe datos\revision.json con lo de las tareas hechas (Get-HallazgosRevision). Sin tareas hechas, los hallazgos van vacios y quedan las cuentas.
+function Save-Revision($Tareas) {
+  $todas = @($Tareas | Where-Object { $null -ne $_ })
   $cuentas = Get-CuentasTareas $todas
   $commit = ''
   $todo = $false
   if ($todas.Count -gt 0) { $commit = [string]$todas[0].entradas.commit; $todo = [bool]$todas[0].entradas.todo }
   Write-Json (Join-Path $Datos 'revision.json') ([ordered]@{
       commit = $commit; todo = $todo; unidades = $todas.Count; hechas = $cuentas.hecha; atascadas = $cuentas.atascada
-      reglas = @($catalogo | ForEach-Object { [ordered]@{ id = $_.id; titulo = $_.titulo } })
-      hallazgos = @($hallazgos); descartados = (Get-CuentasRevision $todas).Descartados
+      reglas = @(Get-ReglasRevision | ForEach-Object { [ordered]@{ id = $_.id; titulo = $_.titulo } })
+      hallazgos = @(Get-HallazgosRevision $todas); descartados = (Get-CuentasRevision $todas).Descartados
     })
 }
 
@@ -381,37 +379,4 @@ function Get-LineaRevision($Tareas) {
   $n = Get-CuentasTareas $todas
   $c = Get-CuentasRevision $todas
   return "Revision por flujos: $($n.hecha) hechas, $($n.atascada) atascadas, $($n.pendiente) pendientes; $($c.Hallazgos) hallazgos ($($c.Descartados) descartados por no poder comprobarlos)."
-}
-
-# ================================ SOLO LEE ================================
-# Tras una ronda, deja el worktree $Dir como en HEAD fuera de .rescate\: lo seguido que cambio (en el disco o en el indice) vuelve a como esta en HEAD y lo nuevo se
-# borra. Avisa en una linea con las rutas y las devuelve (ninguna, si no habia nada).
-function Restore-ArbolRevision([string]$Dir) {
-  $st = Invoke-Git $Dir @('-c', 'core.quotepath=off', 'status', '--porcelain', '--untracked-files=all')
-  if ($st.Codigo -ne 0) { return }
-  $tocados = @()
-  foreach ($l in @($st.Salida)) {
-    if ("$l".Length -lt 4) { continue }
-    $x = "$l".Substring(0, 2)
-    $rutas = @("$l".Substring(3) -split ' -> ' | ForEach-Object { $_.Trim('"') })
-    # un renombrado: la vieja se recupera de HEAD y la nueva se borra
-    for ($k = 0; $k -lt $rutas.Count; $k++) {
-      $ruta = $rutas[$k]
-      if ($ruta -cmatch '^\.rescate(/|$)') { continue }
-      $nueva = ($x[0] -ceq '?' -or $x[0] -ceq 'A' -or ($rutas.Count -eq 2 -and $k -eq 1))
-      if ($nueva) {
-        [void](Invoke-Git $Dir @('rm', '-q', '-f', '--cached', '--ignore-unmatch', '--', $ruta))
-        $f = Join-Ruta $Dir $ruta
-        if (Test-Path -LiteralPath $f -PathType Leaf) { Remove-Item -LiteralPath $f -Force }
-      }
-      else { [void](Invoke-Git $Dir @('checkout', '-q', 'HEAD', '--', $ruta)) }
-      $tocados += $ruta
-    }
-  }
-  if ($tocados.Count -gt 0) {
-    $muestra = (@($tocados | Select-Object -First 8) -join ', ')
-    if ($tocados.Count -gt 8) { $muestra += " y $($tocados.Count - 8) mas" }
-    Aviso "La revision ha tocado ficheros del repositorio (solo lee) y los he dejado como estaban: $muestra."
-  }
-  return $tocados
 }

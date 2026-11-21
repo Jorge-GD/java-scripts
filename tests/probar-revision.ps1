@@ -733,7 +733,7 @@ public class DobleConfig {
 
   @Bean
   @StepScope
-  public FlatFileItemReader<Recibo> lector() {
+  public FlatFileItemReader<Recibo> lectorListener() {
     return new FlatFileItemReader<>();
   }
 }
@@ -743,21 +743,22 @@ $Pruebas['24 m) hallazgos repetidos: un fichero en dos steps da el mismo hallazg
   $f = $P + 'DobleConfig.java'
   $resp = @{
     'revision-primero.json' = (Salida @(
-        (Hallazgo @{ fichero = $f; linea = 16; cita = 'public FlatFileItemReader<Recibo> lector()'; texto = 'De primero.' }),
+        (Hallazgo @{ fichero = $f; linea = 16; cita = 'public FlatFileItemReader<Recibo> lectorListener()'; texto = 'De primero.' }),
         (Hallazgo @{ regla = 'SB-TRANSACCION'; fichero = $f; linea = 6; cita = '.tasklet(uno(), tm)'; texto = 'Uno.' })))
     'revision-segundo.json' = (Salida @(
-        (Hallazgo @{ fichero = $f; linea = 16; cita = 'public FlatFileItemReader<Recibo> lector()'; texto = 'De segundo.' }),
+        (Hallazgo @{ fichero = $f; linea = 16; cita = 'public FlatFileItemReader<Recibo> lectorListener()'; texto = 'De segundo.' }),
+        (Hallazgo @{ regla = 'SB-LISTENER'; fichero = $f; linea = 16; cita = 'lectorListener()'; texto = 'Otra regla en la misma linea.' }),
         (Hallazgo @{ regla = 'SB-TRANSACCION'; fichero = $f; linea = 11; cita = '.tasklet(dos(), tm)'; texto = 'Dos.' })))
   }
   $e = Nuevo-Escenario 'm1' @{ $f = $JavaDoble } $resp
   $t = @(Pasada $e)
   Igual 'las dos unidades, hechas' 'hecha,hecha' (($t | ForEach-Object { $_.estado }) -join ',')
-  Igual 'cada una conserva sus dos hallazgos en su tarea' '2,2' (($t | ForEach-Object { @($_.resultado.hallazgos).Count }) -join ',')
+  Igual 'cada una conserva sus hallazgos en su tarea' '2,3' (($t | ForEach-Object { @($_.resultado.hallazgos).Count }) -join ',')
   $j = Lee-Json $e.Json
-  Igual 'revision.json: tres hallazgos, el repetido una vez' 3 @($j.hallazgos).Count
-  Igual 'en orden de unidad y de linea' 'primero:6,primero:16,segundo:11' ((@($j.hallazgos) | ForEach-Object { ($_.unidad -replace '^revision-', '') + ':' + $_.linea }) -join ',')
+  Igual 'revision.json: cuatro hallazgos, el repetido una vez' 4 @($j.hallazgos).Count
+  Igual 'en orden de unidad y de linea' 'primero:6,primero:16,segundo:11,segundo:16' ((@($j.hallazgos) | ForEach-Object { ($_.unidad -replace '^revision-', '') + ':' + $_.linea }) -join ',')
   Igual 'el repetido es el de la primera unidad' 'De primero.' @($j.hallazgos | Where-Object { $_.linea -eq 16 })[0].texto
-  Igual 'la consola cuenta los que quedan' 'Revision por flujos: 2 hechas, 0 atascadas, 0 pendientes; 3 hallazgos (0 descartados por no poder comprobarlos).' (Get-LineaRevision $t)
+  Igual 'la consola cuenta los que quedan' 'Revision por flujos: 2 hechas, 0 atascadas, 0 pendientes; 4 hallazgos (0 descartados por no poder comprobarlos).' (Get-LineaRevision $t)
 }
 
 $JavaCadena = @'
