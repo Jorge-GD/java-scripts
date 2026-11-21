@@ -15,10 +15,19 @@ cada ronda (hasta $Cfg.Paralelo ficheros a la vez, en el mismo worktree) se desh
 y se compara con la foto (Compare-Huella). Cada fichero cuyas clases (X.class y X$*.class) son iguales se commitea ('practica(lombok): <ruta>'); el
 que no, se deja como estaba y vuelve a pendiente con el motivo (las partes de la huella que cambian); al segundo fallo queda atascado. Si la ronda
 no compila, o la diferencia no es de ningun fichero suyo, se prueba cada fichero con su cambio solo. Un fichero que la IA no cambia queda hecho 'sin
-cambios'. Sin getters ni setters a mano no hay llamadas. Sin Lombok en el pom, un aviso y nada mas. Deja datos\practicas-arreglos.json (por fichero:
+cambios'. Sin getters ni setters a mano no hay llamadas. Sin Lombok en el pom, lo anade antes de empezar (Add-LombokAlPom: el bloque <dependency> del
+pom de la referencia, o uno por defecto; y en annotationProcessorPaths, si el pom lo tiene), comprueba que compila y lo commitea ('practica(lombok): anade
+Lombok al pom.xml'); si no compila, deja el pom como estaba, un aviso y nada mas. Deja datos\practicas-arreglos.json (por fichero:
 estado, commit y motivo) y la linea 'Buenas practicas: N ficheros pasados a Lombok, M atascados, K sin cambios'. Paradas: no-compila (el migrado
 no compila antes de empezar), git (un commit falla), copilot-no-responde, tope-de-tiempo (-MaxHoras) y otro (no hay javap).
 #>
+
+# ============================ CONFIGURACION ============================
+$Cfg += @{
+  # La version de Lombok que se pone en el pom.xml solo si la referencia no lo declara y el padre del migrado no es spring-boot-starter-parent (que
+  # la gestiona). Es la ultima estable de org.projectlombok:lombok en Maven Central (maven-metadata.xml, <release>, 21-11-2026).
+  LombokVersion = '1.18.48'
+}
 
 # ================================ DATOS ================================
 # El asunto del commit de un fichero pasado a Lombok. Con '' es el comienzo que tienen todos (para reconocerlos).
@@ -39,19 +48,186 @@ function Get-FicherosLombok {
   return $por
 }
 
-# El migrado usa Lombok: algun pom.xml suyo (el de la raiz o el de un modulo) lo declara como dependencia.
-function Test-PomLombok {
+# Los pom.xml de un repo: el de la raiz y los de sus modulos (no mira .git, .rescate, target, node_modules ni src).
+function Get-PomsDe([string]$Raiz) {
+  $poms = New-Object System.Collections.Generic.List[string]
   $pila = New-Object System.Collections.Generic.Stack[string]
-  $pila.Push($RepoRoot)
+  $pila.Push($Raiz)
   while ($pila.Count -gt 0) {
     $d = $pila.Pop()
     $pom = Join-Path $d 'pom.xml'
-    if ((Test-Path -LiteralPath $pom -PathType Leaf) -and [System.IO.File]::ReadAllText($pom) -match '(?s)<groupId>\s*org\.projectlombok\s*</groupId>\s*<artifactId>\s*lombok\s*</artifactId>') { return $true }
-    foreach ($s in @(Get-ChildItem -LiteralPath $d -Directory)) {
+    if (Test-Path -LiteralPath $pom -PathType Leaf) { $poms.Add($pom) }
+    foreach ($s in @(Get-ChildItem -LiteralPath $d -Directory | Sort-Object Name -Descending)) {
       if (@('.git', '.rescate', 'target', 'node_modules', 'src') -notcontains $s.Name) { $pila.Push($s.FullName) }
     }
   }
+  return $poms.ToArray()
+}
+
+# El migrado usa Lombok: algun pom.xml suyo (el de la raiz o el de un modulo) lo declara como dependencia.
+function Test-PomLombok {
+  foreach ($pom in @(Get-PomsDe $RepoRoot)) {
+    if ([System.IO.File]::ReadAllText($pom) -match '(?s)<groupId>\s*org\.projectlombok\s*</groupId>\s*<artifactId>\s*lombok\s*</artifactId>') { return $true }
+  }
   return $false
+}
+
+# ============================== LOMBOK EN EL POM ==============================
+# El texto de un pom sin lo que no cuenta al buscar (comentarios, CDATA y dependencyManagement, que pasan a espacios): con el mismo largo, para usar
+# sus indices en el texto de verdad.
+function Get-PomLimpio([string]$Texto) {
+  return [regex]::Replace($Texto, '(?s)<!--.*?-->|<!\[CDATA\[.*?\]\]>|<dependencyManagement>.*?</dependencyManagement>', { param($m) ' ' * $m.Length })
+}
+
+# Donde esta <dependencies> directamente dentro de <project> (no la de un plugin, un perfil ni dependencyManagement): el indice de su etiqueta de
+# apertura (Abre) y el de la de cierre (Cierra). Un <dependencies> no lleva otro dentro: al cerrar uno con solo <project> abierto, la ultima apertura
+# es la suya. $null si el pom no la tiene. $Limpio es Get-PomLimpio del pom.
+function Find-DependenciasPom([string]$Limpio) {
+  $pila = New-Object System.Collections.Generic.List[string]
+  $abre = -1
+  foreach ($m in [regex]::Matches($Limpio, '<(?<c>/?)(?<n>[A-Za-z_][\w.:-]*)[^>]*?(?<s>/?)>')) {
+    $n = $m.Groups['n'].Value
+    if ($m.Groups['s'].Value) { continue }
+    if (-not $m.Groups['c'].Value) {
+      if ($n -ceq 'dependencies') { $abre = $m.Index }
+      $pila.Add($n)
+    }
+    else {
+      if ($pila.Count -gt 0) { $pila.RemoveAt($pila.Count - 1) }
+      if ($n -ceq 'dependencies' -and $pila.Count -eq 1) { return [pscustomobject]@{ Abre = $abre; Cierra = $m.Index } }
+    }
+  }
+  return $null
+}
+
+# El bloque de Lombok de un pom: el <dependency> o el <path> (de annotationProcessorPaths) que lo declara, en lineas: la primera sin sangria y las
+# demas con la sangria que tienen de mas respecto a ella. Sin el, @().
+function Get-BloqueLombok([string]$Texto, [string]$Etiqueta) {
+  $m = [regex]::Match((Get-PomLimpio $Texto), "(?s)<$Etiqueta>(?:(?!</?$Etiqueta>).)*?<groupId>\s*org\.projectlombok\s*</groupId>\s*<artifactId>\s*lombok\s*</artifactId>.*?</$Etiqueta>")
+  if (-not $m.Success) { return @() }
+  $ini = $Texto.LastIndexOf([char]10, $m.Index) + 1
+  $sangria = $Texto.Substring($ini, $m.Index - $ini)
+  if ($sangria.Trim().Length -gt 0) { $sangria = '' }
+  $lineas = @($Texto.Substring($m.Index, $m.Length) -split '\r?\n')
+  for ($i = 1; $i -lt $lineas.Count; $i++) {
+    if ($sangria.Length -gt 0 -and $lineas[$i].StartsWith($sangria, [System.StringComparison]::Ordinal)) { $lineas[$i] = $lineas[$i].Substring($sangria.Length) }
+  }
+  return $lineas
+}
+
+# El bloque por defecto, para cuando la referencia no declara Lombok: <dependency> (provided y optional) o <path>; con <version> si hay $Version.
+function Get-BloqueLombokNuevo([string]$Etiqueta, [string]$Paso, [string]$Version) {
+  $l = @("<$Etiqueta>", "$Paso<groupId>org.projectlombok</groupId>", "$Paso<artifactId>lombok</artifactId>")
+  if ($Version) { $l += "$Paso<version>$Version</version>" }
+  if ($Etiqueta -ceq 'dependency') { $l += @("$Paso<scope>provided</scope>", "$Paso<optional>true</optional>") }
+  return ($l + "</$Etiqueta>")
+}
+
+# Lo que la referencia ($PlantillaRoot) tiene de Lombok en sus pom.xml: Dependencia y Procesador, el primero que encuentra de cada uno (@() si no hay).
+function Get-LombokReferencia {
+  $ref = [pscustomobject]@{ Dependencia = @(); Procesador = @() }
+  if (-not $PlantillaRoot -or -not (Test-Path -LiteralPath $PlantillaRoot -PathType Container)) { return $ref }
+  foreach ($pom in @(Get-PomsDe $PlantillaRoot)) {
+    $texto = [System.IO.File]::ReadAllText($pom)
+    if ($ref.Dependencia.Count -eq 0) { $ref.Dependencia = @(Get-BloqueLombok $texto 'dependency') }
+    if ($ref.Procesador.Count -eq 0) { $ref.Procesador = @(Get-BloqueLombok $texto 'path') }
+  }
+  return $ref
+}
+
+# El pom (o uno de los de arriba, hasta la raiz del repo) tiene de padre spring-boot-starter-parent: Spring Boot pone entonces la version de Lombok.
+function Test-PadreSpringBoot([string]$Pom) {
+  $d = Split-Path $Pom -Parent
+  while ($d.Length -ge $RepoRoot.Length) {
+    $p = Join-Path $d 'pom.xml'
+    if ((Test-Path -LiteralPath $p -PathType Leaf) -and ((Get-PomLimpio ([System.IO.File]::ReadAllText($p))) -match '(?s)<parent>.*?<artifactId>\s*spring-boot-starter-parent\s*</artifactId>.*?</parent>')) { return $true }
+    $d = Split-Path $d -Parent
+  }
+  return $false
+}
+
+# El pom.xml de un fichero del migrado (su ruta relativa): el de su carpeta o el primero que hay hacia arriba, sin salir del repo. $null si no hay.
+function Get-PomDeFichero([string]$Fichero) {
+  $d = Split-Path (Join-Ruta $RepoRoot $Fichero) -Parent
+  while ($d.Length -ge $RepoRoot.Length) {
+    $pom = Join-Path $d 'pom.xml'
+    if (Test-Path -LiteralPath $pom -PathType Leaf) { return $pom }
+    $d = Split-Path $d -Parent
+  }
+  return $null
+}
+
+# Pone $Lineas (la primera sin sangria y las demas con la que llevan de mas) en $Texto, en lineas propias justo antes de la etiqueta de cierre que esta
+# en el indice $Cierra, con la sangria de los $Hijo que ya hay entre $Abre y $Cierra (o la de la etiqueta de cierre y un paso mas) y con los saltos
+# de linea del pom.
+function Add-BloquePom([string]$Texto, [int]$Abre, [int]$Cierra, [string]$Hijo, [string[]]$Lineas) {
+  $nl = "`n"
+  if ($Texto.Contains("`r`n")) { $nl = "`r`n" }
+  $ini = $Texto.LastIndexOf([char]10, $Cierra) + 1
+  $antes = $Texto.Substring($ini, $Cierra - $ini)
+  $sangriaCierre = $antes.Substring(0, $antes.Length - $antes.TrimStart().Length)
+  $sangria = $sangriaCierre + '  '
+  $h = [regex]::Match($Texto.Substring($Abre, $Cierra - $Abre), "(?m)^([ \t]+)<$Hijo>")
+  if ($h.Success) { $sangria = $h.Groups[1].Value }
+  $bloque = (@($Lineas | ForEach-Object { $sangria + $_ }) -join $nl)
+  if ($antes.Trim().Length -eq 0) { return $Texto.Insert($ini, $bloque + $nl) }
+  return $Texto.Insert($Cierra, $nl + $bloque + $nl + $sangriaCierre)
+}
+
+# El pom con Lombok en <dependencies> y, si el tiene annotationProcessorPaths, tambien ahi. $Ref, de Get-LombokReferencia. Lo que la referencia no
+# tiene va por defecto, con el paso de sangria del pom: la dependencia sin version si el padre es Spring Boot, y el procesador con
+# ${lombok.version}, la propiedad de ese padre. $null si el pom no tiene <dependencies>.
+function Get-PomConLombok([string]$Texto, [string]$Pom, $Ref) {
+  $dep = Find-DependenciasPom (Get-PomLimpio $Texto)
+  if (-not $dep) { return $null }
+  $paso = '  '
+  $m = [regex]::Match($Texto, '(?m)^([ \t]+)<modelVersion>')
+  if ($m.Success) { $paso = $m.Groups[1].Value }
+  $version = ''
+  if (-not (Test-PadreSpringBoot $Pom)) { $version = [string]$Cfg.LombokVersion }
+  $lineas = @($Ref.Dependencia)
+  if ($lineas.Count -eq 0) { $lineas = @(Get-BloqueLombokNuevo 'dependency' $paso $version) }
+  $Texto = Add-BloquePom $Texto $dep.Abre $dep.Cierra 'dependency' $lineas
+  $ap = [regex]::Match((Get-PomLimpio $Texto), '(?s)<annotationProcessorPaths>.*?</annotationProcessorPaths>')
+  if (-not $ap.Success) { return $Texto }
+  $lineas = @($Ref.Procesador)
+  if ($lineas.Count -eq 0) {
+    $v = '${lombok.version}'
+    if ($version) { $v = $version }
+    $lineas = @(Get-BloqueLombokNuevo 'path' $paso $v)
+  }
+  return (Add-BloquePom $Texto $ap.Index ($ap.Index + $ap.Length - '</annotationProcessorPaths>'.Length) 'path' $lineas)
+}
+
+# Anade Lombok al pom.xml del modulo de cada fichero de $Ficheros (el de la raiz si es uno solo), comprueba que el migrado compila y lo commitea. Devuelve
+# '' si ha quedado hecho (y lo dice en la consola) o por que no (los pom quedan como estaban).
+function Add-LombokAlPom($Ficheros) {
+  $ref = Get-LombokReferencia
+  $poms = @($Ficheros.Keys | ForEach-Object { Get-PomDeFichero $_ } | Where-Object { $_ } | Select-Object -Unique)
+  if ($poms.Count -eq 0) { return 'no encuentro el pom.xml de esos ficheros' }
+  $nuevos = [ordered]@{}
+  foreach ($pom in $poms) {
+    $nuevo = Get-PomConLombok ([System.IO.File]::ReadAllText($pom)) $pom $ref
+    if ($null -eq $nuevo) { return ('no encuentro <dependencies> en ' + (Get-Rel $RepoRoot $pom)) }
+    $nuevos[$pom] = $nuevo
+  }
+  $rels = @($poms | ForEach-Object { Get-Rel $RepoRoot $_ })
+  foreach ($pom in $poms) { [System.IO.File]::WriteAllText($pom, $nuevos[$pom], $Utf8) }
+  $registro = Join-Path $Registros 'practicas-lombok-pom.log'
+  $motivo = Invoke-CompilarLombok 'compilar el migrado con Lombok en el pom.xml' 'practicas-lombok-pom.log'
+  if ($motivo) { $motivo += " Salida de Maven: $registro" }
+  else {
+    $c = Invoke-Git $RepoRoot (@('commit', '-q') + @($Cfg.CommitArgs) + @('-m', 'practica(lombok): anade Lombok al pom.xml', '--') + $rels)
+    if ($c.Codigo -ne 0) { $motivo = 'git commit ha fallado: ' + (@($c.Salida) -join ' / ') }
+  }
+  if ($motivo) {
+    foreach ($r in $rels) { Undo-FicheroLombok $r }
+    return $motivo
+  }
+  $como = 'con la configuracion por defecto'
+  if ($ref.Dependencia.Count -gt 0) { $como = 'como en la referencia' }
+  Info ('Lombok no estaba en el pom.xml: lo he anadido ' + $como + ' (commit ' + (Get-Head $RepoRoot).Substring(0, 7) + ')')
+  return ''
 }
 
 # El HEAD de partida: el primer commit, yendo hacia atras desde HEAD, que no es de una pasada anterior de esta fase. Los commits 'practica(lombok): ...'
@@ -285,12 +461,15 @@ function Invoke-PracticasLombok([bool]$Conservar) {
   $out = [pscustomobject]@{ Parada = ''; Detalle = ''; Registro = ''; Tareas = @() }
   $ficheros = Get-FicherosLombok
   if ($null -eq $ficheros) { Aviso 'No hay datos/practicas-antes.json: no se sabe que ficheros pasar a Lombok.'; return $out }
-  if ($ficheros.Count -gt 0 -and -not (Test-PomLombok)) { Aviso 'El migrado no usa Lombok: anadelo al pom.xml y vuelve a lanzar'; return $out }
   if ($ficheros.Count -gt 0) {
     try { [void](Get-JavapExe) }
     catch { $out.Parada = 'otro'; $out.Detalle = 'No se puede comparar lo compilado: ' + $_.Exception.Message; $out.Registro = $Registros; return $out }
     $mal = Move-SinCommitAStash 'practicas: cambios sin commit de antes'
     if ($mal) { $out.Parada = 'git'; $out.Detalle = "No he podido apartar con git stash lo que habia sin confirmar en el worktree: $mal"; $out.Registro = $Registros; return $out }
+    if (-not (Test-PomLombok)) {
+      $mal = Add-LombokAlPom $ficheros
+      if ($mal) { Aviso "El migrado no usa Lombok: anadelo al pom.xml y vuelve a lanzar (lo he intentado y no ha podido ser: $mal)"; return $out }
+    }
   }
   $partida = Get-HeadPartida
   $tareas = @(Get-TareasLombok $ficheros $partida $Conservar)
