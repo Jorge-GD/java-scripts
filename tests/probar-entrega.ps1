@@ -712,11 +712,11 @@ $C5bHallazgos = @(
   (Hallazgo-Base 'SB-STEPSCOPE' '@StepScope que devuelve la interfaz' 'src/main/java/com/acme/recibos/config/CargaConfig.java' 41 'public ItemReader<Recibo> reader() {' 'El reader devuelve la interfaz y es un ItemStream.')
 )
 
-# revision.json de juguete: la forma de Save-Revision (revision.ps1). $Cambios lo pisa campo a campo.
+# revision.json de juguete: la forma de Save-Revision (revision.ps1), con tres reglas (la tercera sin hallazgos). $Cambios lo pisa campo a campo.
 function Revision-Base($Hallazgos = @(), [hashtable]$Cambios = @{}) {
   $r = [ordered]@{
     commit = 'abc1234def56'; todo = $false; unidades = 4; hechas = 4; atascadas = 0
-    reglas = @([ordered]@{ id = 'SB-LISTENER'; titulo = 'Listener que nadie registra' }, [ordered]@{ id = 'SB-STEPSCOPE'; titulo = '@StepScope que devuelve la interfaz' })
+    reglas = @([ordered]@{ id = 'SB-LISTENER'; titulo = 'Listener que nadie registra' }, [ordered]@{ id = 'SB-STEPSCOPE'; titulo = '@StepScope que devuelve la interfaz' }, [ordered]@{ id = 'SB-CONTEXTO'; titulo = 'Objeto no serializable en el ExecutionContext' })
     hallazgos = @($Hallazgos); descartados = 2
   }
   foreach ($k in $Cambios.Keys) { $r[$k] = $Cambios[$k] }
@@ -769,7 +769,7 @@ $Pruebas['c5b (a) revision.json con 2 reglas y 3 hallazgos: la pagina 2 tiene la
   }
   Comprueba 'sin -RevisarTodo no lo dice' ((Texto-Plano $sec) -notmatch 'RevisarTodo') (Texto-Plano $sec)
   $grupos = @([regex]::Matches($p2, '(?s)<section class="prob-grupo" aria-labelledby="g-revision-[^"]+">.*?</section>') | ForEach-Object { $_.Value })
-  Igual 'dos grupos, uno por regla' 2 $grupos.Count
+  Igual 'dos grupos, uno por cada regla con hallazgos (la tercera, sin ninguno, no sale)' 2 $grupos.Count
   if ($grupos.Count -ne 2) { return }
   $g1 = Texto-Plano $grupos[0]
   $g2 = Texto-Plano $grupos[1]
@@ -808,6 +808,21 @@ $Pruebas['c5b (b) revision.json con 0 hallazgos: la linea no ha encontrado nada 
   Igual 'no hay ningun grupo de regla' 0 @([regex]::Matches($p2, 'aria-labelledby="g-revision-')).Count
   $con = C5b-Salida 'c5b-b-con' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos) })
   Comprueba 'con hallazgos no sale esa linea' ((Texto-Plano (Panel-De (Pagina $con '2-problemas.html') 'revision')) -notmatch 'no ha encontrado nada')
+  $una = C5b-Salida 'c5b-b-una' ([ordered]@{ 'revision.json' = (Revision-Base @() @{ unidades = 1; hechas = 1; descartados = 0 }) })
+  $tu = Texto-Plano (Panel-De (Pagina $una '2-problemas.html') 'revision')
+  Comprueba 'con 1 unidad lo dice en singular' ($tu.Contains($TxtNada + ' 1 unidad.')) $tu
+  $atasc = C5b-Salida 'c5b-b-atasc' ([ordered]@{ 'revision.json' = (Revision-Base @() @{ unidades = 5; hechas = 3; atascadas = 2; descartados = 0 }) })
+  Comprueba 'con atascadas la linea cuenta las unidades hechas (3), no las 5' ((Texto-Plano (Panel-De (Pagina $atasc '2-problemas.html') 'revision')).Contains($TxtNada + ' 3 unidades')) 
+}
+
+$Pruebas['c5b (b) un hallazgo de una regla que revision.json no lista en reglas sale igual, con su titulo (o con su id si no lo trae)'] = {
+  $raros = @((Hallazgo-Base 'SB-OTRA' 'Regla que no esta en la lista' 'src/main/java/com/acme/recibos/Otra.java' 7 'new Otra()' 'Algo raro.'), (Hallazgo-Base 'SB-SINTITULO' '' 'src/main/java/com/acme/recibos/Sin.java' 0 'x' 'Sin titulo ni linea.'))
+  $s = C5b-Salida 'c5b-b-raros' ([ordered]@{ 'revision.json' = (Revision-Base $raros) })
+  $p2 = Pagina $s '2-problemas.html'
+  $t = Texto-Plano (Panel-De $p2 'revision')
+  Comprueba 'las cuentas dicen 2 hallazgos' ($p2 -match '<b>2</b>hallazgos')
+  Comprueba 'sale el grupo de la regla desconocida, con el titulo del hallazgo y su fichero:linea' ($p2 -match 'aria-labelledby="g-revision-SB-OTRA"' -and $p2.Contains('Regla que no esta en la lista') -and $p2.Contains('<code class="d">src/main/java/com/acme/recibos/Otra.java:7</code>'))
+  Comprueba 'y el que no trae titulo, con su id y el fichero sin linea' ($p2 -match '<h2 id="g-revision-SB-SINTITULO">SB-SINTITULO</h2>' -and $p2.Contains('<code class="d">src/main/java/com/acme/recibos/Sin.java</code>'))
 }
 
 # Las tres paginas de C5b-Salida sin revision.json ni propiedades-arreglo.json, medidas con el codigo de antes de C5b (3050737).
