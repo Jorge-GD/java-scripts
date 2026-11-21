@@ -5600,11 +5600,11 @@ $Pruebas['bp0 practicas: migracion.ps1 deja datos/practicas-antes.json con sus c
   Comprueba 'existe datos/practicas-antes.json' ($null -ne $p) (Cola $r.Salida)
   if ($null -eq $p) { return }
   Igual 'version y cuando' '1 antes' "$($p.version) $($p.cuando)"
-  Igual 'los cuatro detectores, en el orden del formato' 'javac lombok-a-mano lombok-qualifier java21-texto' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
-  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok no aplica ok ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
-  Igual 'el juguete no tiene nada que avisar: ninguna incidencia' 0 @($p.incidencias).Count
+  Igual 'los cinco detectores, en el orden del formato' 'javac lombok-a-mano lombok-qualifier java21-texto limpieza' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
+  Igual 'sus estados: la referencia no usa Lombok, lo demas se mide' 'ok no aplica ok ok ok' (@($p.detectores | ForEach-Object { $_.estado }) -join ' ')
+  Igual 'el juguete solo tiene una incidencia: la clase sin uso de limpieza' 1 @($p.incidencias).Count
   Comprueba 'su registro esta en registros/practicas-antes.log' (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/practicas-antes.log'))
-  Comprueba 'la consola dice las buenas practicas' ($r.Salida -match 'Buenas practicas \(antes\): 0 incidencias en ') (Cola $r.Salida)
+  Comprueba 'la consola dice las buenas practicas' ($r.Salida -match 'Buenas practicas \(antes\): 1 incidencias \(limpieza: 1\) en ') (Cola $r.Salida)
   Comprueba 'hallazgos-antes.json sigue siendo lo ultimo del diagnostico: esta' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/hallazgos-antes.json'))
   Comprueba 'no hay practicas de despues (no se corrigio)' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/practicas-despues.json')))
   # relanzar no repite el diagnostico y, con el, tampoco la medida
@@ -5933,7 +5933,7 @@ function Bp5-HashPagina([string]$Html) {
 # La pagina 5 de la Bp5-Practicas de despues, sin practicas-arreglos.json, medida con el codigo de antes de BP-5 (9a732e2): cada cambio de la pagina 5 o del marco la cambia.
 # BP-6 cambio la frase bp-area-java21-expl: con la frase de antes da 2DCE51F6...D722 (comprobado el 19-11).
 # M49 (20-11) quito PMD y SpotBugs: cambia a proposito la frase de esa area y la fixture (su incidencia de pmd pasa a java21-texto); antes de M49 daba 66422977...3003.
-$Bp5HashSinArreglos = 'B93367626C8D464A16A047410B5F283DAA5B28F627730F0956383A774CBA8046'
+$Bp5HashSinArreglos = '26D9FB2732D390BE5119071E28D3660DB2E1A82FAF0EC0BA1E292AACF33064B6'
 
 $Pruebas['bp5 (a) con el estado en la fase practicas la portada la pone en curso, las de antes hechas y prueba-local en espera; va despues de la correccion y de comparar y antes de prueba-local'] = {
   $x = Bp5-Salida 'bp5-curso' 'practicas'
@@ -7388,7 +7388,7 @@ $Pruebas['m49 (a) una pasada completa con el Maven falso: ninguna llamada a Mave
   $p = Lee-Json (Get-Ruta $e.Out 'datos/practicas-antes.json')
   Comprueba 'las buenas practicas se midieron (datos/practicas-antes.json)' ($null -ne $p) (Cola $r.Salida)
   if ($null -eq $p) { return }
-  Igual 'sus detectores: javac, lombok-a-mano, lombok-qualifier y java21-texto' 'javac lombok-a-mano lombok-qualifier java21-texto' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
+  Igual 'sus detectores: javac, lombok-a-mano, lombok-qualifier, java21-texto y limpieza' 'javac lombok-a-mano lombok-qualifier java21-texto limpieza' (@($p.detectores | ForEach-Object { $_.id }) -join ' ')
   $h5 = Pagina $e.Out '5-buenas-practicas.html'
   Comprueba 'la pagina 5 existe y no nombra ni PMD ni SpotBugs' ($h5.Length -gt 0 -and $h5 -notmatch '(?i)pmd|spotbugs')
 }
