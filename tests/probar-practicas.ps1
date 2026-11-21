@@ -621,7 +621,7 @@ function Comprueba-Formato($J, $E) {
   Igual 'formato: paquete (el prefijo comun de los paquetes de src/main/java)' 'com.acme' $J.paquete
   Igual 'formato: referencia (el nombre de su carpeta)' 'batch-ejemplo' $J.referencia
   Comprueba 'formato: arquitectura existe y es null' ($J.PSObject.Properties.Name -contains 'arquitectura' -and $null -eq $J.arquitectura)
-  Igual 'formato: los 4 detectores en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto' ((@($J.detectores | ForEach-Object { $_.id })) -join ',')
+  Igual 'formato: los 5 detectores en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto,limpieza' ((@($J.detectores | ForEach-Object { $_.id })) -join ',')
   $mal = @($J.detectores | Where-Object { -not ($_.PSObject.Properties.Name -join ',' -ceq 'id,estado,motivo,segundos,corte') })
   Igual 'formato: cada detector lleva id, estado, motivo, segundos y corte' 0 $mal.Count
   $estados = @('ok', 'no medido (tope)', 'no se pudo medir', 'no aplica')
@@ -635,7 +635,7 @@ function Comprueba-Formato($J, $E) {
   Comprueba 'el registro registros\practicas-antes.log existe' (Test-Path -LiteralPath $reg)
   $txt = ''
   if (Test-Path -LiteralPath $reg) { $txt = [System.IO.File]::ReadAllText($reg) }
-  Comprueba 'el registro lleva la salida de Maven y el resumen de los detectores' ($txt -match 'BUILD SUCCESS' -and $txt -match 'javac' -and $txt -match 'lombok-qualifier' -and $txt -match 'java21-texto' -and $txt -notmatch 'pmd|spotbugs') (Cola $txt)
+  Comprueba 'el registro lleva la salida de Maven y el resumen de los detectores' ($txt -match 'BUILD SUCCESS' -and $txt -match 'javac' -and $txt -match 'lombok-qualifier' -and $txt -match 'java21-texto' -and $txt -match 'limpieza' -and $txt -notmatch 'pmd|spotbugs') (Cola $txt)
 }
 
 $Pruebas['10 d) consola: una linea Info con las incidencias por area y los segundos'] = {
@@ -1513,7 +1513,7 @@ $Pruebas['40 bp6 a) charset-por-defecto: cada patron da una incidencia en su fic
   $x = Mide6 'bp6a' @{ Entrada = $Fuente6Charset }
   $fich = "${Dir6}Entrada.java"
   Igual 'las lineas con un patron (la anidada y la de dos patrones, una incidencia cada una)' (Marcadas6 $Fuente6Charset) (Lineas6 $x.Json $fich 'charset-por-defecto')
-  Igual 'ninguna incidencia mas en ese fichero' (Marcadas6 $Fuente6Charset).Split(',').Count @($x.Json.incidencias | Where-Object { $_.fichero -ceq $fich }).Count
+  Igual 'ninguna incidencia mas de java21-texto en ese fichero (la de limpieza que le sale a Entrada, clase-sin-uso, es de otro detector)' (Marcadas6 $Fuente6Charset).Split(',').Count @($x.Json.incidencias | Where-Object { $_.fichero -ceq $fich -and $_.herramienta -ceq 'java21-texto' }).Count
   $i = @($x.Json.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' })[0]
   Comprueba 'hay una incidencia de java21-texto' ($null -ne $i)
   if ($null -eq $i) { return }
@@ -1559,10 +1559,10 @@ $Pruebas['44 bp6 e) formato-cldr: MMM y EEE en el patron literal salen; dd/MM/yy
   Igual 'texto del contrato' $Texto6Cldr $i.texto
 }
 
-$Pruebas['45 bp6 f) en el JSON: java21-texto va el ultimo de detectores con estado ok y sus incidencias llevan el area java21 y su herramienta'] = {
+$Pruebas['45 bp6 f) en el JSON: java21-texto va en detectores con estado ok y sus incidencias llevan el area java21 y su herramienta'] = {
   $x = Mide6 'bp6f' @{ Entrada = $Fuente6Charset; Formatos = $Fuente6Formatos }
   $j = $x.Json
-  Igual 'los detectores, en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto' ((@($j.detectores | ForEach-Object { $_.id })) -join ',')
+  Igual 'los detectores, en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto,limpieza' ((@($j.detectores | ForEach-Object { $_.id })) -join ',')
   $d = Det $j 'java21-texto'
   Igual 'estado ok' 'ok' $d.estado
   Igual 'motivo vacio' '' $d.motivo
@@ -1631,6 +1631,286 @@ $Pruebas['50 bp6 k) solo se lee src/main/java: el mismo codigo en src/test/java 
   Igual 'estado ok' 'ok' (Det $j 'java21-texto').estado
   Igual 'las de src/main/java estan' (Marcadas6 $Fuente6Charset) (Lineas6 $j "${Dir6}Entrada.java" 'charset-por-defecto')
   Igual 'ninguna en src/test/java' 0 @($j.incidencias | Where-Object { $_.herramienta -ceq 'java21-texto' -and $_.fichero -like 'src/test/*' }).Count
+}
+
+# ================================ C1: limpieza ================================
+# El detector de lo que no deberia llegar al senior: restos de herramientas en git, marcas pendientes, codigo comentado y clases que nadie usa.
+# Sin Maven. Solo avisa. Los ficheros de $EnGit van a un commit (los de $SinGit se quedan sin seguir).
+$DirC1 = 'src/main/java/com/acme/limpio/'
+$FinC1 = 'quitalo de git y anadelo a .gitignore.'
+
+function Mide-C1([string]$Nombre, [hashtable]$EnGit, [hashtable]$SinGit = @{}) {
+  $E = Nuevo-Escenario $Nombre
+  foreach ($k in $EnGit.Keys) { Escribe $E.Repo $k $EnGit[$k]; [void](GitEn $E.Repo @('add', '-f', '--', $k)) }
+  if ($EnGit.Count -gt 0) { [void](GitEn $E.Repo @('commit', '-q', '-m', 'c1')) }
+  foreach ($k in $SinGit.Keys) { Escribe $E.Repo $k $SinGit[$k] }
+  return [pscustomobject]@{ E = $E; Json = (Mide $E @{}).Json }
+}
+
+# Las incidencias de limpieza de una regla (la regla vacia: todas).
+function Limpieza-De($J, [string]$Regla = '') {
+  return , @($J.incidencias | Where-Object { $_.herramienta -ceq 'limpieza' -and ($Regla -ceq '' -or $_.regla -ceq $Regla) })
+}
+
+# Los ficheros de unas incidencias, ordenados y juntos (para no depender del orden en que salen).
+function Ficheros-C1($Incs) { return ((@($Incs | ForEach-Object { $_.fichero }) | Sort-Object) -join '|') }
+
+$Pruebas['51 c1 a) resto-herramienta: una incidencia por carpeta (target/ y .github/modernize/) y una por fichero, solo de lo que esta en git, con linea 0 y el texto del contrato'] = {
+  $x = Mide-C1 'c1a' @{
+    'notas.bak' = "x`n"
+    'target/classes/A.class' = "x`n"
+    'target/classes/B.class' = "x`n"
+    '.github/modernize/app/plan.md' = "plan`n"
+    'src/main/java/com/acme/Foo.java.orig' = "x`n"
+  } @{ 'otro.bak' = "x`n" }
+  $r = Limpieza-De $x.Json 'resto-herramienta'
+  Igual 'cuatro incidencias: dos carpetas y dos ficheros (otro.bak no esta en git)' 4 $r.Count
+  Igual 'cuales' ((@('target/', '.github/modernize/', 'notas.bak', 'src/main/java/com/acme/Foo.java.orig') | Sort-Object) -join '|') (Ficheros-C1 $r)
+  Igual 'todas con linea 0' 0 @($r | Where-Object { [int]$_.linea -ne 0 }).Count
+  Igual 'todas del area limpieza' 0 @($r | Where-Object { $_.area -cne 'limpieza' }).Count
+  Igual 'origen referencia, sin clave de Sonar y queHago mano' 0 @($r | Where-Object { $_.origen -cne 'referencia' -or $_.sonar -cne '' -or $_.queHago -cne 'mano' }).Count
+  $t = @($r | Where-Object { $_.fichero -ceq 'target/' })[0]
+  Igual 'texto de la carpeta target/ (2 ficheros, un resto de Maven)' "2 ficheros de target/ estan en git: es un resto de Maven. Si no hace falta, $FinC1" $t.texto
+  $m = @($r | Where-Object { $_.fichero -ceq '.github/modernize/' })[0]
+  Igual 'texto de la carpeta de Copilot (1 fichero)' "1 fichero de .github/modernize/ esta en git: es un resto de Copilot. Si no hace falta, $FinC1" $m.texto
+  $b = @($r | Where-Object { $_.fichero -ceq 'notas.bak' })[0]
+  Igual 'texto de un fichero: un resto de un parche' "Esta en git y es un resto de un parche. Si no hace falta, $FinC1" $b.texto
+}
+
+$Pruebas['52 c1 a2) resto-herramienta: cada patron de la lista (Maven, IDE, parches, migracion y Copilot) sale y lo que puede estar a proposito (jar, zip, war, wrapper) no'] = {
+  $deFichero = @('hs_err_pid42', 'replay_pid7', 'pom.xml.tag', 'pom.xml.releaseBackup', 'pom.xml.versionsBackup', 'pom.xml.next', 'release.properties',
+    'dependency-reduced-pom.xml', 'buildNumber.properties', '.mvn/timing.properties', 'app.log', 'x.class', '.project', '.classpath', 'x.iml', 'x.bak', 'x.orig', 'x.rej', 'sub/mod/hs_err_pid9.log')
+  $deCarpeta = @('target/', '.settings/', '.idea/', '.vscode/', 'migracion-batch-recibos/', '.rescate/', 'mod/target/', 'a/b/.idea/')
+  $en = @{}
+  foreach ($f in $deFichero) { $en[$f] = "x`n" }
+  foreach ($c in $deCarpeta) { $en[$c + 'uno.txt'] = "x`n"; $en[$c + 'dos/tres.txt'] = "x`n" }
+  $noSalen = @('pom.xml', '.mvn/wrapper/maven-wrapper.jar', '.mvn/wrapper/maven-wrapper.properties', 'libs/foo.jar', 'dist/foo.zip', 'dist/foo.war', 'src/main/resources/application.properties',
+    'src/main/java/com/acme/Target.java', 'mytarget/x.txt', 'docs/migracion.md', '.github/workflows/ci.yml', 'release.properties.md', 'x.classes')
+  foreach ($f in $noSalen) { $en[$f] = "x`n" }
+  $x = Mide-C1 'c1a2' $en
+  $r = Limpieza-De $x.Json 'resto-herramienta'
+  Igual 'salen los patrones de fichero y de carpeta, y nada mas' ((@($deFichero) + @($deCarpeta) | Sort-Object) -join '|') (Ficheros-C1 $r)
+  $o = @{}
+  foreach ($i in $r) { $o[$i.fichero] = $i.texto -replace '^.*es un resto de (.*?)\. Si no.*$', '$1' }
+  Igual 'el origen de target/' 'Maven' $o['target/']
+  Igual 'el origen de .idea/' 'el IDE' $o['.idea/']
+  Igual 'el origen de migracion-*/' 'la migracion' $o['migracion-batch-recibos/']
+  Igual 'el origen de .rescate/' 'la migracion' $o['.rescate/']
+  Igual 'la carpeta que cuelga de otra (mod/target/) cuenta en su sitio, con sus 2 ficheros' '2 ficheros de mod/target/ estan en git' (($r | Where-Object { $_.fichero -ceq 'mod/target/' }).texto -replace '^(.*?estan en git).*$', '$1')
+}
+
+$Pruebas['53 c1 b) tests-entrega: PruebaLocalTest y los casos de prueba-local dan UNA incidencia con el primer fichero, linea 0, y no son resto-herramienta'] = {
+  $x = Mide-C1 'c1b' @{
+    'src/test/java/com/acme/PruebaLocalTest.java' = "package com.acme;`nclass PruebaLocalTest { }`n"
+    'src/test/java/com/acme/RegresionLocalTest.java' = "package com.acme;`nclass RegresionLocalTest { }`n"
+    'src/test/resources/prueba-local/job/caso/entrada.csv' = "a;b`n"
+    'src/test/resources/prueba-local-esperado/job/caso/salida.log' = "ok`n"
+  }
+  $r = Limpieza-De $x.Json 'tests-entrega'
+  Igual 'una sola incidencia' 1 $r.Count
+  if ($r.Count -eq 1) {
+    Igual 'con el primero de esos ficheros' 'src/test/java/com/acme/PruebaLocalTest.java' $r[0].fichero
+    Igual 'linea 0' 0 ([int]$r[0].linea)
+    Igual 'texto del contrato' 'Tests de entrega de la prueba en local (-Regresion): no son un resto, pero decide con tu equipo si se quedan en el repo.' $r[0].texto
+    Igual 'area limpieza y origen referencia' 'limpieza referencia' "$($r[0].area) $($r[0].origen)"
+  }
+  Igual 'ninguna resto-herramienta por ellos (ni por el .log de un caso)' 0 (Limpieza-De $x.Json 'resto-herramienta').Count
+  # solo los casos, sin los tests: tambien sale, con el primer caso
+  $y = Mide-C1 'c1b2' @{ 'src/test/resources/prueba-local/job/caso/entrada.csv' = "a;b`n" }
+  Igual 'solo los casos: una incidencia con el caso' 'src/test/resources/prueba-local/job/caso/entrada.csv' ((Limpieza-De $y.Json 'tests-entrega') | ForEach-Object { $_.fichero })
+  $z = Mide-C1 'c1b3' @{ 'src/test/java/com/acme/OtroTest.java' = "package com.acme;`nclass OtroTest { }`n" }
+  Igual 'un test cualquiera no es de entrega' 0 (Limpieza-De $z.Json 'tests-entrega').Count
+}
+
+$Pruebas['54 c1 c) marca-pendiente: TODO, FIXME y XXX en mayusculas y palabra entera, en src/main, una incidencia por linea; todos, TODOS y todo no, ni src/test, ni target, ni otras extensiones'] = {
+  $x = Mide-C1 'c1c' @{
+    'src/main/java/com/acme/Marcas.java' = "package com.acme;`npublic class Marcas {`n    // TODO migracion`n    // todo en minusculas`n    int a; // TODOS los dias`n    // XXX revisar`n    // FIXME y TODO en la misma linea`n    int b = 1;`n}`n"
+    'src/main/resources/application.yml' = "a: 1`n# FIXME ajustar`n# TODOS los dias`nb: 2`n"
+    'src/main/resources/leeme.txt' = "TODO esto no se mira`n"
+    'src/main/resources/db/datos.sql' = "-- TODO borrar`nselect 1;`n"
+    'src/test/java/com/acme/MarcasTest.java' = "package com.acme;`n// TODO en un test`nclass MarcasTest { }`n"
+    'target/classes/application.yml' = "# TODO copia en target`n"
+  }
+  $r = Limpieza-De $x.Json 'marca-pendiente'
+  $de = @{}
+  foreach ($i in $r) { $de[$i.fichero + ':' + $i.linea] = $i }
+  Igual 'las lineas que saltan' ((@('src/main/java/com/acme/Marcas.java:3', 'src/main/java/com/acme/Marcas.java:6', 'src/main/java/com/acme/Marcas.java:7', 'src/main/resources/application.yml:2', 'src/main/resources/db/datos.sql:1') | Sort-Object) -join '|') ((@($de.Keys) | Sort-Object) -join '|')
+  $j = $de['src/main/java/com/acme/Marcas.java:3']
+  if ($null -ne $j) {
+    Igual 'texto: la linea recortada' 'Marca pendiente: // TODO migracion' $j.texto
+    Igual 'un TODO de un .java lleva la regla de Sonar S1135 (esta en Sonar way)' 'sonar S1135' "$($j.origen) $($j.sonar)"
+    Igual 'area y queHago' 'limpieza sonar' "$($j.area) $($j.queHago)"
+  }
+  Igual 'un FIXME de un .java lleva S1134' 'sonar S1134' "$($de['src/main/java/com/acme/Marcas.java:7'].origen) $($de['src/main/java/com/acme/Marcas.java:7'].sonar)"
+  Igual 'un XXX no tiene regla de Sonar: referencia' 'referencia ' "$($de['src/main/java/com/acme/Marcas.java:6'].origen) $($de['src/main/java/com/acme/Marcas.java:6'].sonar)"
+  Igual 'un FIXME de un .yml: Sonar no lo mira, referencia' 'referencia  Marca pendiente: # FIXME ajustar' "$($de['src/main/resources/application.yml:2'].origen) $($de['src/main/resources/application.yml:2'].sonar) $($de['src/main/resources/application.yml:2'].texto)"
+}
+
+$Pruebas['55 c1 d) codigo-comentado: 3 o mas lineas seguidas con // y al menos 2 que acaban en ; { o } dan una incidencia en la primera; la prosa, dos lineas, un Javadoc y un /* */ no'] = {
+  $f = @'
+package com.acme;
+
+public class Comentado {
+    void a() {
+        // foo();
+        // if (x) {
+        // }
+        int y = 0;
+        // esto es prosa
+        // que sigue siendo prosa
+        // y acaba sin nada especial
+        int z = 0;
+        // uno();
+        // dos();
+        int w = 0;
+        // ajuste: ver el documento
+        // una linea mas de prosa
+        // llamada();
+        int v = 0;
+        /**
+         * foo();
+         * bar();
+         * baz();
+         */
+        /* y();
+           z(); */
+    }
+}
+'@
+  $x = Mide-C1 'c1d' @{ 'src/main/java/com/acme/Comentado.java' = $f }
+  $r = Limpieza-De $x.Json 'codigo-comentado'
+  Igual 'una incidencia, en la primera linea del tramo (la 5)' 'src/main/java/com/acme/Comentado.java:5' (($r | ForEach-Object { $_.fichero + ':' + $_.linea }) -join '|')
+  if ($r.Count -eq 1) {
+    Igual 'texto con el numero de lineas' '3 lineas de codigo comentado: si ya no hace falta, borralas (git lo guarda).' $r[0].texto
+    Igual 'area, origen y clave de Sonar (S125 esta en Sonar way)' 'limpieza sonar S125' "$($r[0].area) $($r[0].origen) $($r[0].sonar)"
+    Igual 'queHago' 'sonar' $r[0].queHago
+  }
+  # los .java de src/test no se miran
+  $y = Mide-C1 'c1d2' @{ 'src/test/java/com/acme/ComentadoTest.java' = $f }
+  Igual 'en src/test no se mira' 0 (Limpieza-De $y.Json 'codigo-comentado').Count
+}
+
+$Pruebas['56 c1 e) clase-sin-uso: la que nadie nombra en src/main es candidata (tambien la que solo usa un test, solo sale en un comentario o solo se parece a una variable con otra mayuscula); la nombrada, con una anotacion de Spring, en un .imports o un .yml, o con main, no'] = {
+  $p = 'package com.acme.limpio;'
+  $en = @{
+    "${DirC1}LegacyDateUtils.java" = "$p`n`npublic class LegacyDateUtils {`n    public static String hoy() { return `"x`"; }`n}`n"
+    "${DirC1}Principal.java" = "$p`n`n/** Arranca y usa Usada. */`npublic class Principal {`n    // EnComentario solo sale aqui, en un comentario`n    String legacyDateUtils = `"mismo nombre con otra mayuscula`";`n    public static void main(String[] args) {`n        System.out.println(new Usada().nombre());`n    }`n}`n"
+    "${DirC1}Usada.java" = "$p`n`npublic class Usada {`n    public String nombre() { return `"u`"; }`n}`n"
+    "${DirC1}EnComentario.java" = "$p`n`n/**`n * Una clase que nadie usa.`n */`npublic class EnComentario { }`n"
+    "${DirC1}SoloTest.java" = "$p`n`npublic class SoloTest { }`n"
+    "${DirC1}Registrada.java" = "$p`n`npublic class Registrada { }`n"
+    "${DirC1}EnYml.java" = "$p`n`npublic class EnYml { }`n"
+    "${DirC1}ConMain.java" = "$p`n`npublic class ConMain {`n    public static void main(String[] args) { }`n}`n"
+    "${DirC1}package-info.java" = "$p`n"
+    'src/main/resources/META-INF/spring/x.imports' = "com.acme.limpio.Registrada`n"
+    'src/main/resources/application.yml' = "batch:`n  clase: com.acme.limpio.EnYml`n"
+    'src/test/java/com/acme/limpio/SoloTestTest.java' = "$p`n`nclass SoloTestTest {`n    SoloTest t = new SoloTest();`n}`n"
+  }
+  foreach ($a in @('Configuration', 'AutoConfiguration', 'Component', 'Service', 'Repository', 'Controller', 'RestController', 'SpringBootApplication', 'ConfigurationProperties', 'EnableBatchProcessing')) {
+    $en["${DirC1}Con$a.java"] = "$p`n`n@$a`npublic class Con$a { }`n"
+  }
+  $x = Mide-C1 'c1e' $en
+  $todas = Limpieza-De $x.Json 'clase-sin-uso'
+  $r = @($todas | Where-Object { $_.fichero -like "$DirC1*" })
+  Igual 'las candidatas' ((@('EnComentario', 'LegacyDateUtils', 'SoloTest') | ForEach-Object { "$DirC1$_.java" } | Sort-Object) -join '|') (Ficheros-C1 $r)
+  $l = @($r | Where-Object { $_.fichero -ceq "${DirC1}LegacyDateUtils.java" })[0]
+  if ($null -ne $l) {
+    Igual 'la linea es la de la declaracion de la clase (3)' 3 ([int]$l.linea)
+    Igual 'texto del contrato' 'Nadie la nombra en src/main y no la carga Spring: puede ser codigo muerto (si solo la usan los tests, tambien). Comprueba antes de borrarla.' $l.texto
+    Igual 'area, origen, sin Sonar y queHago' 'limpieza referencia  mano' "$($l.area) $($l.origen) $($l.sonar) $($l.queHago)"
+  }
+  Igual 'con un Javadoc encima, la linea es la de class (6)' 6 ([int]@($r | Where-Object { $_.fichero -ceq "${DirC1}EnComentario.java" })[0].linea)
+}
+
+$Pruebas['57 c1 f) en el JSON: limpieza va el ultimo de detectores, con estado ok, y sus incidencias llevan el area limpieza, la herramienta limpieza y sus nueve campos'] = {
+  $x = Mide-C1 'c1f' @{
+    'notas.bak' = "x`n"
+    "${DirC1}LegacyDateUtils.java" = "package com.acme.limpio;`n`n// TODO migracion`npublic class LegacyDateUtils { }`n"
+  }
+  $j = $x.Json
+  Igual 'los detectores, en orden' 'javac,lombok-a-mano,lombok-qualifier,java21-texto,limpieza' ((@($j.detectores | ForEach-Object { $_.id })) -join ',')
+  $d = Det $j 'limpieza'
+  Igual 'estado ok' 'ok' $d.estado
+  Igual 'motivo vacio' '' $d.motivo
+  Igual 'sin corte' $false $d.corte
+  Igual 'los campos de un detector' 'id,estado,motivo,segundos,corte' ($d.PSObject.Properties.Name -join ',')
+  $mias = Limpieza-De $j
+  Comprueba 'hay incidencias de limpieza' ($mias.Count -gt 0)
+  Igual 'las reglas que salen' 'clase-sin-uso,marca-pendiente,resto-herramienta' ((@($mias | ForEach-Object { $_.regla } | Sort-Object -Unique)) -join ',')
+  Igual 'todas del area limpieza' 0 @($mias | Where-Object { $_.area -cne 'limpieza' }).Count
+  Igual 'todas con sus nueve campos' 0 @($mias | Where-Object { -not ($_.PSObject.Properties.Name -join ',' -ceq 'area,fichero,linea,herramienta,regla,origen,sonar,texto,queHago') }).Count
+  Comprueba-Formato $j $x.E
+}
+
+$Pruebas['58 c1 g) cache: un JSON de antes de limpieza (con la misma clave) no se reutiliza: se mide otra vez y sale el detector; uno completo con la misma clave si se reutiliza'] = {
+  $E = Nuevo-Escenario 'c1g'
+  Escribe $E.Repo 'notas.bak' "x`n"
+  [void](GitEn $E.Repo @('add', '-f', '--', 'notas.bak'))
+  [void](GitEn $E.Repo @('commit', '-q', '-m', 'c1'))
+  $m1 = Mide $E @{} @{} 'antes'
+  Comprueba 'la primera medida lleva limpieza' ($null -ne (Det $m1.Json 'limpieza'))
+  $m2 = Mide $E @{} @{} 'antes' -ConCache
+  Comprueba 'completo y con la misma clave: se reutiliza' ("$($m2.Texto)" -match 'ya medidas') $m2.Texto
+  # el JSON de antes de esta pieza: sin el detector ni sus incidencias, con la misma clave
+  $ruta = Join-Path $E.Datos 'practicas-antes.json'
+  $v = Lee-Json $ruta
+  $v.detectores = @($v.detectores | Where-Object { $_.id -cne 'limpieza' })
+  $v.incidencias = @($v.incidencias | Where-Object { $_.herramienta -cne 'limpieza' })
+  [System.IO.File]::WriteAllText($ruta, (ConvertTo-Json -InputObject $v -Depth 8))
+  Igual 'el JSON viejo no lleva limpieza' 0 @((Lee-Json $ruta).detectores | Where-Object { $_.id -ceq 'limpieza' }).Count
+  $m3 = Mide $E @{} @{} 'antes' -ConCache
+  Comprueba 'con la misma clave, se mide otra vez (no dice que ya estaba medido)' ("$($m3.Texto)" -notmatch 'ya medidas') $m3.Texto
+  Igual 'la misma clave de antes' $m1.Json.clave $m3.Json.clave
+  Igual 'sale el detector limpieza' 'ok' (Det $m3.Json 'limpieza').estado
+  Comprueba 'y su incidencia' ((Limpieza-De $m3.Json 'resto-herramienta').Count -eq 1)
+}
+
+$Pruebas['59 c1 h) la pagina 5 con ese JSON lleva Limpieza, su explicacion y sus incidencias (en las dos vistas)'] = {
+  $x = Mide-C1 'c1h' @{
+    'notas.bak' = "x`n"
+    'target/classes/A.class' = "x`n"
+    "${DirC1}LegacyDateUtils.java" = "package com.acme.limpio;`n`n// TODO migracion`npublic class LegacyDateUtils { }`n"
+  }
+  $mias = Limpieza-De $x.Json
+  Comprueba 'hay incidencias de limpieza' ($mias.Count -gt 0)
+  $h = Pagina5-De6 'c1h-pagina' $x.Json
+  Comprueba 'monta 5-buenas-practicas.html' ($h.Length -gt 0)
+  if ($h.Length -eq 0) { return }
+  Comprueba 'la leyenda lleva Limpieza con su cuenta' ($h -cmatch ('(?s)bp-ley-limpieza.*?Limpieza<b class="bp-ley-n">' + $mias.Count + '</b>'))
+  Comprueba 'lleva la explicacion del area' ($h -cmatch 'Lo que no deber.a llegar al senior: restos de herramientas en git, marcas pendientes, c.digo comentado y clases que nadie usa\. Solo avisa: decide t. qu. se borra\.')
+  foreach ($regla in @('resto-herramienta', 'marca-pendiente', 'clase-sin-uso')) {
+    Igual "cada incidencia sale en las dos vistas: $regla" (2 * @($mias | Where-Object { $_.regla -ceq $regla }).Count) ([regex]::Matches($h, "limpieza $regla").Count)
+  }
+  Comprueba 'y no esta entre las notas de los que no midieron' ($h -notmatch '<code>limpieza</code> <b>')
+  Comprueba 'el grupo del area tiene su nombre (Limpieza) y la cuenta de las incidencias' ($h -cmatch ('<h3 id="ga-limpieza">Limpieza</h3><span class="bp-num">' + $mias.Count + '</span>'))
+  Comprueba 'el resumen de la barra de areas lo dice con su nombre' ($h -cmatch ('Limpieza: ' + $mias.Count + '"'))
+}
+
+$Pruebas['60 c1 i) estado: sin git la regla de restos no mide y lo dice en el motivo (las demas siguen); sin src/main ni git no aplica; con git y sin src/main mide ok'] = {
+  # una carpeta sin git: solo se miran las marcas, el codigo comentado y las clases
+  $d = Join-Path $Dir 'c1i-sin-git'
+  Escribe $d 'src/main/java/com/acme/Sola.java' "package com.acme;`n// TODO migracion`npublic class Sola { }`n"
+  Escribe $d 'notas.bak' "x`n"
+  $r = Get-ResultadoLimpieza $d
+  Igual 'sin git y con src/main: ok' 'ok' $r.Estado
+  Comprueba 'el motivo dice que no es un repo de git' ("$($r.Motivo)" -match 'git') "$($r.Motivo)"
+  Igual 'ni resto-herramienta ni tests-entrega' 0 @($r.Incidencias | Where-Object { $_.regla -ceq 'resto-herramienta' -or $_.regla -ceq 'tests-entrega' }).Count
+  Igual 'la marca y la clase si' 'clase-sin-uso,marca-pendiente' ((@($r.Incidencias | ForEach-Object { $_.regla } | Sort-Object -Unique)) -join ',')
+  # una carpeta sin git ni src/main
+  $v = Join-Path $Dir 'c1i-vacia'
+  Escribe $v 'notas.txt' "x`n"
+  $n = Get-ResultadoLimpieza $v
+  Igual 'sin git ni src/main: no aplica' 'no aplica' $n.Estado
+  Comprueba 'con su motivo' ("$($n.Motivo)" -ne '') "$($n.Motivo)"
+  # un repo de git sin src/main: mide los restos
+  $E = Nuevo-Escenario 'c1i-git'
+  Remove-Item -LiteralPath (Get-Ruta $E.Repo 'src') -Recurse -Force
+  Escribe $E.Repo 'notas.bak' "x`n"
+  [void](GitEn $E.Repo @('add', '-A'))
+  [void](GitEn $E.Repo @('commit', '-q', '-m', 'sin src'))
+  $m = Mide $E @{}
+  Igual 'con git y sin src/main: ok' 'ok' (Det $m.Json 'limpieza').estado
+  Igual 'y el resto de notas.bak sale' 'notas.bak' ((Limpieza-De $m.Json 'resto-herramienta') | ForEach-Object { $_.fichero })
 }
 
 # ================================ M45: LA MARCA DE INTENTO EN CADA RONDA ================================
