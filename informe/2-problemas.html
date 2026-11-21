@@ -3,7 +3,7 @@
   <p class="lede"><code>{{MIGRADO}}</code> comparado con la referencia <code>{{PLANTILLA}}</code>. Primero las áreas con errores.</p>
 </header>
 
-{{{DIAGNOSTICO}}}
+{{{DIAGNOSTICO}}}{{{PROPIEDADES}}}
 <!--TROZO titulo-problemas-->Problemas del batch migrado {{BATCH}}<!--FIN-->
 <!--TROZO diagnostico--><section class="panel" id="estado-build" aria-labelledby="t-build">
   <h2 id="t-build">Compilación y tests</h2>
@@ -54,6 +54,20 @@
 <!--TROZO arregla-paridad-->Migrar el job del original que falta, con el mismo nombre.<!--FIN-->
 <!--TROZO arregla-e2e-->Escribir una prueba de extremo a extremo por job que lo lance de principio a fin y compruebe su salida.<!--FIN-->
 <!--TROZO arregla-tests-->Hacer que los tests pasen: adaptarlos a la nueva estructura o corregir el fallo real de la migración.<!--FIN-->
+<!--TROZO area-propiedades-->Propiedades<!--FIN-->
+<!--TROZO arregla-propiedades-->Poner cada clave que falta en el <code>application.yml</code> del migrado (o en una variable de entorno), con el nombre nuevo de Spring Boot 3 si lo ha cambiado, y quitar las que ya no existen.<!--FIN-->
+<!--TROZO prop-sin-renombres--><p class="pg-como"><b>No se pudo medir</b> qué claves renombra Spring Boot 3 ({{MOTIVO}}): una clave que falte con otro nombre sale aquí como «falta», no como renombrada.</p><!--FIN-->
+<!--TROZO fila-prop-->    <li class="fila s-{{SEV}}">{{{MARCA}}}<code class="d">{{CLAVE}}</code><span class="q">{{{TEXTO}}}</span></li><!--FIN-->
+<!--TROZO prop-ninguna-->    <li class="fila"><span class="q">Ninguna clave del original falta en el migrado.</span></li><!--FIN-->
+<!--TROZO prop-estado-falta-->Falta en el migrado.<!--FIN-->
+<!--TROZO prop-estado-renombrada-falta-->Spring Boot 3 la renombra y el migrado no tiene ninguna de las dos.<!--FIN-->
+<!--TROZO prop-estado-ya-no-existe-->Spring Boot 3 ya no la tiene: quítala o busca la que la sustituye.<!--FIN-->
+<!--TROZO prop-estado-distinto-->El valor del migrado no es el del original.<!--FIN-->
+<!--TROZO prop-estado-sinleer-->Sobra: ni el código ni las librerías ni la referencia la leen.<!--FIN-->
+<!--TROZO prop-donde-original--> En el original: <code>{{DONDE}}</code>.<!--FIN-->
+<!--TROZO prop-donde-migrado--> En el migrado: <code>{{DONDE}}</code>.<!--FIN-->
+<!--TROZO prop-nuevo--> Nombre nuevo: <code>{{NOMBRE}}</code>.<!--FIN-->
+<!--TROZO prop-secreto--> Es un secreto: no se enseña su valor.<!--FIN-->
 <!--TROZO arregla-calidad-->Resolver los avisos de calidad sin cambiar el comportamiento: Javadoc, inyección por constructor, logger en lugar de la consola y catch vacíos.<!--FIN-->
 <!--TROZO cob-panel--><section class="panel" id="cobertura" aria-labelledby="t-cobertura">
   <h2 id="t-cobertura">Cobertura de tests</h2>

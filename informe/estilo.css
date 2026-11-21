@@ -422,3 +422,10 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .m34-ejec-distinto{color:var(--mal);border-color:var(--mal);background:var(--mal-t)}
 .m34-ejec-ninguno{color:var(--toca);border-color:var(--toca);background:var(--toca-t)}
 .m34-ejec-igual{color:var(--muted);background:var(--surf)}
+/* C5a: estados de los puntos de la portada (bien, revisar, falta) */
+.s-bien{--st:var(--ok)}
+.s-revisar{--st:var(--toca)}
+.s-falta{--st:var(--mal)}
+.sev-bien{color:var(--ok)}
+.sev-revisar{color:var(--toca)}
+.sev-falta{color:var(--mal)}
