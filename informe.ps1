@@ -1906,24 +1906,34 @@ function Get-JuntadoPanelHtml($D, $T) {
 
 # Una fila de la lista de entrega: el punto (Id), si esta bien, hay que revisarlo o falta (Estado), el trozo de su etiqueta de origen (Origen:
 # et-medido, et-ia o et-sin), la pagina donde se ve y los valores de su frase. La frase es el trozo entrega-<Id>-<Estado> de index.html y el
-# nombre, entrega-nombre-<Id>: un punto nuevo es una funcion que da su fila mas esos trozos.
-function New-FilaEntrega([string]$Id, [string]$Estado, [string]$Enlace, $Valores = @{}, [string]$Origen = 'et-medido') {
-  return [pscustomobject]@{ Id = $Id; Estado = $Estado; Origen = $Origen; Enlace = $Enlace; Valores = $Valores }
+# nombre, entrega-nombre-<Id>: un punto nuevo es una funcion que da su fila mas esos trozos. Nota, si la hay, es el trozo de una frase que se anade a la de la fila.
+function New-FilaEntrega([string]$Id, [string]$Estado, [string]$Enlace, $Valores = @{}, [string]$Origen = 'et-medido', [string]$Nota = '') {
+  return [pscustomobject]@{ Id = $Id; Estado = $Estado; Origen = $Origen; Enlace = $Enlace; Valores = $Valores; Nota = $Nota }
 }
 
-# Bien si cada job de mapa.json tiene algun caso igual y ninguno distinto en la prueba en local. Sin los dos datos, falta.
+# Lo que falta para dar por buena la prueba en local: sus dos arneses hechos y, en cada job de mapa.json, algun caso igual y ninguno distinto.
+# Un job sin fila en prueba-local.json cuenta como sin caso igual. Sin el JSON, una sola frase. La usan el cierre (migracion.ps1) y la fila Prueba en local.
+function Get-FallosPruebaLocal($Pl, $Mapa) {
+  if (-not $Pl) { return @('no hay datos\prueba-local.json: la pasada no hizo la prueba en local') }
+  $f = @()
+  foreach ($a in @('original', 'migrado')) { if ([string]$Pl.arneses.$a -cne 'hecha') { $f += "el arnes del $a no esta hecho" } }
+  foreach ($j in @($Mapa.jobs | Where-Object { $null -ne $_ })) {
+    $p = @($Pl.jobs | Where-Object { [string]$_.job -ceq [string]$j.job })
+    if ($p.Count -eq 0 -or [int]$p[0].iguales -lt 1) { $f += "el job $($j.job) no tiene ningun caso igual" }
+    if ($p.Count -gt 0 -and [int]$p[0].distintos -gt 0) { $f += "el job $($j.job) tiene $([int]$p[0].distintos) casos distintos" }
+  }
+  return $f
+}
+
+# Bien si Get-FallosPruebaLocal no dice nada; revisar con su cuenta y sus textos si dice algo. Sin prueba-local.json o sin jobs en mapa.json, falta.
 function Get-FilaEntregaLocal($D) {
   $enlace = '3-original-vs-migrado.html'
   $jobs = @($D.Mapa.jobs | Where-Object { $null -ne $_ })
   if (-not $D.PruebaLocal -or $jobs.Count -eq 0) { return (New-FilaEntrega 'prueba-local' 'falta' $enlace) }
-  $mal = @()
-  foreach ($j in $jobs) {
-    $p = @($D.PruebaLocal.jobs | Where-Object { $null -ne $_ -and [string]$_.job -ceq [string]$j.job })
-    if ($p.Count -eq 0 -or [int]$p[0].iguales -lt 1 -or [int]$p[0].distintos -gt 0) { $mal += [string]$j.job }
-  }
+  $mal = @(Get-FallosPruebaLocal $D.PruebaLocal $D.Mapa)
   $estado = 'bien'
   if ($mal.Count -gt 0) { $estado = 'revisar' }
-  return (New-FilaEntrega 'prueba-local' $estado $enlace @{ N = "$($mal.Count)"; M = "$($jobs.Count)"; JOBS = ($mal -join ', ') })
+  return (New-FilaEntrega 'prueba-local' $estado $enlace @{ N = "$($mal.Count)"; M = "$($jobs.Count)"; TEXTOS = ($mal -join '; ') })
 }
 
 # Las puertas pasaron si el cierre junto.
@@ -1943,14 +1953,17 @@ function Get-FilaEntregaLimpieza($D) {
   return (New-FilaEntrega 'limpieza' $estado '5-buenas-practicas.html' @{ N = "$n" })
 }
 
-# Las claves del original que faltan en el migrado: falta mas renombrada-falta. Sin propiedades.json medido, falta.
+# Las claves del original que faltan en el migrado: falta mas renombrada-falta. Sin propiedades.json medido, falta. Con los renombres de Spring Boot 3 sin medir
+# sigue en bien o revisar, pero su frase lo dice: una clave vieja que Boot 3 ya no lee puede parecer igual.
 function Get-FilaEntregaPropiedades($D) {
   $enlace = '2-problemas.html#g-propiedades'
   if (-not $D.Propiedades -or -not $D.Propiedades.resumen) { return (New-FilaEntrega 'propiedades' 'falta' $enlace) }
   $n = @($D.Propiedades.legacy | Where-Object { $null -ne $_ -and @('falta', 'renombrada-falta') -ccontains [string]$_.estado }).Count
   $estado = 'bien'
   if ($n -gt 0) { $estado = 'revisar' }
-  return (New-FilaEntrega 'propiedades' $estado $enlace @{ N = "$n" })
+  $nota = ''
+  if ([string]$D.Propiedades.renombres.estado -ceq 'no se pudo medir') { $nota = 'entrega-propiedades-sin-renombres' }
+  return (New-FilaEntrega 'propiedades' $estado $enlace @{ N = "$n" } 'et-medido' $nota)
 }
 
 # Bien si hay convivencia.json: dice cuantos jobs van a la vez y cuantos uno detras de otro.
@@ -1972,9 +1985,11 @@ function Get-EntregaHtml($D, $T) {
   if (-not (Get-CierreHecho $D.Estado)) { return '' }
   $filas = Format-Lista $T 'entrega-fila' (Get-ListaEntrega $D) {
     param($f)
+    $nota = ''
+    if ($f.Nota) { $nota = ' ' + (Format-Trozo $T $f.Nota) }
     @{
       ESTADO = $f.Estado; MARCA = (Format-Trozo $T "entrega-marca-$($f.Estado)"); NOMBRE = (Format-Trozo $T "entrega-nombre-$($f.Id)")
-      ETIQUETA = (Format-Trozo $T $f.Origen); TEXTO = (Format-Trozo $T "entrega-$($f.Id)-$($f.Estado)" $f.Valores); ENLACE = $f.Enlace
+      ETIQUETA = (Format-Trozo $T $f.Origen); TEXTO = ((Format-Trozo $T "entrega-$($f.Id)-$($f.Estado)" $f.Valores) + $nota); ENLACE = $f.Enlace
     }
   }
   return (Format-Trozo $T 'entrega' @{ JUNTADO = (Get-JuntadoHtml $D $T); FILAS = $filas })
