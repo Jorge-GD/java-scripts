@@ -18,8 +18,10 @@ noAplica: [ { clave, motivo } ] }, con la clave del original.
 Puertas, en este orden (si una falla se deshace todo lo de la tarea, y se reintenta con el motivo y mas esfuerzo; al segundo fallo queda atascada, con un
 aviso, y la pasada sigue): a) el JSON vale; b) solo cambian los ficheros permitidos; c) ningun valor de un secreto del original sale en el diff (el script lo
 lee del original; de menos de 4 caracteres no se vigila); d) volver a comparar: cada clave pedida ya no esta en falta ni en renombrada-falta (una renombrada
-solo vale con su nombre nuevo) o esta en noAplica; e) Invoke-DiagnosticoMotor 'propiedades': compila y los tests no peor que en diagnostico-despues.md
-(la regla de Invoke-Cierre). Sin cambios (todo noAplica) no hay diagnostico ni commit.
+solo vale con su nombre nuevo) o esta en noAplica; f) ninguna clave empeora: una del original que estaba igual, por-variable o renombrada no pasa a distinto,
+falta, renombrada-falta ni ya-no-existe (con la misma comparacion de la d, asi que va antes de compilar); e) Invoke-DiagnosticoMotor 'propiedades': compila y
+los tests no peor que en diagnostico-despues.md (Get-FallosBuild de informe.ps1, la regla de Invoke-Cierre). Sin cambios (todo noAplica) no hay diagnostico
+ni commit.
 Un commit en el worktree: 'rescate(propiedades): <n> claves del original en el yml', solo con los ficheros permitidos que cambiaron.
 Deja datos\propiedades-arreglo.json = { estado (hecha, atascada, sin-faltan o sin-cambios), commit, pedidas, anadidas[], noAplica[], motivo, huella } y la
 linea 'Propiedades al yml: N anadidas, M no aplican (commit abc1234).' (o 'atascada: <motivo>' o 'ninguna falta'). Huella = claves pedidas con su valor, ficheros
@@ -158,10 +160,24 @@ function Get-SinResolver($J, $Pedidas, [string[]]$NoAplica) {
   return @($sin | Select-Object -Unique)
 }
 
-# Las puertas a-e sobre lo que ha dejado la IA en el worktree. Devuelve Motivo ('' si pasan todas), Ficha (anadidas y noAplica), Cambios (los ficheros que
+# La puerta f: las claves del original que estaban bien en el migrado ($Antes, el propiedades.json de antes de llamar a la IA: igual, por-variable o
+# renombrada) y que en $Ahora (el de despues) estan peor (distinto, falta, renombrada-falta o ya-no-existe). Una cadena por clave, sin su valor.
+function Get-ClavesQueEmpeoran($Antes, $Ahora) {
+  $bien = @('igual', 'por-variable', 'renombrada')
+  $mal = @('distinto', 'falta', 'renombrada-falta', 'ya-no-existe')
+  $res = @()
+  foreach ($a in @(@($Antes.legacy) | Where-Object { $_ -and ($bien -ccontains [string]$_.estado) })) {
+    foreach ($d in @(@($Ahora.legacy) | Where-Object {
+          $_ -and $_.clave -ceq $a.clave -and $_.perfil -ceq $a.perfil -and $_.fichero -ceq $a.fichero -and $_.linea -eq $a.linea -and ($mal -ccontains [string]$_.estado)
+        })) { $res += "$($a.clave) (perfil $($a.perfil), antes $($a.estado), ahora $($d.estado))" }
+  }
+  return $res
+}
+
+# Las puertas a-f sobre lo que ha dejado la IA en el worktree. Devuelve Motivo ('' si pasan todas), Ficha (anadidas y noAplica), Cambios (los ficheros que
 # hay que commitear; vacio = nada) y Parada ($true si el motor del diagnostico se ha caido: ya ha puesto la parada). Las que cambian el indice (git add) las
 # deshace quien llama.
-function Confirm-CambiosPropiedades($T, $Pedidas, $Permitidos, $Secretos) {
+function Confirm-CambiosPropiedades($T, $Pedidas, $Permitidos, $Secretos, $Antes) {
   $v = [pscustomobject]@{ Motivo = ''; Ficha = $null; Cambios = @(); Parada = $false }
   # a) el JSON
   $salida = Test-Salida $T $RepoRoot ''
@@ -193,6 +209,12 @@ function Confirm-CambiosPropiedades($T, $Pedidas, $Permitidos, $Secretos) {
     $v.Motivo = 'Despues de tu cambio, el script compara otra vez y estas claves siguen sin estar en el migrado (una renombrada solo vale con su nombre nuevo) ni en noAplica: ' + ($sin -join ', ') + '.'
     return $v
   }
+  # f) ninguna clave que estaba bien empeora
+  $peor = @(Get-ClavesQueEmpeoran $Antes $J)
+  if ($peor.Count -gt 0) {
+    $v.Motivo = 'Despues de tu cambio, estas claves del original ya estaban bien en el migrado y ahora no: ' + ($peor -join '; ') + '. No cambies ni borres lo que ya estaba: solo anades.'
+    return $v
+  }
   if ($v.Cambios.Count -eq 0) { return $v }
   # e) compila y los tests no peor que antes (la regla de Invoke-Cierre)
   if (-not (Invoke-DiagnosticoMotor 'propiedades')) { $v.Parada = $true; return $v }
@@ -200,8 +222,8 @@ function Confirm-CambiosPropiedades($T, $Pedidas, $Permitidos, $Secretos) {
   $antes = ''
   $rutaAntes = Join-Path $Datos 'diagnostico-despues.md'
   if (Test-Path -LiteralPath $rutaAntes) { $antes = Get-EstadoBuild ([System.IO.File]::ReadAllText($rutaAntes, $Utf8)) }
-  if ($nuevo -cnotlike 'compila: SI*') { $v.Motivo = "Con tu cambio el migrado no compila o no se ha podido comprobar (el diagnostico dice '$nuevo'): un fichero de propiedades no puede romper la compilacion." }
-  elseif ($nuevo -ceq 'compila: SI | tests: FALLAN' -and $antes -cne $nuevo) { $v.Motivo = 'Con tu cambio los tests fallan y antes no fallaban.' }
+  $fallos = @(Get-FallosBuild $nuevo $antes 'el migrado de antes de tu cambio')
+  if ($fallos.Count -gt 0) { $v.Motivo = 'Con tu cambio: ' + ($fallos -join '; ') + '. Un fichero de propiedades no puede empeorar la compilacion ni los tests.' }
   return $v
 }
 
@@ -209,7 +231,7 @@ function Confirm-CambiosPropiedades($T, $Pedidas, $Permitidos, $Secretos) {
 # Una ronda: una llamada a Copilot en el worktree del migrado, las puertas y, si pasan, el commit. Devuelve Estado (ok, sin-cambios, invalida, fallo,
 # tiempo, git o parada), Motivo, Commit y Ficha. Si no es ok ni sin-cambios, el worktree queda como estaba. La marca de intento (comun.ps1) va desde antes
 # de la llamada hasta que todo esta commiteado o deshecho; nunca en un finally (con Ctrl+C se ejecuta y la marca tiene que quedar).
-function Invoke-RondaPropiedades($T, $Pedidas, $Permitidos, $Secretos) {
+function Invoke-RondaPropiedades($T, $Pedidas, $Permitidos, $Secretos, $Antes) {
   $r = [pscustomobject]@{ Estado = 'ok'; Motivo = ''; Commit = ''; Ficha = $null }
   $motivo = ''
   $esfuerzo = $Cfg.EsfuerzoLectura
@@ -233,7 +255,7 @@ function Invoke-RondaPropiedades($T, $Pedidas, $Permitidos, $Secretos) {
   else {
     # un 'git add' de la IA dejaria sus cambios en el indice, donde Get-Cambios no los ve
     [void](Invoke-Git $RepoRoot @('reset', '-q'))
-    $v = Confirm-CambiosPropiedades $T $Pedidas $Permitidos $Secretos
+    $v = Confirm-CambiosPropiedades $T $Pedidas $Permitidos $Secretos $Antes
     if ($v.Parada) { $r.Estado = 'parada' }
     elseif ($v.Motivo) { $r.Estado = 'invalida'; $r.Motivo = $v.Motivo }
     else {
@@ -309,7 +331,7 @@ function Invoke-FasePropiedades([bool]$Conservar) {
     if ($mal) { Aviso "Propiedades al yml: no he podido apartar con git stash lo que habia sin confirmar en el worktree: $mal. No hago nada."; return $true }
     $secretos = @(Get-SecretosOriginal $J)
     while (-not $parada -and $t.estado -ceq 'pendiente') {
-      $o = Invoke-RondaPropiedades $t $pedidas $permitidos $secretos
+      $o = Invoke-RondaPropiedades $t $pedidas $permitidos $secretos $J
       if ($o.Estado -ceq 'parada') { $parada = $true; continue }
       $t.intentos++
       $t.motivo = $o.Motivo

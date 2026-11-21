@@ -252,6 +252,16 @@ function Get-VistaJob($D, $J) {
 # La linea "- Estado:" de un diagnostico.md (uno de los cinco textos del build de $TextosBuild), o '' si no la tiene.
 function Get-EstadoBuild([string]$Md) { return [regex]::Match($Md, '(?m)^- Estado: (.*)$').Groups[1].Value.Trim() }
 
+# La regla de las puertas de un build ($Ahora, el estado de un diagnostico) frente al de antes ($Antes): tiene que compilar ('compila: SI...') y los
+# tests solo pueden fallar si ya fallaban en $Antes. $DondeAntes dice de donde es ese 'antes' ('tu rama'). Devuelve el texto de cada cosa que falla
+# (vacio = vale). La usan las puertas del cierre y las de la fase de propiedades.
+function Get-FallosBuild([string]$Ahora, [string]$Antes, [string]$DondeAntes) {
+  $fallos = @()
+  if ($Ahora -cnotlike 'compila: SI*') { $fallos += "no compila o no se ha podido comprobar (el diagnostico dice '$Ahora')" }
+  if ($Ahora -ceq 'compila: SI | tests: FALLAN' -and $Antes -cne $Ahora) { $fallos += "los tests fallan y en $DondeAntes no fallaban" }
+  return $fallos
+}
+
 # Los problemas del migrado que dejo un diagnostico ($Cuando: antes de corregir o despues): hallazgos-<Cuando>.json y
 # diagnostico-<Cuando>.md. El orden de las areas es el de la tabla del .md (las que solo salen en los hallazgos, al final).
 # $null si falta alguno de los dos o el .json no se lee.
