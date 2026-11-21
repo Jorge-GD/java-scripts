@@ -1368,14 +1368,18 @@ function Get-RevisionHtml($D, $T) {
   if ($r.todo -eq $true) { $todo = Format-Trozo $T 'revision-todo' }
   $atascadas = [int]$r.atascadas
   $aviso = ''
-  if ($atascadas -gt 0) { $aviso = Format-Trozo $T 'revision-atascadas' @{ N = "$atascadas" } }
+  $cifra = Format-Trozo $T 'revision-cifra-atascadas' @{ N = "$atascadas" }
+  if ($atascadas -gt 0) {
+    $aviso = Format-Trozo $T 'revision-atascadas' @{ N = "$atascadas" }
+    $cifra = Format-Trozo $T 'revision-cifra-atascadas-mal' @{ N = "$atascadas" }
+  }
   $nada = ''
   if ($hallazgos.Count -eq 0) {
     $nada = Format-Trozo $T 'revision-nada' @{ N = "$([int]$r.hechas)" }
     if ([int]$r.hechas -eq 1) { $nada = Format-Trozo $T 'revision-nada-una' }
   }
   $panel = Format-Trozo $T 'revision' @{
-    ETIQUETA = (Format-Trozo $T 'et-ia'); TODO = $todo; UNIDADES = "$([int]$r.unidades)"; HECHAS = "$([int]$r.hechas)"; ATASCADAS = "$atascadas"
+    ETIQUETA = (Format-Trozo $T 'et-ia'); TODO = $todo; UNIDADES = "$([int]$r.unidades)"; HECHAS = "$([int]$r.hechas)"; CIFRA_ATASCADAS = $cifra
     HALLAZGOS = "$($hallazgos.Count)"; DESCARTADOS = "$([int]$r.descartados)"; AVISO = $aviso; NADA = $nada
   }
   return ("`n" + ((@($panel) + $grupos) -join "`n"))

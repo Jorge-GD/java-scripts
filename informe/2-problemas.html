@@ -62,13 +62,15 @@
   <div class="cifras">
     <p><b>{{UNIDADES}}</b>unidades</p>
     <p><b>{{HECHAS}}</b>hechas</p>
-    <p class="cif-mal"><b>{{ATASCADAS}}</b>atascadas</p>
+    {{{CIFRA_ATASCADAS}}}
     <p><b>{{HALLAZGOS}}</b>hallazgos</p>
     <p><b>{{DESCARTADOS}}</b>descartados</p>
   </div>
   {{{AVISO}}}
   {{{NADA}}}
 </section><!--FIN-->
+<!--TROZO revision-cifra-atascadas--><p><b>{{N}}</b>atascadas</p><!--FIN-->
+<!--TROZO revision-cifra-atascadas-mal--><p class="cif-mal"><b>{{N}}</b>atascadas</p><!--FIN-->
 <!--TROZO revision-todo--><p>Se ha revisado todo el código (<code>-RevisarTodo</code>), no solo lo que cambió.</p><!--FIN-->
 <!--TROZO revision-atascadas--><p>Unidades atascadas: {{N}}. La IA no dio un resultado válido en ellas. Al relanzar se conservan sin repetir; para volver a intentarlas, relanza el mismo comando con <code>-Reintentar</code>.</p><!--FIN-->
 <!--TROZO revision-nada--><p>La revisión no ha encontrado nada en {{N}} unidades.</p><!--FIN-->
