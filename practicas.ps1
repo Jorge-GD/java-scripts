@@ -5,7 +5,7 @@ tareas.ps1 (Write-Json, Read-Json, Get-Hash8). Solo ASCII. Vale para Windows Pow
 quitaron el 20-11: en el equipo de la persona acababan siempre en 'no se pudo medir' y costaban dos Maven por medida.
 
   Invoke-Practicas <repo> <referencia> <cuando> <datos> <registros> <hallazgos del motor>
-      Mide el repo migrado con 4 detectores y escribe <datos>\practicas-<cuando>.json y <registros>\practicas-<cuando>.log
+      Mide el repo migrado con 5 detectores y escribe <datos>\practicas-<cuando>.json y <registros>\practicas-<cuando>.log
       (la salida de Maven de javac y, al final, un resumen). Nunca lanza una excepcion ni para el diagnostico: un detector que falla
       queda en 'no se pudo medir' con su motivo y los demas siguen. El JSON se escribe siempre.
         javac            mvn -B compile (sin -q ni clean; antes se borran solo target\classes y target\maven-status). Cada
@@ -18,9 +18,16 @@ quitaron el 20-11: en el equipo de la persona acababan siempre en 'no se pudo me
         java21-texto     Solo leyendo el codigo de src\main\java, sin comentarios: lo que cambia de texto en Java 21. charset-por-defecto
                          (JEP 400, Java 18: el juego de caracteres por defecto pasa a UTF-8) y formato-cldr (Java 9: los nombres de mes y
                          dia y los separadores de numeros salen de CLDR). Solo avisa donde mirar; el arreglo depende del servidor.
+        limpieza         Sin Maven, solo avisa (no borra nada) de lo que no deberia llegar al senior. resto-herramienta: ficheros EN GIT
+                         (git ls-files) que son de Maven, del IDE, de un parche, de la migracion o de Copilot ($Cfg.RestosHerramienta; una
+                         incidencia por carpeta y otra por fichero). tests-entrega: PruebaLocalTest, RegresionLocalTest y los casos de
+                         prueba-local (una incidencia; no son un resto). Y, leyendo src/main: marca-pendiente (TODO, FIXME, XXX),
+                         codigo-comentado (3 o mas lineas // seguidas, con 2 que acaban en ; { o }) y clase-sin-uso (un .java que nadie
+                         nombra en src/main, sin anotacion de Spring ni main: solo una candidata, la decide la persona o la revision con IA).
   Tope: $Cfg.SegundosPracticas en total, para javac y Lombok (el que se pasa queda en 'no medido (tope)').
   Cache: la clave es el HEAD del migrado mas su git status --porcelain (sin target, .rescate ni migracion-*) y la huella de cada fichero
-  cambiado; si el JSON de ese <cuando> ya tiene la misma clave, no se mide.
+  cambiado; si el JSON de ese <cuando> ya tiene la misma clave Y lleva todos los detectores de hoy, no se mide (un JSON de antes de que
+  existiera un detector se mide otra vez aunque la clave sea la misma).
   queHago de cada incidencia: paso2 si el motor ya dice ese fichero y esa linea en sus hallazgos; si no, sonar (origen sonar) o
   mano (origen referencia). 'notoca' es de BP-1.
   Un practicas-<Cuando>.json de antes del 20-11 trae los detectores pmd y spotbugs: no se corrige aqui; informe.ps1 los ignora al leerlo.
@@ -33,6 +40,18 @@ $Cfg += @{
   LineaMaxJavap       = 7500   # caracteres de argumentos de cada llamada a javap (Windows corta la linea de comandos en 8.191)
   SonarReglasWay      = 608    # reglas del perfil Sonar way de Java: cita [c7] de buenas-practicas/PROPUESTA-fable.md
   SonarReglasAqui     = 1      # las de Sonar que se miden aqui: S5738 (javac, 'marked for removal'). informe.ps1 pone este 1 a lo guardado antes de quitar PMD
+  # Lo que no se sube a git, por quien lo deja (patrones de las plantillas Maven.gitignore y Java.gitignore de github/gitignore, sin *.jar, *.zip, *.war ni
+  # .mvn/wrapper/maven-wrapper.jar, que pueden estar a proposito; y lo de la migracion y Copilot). Un patron que acaba en '/' es una carpeta de cualquier
+  # nivel; los demas casan con el nombre del fichero ('*' no cruza '/').
+  RestosHerramienta   = @(
+    @{ Origen = 'Maven'; Patrones = @('target/', '*.class', '*.log', 'hs_err_pid*', 'replay_pid*', 'pom.xml.tag', 'pom.xml.releaseBackup', 'pom.xml.versionsBackup', 'pom.xml.next', 'release.properties', 'dependency-reduced-pom.xml', 'buildNumber.properties', '.mvn/timing.properties') },
+    @{ Origen = 'el IDE'; Patrones = @('.project', '.classpath', '.settings/', '.idea/', '*.iml', '.vscode/') },
+    @{ Origen = 'un parche'; Patrones = @('*.bak', '*.orig', '*.rej') },
+    @{ Origen = 'la migracion'; Patrones = @('migracion-*/', '.rescate/') },
+    @{ Origen = 'Copilot'; Patrones = @('.github/modernize/') }
+  )
+  # Los tests de entrega de la prueba en local (-Regresion): no son un resto, pero se decide con el equipo si se quedan.
+  TestsEntrega        = '(^|/)(PruebaLocalTest|RegresionLocalTest)\.java$|(^|/)src/test/resources/prueba-local(-esperado)?/'
 }
 
 # ============================== UTILIDADES ==============================
@@ -420,6 +439,176 @@ function Get-ResultadoJava21Texto([string]$Repo) {
   return @{ Estado = 'ok'; Incidencias = $inc }
 }
 
+# ================================ LIMPIEZA ================================
+# El glob de un nombre ('*' dentro de un nombre, sin cruzar '/') como expresion regular.
+function ConvertTo-RegexGlob([string]$Patron) { return ([regex]::Escape($Patron) -replace '\\\*', '[^/]*') }
+
+# Los ficheros que sigue git (git ls-files, con '/'), o $null si la carpeta no es un repo de git. La coma conserva una lista vacia.
+function Get-FicherosGit([string]$Repo) {
+  try { $g = Invoke-Git $Repo @('-c', 'core.quotepath=off', 'ls-files') }
+  catch { return $null }
+  if ($g.Codigo -ne 0) { return $null }
+  return , @($g.Salida | Where-Object { $_ })
+}
+
+# Los ficheros de src/main de cualquier modulo (sin lo que cuelga de target) que se leen aqui: Rel (con /), Ext (en minusculas) y Texto. Ordenados.
+function Get-FuentesSrcMain([string]$Repo) {
+  $leer = @('.java', '.yml', '.yaml', '.properties', '.xml', '.sql', '.factories', '.imports')
+  $r = @()
+  foreach ($f in @(Get-ChildItem -LiteralPath $Repo -Recurse -File -ErrorAction SilentlyContinue)) {
+    $ext = $f.Extension.ToLowerInvariant()
+    if ($leer -cnotcontains $ext) { continue }
+    $rel = Get-RelRepo $Repo $f.FullName
+    if ($rel -cnotmatch '(^|/)src/main/' -or $rel -cmatch '(^|/)target/') { continue }
+    $r += [pscustomobject]@{ Rel = $rel; Ext = $ext; Texto = [System.IO.File]::ReadAllText($f.FullName) }
+  }
+  return @($r | Sort-Object Rel)
+}
+
+# Una incidencia por carpeta de resto (de cualquier nivel: la mas alta que case) y otra por fichero de resto, solo de los ficheros que esta en git.
+# Lo que cuelga de una carpeta de resto cuenta en su carpeta. Los tests de entrega de la prueba en local no son un resto.
+function Get-RestosHerramienta([string[]]$Rutas) {
+  $carpetas = @()
+  $ficheros = @()
+  foreach ($g in @($Cfg.RestosHerramienta)) {
+    foreach ($p in @($g.Patrones)) {
+      if ($p.EndsWith('/')) { $carpetas += [pscustomobject]@{ Rx = '^(?<c>(?:[^/]+/)*?' + (ConvertTo-RegexGlob $p.TrimEnd('/')) + '/)'; Origen = $g.Origen } }
+      else { $ficheros += [pscustomobject]@{ Rx = '(^|/)' + (ConvertTo-RegexGlob $p) + '$'; Origen = $g.Origen } }
+    }
+  }
+  $quitar = 'Si no hace falta, quitalo de git y anadelo a .gitignore.'
+  $deCarpeta = [ordered]@{}
+  $incFicheros = @()
+  foreach ($ruta in @($Rutas)) {
+    if ($ruta -cmatch $Cfg.TestsEntrega) { continue }
+    $mejor = $null
+    foreach ($c in $carpetas) {
+      $m = [regex]::Match($ruta, $c.Rx)
+      if ($m.Success -and ($null -eq $mejor -or $m.Groups['c'].Length -lt $mejor.Carpeta.Length)) { $mejor = [pscustomobject]@{ Carpeta = $m.Groups['c'].Value; Origen = $c.Origen } }
+    }
+    if ($null -ne $mejor) {
+      if (-not $deCarpeta.Contains($mejor.Carpeta)) { $deCarpeta[$mejor.Carpeta] = [pscustomobject]@{ Origen = $mejor.Origen; N = 0 } }
+      $deCarpeta[$mejor.Carpeta].N++
+      continue
+    }
+    foreach ($f in $ficheros) {
+      if ($ruta -cmatch $f.Rx) { $incFicheros += , (New-Incidencia 'limpieza' $ruta 0 'limpieza' 'resto-herramienta' 'referencia' '' "Esta en git y es un resto de $($f.Origen). $quitar"); break }
+    }
+  }
+  $inc = @()
+  foreach ($carpeta in $deCarpeta.Keys) {
+    $n = $deCarpeta[$carpeta].N
+    $cuantos = "$n ficheros de $carpeta estan"
+    if ($n -eq 1) { $cuantos = "1 fichero de $carpeta esta" }
+    $inc += , (New-Incidencia 'limpieza' $carpeta 0 'limpieza' 'resto-herramienta' 'referencia' '' "$cuantos en git: es un resto de $($deCarpeta[$carpeta].Origen). $quitar")
+  }
+  return @($inc + $incFicheros)
+}
+
+# Una sola incidencia, con el primer fichero de git de los tests de entrega de la prueba en local (no son un resto: lo decide el equipo).
+function Get-TestsEntrega([string[]]$Rutas) {
+  $primero = @($Rutas | Where-Object { $_ -cmatch $Cfg.TestsEntrega } | Select-Object -First 1)
+  if ($primero.Count -eq 0) { return @() }
+  return , (New-Incidencia 'limpieza' $primero[0] 0 'limpieza' 'tests-entrega' 'referencia' '' 'Tests de entrega de la prueba en local (-Regresion): no son un resto, pero decide con tu equipo si se quedan en el repo.')
+}
+
+# TODO, FIXME y XXX (en mayusculas y palabra entera) en cualquier linea de src/main, una incidencia por linea. En un .java, el TODO y el FIXME ya los
+# avisa Sonar (S1135 y S1134, las dos en Sonar way: comprobado el 21-11 en sonar-java, profiles/Sonar_way); el XXX y lo que no es .java, no.
+function Get-MarcasPendientes($Fuentes) {
+  $inc = @()
+  foreach ($f in @($Fuentes | Where-Object { @('.java', '.yml', '.yaml', '.properties', '.xml', '.sql') -ccontains $_.Ext })) {
+    if ($f.Texto -cnotmatch '\b(?:TODO|FIXME|XXX)\b') { continue }
+    $n = 0
+    foreach ($l in ($f.Texto -split '\r?\n')) {
+      $n++
+      $m = [regex]::Match($l, '\b(?:TODO|FIXME|XXX)\b')
+      if (-not $m.Success) { continue }
+      $origen = 'referencia'
+      $sonar = ''
+      if ($f.Ext -ceq '.java' -and $m.Value -ceq 'TODO') { $origen = 'sonar'; $sonar = 'S1135' }
+      elseif ($f.Ext -ceq '.java' -and $m.Value -ceq 'FIXME') { $origen = 'sonar'; $sonar = 'S1134' }
+      $inc += , (New-Incidencia 'limpieza' $f.Rel $n 'limpieza' 'marca-pendiente' $origen $sonar ('Marca pendiente: ' + $l.Trim()))
+    }
+  }
+  return $inc
+}
+
+# En los .java de src/main/java, cada tramo de lineas seguidas que empiezan por // (tras los espacios) con 3 o mas lineas y al menos 2 que, sin el //,
+# acaban en ; { o }: una incidencia en su primera linea. Los /* */ y /** */ no cuentan. Es la S125 de Sonar (esta en Sonar way, comprobado el 21-11).
+function Get-CodigoComentado($Fuentes) {
+  $inc = @()
+  foreach ($f in @($Fuentes | Where-Object { $_.Ext -ceq '.java' -and $_.Rel -cmatch '(^|/)src/main/java/' })) {
+    if ($f.Texto -cnotmatch '(?m)^\s*//') { continue }
+    $lineas = @($f.Texto -split '\r?\n')
+    $tramo = @()
+    $ini = 0
+    for ($n = 1; $n -le $lineas.Count + 1; $n++) {   # una linea de mas, vacia, cierra el ultimo tramo
+      $l = ''
+      if ($n -le $lineas.Count) { $l = $lineas[$n - 1].Trim() }
+      if ($l.StartsWith('//')) {
+        if ($tramo.Count -eq 0) { $ini = $n }
+        $tramo += $l.Substring(2).Trim()
+        continue
+      }
+      if ($tramo.Count -ge 3 -and @($tramo | Where-Object { $_ -cmatch '[;{}]$' }).Count -ge 2) {
+        $inc += , (New-Incidencia 'limpieza' $f.Rel $ini 'limpieza' 'codigo-comentado' 'sonar' 'S125' "$($tramo.Count) lineas de codigo comentado: si ya no hace falta, borralas (git lo guarda).")
+      }
+      $tramo = @()
+    }
+  }
+  return $inc
+}
+
+# Clases candidatas a codigo muerto: un .java de src/main/java (sin package-info ni module-info) cuyo nombre no sale como palabra entera en ningun otro fichero
+# de src/main (los .java sin comentarios y, en src/main/resources, los .xml, .yml, .yaml, .properties, .factories e .imports), sin anotacion de Spring que la
+# cargue y sin main. Los tests no cuentan como uso. Solo mira nombres: es una candidata, no una prueba.
+function Get-ClasesSinUso($Fuentes) {
+  $deResources = @('.xml', '.yml', '.yaml', '.properties', '.factories', '.imports')
+  $enFicheros = New-Object 'System.Collections.Generic.Dictionary[string,int]'   # palabra -> en cuantos ficheros sale (con mayusculas y minusculas distintas)
+  $candidatas = @()
+  foreach ($f in $Fuentes) {
+    $codigo = $f.Texto
+    if ($f.Ext -ceq '.java') { $codigo = Get-JavaSinComentarios $f.Texto }
+    elseif ($f.Rel -cnotmatch '(^|/)src/main/resources/' -or $deResources -cnotcontains $f.Ext) { continue }
+    $palabras = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($m in [regex]::Matches($codigo, '\w+')) { [void]$palabras.Add($m.Value) }
+    foreach ($p in $palabras) { $n = 0; [void]$enFicheros.TryGetValue($p, [ref]$n); $enFicheros[$p] = $n + 1 }
+    $nombre = [System.IO.Path]::GetFileNameWithoutExtension($f.Rel)
+    if ($f.Ext -ceq '.java' -and $f.Rel -cmatch '(^|/)src/main/java/' -and $nombre -cne 'package-info' -and $nombre -cne 'module-info') {
+      $candidatas += [pscustomobject]@{ Rel = $f.Rel; Nombre = $nombre; Codigo = $codigo; Propio = [int]$palabras.Contains($nombre) }
+    }
+  }
+  $inc = @()
+  foreach ($c in $candidatas) {
+    $salen = 0
+    [void]$enFicheros.TryGetValue($c.Nombre, [ref]$salen)
+    if ($salen - $c.Propio -gt 0) { continue }
+    if ($c.Codigo -cmatch '@(?:[\w.]*\.)?(?:Configuration|AutoConfiguration|Component|Service|Repository|Controller|RestController|SpringBootApplication|ConfigurationProperties|EnableBatchProcessing)\b') { continue }
+    if ($c.Codigo -cmatch '\bstatic\s+void\s+main\s*\(') { continue }
+    $d = [regex]::Match($c.Codigo, '\b(?:class|interface|enum|record)\s+' + [regex]::Escape($c.Nombre) + '\b')
+    $linea = 1
+    if ($d.Success) { $linea = $c.Codigo.Substring(0, $d.Index).Split("`n").Count }
+    $inc += , (New-Incidencia 'limpieza' $c.Rel $linea 'limpieza' 'clase-sin-uso' 'referencia' '' 'Nadie la nombra en src/main y no la carga Spring: puede ser codigo muerto (si solo la usan los tests, tambien). Comprueba antes de borrarla.')
+  }
+  return $inc
+}
+
+# Lo que no deberia llegar al senior, sin Maven y sin borrar nada. Sin git no mide los restos ni los tests de entrega y lo dice en el motivo; sin git ni
+# src/main, no aplica.
+function Get-ResultadoLimpieza([string]$Repo) {
+  $git = Get-FicherosGit $Repo
+  $fuentes = @(Get-FuentesSrcMain $Repo)
+  if ($null -eq $git -and $fuentes.Count -eq 0) { return @{ Estado = 'no aplica'; Motivo = 'no hay src/main ni git' } }
+  $inc = @()
+  $motivo = ''
+  if ($null -eq $git) { $motivo = 'la carpeta no es un repo de git: no se miran resto-herramienta ni tests-entrega' }
+  else { $inc += @(Get-RestosHerramienta $git); $inc += @(Get-TestsEntrega $git) }
+  $inc += @(Get-MarcasPendientes $fuentes)
+  $inc += @(Get-CodigoComentado $fuentes)
+  $inc += @(Get-ClasesSinUso $fuentes)
+  return @{ Estado = 'ok'; Motivo = $motivo; Incidencias = $inc }
+}
+
 # queHago: paso2 si los hallazgos del motor dicen el mismo fichero y la misma linea; si no, sonar (origen sonar) o mano.
 # ('notoca' es de BP-1.) Los hallazgos del motor son una matriz de {Cat, Sev, Fichero, Linea, Detalle}; si no se pueden leer, ninguna es paso2.
 function Set-QueHago($Incidencias, [string]$HallazgosMotor) {
@@ -440,7 +629,7 @@ function Set-QueHago($Incidencias, [string]$HallazgosMotor) {
 # ================================ MEDIR ================================
 function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [string]$Datos, [string]$Registros, [string]$HallazgosMotor) {
   $reloj = [System.Diagnostics.Stopwatch]::StartNew()
-  $ids = @('javac', 'lombok-a-mano', 'lombok-qualifier', 'java21-texto')   # el orden del JSON
+  $ids = @('javac', 'lombok-a-mano', 'lombok-qualifier', 'java21-texto', 'limpieza')   # el orden del JSON
   $json = Join-Path $Datos "practicas-$Cuando.json"
   $registro = Join-Path $Registros "practicas-$Cuando.log"
   $res = @{}
@@ -451,7 +640,9 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     if ($clave -and (Test-Path -LiteralPath $json -PathType Leaf)) {
       $previo = $null
       try { $previo = Read-Json $json } catch { $previo = $null }
-      if ($null -ne $previo -and "$($previo.clave)" -ceq $clave) {
+      # un JSON de antes de que existiera un detector no vale aunque la clave sea la misma: le falta ese detector
+      $deAntes = @(@($previo.detectores) | Where-Object { $_ } | ForEach-Object { "$($_.id)" })
+      if ($null -ne $previo -and "$($previo.clave)" -ceq $clave -and @($ids | Where-Object { $deAntes -cnotcontains $_ }).Count -eq 0) {
         Info "Buenas practicas ($Cuando): ya medidas con este mismo codigo (clave $clave); no se vuelven a medir."
         return
       }
@@ -463,6 +654,7 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     $res['lombok-a-mano'] = Measure-Detector 'lombok-a-mano' { Get-ResultadoLombokAMano $Repo $Referencia $fin }
     $res['lombok-qualifier'] = Measure-Detector 'lombok-qualifier' { Get-ResultadoLombokQualifier $Repo }
     $res['java21-texto'] = Measure-Detector 'java21-texto' { Get-ResultadoJava21Texto $Repo }
+    $res['limpieza'] = Measure-Detector 'limpieza' { Get-ResultadoLimpieza $Repo }
   }
   catch {
     $fallo = $_.Exception.Message
@@ -502,7 +694,7 @@ function Invoke-Practicas([string]$Repo, [string]$Referencia, [string]$Cuando, [
     try { [System.IO.File]::AppendAllText($registro, ($resumen -join "`n") + "`n", $Utf8) } catch { $null = $_ }
 
     $porArea = @()
-    foreach ($a in @('java21', 'boot3-batch5', 'lombok', 'arquitectura')) {
+    foreach ($a in @('java21', 'boot3-batch5', 'lombok', 'arquitectura', 'limpieza')) {
       $n = @($incidencias | Where-Object { $_.area -ceq $a }).Count
       if ($n -gt 0) { $porArea += "${a}: $n" }
     }
