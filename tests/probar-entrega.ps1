@@ -221,7 +221,7 @@ $Pruebas['c5 (a) corregido sin cierre: el texto manda a juntar con -Cierre y el 
   $sec = Panel-De $i 'siguiente-paso'
   Comprueba 'el texto dice que revises y juntes con -Cierre' ((Texto-Plano $sec).Contains($TxtJuntalos)) (Texto-Plano $sec)
   $cmd = Comando-De $sec
-  Igual 'la portada enseña el mismo comando' ($paso.Comando -replace "`r", '') $cmd
+  Igual 'la portada ensena el mismo comando' ($paso.Comando -replace "`r", '') $cmd
   Comprueba 'y no dice git merge' ($cmd -notmatch 'merge' -and (Texto-Plano $sec) -notmatch 'merge') $cmd
   Comprueba 'sin cierre no sale el bloque Entrega' ($i -notmatch 'id="entrega"')
   # con cierre.hecho = false (un cierre a medias) tampoco
@@ -299,7 +299,7 @@ $Pruebas['c5 (c) cada parada cierre-*: su texto, su DETALLE y el comando de -Cie
   $p = [ordered]@{ motivo = 'cierre-otro'; detalle = 'algo raro'; registro = 'r'; ayuda = 'a' }
   $s = Nueva-Salida 'c-otro' (Estado-Base @{ parada = $p })
   $sec = Panel-De (Pagina $s 'index.html') 'siguiente-paso'
-  Comprueba 'cierre-otro cae en el texto de otro motivo' ((Texto-Plano $sec).Contains('Ha fallado el propio script (cierre-otro)')) (Texto-Plano $sec)
+  Comprueba 'cierre-otro cae en el texto de otro motivo' ((Texto-Plano $sec) -match 'Ha fallado el propio script \(\s*cierre-otro\s*\)') (Texto-Plano $sec)
   Igual 'y su comando es el de -Cierre' $ComandoCierre (Comando-De $sec)
   # y una parada que no es del cierre no cambia
   $p = [ordered]@{ motivo = 'git'; detalle = 'x'; registro = 'r'; ayuda = 'a' }
@@ -458,7 +458,7 @@ $Pruebas['c5 (f) pagina 2, area Propiedades: falta, renombrada-falta, ya-no-exis
   Comprueba 'la pagina 2 tiene el area Propiedades' ($g.Length -gt 0) 'sin g-propiedades'
   $t = Texto-Plano $g
   Comprueba 'con su nombre y la etiqueta Medido' ($t -match 'Propiedades' -and $g -match 'et et-medido') $t
-  Comprueba 'cuenta 3 errores y 2 avisos' ($t -match '3 errores, 2 avisos') $t
+  Comprueba 'cuenta 2 errores (falta y renombrada-falta) y 3 avisos' ($t -match '2 errores, 3 avisos') $t
   $filas = @([regex]::Matches($g, '(?s)<li class="fila s-(\w+)">.*?</li>'))
   Igual 'cinco filas' 5 $filas.Count
   foreach ($c in @('recibos.ruta', 'recibos.cola', 'recibos.vieja', 'recibos.limite', 'otra.sobra')) { Comprueba "sale $c" ($g.Contains('<code class="d">' + $c + '</code>')) $g }
@@ -474,10 +474,10 @@ $Pruebas['c5 (f) pagina 2, area Propiedades: falta, renombrada-falta, ya-no-exis
   Comprueba 'distinto: dice que el valor no es el del original' ($f4 -match 'El valor del migrado no es el del original') $f4
   $f5 = Texto-Plano (& $fila 'otra.sobra')
   Comprueba 'sin leer: del migrado, con su fichero' ($f5 -match 'Sobra' -and $f5.Contains('En el migrado: src/main/resources/application.yml:12')) $f5
-  Comprueba 'los errores llevan marca de error y los avisos de aviso' (($filas | ForEach-Object { $_.Groups[1].Value }) -join ',' -ceq 'error,error,error,aviso,aviso')
+  Comprueba 'primero los errores y luego los avisos' (($filas | ForEach-Object { $_.Groups[1].Value }) -join ',' -ceq 'error,error,aviso,aviso,aviso')
 }
 
-$Pruebas['c5 (f) pagina 2, Propiedades: un secreto no enseña su valor aunque el JSON lo traiga; todo va escapado; sin JSON el area no sale'] = {
+$Pruebas['c5 (f) pagina 2, Propiedades: un secreto no ensena su valor aunque el JSON lo traiga; todo va escapado; sin JSON el area no sale'] = {
   $leg = @(
     (Prop-Legacy 'recibos.clave-api' 'falta' 'src/main/resources/application.properties' 5 @{ secreto = $true; valorLegacy = 'sup3rS3creto-legacy'; valorMigrado = 'sup3rS3creto-migrado' })
     (Prop-Legacy 'recibos.usuario' 'distinto' 'src/main/resources/application.properties' 6 @{ valorLegacy = 'valorVisible1'; valorMigrado = 'valorVisible2' })
@@ -490,9 +490,9 @@ $Pruebas['c5 (f) pagina 2, Propiedades: un secreto no enseña su valor aunque el
   Comprueba 'el area sale' ($g.Length -gt 0)
   Comprueba 'ninguna pagina lleva el valor del secreto' (-not $p2.Contains('sup3rS3creto') -and -not (Pagina $s 'index.html').Contains('sup3rS3creto'))
   $t = Texto-Plano $g
-  Comprueba 'el secreto dice que no se enseña su valor, en las dos filas' ((@([regex]::Matches($t, 'no se ense.a su valor')).Count) -eq 2) $t
+  Comprueba 'el secreto dice que no se ensena su valor, en las dos filas' ((@([regex]::Matches($t, 'no se ense.a su valor')).Count) -eq 2) $t
   Comprueba 'la clave del secreto si sale' ($t.Contains('recibos.clave-api') -and $t.Contains('otra.password')) $t
-  Comprueba 'los valores de una clave que no es secreta tampoco se enseñan' (-not $p2.Contains('valorVisible1') -and -not $p2.Contains('valorVisible2'))
+  Comprueba 'los valores de una clave que no es secreta tampoco se ensenan' (-not $p2.Contains('valorVisible1') -and -not $p2.Contains('valorVisible2'))
   Comprueba 'la clave y el fichero se escapan' ($g.Contains('x&lt;b&gt;.y') -and $g.Contains('a&amp;b.properties:7'))
   # sin propiedades.json el area no sale y la pagina no nombra las propiedades
   $sin = Nueva-Salida 'f-sin' (Estado-Base)
