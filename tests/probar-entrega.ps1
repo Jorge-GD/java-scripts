@@ -78,8 +78,9 @@ function Caso-Local([string]$Job, [string]$Caso, [string]$Resultado) {
   return [ordered]@{ job = $Job; caso = $Caso; titulo = "Titulo $Caso"; resultado = $Resultado; motivo = ''; diferencias = @() }
 }
 
-# Los datos de la prueba en local: un objeto por job ($Jobs: nombre -> @(iguales, distintos)).
-function Local-Base($Jobs) {
+# Los datos de la prueba en local: un objeto por job ($Jobs: nombre -> @(iguales, distintos)) y el estado de sus dos arneses (por defecto, hechos).
+function Local-Base($Jobs, $Arneses = $null) {
+  if (-not $Arneses) { $Arneses = [ordered]@{ original = 'hecha'; migrado = 'hecha' } }
   $js = @()
   $casos = @()
   foreach ($j in $Jobs.Keys) {
@@ -87,7 +88,7 @@ function Local-Base($Jobs) {
     for ($i = 1; $i -le $Jobs[$j][0]; $i++) { $casos += (Caso-Local $j "ok$i" 'igual') }
     for ($i = 1; $i -le $Jobs[$j][1]; $i++) { $casos += (Caso-Local $j "mal$i" 'distinto') }
   }
-  return [ordered]@{ jobs = $js; casos = $casos }
+  return [ordered]@{ arneses = $Arneses; jobs = $js; casos = $casos }
 }
 
 # mapa.json con estos jobs (nombres), sin clases.
@@ -399,7 +400,7 @@ $Pruebas['c5 (e) lista de entrega: revisar con la cuenta en prueba en local, lim
   $l = @(Get-ListaEntrega (Read-DatosInforme $s))
   $pl = Fila-De $l 'prueba-local'
   Igual 'prueba en local: revisar' 'revisar' $pl.Estado
-  Igual 'con 2 de 3 jobs (resumenJob sin caso igual y avisoJob con distintos)' '2 3 resumenJob, avisoJob' ($pl.Valores.N + ' ' + $pl.Valores.M + ' ' + $pl.Valores.JOBS)
+  Igual 'con 2 fallos de 3 jobs (resumenJob sin caso igual y avisoJob con distintos) y sus textos' '2 3 el job resumenJob no tiene ningun caso igual; el job avisoJob tiene 2 casos distintos' ($pl.Valores.N + ' ' + $pl.Valores.M + ' ' + $pl.Valores.TEXTOS)
   $li = Fila-De $l 'limpieza'
   Igual 'limpieza: revisar' 'revisar' $li.Estado
   Igual 'con la cuenta de los que empiezan por limpieza:' '2' $li.Valores.N
@@ -411,7 +412,7 @@ $Pruebas['c5 (e) lista de entrega: revisar con la cuenta en prueba en local, lim
   $filas = @([regex]::Matches((Panel-De (Pagina $s 'index.html') 'entrega'), '(?s)<li class="fila s-(\w+)">.*?</li>') | ForEach-Object { $_.Groups[1].Value })
   Igual 'en la pagina: revisar, bien, revisar, revisar, falta' 'revisar,bien,revisar,revisar,falta' ($filas -join ',')
   $t = Texto-Plano (Panel-De (Pagina $s 'index.html') 'entrega')
-  Comprueba 'las cuentas salen en el texto' ($t -match '2 de 3 jobs' -and $t -match 'resumenJob, avisoJob') $t
+  Comprueba 'la cuenta y los textos salen en la frase' ($t -match '\(2\)' -and $t -match 'el job resumenJob no tiene ningun caso igual; el job avisoJob tiene 2 casos distintos') $t
   Comprueba 'y los estados en palabras' ($t -match 'Revisar' -and $t -match 'Bien' -and $t -match 'Falta') $t
 }
 
@@ -569,6 +570,121 @@ $Pruebas['c5 (i) el README, rescate.ps1 y comun.ps1 ya no mandan a juntar con gi
   Igual 'comun.ps1 tiene una linea Unirla a tu rama' 1 $comun.Count
   Comprueba 'que no dice git merge' ($comun[0] -notmatch 'merge') $comun[0]
   Comprueba 'y dice -Cierre' ($comun[0] -match '-Cierre') $comun[0]
+}
+
+# ================================ (j) C5a-ARREGLOS ================================
+$Pruebas['c5 (j) Get-FallosPruebaLocal tiene una sola definicion, en informe.ps1: migracion.ps1 la llama y la fila Prueba en local tambien'] = {
+  $utf8 = New-Object System.Text.UTF8Encoding($false)
+  $inf = [System.IO.File]::ReadAllText((Join-Path $raiz 'informe.ps1'), $utf8)
+  $mig = [System.IO.File]::ReadAllText((Join-Path $raiz 'migracion.ps1'), $utf8)
+  Igual 'informe.ps1 la define' 1 ([regex]::Matches($inf, '(?m)^function Get-FallosPruebaLocal\b').Count)
+  Igual 'migracion.ps1 ya no la define' 0 ([regex]::Matches($mig, '(?m)^function Get-FallosPruebaLocal\b').Count)
+  Comprueba 'migracion.ps1 la sigue llamando (el cierre)' ($mig -match 'Get-FallosPruebaLocal \$') 'sin llamada'
+  $fila = [regex]::Match($inf, '(?s)function Get-FilaEntregaLocal\b.*?\r?\n}\r?\n').Value
+  Comprueba 'la fila Prueba en local la llama en vez de repetir el bucle de los jobs' ($fila -match 'Get-FallosPruebaLocal' -and $fila -notmatch 'foreach') $fila
+}
+
+$Pruebas['c5 (j) Get-FallosPruebaLocal: los arneses sin hacer, el job sin caso igual (o sin fila) y el job con casos distintos; sin datos, una frase'] = {
+  $mapa = Mapa-Base @('cargaJob', 'resumenJob', 'avisoJob', 'sinFilaJob')
+  $local = Local-Base ([ordered]@{ cargaJob = @(2, 0); resumenJob = @(0, 0); avisoJob = @(1, 2) }) ([ordered]@{ original = 'hecha'; migrado = 'pendiente' })
+  $l = (ConvertTo-Json -InputObject $local -Depth 8) | ConvertFrom-Json
+  $m = (ConvertTo-Json -InputObject $mapa -Depth 8) | ConvertFrom-Json
+  $f = @(Get-FallosPruebaLocal $l $m)
+  Igual 'cuatro fallos' 4 $f.Count
+  Igual 'el arnes del migrado' 'el arnes del migrado no esta hecho' $f[0]
+  Igual 'resumenJob sin caso igual' 'el job resumenJob no tiene ningun caso igual' $f[1]
+  Igual 'avisoJob con dos distintos' 'el job avisoJob tiene 2 casos distintos' $f[2]
+  Igual 'un job sin fila en prueba-local.json cuenta como sin caso igual' 'el job sinFilaJob no tiene ningun caso igual' $f[3]
+  Igual 'sin el JSON, una sola frase que lo nombra' 1 @(Get-FallosPruebaLocal $null $m).Count
+  Comprueba 'y dice prueba-local.json' ((@(Get-FallosPruebaLocal $null $m)[0]) -match 'prueba-local\.json')
+  $bien = (ConvertTo-Json -InputObject (Local-Base ([ordered]@{ cargaJob = @(2, 0) })) -Depth 8) | ConvertFrom-Json
+  $mapa1 = (ConvertTo-Json -InputObject (Mapa-Base @('cargaJob')) -Depth 8) | ConvertFrom-Json
+  Igual 'con los dos arneses hechos y el job igual, nada' 0 @(Get-FallosPruebaLocal $bien $mapa1).Count
+}
+
+$Pruebas['c5 (j) fila Prueba en local: un arnes sin hacer con todos los jobs iguales da revisar; un job sin fila en prueba-local.json tambien, y lo nombra'] = {
+  $repo = Repo-Cierre 'j-local-repo' 1
+  $est = Estado-Base @{ migrado = $repo.Ruta; cierre = (Cierre-Hecho $repo) }
+  $iguales = [ordered]@{ cargaJob = @(2, 0); resumenJob = @(1, 0) }
+  $s = Nueva-Salida 'j-arnes' $est ([ordered]@{ 'correcciones.json' = (Correccion-Base 1); 'mapa.json' = (Mapa-Base @('cargaJob', 'resumenJob')); 'prueba-local.json' = (Local-Base $iguales ([ordered]@{ original = 'hecha'; migrado = 'pendiente' })) })
+  $f = Fila-De @(Get-ListaEntrega (Read-DatosInforme $s)) 'prueba-local'
+  Igual 'un arnes sin hacer: revisar' 'revisar' $f.Estado
+  Igual 'con un fallo, de 2 jobs' '1 2' ($f.Valores.N + ' ' + $f.Valores.M)
+  Igual 'y su texto' 'el arnes del migrado no esta hecho' $f.Valores.TEXTOS
+  $t = Texto-Plano (Panel-De (Pagina $s 'index.html') 'entrega')
+  Comprueba 'la portada lo dice' ($t.Contains('el arnes del migrado no esta hecho')) $t
+  $filas = @([regex]::Matches((Panel-De (Pagina $s 'index.html') 'entrega'), '(?s)<li class="fila s-(\w+)">') | ForEach-Object { $_.Groups[1].Value })
+  Igual 'y es la primera fila de la portada, en revisar' 'revisar' $filas[0]
+  $s = Nueva-Salida 'j-arneses' $est ([ordered]@{ 'correcciones.json' = (Correccion-Base 1); 'mapa.json' = (Mapa-Base @('cargaJob', 'resumenJob')); 'prueba-local.json' = (Local-Base $iguales ([ordered]@{ original = 'pendiente'; migrado = 'pendiente' })) })
+  $f = Fila-De @(Get-ListaEntrega (Read-DatosInforme $s)) 'prueba-local'
+  Igual 'los dos arneses sin hacer: dos fallos, uno por arnes' 'revisar 2 el arnes del original no esta hecho; el arnes del migrado no esta hecho' ($f.Estado + ' ' + $f.Valores.N + ' ' + $f.Valores.TEXTOS)
+  $s = Nueva-Salida 'j-sin-fila' $est ([ordered]@{ 'correcciones.json' = (Correccion-Base 1); 'mapa.json' = (Mapa-Base @('cargaJob', 'resumenJob', 'avisoJob')); 'prueba-local.json' = (Local-Base $iguales) })
+  $f = Fila-De @(Get-ListaEntrega (Read-DatosInforme $s)) 'prueba-local'
+  Igual 'un job de mapa.json sin fila en prueba-local.json: revisar' 'revisar' $f.Estado
+  Igual 'con un fallo, de 3 jobs, que nombra al job' '1 3 el job avisoJob no tiene ningun caso igual' ($f.Valores.N + ' ' + $f.Valores.M + ' ' + $f.Valores.TEXTOS)
+  Comprueba 'la portada nombra al job' ((Texto-Plano (Panel-De (Pagina $s 'index.html') 'entrega')).Contains('el job avisoJob no tiene ningun caso igual'))
+  $s = Nueva-Salida 'j-todo-bien' $est ([ordered]@{ 'correcciones.json' = (Correccion-Base 1); 'mapa.json' = (Mapa-Base @('cargaJob', 'resumenJob')); 'prueba-local.json' = (Local-Base $iguales) })
+  $f = Fila-De @(Get-ListaEntrega (Read-DatosInforme $s)) 'prueba-local'
+  Igual 'con los dos arneses hechos y todos los jobs iguales: bien' 'bien' $f.Estado
+  Igual 'sin textos de fallo' '' $f.Valores.TEXTOS
+}
+
+$Pruebas['c5 (j) fila Propiedades con los renombres sin medir: sigue en bien o en revisar y su frase anade sin medir los renombres de Spring Boot 3; con los renombres medidos no'] = {
+  $repo = Repo-Cierre 'j-prop-repo' 1
+  $est = Estado-Base @{ migrado = $repo.Ruta; cierre = (Cierre-Hecho $repo) }
+  $base = [ordered]@{ 'correcciones.json' = (Correccion-Base 1); 'mapa.json' = (Mapa-Base @('cargaJob')); 'prueba-local.json' = (Local-Base ([ordered]@{ cargaJob = @(2, 0) })) }
+  $casos = @(
+    @('sin-medir-bien', 'igual', 'no se pudo medir', 'bien', $true),
+    @('sin-medir-revisar', 'falta', 'no se pudo medir', 'revisar', $true),
+    @('medidos-bien', 'igual', 'ok', 'bien', $false),
+    @('medidos-revisar', 'falta', 'ok', 'revisar', $false)
+  )
+  foreach ($c in $casos) {
+    $datos = [ordered]@{}
+    foreach ($k in $base.Keys) { $datos[$k] = $base[$k] }
+    $datos['propiedades.json'] = (Propiedades-Base @((Prop-Legacy 'a.uno' $c[1])) @() $c[2])
+    $s = Nueva-Salida ('j-prop-' + $c[0]) $est $datos
+    $f = Fila-De @(Get-ListaEntrega (Read-DatosInforme $s)) 'propiedades'
+    Igual ($c[0] + ': el estado de siempre') $c[3] $f.Estado
+    $fila = [regex]::Match((Panel-De (Pagina $s 'index.html') 'entrega'), '(?s)<li class="fila s-\w+">(?:(?!</li>).)*Propiedades(?:(?!</li>).)*</li>').Value
+    Comprueba ($c[0] + ': esta la fila de Propiedades') ($fila.Length -gt 0) (Panel-De (Pagina $s 'index.html') 'entrega')
+    $t = Texto-Plano $fila
+    Igual ($c[0] + ': dice sin medir los renombres de Spring Boot 3') $c[4] ($t -match 'sin medir los renombres de Spring Boot 3')
+  }
+}
+
+$Pruebas['c5 (j) comun.ps1: el aviso de una rama de rescate sin unir da dos caminos, cada uno en su linea: -Cierre si vienes de migracion.ps1, git merge si no'] = {
+  $utf8 = New-Object System.Text.UTF8Encoding($false)
+  $l = @([System.IO.File]::ReadAllLines((Join-Path $raiz 'comun.ps1'), $utf8))
+  $i = @(0..($l.Count - 1) | Where-Object { $l[$_] -match 'Unirla a tu rama' })
+  Igual 'una linea Unirla a tu rama' 1 $i.Count
+  Comprueba 'la primera es el camino de migracion.ps1: lleva -Cierre y no git merge' ($l[$i[0]] -match '^\s*Info ' -and $l[$i[0]] -match 'migracion\.ps1' -and $l[$i[0]] -match '-Cierre' -and $l[$i[0]] -notmatch 'merge') $l[$i[0]]
+  Comprueba 'la siguiente es el otro camino: otra linea Info con git -C ... merge y sin -Cierre' ($l[$i[0] + 1] -match '^\s*Info ' -and $l[$i[0] + 1] -match 'git -C .* merge ' -and $l[$i[0] + 1] -notmatch '-Cierre') $l[$i[0] + 1]
+}
+
+$Pruebas['c5 (j) con cierre.hecho de una pasada anterior, una pasada nueva que corre, para o falla sigue diciendo su paso y su comando, no Ya esta en tu rama'] = {
+  $repo = Repo-Cierre 'j-nueva-repo' 1
+  $cierre = Cierre-Hecho $repo
+  $comando = $ComandoPasada.Replace('C:\ruta\migrado', $repo.Ruta)
+  $parada = [ordered]@{ motivo = 'git'; detalle = 'd'; registro = 'r'; ayuda = 'a' }
+  $localFallo = [ordered]@{ resultado = 'fallo'; codigo = 1; minutos = 1.5; detalle = 'dos / tres'; registro = 'registros/prueba-local.log' }
+  $tabla = @(
+    @('corriendo', @{ fin = '' }, ($comando + ' -Si')),
+    @('parada', @{ parada = $parada }, ($comando + ' -Si')),
+    @('local-fallo', @{ pruebaLocal = $localFallo }, ($comando + ' -Si'))
+  )
+  foreach ($f in $tabla) {
+    $est = Estado-Base @{ migrado = $repo.Ruta; cierre = $cierre }
+    foreach ($k in $f[1].Keys) { $est[$k] = $f[1][$k] }
+    $s = Nueva-Salida ('j-nueva-' + $f[0]) $est ([ordered]@{ 'correcciones.json' = (Correccion-Base 1); 'mapa.json' = (Mapa-Base @('cargaJob')); 'prueba-local.json' = (Local-Base ([ordered]@{ cargaJob = @(2, 0) })) })
+    $paso = Paso-De $s
+    Igual ($f[0] + ': su Caso, no el de juntado') $f[0] $paso.Caso
+    Comprueba ($f[0] + ': no es un juntado') (-not $paso.Juntado)
+    Igual ($f[0] + ': su comando') $f[2] $paso.Comando
+    $sp = Panel-De (Pagina $s 'index.html') 'siguiente-paso'
+    Comprueba ($f[0] + ': la portada no dice Ya esta en tu rama') ((Texto-Plano $sp) -notmatch 'Ya est. en tu rama') (Texto-Plano $sp)
+    Igual ($f[0] + ': la portada lleva su comando') $f[2] ((Comando-De $sp).Trim())
+  }
 }
 
 Invoke-Banco $Pruebas 'probar-entrega.ps1 (C5a: los informes despues de -Cierre)'
