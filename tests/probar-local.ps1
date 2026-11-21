@@ -5006,5 +5006,50 @@ Fila 'sin-nada' @('[INFO] BUILD SUCCESS')
   Igual 'sin nada: sin causa' '' $v['sin-nada']
 }
 
+$Pruebas['m53 (i) -Reparar con dos tests que fallan, cada uno con su message: El primero falla con: lleva el del primero de la lista, no el del ultimo'] = {
+  $e = Escenario-M53 'm53-i' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  # ZonaTest ya falla antes del arreglo (espera 5.02) y ReglaTest empieza a fallar con el (espera 5.01): fallan los dos, con messages distintos
+  [void](Commit-En $e.Wt 'src/test/java/com/acme/nuevo/ZonaTest.java' "package com.acme.nuevo;`n// ESPERA minimo=5.02`nclass ZonaTest {}`n" 'test que ya fallaba')
+  $r = Prueba-M53 $e '' @('-Reparar') @{} 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  $m = [regex]::Match("$($rep[0].motivo)", '\(esperan el comportamiento de ahora\?\): (\S+?),\s')
+  $mensajes = @{ 'com.acme.nuevo.ReglaTest.espera' = 'esperaba minimo=5.01 y hay 5.00'; 'com.acme.nuevo.ZonaTest.espera' = 'esperaba minimo=5.02 y hay 5.00' }
+  $otro = @{ 'com.acme.nuevo.ReglaTest.espera' = 'esperaba minimo=5.02'; 'com.acme.nuevo.ZonaTest.espera' = 'esperaba minimo=5.01' }
+  Comprueba 'el motivo nombra los dos tests y dice Fallan 2 y antes fallaban 1' ($m.Success -and $mensajes.ContainsKey($m.Groups[1].Value) -and $rep[0].motivo.Contains('Fallan 2 y antes fallaban 1.')) $rep[0].motivo
+  $primero = $m.Groups[1].Value
+  Comprueba 'acaba con El primero falla con: el message del primero de la lista' ($m.Success -and $rep[0].motivo.EndsWith(" El primero falla con: $($mensajes[$primero]).")) $rep[0].motivo
+  Comprueba 'y no con el del segundo' ($m.Success -and -not $rep[0].motivo.Contains($otro[$primero])) $rep[0].motivo
+  $p = @(Registros-Reparar $e 2)
+  Comprueba 'el prompt del reintento lleva lo mismo' ($m.Success -and $p.Count -ge 1 -and $p[0].Contains(" El primero falla con: $($mensajes[$primero]).")) (Cola ($p -join ' '))
+}
+
+$Pruebas['m53 (j) sin estado.txt con Maven en 1 y sin causa en el log: no es el caso de Maven bien y sin salida, la causa queda vacia y la consola dice sin causa'] = {
+  $e = Escenario-M53 'm53-j' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M53 $e 'sin-salida-rc1'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M53 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: sin estado.txt y sin causa' 'sin estado.txt|' "$($f.estado)|$($f.causa)"
+  Comprueba 'la consola dice sin causa en la salida de Maven y no lo de que no ha dejado salida' ($r.Salida -match 'el migrado no deja estado\.txt: sin causa en la salida de Maven' -and -not $r.Salida.Contains($CausaSinSalida53)) (Cola $r.Salida)
+}
+
+$Pruebas['m53 (k) un lado con estado.txt (EXCEPCION), Maven en 0 y sin causa en el log: no es el caso de Maven bien y sin salida, la causa queda vacia y la consola dice sin causa'] = {
+  $e = Escenario-M53 'm53-k' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M53 $e 'excepcion-muda'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M53 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: EXCEPCION y sin causa' 'EXCEPCION|' "$($f.estado)|$($f.causa)"
+  Comprueba 'la consola dice sin causa en la salida de Maven y no lo de que no ha dejado salida' ($r.Salida -match 'el migrado acaba EXCEPCION: sin causa en la salida de Maven' -and -not $r.Salida.Contains($CausaSinSalida53)) (Cola $r.Salida)
+}
+
+$Pruebas['m53 (l) sin estado.txt con Maven en 0 y una causa en el log (el aviso cancelling refresh attempt): la causa es la del log, no el texto fijo de que no ha dejado salida'] = {
+  $e = Escenario-M53 'm53-l' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M53 $e 'sin-salida-aviso'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M53 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: sin estado.txt, con la causa del aviso de Spring' "sin estado.txt|$CausaContexto53" "$($f.estado)|$($f.causa)"
+  Comprueba 'la consola dice esa causa y no lo de que no ha dejado salida' ($r.Salida.Contains("el migrado no deja estado.txt: $CausaContexto53") -and -not $r.Salida.Contains($CausaSinSalida53)) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
