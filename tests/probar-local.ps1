@@ -5863,7 +5863,7 @@ $hoy = [datetime]'2026-11-21'
 function Salida([string]$K, $V) { if ($null -eq $V) { $V = '(null)' }; $K + ' ' + $V }
 '@
   $raizPs = Split-Path -Parent $Script
-  $texto = 'param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-RutaLarga', 'Copy-Fichero', 'Copy-Salida', 'Get-RelSalida', 'Get-LargoRuta', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" +
+  $texto = 'param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-RutaLarga', 'Copy-ConDotNet', 'Copy-Fichero', 'Copy-Salida', 'Get-RelSalida', 'Get-LargoRuta', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" +
     (Texto-De-Funciones (Join-Path $raizPs 'tareas.ps1') @('Get-Hash8')) + "`n" + (Texto-De-Funciones (Join-Path $raizPs 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Aviso')) + "`n" + $pre + "`n" + $Cuerpo
   [System.IO.File]::WriteAllText($f, $texto)
   $r = Lanzar $f @($Dir)
@@ -5953,6 +5953,71 @@ Salida 'D' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-x/no2.txt'))
   Igual 'B: con el mismo mensaje que Copy-Item (el motivo de hoy)' 'True' $x.V['B']
   Igual 'C: con un origen largo que no existe y Windows simulado, falla tambien' 'True' $x.V['C']
   Igual 'D: y no deja ningun fichero' 'False' $x.V['D']
+}
+
+$Pruebas['m63 (d) con un origen largo en Windows, Copy-Fichero prueba primero Copy-Item con la ruta con \\?\ y, si falla, .NET con la misma ruta; si el primero copia no llega al segundo, y uno corto no pasa por .NET'] = {
+  $x = Lanza-M63 'd' @'
+$SoWindows = $true
+$de = Join-Path $Raiz ('m63-d/' + ('o' * 100) + '/' + ('p' * 100) + '/' + ('q' * 60) + '.txt')
+New-Item -ItemType Directory -Path (Split-Path $de -Parent) -Force | Out-Null
+[System.IO.File]::WriteAllText($de, 'hola')
+$corto = Join-Path $Raiz 'm63-d/corto.txt'
+[System.IO.File]::WriteAllText($corto, 'hola')
+$script:Llamadas = @()
+$script:ItemFalla = $true
+function Copy-Item {
+  param([string]$LiteralPath, [string]$Destination, [switch]$Force, $ErrorAction)
+  $script:Llamadas += 'item:' + $LiteralPath
+  if ($script:ItemFalla) { throw 'Copy-Item falla' }
+  Microsoft.PowerShell.Management\Copy-Item -LiteralPath $de -Destination $Destination -Force
+}
+function Copy-ConDotNet {
+  param([string]$De, [string]$A)
+  $script:Llamadas += 'net:' + $De
+  [System.IO.File]::Copy($de, $A, $true)
+}
+$larga = Get-RutaLarga $de $true
+Copy-Fichero $de (Join-Path $Raiz 'm63-d/destino1.txt')
+Salida 'A' (($script:Llamadas -join '|') -ceq ('item:' + $larga + '|net:' + $larga))
+Salida 'B' ([System.IO.File]::ReadAllText((Join-Path $Raiz 'm63-d/destino1.txt')))
+$script:Llamadas = @(); $script:ItemFalla = $false
+Copy-Fichero $de (Join-Path $Raiz 'm63-d/destino2.txt')
+Salida 'C' (($script:Llamadas -join '|') -ceq ('item:' + $larga))
+Salida 'D' ([System.IO.File]::ReadAllText((Join-Path $Raiz 'm63-d/destino2.txt')))
+$script:Llamadas = @(); $script:ItemFalla = $true
+$ok = $true
+try { Copy-Fichero $corto (Join-Path $Raiz 'm63-d/destino3.txt') } catch { $ok = $false }
+Salida 'E' (($script:Llamadas -join '|') -ceq ('item:' + $corto))
+Salida 'F' (-not $ok)
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: si Copy-Item falla, prueba .NET con la misma ruta con prefijo, despues de Copy-Item' 'True' $x.V['A']
+  Igual 'B: y el fichero se copia' 'hola' $x.V['B']
+  Igual 'C: si Copy-Item copia, no llega a .NET' 'True' $x.V['C']
+  Igual 'D: y el fichero se copia' 'hola' $x.V['D']
+  Igual 'E: un origen corto va solo con Copy-Item y su ruta, sin prefijo' 'True' $x.V['E']
+  Igual 'F: y si falla, falla (no hay segundo intento)' 'True' $x.V['F']
+}
+
+$Pruebas['m63 (e) con un origen largo en Windows y las dos copias fallando, Copy-Salida deja el fichero sin guardar con el motivo del ultimo error (el de .NET)'] = {
+  $x = Lanza-M63 'e' @'
+$SoWindows = $true
+$de = Join-Path $Raiz ('m63-e/' + ('o' * 100) + '/' + ('p' * 100) + '/' + ('q' * 60))
+New-Item -ItemType Directory -Path $de -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $de 'dato.txt'), 'hola')
+function Copy-Item { param([string]$LiteralPath, [string]$Destination, [switch]$Force, $ErrorAction) throw 'Copy-Item falla' }
+function Copy-ConDotNet { param([string]$De, [string]$A) throw 'File.Copy falla' }
+$no = @(Copy-Salida $de (Join-Path $Raiz 'm63-e/destino') 'cargaJob' 'caso' @($hoy))
+Salida 'A' $no.Count
+Salida 'B' $no[0].motivo
+Salida 'C' $no[0].fichero
+Salida 'D' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-e/destino/dato.txt'))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: un fichero sin guardar' 1 $x.V['A']
+  Igual 'B: con el mensaje del ultimo error, el de .NET' 'File.Copy falla' $x.V['B']
+  Igual 'C: el del fichero' 'dato.txt' $x.V['C']
+  Igual 'D: sin copiar' 'False' $x.V['D']
 }
 
 # ================================ LANZADOR ================================
