@@ -1058,7 +1058,6 @@ function Get-FaseHtml($D, $T, [string]$Fase) {
   }
   elseif ([array]::IndexOf($orden, $Fase) -lt [array]::IndexOf($orden, $est)) { $e = 'hecha' }
   elseif ($Fase -eq $est) { $e = 'curso' }
-  elseif ($Fase -eq 'propiedades' -and $D.PropiedadesArreglo) { $e = 'hecha' }
   $ts = @($D.Tareas | Where-Object { $_.tipo -eq $Tipo })
   $cuenta = Format-Trozo $T 'cuenta-ninguna'
   if ($Fase -eq 'diagnostico') {
