@@ -25,8 +25,7 @@ $falsos = Join-Path $aqui 'falsos'
 . (Join-Path $raiz 'tareas.ps1')
 . (Join-Path $raiz 'informe.ps1')
 . (Join-Path $raiz 'propiedades.ps1')
-$rutaArreglo = Join-Path $raiz 'arreglo-propiedades.ps1'
-if (Test-Path -LiteralPath $rutaArreglo) { . $rutaArreglo }
+. (Join-Path $raiz 'arreglo-propiedades.ps1')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Cfg.CopilotExe = Join-Path $falsos 'c6b-copilot.ps1'
 $Cfg.MvnExe = Join-Path $falsos 'c6-mvn.ps1'
@@ -171,13 +170,16 @@ function Donde-Esta([string]$Valor, $E, [string]$Consola) {
 
 # Lo que tiene que cumplir toda tarea que se queda atascada: la pasada sigue, dos llamadas (la segunda con la correccion y su motivo), el migrado como
 # estaba, ningun commit nuevo, el JSON y la tarea atascadas y el aviso.
-function Comprueba-Atascada($E, $X, [string]$Motivo, [int]$Commits = 1) {
+function Comprueba-Atascada($E, $X, [string]$Motivo, [int]$Commits = 1, [switch]$SinCorreccion) {
   Igual 'la pasada sigue' $true $X.Sigue
   Igual 'dos llamadas' 2 (Llamadas-De $E.Llamadas).Count
   $p2 = ''
   if (Test-Path -LiteralPath (Join-Path $E.Prompts '2.md')) { $p2 = Prompt-De $E 2 }
-  Comprueba 'el prompt del reintento lleva la correccion' ($p2 -match 'CORRECCI') 'sin CORRECCI'
-  Comprueba "el prompt del reintento lleva el motivo ($Motivo)" ($p2 -match $Motivo) $p2
+  if ($SinCorreccion) { Comprueba 'el prompt del reintento (tras un fallo de la llamada) no lleva la correccion: no hay nada que corregir' ($p2 -notmatch 'CORRECCI') $p2 }
+  else {
+    Comprueba 'el prompt del reintento lleva la correccion' ($p2 -match 'CORRECCI') 'sin CORRECCI'
+    Comprueba "el prompt del reintento lleva el motivo ($Motivo)" ($p2 -match $Motivo) $p2
+  }
   Comprueba 'el migrado esta como al empezar' (Como-Antes $E) (Estado-Git $E)
   Igual 'ningun commit nuevo' $Commits $X.Commits.Count
   Igual 'JSON: atascada' 'atascada' $X.Json.estado
@@ -318,8 +320,8 @@ $Pruebas['6 d2b) crea un fichero que no esta permitido (otro perfil sin pedir): 
 
 $Pruebas['7 d3) escribe el valor de un secreto: se deshace, el motivo nombra la clave y el valor no sale en ningun sitio'] = {
   $E = Nuevo-Escenario 'd3' @{ ($RR + 'application.properties') = $LegS } $MigA
-  $yml = $YmlA2 + "db:`n  password: $Secreto`n"
-  Plan $E 1 @{ ficheros = @{ ($Yml) = $yml }; salida = $SalidaS; texto = "he copiado $Secreto como pedias" }
+  $conSecreto = $YmlA2 + "db:`n  password: $Secreto`n"
+  Plan $E 1 @{ ficheros = @{ ($Yml) = $conSecreto }; salida = $SalidaS; texto = "he copiado $Secreto como pedias" }
   $X = Fase $E
   Comprueba-Atascada $E $X 'db\.password'
   Igual 'no llega al diagnostico' 0 $X.Diag.Count
@@ -382,7 +384,7 @@ $Pruebas['13 d8) Copilot sale con codigo 1 despues de cambiar el yml: se deshace
   $E = Nuevo-Escenario 'd8' @{ ($RR + 'application.properties') = $LegA } $MigA
   Plan $E 1 @{ ficheros = @{ ($Yml) = $YmlA2 }; salida = $SalidaA2; sale = 1; texto = 'sin sesion' }
   $X = Fase $E
-  Comprueba-Atascada $E $X 'codigo 1'
+  Comprueba-Atascada $E $X 'codigo 1' -SinCorreccion
   Igual 'sin parada' 0 $script:Paradas.Count
 }
 
@@ -434,12 +436,12 @@ $Pruebas['16 f) cache: relanzar sin cambios no llama y deja el resultado; cambia
   # una atascada con la misma huella no se repite (Conservar); la huella son las claves pedidas con su valor, los ficheros permitidos y la plantilla
   Plan $E 1 @{ ficheros = @{ ($Yml) = $YmlA2 }; salida = @{ anadidas = @($AnadeLote, $AnadeBatch, @{ clave = 'app.inventada'; fichero = $Yml }); noAplica = @() } }
   $a = Fase $E
-  Igual 'primer lanzamiento: atascada, dos llamadas' 'atascada 2' "$($a.Json.estado) $(@(Llamadas-De $E.Llamadas).Count)"
+  Igual 'primer lanzamiento: atascada, dos llamadas' 'atascada 2' "$($a.Json.estado) $((Llamadas-De $E.Llamadas).Count)"
   $huella = $a.Json.huella
   $b = Fase $E
   Igual 'relanzar con la misma huella y atascada: ninguna llamada nueva' 2 (Llamadas-De $E.Llamadas).Count
   Igual 'sigue atascada, con la misma huella' "atascada $huella" "$($b.Json.estado) $($b.Json.huella)"
-  Comprueba 'la consola lo repite' ($b.Avisos -match '^Propiedades al yml: atascada: ') ($b.Avisos -join ' / ')
+  Comprueba 'la consola lo repite' (@($b.Avisos | Where-Object { $_ -match '^Propiedades al yml: atascada: ' }).Count -eq 1) ($b.Avisos -join ' / ')
   $c = Fase $E -Mantener $false
   Igual 'sin conservar las atascadas (-Reintentar): vuelve a llamar' 4 (Llamadas-De $E.Llamadas).Count
   # cambiar la plantilla

@@ -596,6 +596,7 @@ function Test-Salida($T, [string]$Dir, [string]$Leer) {
     'ficha-sh' { return (Test-FichaSh $T $Dir) }
     'comparar-sh' { return (Test-CompararSh $T $Dir) }
     'revision-flujo' { return (Test-Revision $T $Dir) }
+    'propiedades' { return (Test-SalidaPropiedades $T $Dir) }
     default { return (Test-Ficha $T $Dir $Leer) }
   }
 }
