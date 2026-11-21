@@ -80,7 +80,8 @@ function Get-PomLimpio([string]$Texto) {
 }
 
 # Donde esta <dependencies> directamente dentro de <project> (no la de un plugin, un perfil ni dependencyManagement): el indice de su etiqueta de
-# apertura (Abre) y el de la de cierre (Cierra). $null si el pom no la tiene. $Limpio es Get-PomLimpio del pom.
+# apertura (Abre) y el de la de cierre (Cierra). Un <dependencies> no lleva otro dentro: al cerrar uno con solo <project> abierto, la ultima apertura
+# es la suya. $null si el pom no la tiene. $Limpio es Get-PomLimpio del pom.
 function Find-DependenciasPom([string]$Limpio) {
   $pila = New-Object System.Collections.Generic.List[string]
   $abre = -1
@@ -88,12 +89,12 @@ function Find-DependenciasPom([string]$Limpio) {
     $n = $m.Groups['n'].Value
     if ($m.Groups['s'].Value) { continue }
     if (-not $m.Groups['c'].Value) {
-      if ($n -ceq 'dependencies' -and $pila.Count -eq 1 -and $pila[0] -ceq 'project') { $abre = $m.Index }
+      if ($n -ceq 'dependencies') { $abre = $m.Index }
       $pila.Add($n)
     }
     else {
       if ($pila.Count -gt 0) { $pila.RemoveAt($pila.Count - 1) }
-      if ($n -ceq 'dependencies' -and $pila.Count -eq 1 -and $abre -ge 0) { return [pscustomobject]@{ Abre = $abre; Cierra = $m.Index } }
+      if ($n -ceq 'dependencies' -and $pila.Count -eq 1) { return [pscustomobject]@{ Abre = $abre; Cierra = $m.Index } }
     }
   }
   return $null
