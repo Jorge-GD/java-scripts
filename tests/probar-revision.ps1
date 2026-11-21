@@ -585,17 +585,17 @@ $Pruebas['19 i) cache: la segunda pasada sin cambios no llama a Copilot; cambiar
 $Pruebas['20 i) el prompt: tipo, unidad, un FICHERO: por fichero, las candidatas de la unidad, el catalogo, el tope de hallazgos, la salida y la cita maxima'] = {
   $e = Nuevo-Escenario 'i2' $FicherosFlujo
   $u = @(Get-TareasRevision $e.Dir 'main' $true @(($P + 'EscritorUno.java')) $false)
-  $p = Get-Prompt $u[0] '' ''
-  Comprueba 'TIPO: revision-flujo' ($p -match '(?m)^TIPO: revision-flujo$')
-  Comprueba 'dice la unidad' ($p -match 'step paso')
-  Comprueba 'una linea FICHERO: por fichero, el step primero' ($p -match ('(?m)^FICHERO: ' + [regex]::Escape($P) + 'Pasos\.java\r?\n+FICHERO: ' + [regex]::Escape($P) + 'EscritorUno\.java$')) $p
-  Comprueba 'las candidatas de la unidad' ($p -match ('(?s)andidatas.*' + [regex]::Escape($P) + 'EscritorUno\.java')) $p
-  foreach ($r in @(Get-ReglasRevision)) { Comprueba "el catalogo lleva $($r.id): su texto" ($p.Contains($r.id + ': ' + $r.que)) }
-  Comprueba 'el tope de hallazgos (5)' ($p -match '\b5\b')
-  Comprueba 'la salida: .rescate/tareas/revision-paso.json' ($p.Contains('.rescate/tareas/revision-paso.json'))
-  Comprueba 'la cita maxima (120)' ($p.Contains('120'))
-  Comprueba 'no deja ninguna clave sin sustituir' ($p -notmatch '\{\{')
-  Comprueba 'sin motivo no lleva la seccion de correccion' ($p -notmatch 'CORRECCI' -and -not $p.Contains('<!--CORRECCION-->'))
+  $pr = Get-Prompt $u[0] '' ''
+  Comprueba 'TIPO: revision-flujo' ($pr -match '(?m)^TIPO: revision-flujo$')
+  Comprueba 'dice la unidad' ($pr -match 'step paso')
+  Comprueba 'una linea FICHERO: por fichero, el step primero' ($pr -match ('(?m)^FICHERO: ' + [regex]::Escape($P) + 'Pasos\.java\r?\n+FICHERO: ' + [regex]::Escape($P) + 'EscritorUno\.java$')) $pr
+  Comprueba 'las candidatas de la unidad' ($pr -match ('(?s)andidatas.*' + [regex]::Escape($P) + 'EscritorUno\.java')) $pr
+  foreach ($r in @(Get-ReglasRevision)) { Comprueba "el catalogo lleva $($r.id): su texto" ($pr.Contains($r.id + ': ' + $r.que)) }
+  Comprueba 'el tope de hallazgos (5)' ($pr -match '\b5\b')
+  Comprueba 'la salida: .rescate/tareas/revision-paso.json' ($pr.Contains('.rescate/tareas/revision-paso.json'))
+  Comprueba 'la cita maxima (120)' ($pr.Contains('120'))
+  Comprueba 'no deja ninguna clave sin sustituir' ($pr -notmatch '\{\{')
+  Comprueba 'sin motivo no lleva la seccion de correccion' ($pr -notmatch 'CORRECCI' -and -not $pr.Contains('<!--CORRECCION-->'))
   $suelta = Get-Prompt $u[1] '' ''
   Comprueba 'una unidad sin candidatas dice ninguna' ($suelta -match '(?s)andidatas[^\n]*\n+ninguna')
   $c = Get-Prompt $u[0] '' 'Mas de la mitad de los hallazgos no valen.'
