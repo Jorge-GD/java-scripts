@@ -5972,8 +5972,8 @@ function Copy-Item {
   Microsoft.PowerShell.Management\Copy-Item -LiteralPath $de -Destination $Destination -Force
 }
 function Copy-ConDotNet {
-  param([string]$De, [string]$A)
-  $script:Llamadas += 'net:' + $De
+  param([string]$Origen, [string]$A)
+  $script:Llamadas += 'net:' + $Origen
   [System.IO.File]::Copy($de, $A, $true)
 }
 $larga = Get-RutaLarga $de $true

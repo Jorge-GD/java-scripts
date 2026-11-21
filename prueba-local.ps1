@@ -294,12 +294,19 @@ function Get-RutaLarga([string]$Ruta, [bool]$EsWindows = $SoWindows) {
   return '\\?\' + $r
 }
 
+# Copia $De a $A con .NET: el segundo intento de Copy-Fichero con una ruta larga (File.Copy admite el prefijo \\?\ en .NET Framework 4.6.2 o posterior, pero depende de
+# como arranque el host el manejo de rutas antiguas). Es una funcion para que las pruebas la cambien.
+function Copy-ConDotNet([string]$De, [string]$A) { [System.IO.File]::Copy($De, $A, $true) }
+
+# Copia $De a $A. Con un origen de mas de 259 letras en Windows (Get-RutaLarga) prueba Copy-Item con la ruta con prefijo (el proveedor de ficheros de Windows
+# PowerShell 5.1 suele aceptarla) y, si lanza, Copy-ConDotNet con la misma; si fallan las dos, sale el error de la segunda.
 function Copy-Fichero([string]$De, [string]$A) {
   $d = Split-Path $A -Parent
   if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
   $origen = Get-RutaLarga $De
-  if ($origen -ceq $De) { Copy-Item -LiteralPath $De -Destination $A -Force }
-  else { [System.IO.File]::Copy($origen, $A, $true) }   # un origen de mas de 259 letras: Copy-Item de Windows PowerShell 5.1 no lo lee, File.Copy con \\?\ si
+  if ($origen -ceq $De) { Copy-Item -LiteralPath $De -Destination $A -Force; return }
+  try { Copy-Item -LiteralPath $origen -Destination $A -Force -ErrorAction Stop }
+  catch { Copy-ConDotNet $origen $A }
 }
 
 # Copia los ficheros de la carpeta $De (con sus subcarpetas) a $A, pisando los que haya. Sin $De, nada.
