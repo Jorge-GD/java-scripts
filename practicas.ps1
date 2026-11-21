@@ -39,7 +39,7 @@ $Cfg += @{
   JavapExe            = ''     # javap; vacio = el de JAVA_HOME
   LineaMaxJavap       = 7500   # caracteres de argumentos de cada llamada a javap (Windows corta la linea de comandos en 8.191)
   SonarReglasWay      = 608    # reglas del perfil Sonar way de Java: cita [c7] de buenas-practicas/PROPUESTA-fable.md
-  SonarReglasAqui     = 1      # las de Sonar que se miden aqui: S5738 (javac, 'marked for removal'). informe.ps1 pone este 1 a lo guardado antes de quitar PMD
+  SonarReglasAqui     = 4      # las de Sonar que se miden aqui: S5738 (javac, 'marked for removal'), S125 (codigo comentado), S1135 y S1134 (TODO y FIXME de un .java). informe.ps1 pone un 1 a lo guardado con PMD (antes del 20-11)
   # Lo que no se sube a git, por quien lo deja (patrones de las plantillas Maven.gitignore y Java.gitignore de github/gitignore, sin *.jar, *.zip, *.war ni
   # .mvn/wrapper/maven-wrapper.jar, que pueden estar a proposito; y lo de la migracion y Copilot). Un patron que acaba en '/' es una carpeta de cualquier
   # nivel; los demas casan con el nombre del fichero ('*' no cruza '/').

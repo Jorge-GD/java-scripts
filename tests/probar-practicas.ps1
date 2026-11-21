@@ -580,7 +580,7 @@ $Pruebas['8 c) lombok-qualifier: sale sin lombok.config y no sale con copyableAn
   Igual 'sin @RequiredArgsConstructor ni @AllArgsConstructor: ninguna' 0 (Qualifier-De (Mide $E @{}).Json).Count
 }
 
-$Pruebas['9 d) queHago: paso2 si el motor dice ese fichero y esa linea, sonar si no (javac) y mano (Lombok); sonar.reglasAqui es 1 (S5738)'] = {
+$Pruebas['9 d) queHago: paso2 si el motor dice ese fichero y esa linea, sonar si no (javac) y mano (Lombok); sonar.reglasAqui es 4 (S5738, S125, S1135 y S1134)'] = {
   $E = Nuevo-Escenario 'd' $true
   $tot = 'src/main/java/com/acme/demo/Totales.java'
   $cla = 'src/main/java/com/acme/demo/Clasificador.java'
@@ -600,7 +600,7 @@ $Pruebas['9 d) queHago: paso2 si el motor dice ese fichero y esa linea, sonar si
   Igual 'mano: la de Lombok' 1 @($j.incidencias | Where-Object { $_.queHago -ceq 'mano' -and $_.herramienta -ceq 'lombok' }).Count
   Igual 'ninguna incidencia con origen spotbugs' 0 @($j.incidencias | Where-Object { $_.origen -ceq 'spotbugs' }).Count
   Igual 'sonar.reglasWay: 608' 608 $j.sonar.reglasWay
-  Igual 'sonar.reglasAqui: 1 (S5738, la de javac)' 1 $j.sonar.reglasAqui
+  Igual 'sonar.reglasAqui: 4 (S5738 de javac, S125, S1135 y S1134 de limpieza)' 4 $j.sonar.reglasAqui
   # sin hallazgos del motor, ni una es paso2
   Remove-Item -LiteralPath $E.Hallazgos -Force
   $m = Mide $E @{ BP0_CLASES = $E.Clases; BP0_JAVAC_SALIDA = $salida }
@@ -751,7 +751,7 @@ $Pruebas['16 g) un detector que falla no para a los demas ni a la medida; nada l
 
 $Pruebas['17 ficheros y ajustes: ASCII, nada de PowerShell 7 y los ajustes en $Cfg'] = {
   Igual 'SegundosPracticas' 300 $Cfg.SegundosPracticas
-  Igual 'SonarReglasAqui' 1 $Cfg.SonarReglasAqui
+  Igual 'SonarReglasAqui' 4 $Cfg.SonarReglasAqui
   Comprueba 'SegundosMinAnalisis ya no existe' (-not $Cfg.ContainsKey('SegundosMinAnalisis'))
   foreach ($f in @('practicas.ps1', 'arreglo-practicas.ps1', 'tests/probar-practicas.ps1', 'tests/falsos/bp0-mvn.ps1', 'tests/falsos/bp0-javap.ps1', 'tests/falsos/bp4-mvn.ps1', 'tests/falsos/bp4-copilot.ps1')) {
     $t = [System.IO.File]::ReadAllText((Get-Ruta $raiz $f))
