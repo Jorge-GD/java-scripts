@@ -1711,14 +1711,15 @@ $Pruebas['m28 (a) el arnes del original da error en el test: el motivo acaba con
   Comprueba 'la consola la ensena' ($x.R.Salida.Contains('Causa: ' + $M28Fondo)) (Cola $x.R.Salida)
 }
 
-$Pruebas['m28 (b) un informe viejo de otra ejecucion y ninguno nuevo: el motivo no lleva la causa vieja ni Causa:'] = {
+$Pruebas['m28 (b) un informe viejo de otra ejecucion y ninguno nuevo: el motivo no lleva la causa vieja, y su Causa: es el mensaje del Failed to execute goal de Maven (m53)'] = {
   $x = Arnes-Falla-Surefire 'm28-b' 'arnes-surefire-viejo'
   Igual 'sale con 1' 1 $x.R.Codigo
   $m = [string]$x.T.motivo
   Comprueba 'el motivo lleva las lineas [ERROR] de Maven' ($m -match '\[ERROR\] Failed to execute goal') $m
   Comprueba 'no lleva la causa vieja' ($m -notmatch 'causa-vieja') $m
-  Comprueba 'ni una linea Causa:' ($m -notmatch '(?m)^Causa:') $m
-  Comprueba 'el prompt del reintento tampoco' ($x.Reintento -and $x.Reintento -notmatch 'causa-vieja' -and $x.Reintento -notmatch '(?m)^Causa:') (Cola $x.Reintento)
+  # antes de m53 no habia ninguna linea Causa: (la salida de Maven solo traia el [ERROR] Failed to execute goal ... There are test failures., que no daba causa)
+  Comprueba 'la linea Causa: es el mensaje del Failed to execute goal de Maven' ($m -match '(?m)^Causa: There are test failures\.$') $m
+  Comprueba 'el prompt del reintento tampoco lleva la causa vieja y lleva esa Causa:' ($x.Reintento -and $x.Reintento -notmatch 'causa-vieja' -and $x.Reintento -match '(?m)^Causa: There are test failures\.') (Cola $x.Reintento)
 }
 
 $Pruebas['m28 (c) informe con <<< ERROR! y ningun Caused by: la causa es la primera linea con texto despues'] = {
