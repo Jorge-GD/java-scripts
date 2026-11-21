@@ -35,15 +35,15 @@ $SecretoPro = 'cHJvLXNlY3JldG8='
 $Valores = @{
   pre = [ordered]@{
     'env.ruta-entrada' = '/data/pre/entrada'; 'env.lote-pedidos-endpoint' = 'https://pedidos.pre.acme.test/api'; 'env.cliente' = '<PENDIENTE>'
-    'env.reintentos' = '5'; 'env.url-token' = 'https://auth.pre.acme.test/token'
+    'env.reintentos' = '5'; 'env.url-auth' = 'https://auth.pre.acme.test/token'
   }
   pro = [ordered]@{
     'env.ruta-entrada' = '/data/pro/entrada'; 'env.lote-pedidos-endpoint' = 'https://pedidos.acme.test/api'; 'env.cliente' = 'acme-pro'
-    'env.reintentos' = '3'; 'env.url-token' = 'https://auth.acme.test/token'
+    'env.reintentos' = '3'; 'env.url-auth' = 'https://auth.acme.test/token'
   }
   des = [ordered]@{
     'env.ruta-entrada' = '<PENDIENTE>'; 'env.lote-pedidos-endpoint' = '<PENDIENTE>'; 'env.cliente' = '<PENDIENTE>'
-    'env.reintentos' = '<PENDIENTE>'; 'env.url-token' = '<PENDIENTE>'
+    'env.reintentos' = '<PENDIENTE>'; 'env.url-auth' = '<PENDIENTE>'
   }
 }
 $IdProps = 'configmap-plataforma-plataforma-ci-props-env'
@@ -65,8 +65,8 @@ lote:
   local: ${lote.entrada}
 rest:
   token:
-    url: ${env.url-token}
-    clave: ${env.url-token-clave}
+    url: ${env.url-auth}
+    clave: ${env.url-auth-clave}
 '@
 
 # El repo de configmap de referencia (con la forma del de verdad y datos inventados): 3 entornos de 4 ficheros, las carpetas de punto y dos ficheros sueltos.
@@ -100,7 +100,7 @@ function Ficheros-Entorno([string]$Env, $Ref, $Vals = $null, [string[]]$ExtraSec
   $l = @($Vals.Keys | Where-Object { $ExtraSecretas -notcontains $_ } | ForEach-Object { "pfx.variables.$_=$($Vals[$_])" })
   $f = [ordered]@{}
   $f["config/$Env/variables"] = ($l -join "`n") + "`n"
-  $s = '"variable":"env.url-token-clave","secreto":"<PENDIENTE: nombre del Secret>","clave":"<PENDIENTE: clave del Secret>"' + "`n"
+  $s = '"variable":"env.url-auth-clave","secreto":"<PENDIENTE: nombre del Secret>","clave":"<PENDIENTE: clave del Secret>"' + "`n"
   foreach ($x in $ExtraSecretas) { $s += '"variable":"' + $x + '","secreto":"<PENDIENTE: nombre del Secret>","clave":"<PENDIENTE: clave del Secret>"' + "`n" }
   $f["config/$Env/secretos"] = $s
   $f["config/$Env/montajes"] = Adapta $Ref["config/$Env/montajes"]
@@ -129,10 +129,10 @@ function Nuevo-Escenario([string]$Nombre, [hashtable]$Op = @{}) {
   Escribe $e.Migrado 'src/main/resources/application.yml' ($yml + "`n")
   $ref = Ficheros-Referencia
   foreach ($k in $ref.Keys) { Escribe $e.Ref $k $ref[$k] }
-  Escribe $e.Inv 'PRE/app.properties' "ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.token=https://auth.pre.acme.test/token`nurl.token.clave=$SecretoPre`nmax.reintentos=5`n"
+  Escribe $e.Inv 'PRE/app.properties' "ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.auth=https://auth.pre.acme.test/token`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`n"
   Escribe $e.Inv 'PRE/vault' "x=SECRETO_VAULT`n"
   Escribe $e.Inv 'PRE/host' "servidor=HOST_NO_LEER`n"
-  Escribe $e.Inv 'PRO/app.properties' "ruta.entrada=/data/pro/entrada`nlote.pedidos.endpoint=https://pedidos.acme.test/api`ncliente=acme-pro`nurl.token=https://auth.acme.test/token`nurl.token.clave=$SecretoPro`nmax.reintentos=3`n"
+  Escribe $e.Inv 'PRO/app.properties' "ruta.entrada=/data/pro/entrada`nlote.pedidos.endpoint=https://pedidos.acme.test/api`ncliente=acme-pro`nurl.auth=https://auth.acme.test/token`nurl.auth.clave=$SecretoPro`nmax.reintentos=3`n"
   Escribe $e.Inv 'PRO/vault.properties' "y=SECRETO_VAULT_PRO`n"
   Escribe $e.Inv 'group_vars/all.yml' "clave_x: SECRETO_GV`n"
   if ($Op.Git) { foreach ($d in @($e.Plantilla, $e.Migrado)) { Inicia-Repo $d } }
@@ -147,9 +147,10 @@ function Nuevo-Escenario([string]$Nombre, [hashtable]$Op = @{}) {
 }
 
 # El plan del Copilot de mentira para la tarea $Id: ficheros (ruta -> texto), salida (el texto de .rescate/tareas/<id>.json) y si es el de la llamada con correccion.
-function Plan($E, [string]$Id, $Ficheros = $null, [string]$Salida = $null, [bool]$Reintento = $false, [bool]$Falla = $false) {
+function Plan($E, [string]$Id, $Ficheros = $null, [string]$Salida = $null, [bool]$Reintento = $false, [bool]$Falla = $false, [string]$CopiaPrompt = '') {
   $p = [ordered]@{}
   if ($null -ne $Ficheros) { $p['ficheros'] = $Ficheros }
+  if ($CopiaPrompt) { $p['copiaPrompt'] = $CopiaPrompt }
   if ($Salida) { $p['salida'] = $Salida }
   if ($Falla) { $p['falla'] = $true }
   $n = $Id + '.json'
@@ -164,7 +165,7 @@ function Salida-Variables($Lista) {
 # Lo que contesta la IA a la tarea de variables: cada variable con su clave del inventario (o ninguna). El script no empareja nada por su cuenta.
 $ParesBuenos = [ordered]@{
   'env.cliente' = 'cliente'; 'env.lote-pedidos-endpoint' = 'lote.pedidos.endpoint'; 'env.reintentos' = 'max.reintentos'
-  'env.ruta-entrada' = 'ruta.entrada'; 'env.url-token' = 'url.token'; 'env.url-token-clave' = 'url.token.clave'
+  'env.ruta-entrada' = 'ruta.entrada'; 'env.url-auth' = 'url.auth'; 'env.url-auth-clave' = 'url.auth.clave'
 }
 function Respuesta-Variables($Pares, [string[]]$Secretas = @()) {
   return (Salida-Variables @($Pares.Keys | ForEach-Object { , @($_, $Pares[$_], ($Secretas -contains $_)) }))
@@ -290,15 +291,15 @@ $Pruebas['c9 (b1) variables: ${env.a} y ${env.b:x} salen, una resuelta dentro de
 }
 
 $Pruebas['c9 (b2) variables: todas van a la tarea de la IA (el script no empareja nada) y la pareja que contesta es la que da los valores'] = {
-  $y = "a:`n  x: `${env.ruta-entrada}`n  y: `${env.lote-pedidos-endpoint}`n  z: `${env.url-token-clave}`n"
+  $y = "a:`n  x: `${env.ruta-entrada}`n  y: `${env.lote-pedidos-endpoint}`n  z: `${env.url-auth-clave}`n"
   $e = Nuevo-Escenario 'b2' @{ Yml = $y }
   Planes-Buenos $e
-  Plan $e 'configmap-variables-1' $null (Respuesta-Variables ([ordered]@{ 'env.lote-pedidos-endpoint' = 'lote.pedidos.endpoint'; 'env.ruta-entrada' = 'ruta.entrada'; 'env.url-token-clave' = 'url.token.clave' }))
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables ([ordered]@{ 'env.lote-pedidos-endpoint' = 'lote.pedidos.endpoint'; 'env.ruta-entrada' = 'ruta.entrada'; 'env.url-auth-clave' = 'url.auth.clave' }))
   $x = Corre $e
   Igual 'sale con 0' 0 $x.R.Codigo
   Igual 'una sola llamada de variables, aunque el nombre case con una clave del inventario' 1 @(Llamadas-De $e | Where-Object { $_.Id -like 'configmap-variables-*' }).Count
   $t = Tarea-Guardada $e 'configmap-variables-1'
-  Igual 'con las tres variables' 'env.lote-pedidos-endpoint,env.ruta-entrada,env.url-token-clave' (@($t.entradas.variables) -join ',')
+  Igual 'con las tres variables' 'env.lote-pedidos-endpoint,env.ruta-entrada,env.url-auth-clave' (@($t.entradas.variables) -join ',')
   Comprueba 'el valor de pre sale de la pareja de la IA' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.ruta-entrada = /data/pre/entrada'))
   $p = Pendiente $e
   Comprueba 'PENDIENTE.md dice que la pareja la puso la IA' ($p -match '(?m)^\| env\.ruta-entrada \|[^|]*`ruta\.entrada`[^|]*IA[^|]*\|') $p
@@ -317,7 +318,7 @@ $Pruebas['c9 (b3) variables: van en tareas de 10 como mucho, con la lista cerrad
   Igual 'la segunda, 1' 1 @($t2.entradas.variables).Count
   Igual 'hay dos llamadas de variables' 2 @(Llamadas-De $e | Where-Object { $_.Id -like 'configmap-variables-*' }).Count
   $p = Prompt-De $e 'configmap-variables-1'
-  Comprueba 'el prompt lleva las claves del inventario' ($p.Contains('ruta.entrada') -and $p.Contains('max.reintentos') -and $p.Contains('url.token.clave'))
+  Comprueba 'el prompt lleva las claves del inventario' ($p.Contains('ruta.entrada') -and $p.Contains('max.reintentos') -and $p.Contains('url.auth.clave'))
   Comprueba 'y ningun valor del inventario' (-not $p.Contains('/data/pre/entrada') -and -not $p.Contains($SecretoPre) -and -not $p.Contains('acme-pro'))
   Comprueba 'lleva la linea del yml de la variable' ($p -match 'v03: \$\{env\.v03\}')
   Comprueba 'y el trabajo se hace en el repo nuevo, con el migrado a la vista' ((@(Llamadas-De $e)[0]).Carpeta -eq $e.Destino -and (@(Llamadas-De $e)[0]).Flags.Contains('--add-dir=' + $e.Migrado))
@@ -353,7 +354,7 @@ $Pruebas['c9 (b5) variables: una respuesta a la que falta una variable, o con un
   Comprueba 'el motivo nombra la variable que faltaba' ($t.motivo.Contains('env.reintentos')) $t.motivo
   Comprueba 'y la que no se pidio' ($t.motivo.Contains('env.otra')) $t.motivo
   Comprueba 'PENDIENTE.md la cuenta entre las atascadas' ((Seccion (Pendiente $e) 'Tareas atascadas').Contains('configmap-variables-1'))
-  Comprueba 'sin pareja, todas las variables salen pendientes (menos la secreta)' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.ruta-entrada = <PENDIENTE>') -and (Prompt-De $e 'configmap-entorno-pre').Contains('- env.url-token-clave (secreto, sin valor)'))
+  Comprueba 'sin pareja, todas las variables salen pendientes (menos la secreta)' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.ruta-entrada = <PENDIENTE>') -and (Prompt-De $e 'configmap-entorno-pre').Contains('- env.url-auth-clave (secreto, sin valor)'))
 }
 
 # ---- (c) entornos ----
@@ -368,7 +369,7 @@ $Pruebas['c9 (c1) entornos: el valor de PRE va a la tabla de pre y el de PRO a l
   Comprueba 'pro: la suya' ($pro.Contains('- env.ruta-entrada = /data/pro/entrada') -and -not $pro.Contains('/data/pre/'))
   Comprueba 'pre no tiene cliente: pendiente; pro lo tiene' ($pre.Contains('- env.cliente = <PENDIENTE>') -and $pro.Contains('- env.cliente = acme-pro'))
   Comprueba 'des no tiene inventario: todo pendiente' ($des.Contains('- env.ruta-entrada = <PENDIENTE>') -and $des.Contains('- env.cliente = <PENDIENTE>') -and -not $des.Contains('/data/') -and -not $des.Contains('acme-pro'))
-  Comprueba 'la secreta va sin valor, en los tres' ($pre.Contains('- env.url-token-clave (secreto, sin valor)') -and $pro.Contains('- env.url-token-clave (secreto, sin valor)') -and $des.Contains('- env.url-token-clave (secreto, sin valor)'))
+  Comprueba 'la secreta va sin valor, en los tres' ($pre.Contains('- env.url-auth-clave (secreto, sin valor)') -and $pro.Contains('- env.url-auth-clave (secreto, sin valor)') -and $des.Contains('- env.url-auth-clave (secreto, sin valor)'))
   Comprueba 'el valor de pre esta en su variables y el de pro en el suyo' ((Lee-Destino $e 'config/pre/variables').Contains('pfx.variables.env.ruta-entrada=/data/pre/entrada') -and (Lee-Destino $e 'config/pro/variables').Contains('pfx.variables.env.ruta-entrada=/data/pro/entrada'))
   Comprueba 'des tambien tiene sus cuatro ficheros' (@('variables', 'secretos', 'montajes', 'recursos' | Where-Object { Existe-Destino $e "config/des/$_" }).Count -eq 4)
   Comprueba 'la consola no se queda en blanco: dice donde ha quedado' ((Corre $e).Consola.Contains($e.Destino))
@@ -382,7 +383,7 @@ $Pruebas['c9 (c2) entornos: PENDIENTE.md lleva una tabla por entorno con de dond
   $pre = Seccion $p 'Entorno PRE'
   Comprueba 'hay seccion de PRE, de PRO y de DES' ((Seccion $p 'Entorno PRO') -and (Seccion $p 'Entorno DES') -and $pre)
   Comprueba 'una variable con valor, emparejada por la IA: valor puesto' ($pre -match '(?m)^\| env\.ruta-entrada \|[^|]*`ruta\.entrada`[^|]*IA[^|]*\| valor puesto \|') $pre
-  Comprueba 'la secreta: hay que pedir el Secret' ($pre -match '(?m)^\| env\.url-token-clave \|[^|]*\| secreto: hay que pedir el Secret \|') $pre
+  Comprueba 'la secreta: hay que pedir el Secret' ($pre -match '(?m)^\| env\.url-auth-clave \|[^|]*\| secreto: hay que pedir el Secret \|') $pre
   Comprueba 'la que el inventario de pre no tiene: pendiente' ($pre -match '(?m)^\| env\.cliente \|[^|]*\| pendiente \|') $pre
   Comprueba 'en DES, todo pendiente (menos la secreta)' ((Seccion $p 'Entorno DES') -match '(?m)^\| env\.ruta-entrada \|[^|]*\| pendiente \|')
   Comprueba 'las diferencias entre entornos dicen que PRE no tiene cliente y PRO si' ((Seccion $p 'Diferencias entre entornos').Contains('PRE no tiene `cliente`; PRO s' + $i_)) (Seccion $p 'Diferencias entre entornos')
@@ -391,15 +392,19 @@ $Pruebas['c9 (c2) entornos: PENDIENTE.md lleva una tabla por entorno con de dond
 }
 
 # ---- (d) secretos ----
-$Pruebas['c9 (d1) secretos: ni el valor del inventario ni el del vault salen en ningun prompt, fichero ni consola; el inventario solo se lee de los *.properties'] = {
+$Pruebas['c9 (d1) secretos: una IA que copia en un fichero todo lo que ve no saca ni el valor del inventario ni el del vault: ninguno llega a un prompt y la guarda (c) no encuentra nada'] = {
   $e = Nuevo-Escenario 'd1'
   Planes-Buenos $e
+  Plan $e 'configmap-entorno-pre' (Ficheros-Entorno 'pre' (Ficheros-Referencia) $Valores['pre']) $null $false $false 'config/pre/lo-que-vi'
   $x = Corre $e
+  Comprueba 'el fichero con el prompt entero de pre esta (la guarda lo ha mirado y lo ha dejado)' (Existe-Destino $e 'config/pre/lo-que-vi')
+  Comprueba 'y es el prompt de verdad: lleva la tabla con los valores no secretos' ((Lee-Destino $e 'config/pre/lo-que-vi').Contains('- env.ruta-entrada = /data/pre/entrada'))
+  Igual 'pre queda hecha' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
   foreach ($v in @($SecretoPre, $SecretoPro, 'SECRETO_VAULT', 'SECRETO_VAULT_PRO', 'SECRETO_GV', 'HOST_NO_LEER')) { Igual "el valor $v no sale en ningun sitio" 0 (Sale-Valor $e $v $x.Consola) }
   Comprueba 'el prompt de pre no tiene ni el secreto de pro, ni vault' (-not (Prompt-De $e 'configmap-entorno-pre').Contains('SECRETO'))
   Comprueba 'la lista de claves del prompt de variables no lleva las de vault.properties' ((Prompt-De $e 'configmap-variables-1') -notmatch '(?m)^- y\s*$')
   Comprueba 'sigue habiendo valores no secretos de pre' ((Lee-Destino $e 'config/pre/variables').Contains('/data/pre/entrada'))
-  Comprueba 'la variable de la clave es secreta por el nombre, y la linea de secretos la nombra sin valor' ((Lee-Destino $e 'config/pre/secretos').Contains('"variable":"env.url-token-clave"'))
+  Comprueba 'la variable de la clave es secreta por el nombre, y la linea de secretos la nombra sin valor' ((Lee-Destino $e 'config/pre/secretos').Contains('"variable":"env.url-auth-clave"'))
 }
 
 $Pruebas['c9 (d2) secretos: la IA marca como secreta una variable que no lo parece: no sale su valor en el prompt y la tarea la pide como secreto'] = {
@@ -420,7 +425,7 @@ $Pruebas['c9 (d3) secretos: si el falso escribe el valor del secreto en variable
   Planes-Buenos $e
   $v = [ordered]@{}
   foreach ($k in $Valores['pre'].Keys) { $v[$k] = $Valores['pre'][$k] }
-  $v['env.url-token-clave'] = $SecretoPre
+  $v['env.url-auth-clave'] = $SecretoPre
   Plan $e 'configmap-entorno-pre' (Ficheros-Entorno 'pre' (Ficheros-Referencia) $v)
   $x = Corre $e
   $t = Tarea-Guardada $e 'configmap-entorno-pre'
@@ -438,7 +443,7 @@ $Pruebas['c9 (d4) secretos: si lo escribe solo la primera vez, la segunda (con e
   Planes-Buenos $e
   $v = [ordered]@{}
   foreach ($k in $Valores['pro'].Keys) { $v[$k] = $Valores['pro'][$k] }
-  $v['env.url-token-clave'] = $SecretoPro
+  $v['env.url-auth-clave'] = $SecretoPro
   Plan $e 'configmap-entorno-pro' (Ficheros-Entorno 'pro' (Ficheros-Referencia) $v)
   Plan $e 'configmap-entorno-pro' (Ficheros-Entorno 'pro' (Ficheros-Referencia)) $null $true
   $x = Corre $e
@@ -455,7 +460,7 @@ $Pruebas['c9 (e1) cobertura: una variable no secreta que el falso se deja en pre
   foreach ($k in $Valores['pre'].Keys) { if ($k -ne 'env.lote-pedidos-endpoint') { $v[$k] = $Valores['pre'][$k] } }
   Plan $e 'configmap-entorno-pre' (Ficheros-Entorno 'pre' (Ficheros-Referencia) $v)
   $f = Ficheros-Entorno 'pro' (Ficheros-Referencia)
-  $f['config/pro/variables'] += "pfx.variables.env.url-token-clave=algo-que-no-es-un-valor-del-inventario`n"
+  $f['config/pro/variables'] += "pfx.variables.env.url-auth-clave=algo-que-no-es-un-valor-del-inventario`n"
   Plan $e 'configmap-entorno-pro' $f
   [void](Corre $e)
   $t = Tarea-Guardada $e 'configmap-entorno-pre'
@@ -463,7 +468,7 @@ $Pruebas['c9 (e1) cobertura: una variable no secreta que el falso se deja en pre
   Comprueba 'y el motivo nombra la variable que falta' ($t.motivo.Contains('env.lote-pedidos-endpoint')) $t.motivo
   $u = Tarea-Guardada $e 'configmap-entorno-pro'
   Igual 'pro (una secreta con valor) queda atascada' 'atascada' $u.estado
-  Comprueba 'y el motivo nombra la secreta' ($u.motivo.Contains('env.url-token-clave')) $u.motivo
+  Comprueba 'y el motivo nombra la secreta' ($u.motivo.Contains('env.url-auth-clave')) $u.motivo
 }
 
 $Pruebas['c9 (e2) cobertura: una variable con el valor de otro entorno, o un fichero que falta, hacen la tarea invalida'] = {
@@ -581,7 +586,7 @@ $Pruebas['c9 (h1) relanzar: sin cambios en las entradas no hay ni una llamada; u
   Igual 'el fichero sigue como lo dejo el usuario' "pfx.variables.env.a-mano=1`n" (Lee-Destino $e 'config/pre/variables')
   Comprueba 'la consola lo dice' ($x.Consola -match 'config/pre/variables' -and $x.Consola -match 'cambiado')
   Comprueba 'y PENDIENTE.md' ((Seccion (Pendiente $e) 'Ficheros que has cambiado').Contains('config/pre/variables'))
-  Escribe $e.Inv 'PRO/app.properties' "ruta.entrada=/data/pro/nueva`nlote.pedidos.endpoint=https://pedidos.acme.test/api`ncliente=acme-pro`nurl.token=https://auth.acme.test/token`nurl.token.clave=$SecretoPro`nmax.reintentos=3`n"
+  Escribe $e.Inv 'PRO/app.properties' "ruta.entrada=/data/pro/nueva`nlote.pedidos.endpoint=https://pedidos.acme.test/api`ncliente=acme-pro`nurl.auth=https://auth.acme.test/token`nurl.auth.clave=$SecretoPro`nmax.reintentos=3`n"
   $v = [ordered]@{}
   foreach ($k in $Valores['pro'].Keys) { $v[$k] = $Valores['pro'][$k] }
   $v['env.ruta-entrada'] = '/data/pro/nueva'
@@ -603,7 +608,7 @@ $Pruebas['c9 (h5) relanzar: un fichero que el usuario ha cambiado no se rehace n
   Planes-Buenos $e
   [void](Corre $e)
   Escribe $e.Destino 'config/pre/variables' "pfx.variables.env.a-mano=1`n"
-  Escribe $e.Inv 'PRE/app.properties' "ruta.entrada=/data/pre/nueva`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.token=https://auth.pre.acme.test/token`nurl.token.clave=$SecretoPre`nmax.reintentos=5`n"
+  Escribe $e.Inv 'PRE/app.properties' "ruta.entrada=/data/pre/nueva`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.auth=https://auth.pre.acme.test/token`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`n"
   $m = @(Llamadas-De $e).Count
   $x = Corre $e
   Igual 'cambia el inventario de pre pero el usuario cambio su fichero: ninguna llamada' '' (Ids-Nuevos $e $m)
@@ -677,11 +682,15 @@ function Estado-Cerrado($E) {
   return (Join-Path (Join-Path $salida 'datos') 'estado.json')
 }
 
-function Migra-C9($E, [string[]]$A, [string[]]$Entrada = @('')) {
+function Migra-C9($E, [string[]]$A, [string[]]$Entrada = @(''), [switch]$SinModelo) {
   $env:RESCATE_HOME = $E.Home
-  try { return (Lanzar (Join-Path $raiz 'migracion.ps1') (@('-Legacy', $E.Original, '-Migrado', $E.Migrado, '-Plantilla', $E.Plantilla, '-Modelo', 'modelo-x') + $A) '' $Entrada) }
+  $m = @('-Modelo', 'modelo-x')
+  if ($SinModelo) { $m = @() }
+  try { return (Lanzar (Join-Path $raiz 'migracion.ps1') (@('-Legacy', $E.Original, '-Migrado', $E.Migrado, '-Plantilla', $E.Plantilla) + $m + $A) '' $Entrada) }
   finally { $env:RESCATE_HOME = '' }
 }
+# Las carpetas de datos y registros de migracion.ps1 (dentro del migrado).
+function Datos-Migra($E) { return (Join-Path (Join-Path $E.Migrado 'migracion-acme-lote-pedidos') 'datos') }
 
 $Pruebas['c9 (i1) migracion.ps1 -ConfigMap: solo hace esta fase; pregunta la referencia la primera vez y la guarda en ajustes.json; el inventario va a estado.json'] = {
   $e = Migra-Escenario 'i1'
@@ -716,8 +725,8 @@ $Pruebas['c9 (i2) migracion.ps1 -ConfigMap: sin inventario (ni guardado) para co
   }
 }
 
-$Pruebas['c9 (i3) migracion.ps1 -Cierre: con las dos rutas hace el repo de configmap al final; sin -Inventario dice la linea y no lo hace'] = {
-  $e = Migra-Escenario 'i3'
+$Pruebas['c9 (i4) migracion.ps1 -Cierre: con las dos rutas hace el repo de configmap al final; sin -Inventario dice la linea y no lo hace'] = {
+  $e = Migra-Escenario 'i4'
   [void](Estado-Cerrado $e)
   Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'c9-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); JavaExe = (Join-Path $falsos 'java.ps1'); SegundosPorLlamada = 60; ConfigMapReferencia = $e.Ref }))
   $r = Migra-C9 $e @('-Cierre')
@@ -730,6 +739,314 @@ $Pruebas['c9 (i3) migracion.ps1 -Cierre: con las dos rutas hace el repo de confi
   Comprueba 'y no repite la linea de ayuda' (-not $r2.Salida.Contains('Para el repo de configmap'))
   $r3 = Migra-C9 $e @('-Cierre')
   Comprueba 'con el inventario ya guardado (sin -Inventario): lo vuelve a hacer, sin llamadas nuevas' ($r3.Codigo -eq 0 -and -not $r3.Salida.Contains('Para el repo de configmap'))
+}
+
+$Pruebas['c9 (i3) migracion.ps1 -Cierre sin nada que juntar (la rama de rescate ya esta en tu rama): sale con 0, dice como pedir el repo de configmap y no lo hace; con el repo hecho no repite la linea'] = {
+  $e = Migra-Escenario 'i3'
+  [void](Estado-Cerrado $e)
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'c9-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); JavaExe = (Join-Path $falsos 'java.ps1'); SegundosPorLlamada = 60; ConfigMapReferencia = $e.Ref }))
+  [void](GitEn $e.Migrado @('worktree', 'remove', '--force', ($e.Migrado + '-rescate')))
+  $r = Migra-C9 $e @('-Cierre')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'pasa por la salida de nada que juntar' ($r.Salida -match 'no hay nada que juntar') $r.Salida
+  Comprueba 'dice como pedir el repo de configmap' ($r.Salida.Contains('Para el repo de configmap: relanza con -ConfigMap -Inventario <carpeta del inventario del original>')) $r.Salida
+  Comprueba 'y no lo crea' (-not (Test-Path -LiteralPath $e.Destino))
+  $h = Migra-C9 $e @('-ConfigMap', '-Inventario', $e.Inv)
+  Igual 'con -ConfigMap -Inventario se hace' 0 $h.Codigo
+  Comprueba 'el repo esta hecho' (Test-Path -LiteralPath (Get-Ruta $e.Destino 'PENDIENTE.md')) $h.Salida
+  $r2 = Migra-C9 $e @('-Cierre')
+  Comprueba 'con el repo hecho, la misma salida no repite la linea' ($r2.Codigo -eq 0 -and $r2.Salida -match 'no hay nada que juntar' -and -not $r2.Salida.Contains('Para el repo de configmap')) $r2.Salida
+}
+
+$Pruebas['c9 (i5) migracion.ps1 -Cierre: una excepcion del repo de configmap avisa con la ruta del registro, sin error interno, y el codigo de salida es el del cierre'] = {
+  $e = Migra-Escenario 'i5'
+  $est = Estado-Cerrado $e
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'c9-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); JavaExe = (Join-Path $falsos 'java.ps1'); SegundosPorLlamada = 60; ConfigMapReferencia = $e.Ref; ConfigMapSecretos = '(' }))
+  $r = Migra-C9 $e @('-Cierre', '-Inventario', $e.Inv)
+  Igual 'sale con 0 (el del cierre)' 0 $r.Codigo
+  Comprueba 'avisa de que el repo de configmap no se ha hecho' ($r.Salida -match 'repo de configmap no se ha hecho') $r.Salida
+  Comprueba 'con la ruta del registro' ($r.Salida -match 'configmap-error\.log') $r.Salida
+  Comprueba 'que existe' (Test-Path -LiteralPath (Join-Path (Join-Path (Split-Path (Datos-Migra $e) -Parent) 'registros') 'configmap-error.log'))
+  Comprueba 'no es un error interno' ($r.Salida -notmatch 'Error interno' -and $null -eq (Lee-Json $est).parada) "$($r.Salida) / $((Lee-Json $est).parada | ConvertTo-Json -Compress)"
+}
+
+# ---- (j) lo que encontro la revision independiente ----
+$Pruebas['c9 (j1) nombres de secretos: se miran todos los trozos de la clave (password, token, credencial, private, apikey); user solo al final o seguido de name; y un valor con credenciales dentro es secreto'] = {
+  foreach ($n in @('spring.security.user.name', 'x.password.value', 'x.password.file', 'ftp.credencial', 'ftp.credential', 'api.token', 'private.key', 'x.apikey', 'x.api-key', 'sftp.user', 'sftp.username', 'db.usuario', 'env.clave-x')) { Comprueba "$n es secreto" (Test-NombreSecretoConfigMap $n) }
+  foreach ($n in @('env.ruta-entrada', 'spring.application.name', 'env.cliente', 'user.home', 'x.users.count', 'env.url-auth', 'max.reintentos', 'lote.pedidos.endpoint')) { Comprueba "$n no es secreto" (-not (Test-NombreSecretoConfigMap $n)) }
+  foreach ($v in @('https://svc:Pa55@pedidos.pre.acme.test/api', 'jdbc:oracle:thin:usr/Zx9Secret@host:1521/svc', 'usr/Zx9Secret@host')) { Comprueba "el valor $v lleva credenciales" (Test-ValorSecretoConfigMap $v) }
+  foreach ($v in @('https://pedidos.pre.acme.test/api', '/data/pre/entrada', 'https://user@host/path', 'user@acme.test', 'a/b', '5', '')) { Comprueba "el valor '$v' no lleva credenciales" (-not (Test-ValorSecretoConfigMap $v)) }
+}
+
+$Pruebas['c9 (j2) secretos: un valor comun (usuario sftp = lote, que sale en el nombre del repo) no es prueba de nada: no se borra ningun fichero y la clave va a PENDIENTE.md sin su valor'] = {
+  $e = Nuevo-Escenario 'j2'
+  Escribe $e.Inv 'PRE/app.properties' ("ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.auth=https://auth.pre.acme.test/token`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`nsftp.user=lote`n")
+  Planes-Buenos $e
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Igual 'ninguna atascada' 0 $x.R.Atascadas
+  foreach ($id in @('configmap-entorno-des', 'configmap-entorno-pre', 'configmap-entorno-pro')) { Igual "$id queda hecha" 'hecha' (Tarea-Guardada $e $id).estado }
+  Comprueba 'no se borra ningun fichero: estan los cuatro de pre' (@('variables', 'secretos', 'montajes', 'recursos' | Where-Object { Existe-Destino $e "config/pre/$_" }).Count -eq 4)
+  Comprueba 'ni se dice que se ha borrado' ($x.Consola -notmatch 'Borrado' -and $x.Consola -notmatch 'llevaba el valor')
+  $p = Pendiente $e
+  $s = Seccion $p 'Secretos que no se pueden vigilar'
+  Comprueba 'PENDIENTE.md nombra la clave con el motivo, sin su valor' ($s.Contains('sftp.user') -and $s.Contains('revisa a mano: su valor es demasiado com' + [char]0xFA + 'n para vigilarlo')) $p
+  Comprueba 'y no dice que llevaba el valor de un secreto' (-not $p.Contains('llevaba el valor'))
+  Igual 'el secreto de verdad (el de url.auth.clave) no sale en ningun sitio' 0 (Sale-Valor $e $SecretoPre $x.Consola)
+}
+
+$Pruebas['c9 (j3) secretos: un fichero que el usuario ha cambiado no se borra nunca, aunque lleve el valor de un secreto: solo se avisa (sin el valor)'] = {
+  $e = Nuevo-Escenario 'j3'
+  Planes-Buenos $e
+  [void](Corre $e)
+  Escribe $e.Destino 'config/pre/variables' ("pfx.variables.env.a-mano=1`npfx.variables.env.otra=$SecretoPre`n")
+  $m = @(Llamadas-De $e).Count
+  $x = Corre $e
+  Comprueba 'el fichero sigue, como lo dejo el usuario' ((Existe-Destino $e 'config/pre/variables') -and (Lee-Destino $e 'config/pre/variables').Contains('a-mano=1'))
+  Comprueba 'la consola avisa de ese fichero y dice que no lo borra' ($x.Consola -match 'config/pre/variables' -and $x.Consola -match 'no lo borro') $x.Consola
+  Comprueba 'sin dar el valor' (-not $x.Consola.Contains($SecretoPre) -and -not (Pendiente $e).Contains($SecretoPre))
+  Comprueba 'no dice que lo ha borrado' ($x.Consola -notmatch 'Borrado' -and -not (Pendiente $e).Contains('llevaba el valor'))
+  Comprueba 'PENDIENTE.md lo pone en su seccion' ((Seccion (Pendiente $e) 'Ficheros tuyos con el valor de un secreto').Contains('config/pre/variables'))
+  Igual 'ninguna llamada nueva' $m @(Llamadas-De $e).Count
+}
+
+$Pruebas['c9 (j4) secretos: el valor cuenta solo como palabra entera: pegado a letras o cifras no es una fuga; solo, si lo es'] = {
+  $inv = "ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.auth=https://auth.pre.acme.test/token`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`nsftp.password=Zq81Tx`n"
+  $e = Nuevo-Escenario 'j4a'
+  Escribe $e.Inv 'PRE/app.properties' $inv
+  Planes-Buenos $e
+  $f = Ficheros-Entorno 'pre' (Ficheros-Referencia) $Valores['pre']
+  $f['config/pre/montajes'] += "# AZq81TxB y xZq81Tx9`n"
+  Plan $e 'configmap-entorno-pre' $f
+  [void](Corre $e)
+  Igual 'pegado a letras y cifras: la tarea queda hecha' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  Comprueba 'y el fichero esta' (Existe-Destino $e 'config/pre/montajes')
+  $e = Nuevo-Escenario 'j4b'
+  Escribe $e.Inv 'PRE/app.properties' $inv
+  Planes-Buenos $e
+  $f = Ficheros-Entorno 'pre' (Ficheros-Referencia) $Valores['pre']
+  $f['config/pre/montajes'] += "clave=Zq81Tx`n"
+  Plan $e 'configmap-entorno-pre' $f
+  $x = Corre $e
+  Igual 'como palabra entera: atascada' 'atascada' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  Comprueba 'el fichero se ha borrado' (-not (Existe-Destino $e 'config/pre/montajes'))
+  Comprueba 'el motivo (este si) dice que llevaba el valor de un secreto, sin darlo' ((Tarea-Guardada $e 'configmap-entorno-pre').motivo -match 'llevaba el valor de un secreto' -and -not (Tarea-Guardada $e 'configmap-entorno-pre').motivo.Contains('Zq81Tx'))
+  Igual 'el valor no sale en ningun sitio' 0 (Sale-Valor $e 'Zq81Tx' $x.Consola)
+}
+
+$Pruebas['c9 (j5) secretos: un valor con credenciales dentro (esquema://usuario:clave@host, usuario/clave@host) es secreto aunque su nombre no lo diga: no va al prompt y la variable se pide como secreto'] = {
+  $e = Nuevo-Escenario 'j5'
+  Escribe $e.Inv 'PRE/app.properties' ("ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://svc:Pa55@pedidos.pre.acme.test/api`nurl.auth=jdbc:oracle:thin:usr/Zx9Secret@host:1521/svc`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`n")
+  Planes-Buenos $e
+  foreach ($env in @('des', 'pre', 'pro')) { Plan $e "configmap-entorno-$env" (Ficheros-Entorno $env (Ficheros-Referencia) $Valores[$env] @('env.lote-pedidos-endpoint', 'env.url-auth')) }
+  $x = Corre $e
+  foreach ($v in @('Pa55', 'Zx9Secret')) { Igual "'$v' no sale en ningun sitio" 0 (Sale-Valor $e $v $x.Consola) }
+  $pre = Prompt-De $e 'configmap-entorno-pre'
+  Comprueba 'el prompt de pre las lleva como secretas, sin valor' ($pre.Contains('- env.lote-pedidos-endpoint (secreto, sin valor)') -and $pre.Contains('- env.url-auth (secreto, sin valor)')) $pre
+  Igual 'pre queda hecha' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  $s = Seccion (Pendiente $e) 'Entorno PRE'
+  Comprueba 'PENDIENTE.md las da por secretas (hay que pedir el Secret), no como valor puesto' ($s -match '(?m)^\| env\.lote-pedidos-endpoint \|[^|]*\| secreto: hay que pedir el Secret \|' -and $s -match '(?m)^\| env\.url-auth \|[^|]*\| secreto: hay que pedir el Secret \|') $s
+}
+
+$Pruebas['c9 (j6) cobertura (a): el valor cuenta como palabra entera en la linea de su variable y una linea de comentario no cuenta'] = {
+  $e = Nuevo-Escenario 'j6'
+  Planes-Buenos $e
+  $v = [ordered]@{}
+  foreach ($k in $Valores['pre'].Keys) { $v[$k] = $Valores['pre'][$k] }
+  $v['env.reintentos'] = '500'
+  Plan $e 'configmap-entorno-pre' (Ficheros-Entorno 'pre' (Ficheros-Referencia) $v)
+  $f = Ficheros-Entorno 'pre' (Ficheros-Referencia) $Valores['pre']
+  $f['config/pre/variables'] = ($f['config/pre/variables'] -replace 'reintentos=5', 'reintentos=99') + "# env.reintentos = 5`n"
+  Plan $e 'configmap-entorno-pre' $f $null $true
+  [void](Corre $e)
+  Igual 'dos llamadas: la primera (reintentos=500) no vale' 2 @(Llamadas-De $e | Where-Object { $_.Id -eq 'configmap-entorno-pre' }).Count
+  Comprueba 'el motivo de la primera nombra la variable' ((Prompt-De $e 'configmap-entorno-pre' 2).Contains('env.reintentos'))
+  $t = Tarea-Guardada $e 'configmap-entorno-pre'
+  Igual 'la segunda (reintentos=99 y un comentario con el 5) tampoco: atascada' 'atascada' $t.estado
+  Comprueba 'y el motivo nombra la variable' ($t.motivo.Contains('env.reintentos')) $t.motivo
+}
+
+$Pruebas['c9 (j7) cobertura (d): el nombre de una variable, una clave o un valor del inventario con el nombre del batch de referencia no cuenta como resto; un resto de verdad si'] = {
+  $y = "a:`n  x: `${env.precios-endpoint}`n  y: `${env.ruta-entrada}`n"
+  $e = Nuevo-Escenario 'j7' @{ Yml = $y }
+  Escribe $e.Inv 'PRE/app.properties' "ruta.entrada=/data/pre/entrada`nprecios.endpoint=https://precios.pre.acme.test/api`n"
+  Planes-Buenos $e
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables ([ordered]@{ 'env.precios-endpoint' = 'precios.endpoint'; 'env.ruta-entrada' = 'ruta.entrada' }))
+  foreach ($env in @('des', 'pre', 'pro')) {
+    $v = [ordered]@{ 'env.precios-endpoint' = $(if ($env -eq 'pre') { 'https://precios.pre.acme.test/api' } else { '<PENDIENTE>' }); 'env.ruta-entrada' = $(if ($env -eq 'pre') { '/data/pre/entrada' } else { '<PENDIENTE>' }) }
+    Plan $e "configmap-entorno-$env" (Ficheros-Entorno $env (Ficheros-Referencia) $v)
+  }
+  $malo = Ficheros-Entorno 'pro' (Ficheros-Referencia) ([ordered]@{ 'env.precios-endpoint' = '<PENDIENTE>'; 'env.ruta-entrada' = '<PENDIENTE>' })
+  $malo['config/pro/montajes'] = (Ficheros-Referencia)['config/pro/montajes']
+  Plan $e 'configmap-entorno-pro' $malo
+  [void](Corre $e)
+  Igual 'pre queda hecha a la primera' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  Igual 'con una sola llamada' 1 @(Llamadas-De $e | Where-Object { $_.Id -eq 'configmap-entorno-pre' }).Count
+  Igual 'des tambien' 1 @(Llamadas-De $e | Where-Object { $_.Id -eq 'configmap-entorno-des' }).Count
+  Comprueba 'el fichero lleva el nombre de la variable y el valor tal cual' ((Lee-Destino $e 'config/pre/variables').Contains('env.precios-endpoint=https://precios.pre.acme.test/api'))
+  Igual 'pro (montajes sin adaptar: lleva precios de verdad) se reintenta' 2 @(Llamadas-De $e | Where-Object { $_.Id -eq 'configmap-entorno-pro' }).Count
+  Comprueba 'y su motivo pide cambiar precios por pedidos' ((Prompt-De $e 'configmap-entorno-pro' 2) -match 'precios' -and (Prompt-De $e 'configmap-entorno-pro' 2) -match 'config/pro/montajes')
+}
+
+$Pruebas['c9 (j8) escrituras fuera de sitio: lo que una ronda cambia fuera de sus destinos se deshace (se borra si es nuevo, se restaura si existia) y se apunta en configmap.json y en una linea de consola por ronda'] = {
+  $e = Nuevo-Escenario 'j8'
+  Planes-Buenos $e
+  $ref = Ficheros-Referencia
+  $f = Ficheros-Entorno 'pre' $ref $Valores['pre']
+  $f['docs/extra-de-la-ia.txt'] = 'extra'
+  $f['.plataforma/cd/values.yaml'] = 'basura de pre'
+  Plan $e 'configmap-entorno-pre' $f
+  Plan $e $IdFlujo @{ '.github/workflows/cd.yml' = (Adapta-Plataforma '.github/workflows/cd.yml' $ref['.github/workflows/cd.yml']); 'config/pre/variables' = 'basura del workflow' }
+  $x = Corre $e
+  Comprueba 'el fichero nuevo fuera de sitio se ha borrado' (-not (Existe-Destino $e 'docs/extra-de-la-ia.txt'))
+  Comprueba 'el de la ronda siguiente que se escribio antes de tiempo, tambien: el bueno es el de su tarea' ((Lee-Destino $e '.plataforma/cd/values.yaml').Contains('applicationName'))
+  Comprueba 'el que existia (config/pre/variables) esta como lo dejo su tarea' ((Lee-Destino $e 'config/pre/variables').Contains('pfx.variables.env.ruta-entrada=/data/pre/entrada'))
+  Igual 'las tareas no se invalidan: pre queda hecha' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  Igual 'y el workflow' 'hecha' (Tarea-Guardada $e $IdFlujo).estado
+  $l = @($x.Consola -split "`n" | Where-Object { $_ -match 'fuera de lo suyo' })
+  Igual 'una linea de consola por ronda con cambios' 2 $l.Count
+  Comprueba 'la primera nombra los ficheros' ($l[0].Contains('docs/extra-de-la-ia.txt')) $x.Consola
+  $j = Lee-Json (Join-Path $e.Datos 'configmap.json')
+  Comprueba 'configmap.json los apunta' (@($j.fueraDeSitio) -contains 'docs/extra-de-la-ia.txt' -and @($j.fueraDeSitio) -contains 'config/pre/variables') ($j.fueraDeSitio | ConvertTo-Json -Compress)
+}
+
+$Pruebas['c9 (j9) --deny-tool=shell: todas las llamadas de configmap lo llevan y los argumentos de Copilot quedan como estaban'] = {
+  $e = Nuevo-Escenario 'j9'
+  Planes-Buenos $e
+  $antes = @($Cfg.CopilotArgs) -join ' '
+  [void](Corre $e)
+  $l = @(Llamadas-De $e)
+  Comprueba 'hay llamadas' ($l.Count -ge 13) "$($l.Count)"
+  Igual 'todas llevan --deny-tool=shell' $l.Count @($l | Where-Object { $_.Flags -match '(^| )--deny-tool=shell( |$)' }).Count
+  Igual 'y los argumentos de Copilot de despues son los de antes' $antes (@($Cfg.CopilotArgs) -join ' ')
+}
+
+$Pruebas['c9 (j10) el migrado: si git status cambia durante la fase se avisa con los ficheros y no se deshace nada; sin cambios no se avisa'] = {
+  $e = Nuevo-Escenario 'j10' @{ Git = $true }
+  Planes-Buenos $e
+  $f = Ficheros-Entorno 'pre' (Ficheros-Referencia) $Valores['pre']
+  $f['../acme-lote-pedidos/NUEVO-DE-LA-IA.txt'] = 'x'
+  $f['../acme-lote-pedidos/src/main/resources/application.yml'] = "tocado`n"
+  Plan $e 'configmap-entorno-pre' $f
+  $x = Corre $e
+  Comprueba 'avisa con los dos ficheros' ($x.Consola -match 'ha cambiado el migrado' -and $x.Consola -match 'NUEVO-DE-LA-IA\.txt' -and $x.Consola -match 'application\.yml') $x.Consola
+  Comprueba 'y no los deshace' ((Test-Path -LiteralPath (Join-Path $e.Migrado 'NUEVO-DE-LA-IA.txt')) -and (Get-Content -LiteralPath (Join-Path $e.Migrado 'src/main/resources/application.yml') -Raw).StartsWith('tocado'))
+  $e2 = Nuevo-Escenario 'j10b' @{ Git = $true }
+  Planes-Buenos $e2
+  $y = Corre $e2
+  Comprueba 'sin cambios en el migrado no hay aviso' ($y.Consola -notmatch 'ha cambiado el migrado') $y.Consola
+}
+
+$Pruebas['c9 (j11) migracion.ps1 -ConfigMap sin estado.json previo: inventario y modelo quedan en datos/configmap.json; el relanzamiento los usa (sin -Inventario ni -Modelo) y conserva las atascadas sin -Reintentar'] = {
+  $e = Migra-Escenario 'j11'
+  $mal = [ordered]@{}
+  foreach ($k in $ParesBuenos.Keys) { $mal[$k] = $ParesBuenos[$k] }
+  $mal['env.reintentos'] = 'no.existe'
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables $mal)
+  $r = Migra-C9 $e @('-ConfigMap', '-Inventario', $e.Inv, '-ConfigMapReferencia', $e.Ref)
+  $dat = Datos-Migra $e
+  Igual 'la primera sale con 0' 0 $r.Codigo
+  Comprueba 'no crea estado.json (no hay pasada)' (-not (Test-Path -LiteralPath (Join-Path $dat 'estado.json')))
+  $j = Lee-Json (Join-Path $dat 'configmap.json')
+  Igual 'configmap.json lleva el inventario' $e.Inv "$($j.inventario)"
+  Igual 'y el modelo' 'modelo-x' "$($j.modelo)"
+  Igual 'la tarea de variables queda atascada' 'atascada' (Lee-Json (Join-Path (Join-Path $dat 'tareas') 'configmap-variables-1.json')).estado
+  $n = @(Llamadas-De $e).Count
+  $r2 = Migra-C9 $e @('-ConfigMap') -SinModelo
+  Igual 'relanzada sin -Inventario ni -Modelo: sale con 0' 0 $r2.Codigo
+  Comprueba 'no pregunta el modelo: usa el guardado' ($r2.Salida -match 'Modelo: modelo-x' -and $r2.Salida -notmatch 'Modelo de Copilot') $r2.Salida
+  Igual 'sin llamadas nuevas: la atascada se conserva' $n @(Llamadas-De $e).Count
+  $r3 = Migra-C9 $e @('-ConfigMap', '-Reintentar') -SinModelo
+  Igual 'con -Reintentar si vuelve a llamar (dos llamadas mas)' ($n + 2) @(Llamadas-De $e).Count
+}
+
+$Pruebas['c9 (j12) PENDIENTE.md sale del estado final: una tarea de entorno atascada o un fichero borrado dejan sus variables pendientes, no con valor puesto'] = {
+  $e = Nuevo-Escenario 'j12'
+  Planes-Buenos $e
+  $v = [ordered]@{}
+  foreach ($k in $Valores['pre'].Keys) { $v[$k] = $Valores['pre'][$k] }
+  $v['env.url-auth-clave'] = $SecretoPre
+  Plan $e 'configmap-entorno-pre' (Ficheros-Entorno 'pre' (Ficheros-Referencia) $v)
+  $sin = Ficheros-Entorno 'pro' (Ficheros-Referencia) $Valores['pro']
+  $sin.Remove('config/pro/montajes')
+  Plan $e 'configmap-entorno-pro' $sin
+  [void](Corre $e)
+  Igual 'pre atascada (escribio el valor del secreto y se borro el fichero)' 'atascada' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  Igual 'pro atascada (falta un fichero)' 'atascada' (Tarea-Guardada $e 'configmap-entorno-pro').estado
+  $p = Pendiente $e
+  foreach ($env in @('PRE', 'PRO')) {
+    $s = Seccion $p "Entorno $env"
+    Comprueba "$env : ninguna variable sale como valor puesto" ($s -notmatch 'valor puesto') $s
+    Comprueba "$env : env.ruta-entrada sale pendiente" ($s -match '(?m)^\| env\.ruta-entrada \|[^|]*\| pendiente \|') $s
+  }
+  $j = Lee-Json (Join-Path $e.Datos 'configmap.json')
+  $pro = @($j.entornos | Where-Object { $_.nombre -eq 'pro' })[0]
+  Comprueba 'configmap.json dice lo mismo' (@($pro.variables | Where-Object { $_.estado -eq 'valor' }).Count -eq 0) ($pro | ConvertTo-Json -Compress -Depth 4)
+}
+
+$Pruebas['c9 (j13) ocultar: la cita y el problema de un hallazgo, y datos/configmap.json entero, salen sin el valor de un secreto (tampoco escapado)'] = {
+  $e = Nuevo-Escenario 'j13'
+  Planes-Buenos $e
+  [void](Corre $e)
+  Escribe $e.Destino 'config/pre/montajes' "x=$SecretoPre`n"
+  Remove-Item -LiteralPath (Join-Path (Join-Path $e.Datos 'tareas') 'configmap-revision-pre.json') -Force
+  $h = [ordered]@{ fichero = 'config/pre/montajes'; linea = 1; cita = "x=$SecretoPre"; problema = "Lleva $SecretoPre en claro." }
+  Plan $e 'configmap-revision-pre' $null (ConvertTo-Json -InputObject @{ hallazgos = @($h) } -Depth 4)
+  $x = Corre $e
+  $p = Pendiente $e
+  Comprueba 'PENDIENTE.md tiene el hallazgo con el valor tapado' ($p.Contains('x=***') -and -not $p.Contains($SecretoPre)) $p
+  $json = [System.IO.File]::ReadAllText((Join-Path $e.Datos 'configmap.json'))
+  Comprueba 'configmap.json tiene el hallazgo con el valor tapado' ($json.Contains('x=***') -and -not $json.Contains($SecretoPre))
+  Comprueba 'la consola tampoco lo lleva' (-not $x.Consola.Contains($SecretoPre))
+  # un valor con comillas y signos que el JSON escapa
+  $raro = 'pa"ss<w>rd&1'
+  $CmSecretos.Add($raro)
+  try {
+    $ruta = Join-Path $e.Datos 'raro.json'
+    Write-JsonConfigMap $ruta ([ordered]@{ a = "antes $raro despues"; b = @([ordered]@{ c = $raro }) })
+    $t = [System.IO.File]::ReadAllText($ruta)
+    $esc = (ConvertTo-Json -InputObject $raro).Trim('"')
+    Comprueba 'un valor con comillas y signos no sale ni escapado' (-not $t.Contains($raro) -and -not $t.Contains($esc) -and $t.Contains('antes ***')) $t
+  }
+  finally { $CmSecretos.Remove($raro) | Out-Null }
+}
+
+$Pruebas['c9 (j14) cambiado a mano: pasar un fichero a CRLF (git en Windows) no cuenta como cambiado; un cambio de verdad si, tambien en CRLF'] = {
+  $e = Nuevo-Escenario 'j14'
+  Planes-Buenos $e
+  [void](Corre $e)
+  $r = Get-Ruta $e.Destino 'config/pre/variables'
+  $t = [System.IO.File]::ReadAllText($r)
+  [System.IO.File]::WriteAllText($r, $t.Replace("`n", "`r`n"))
+  $n = @(Llamadas-De $e).Count
+  $x = Corre $e
+  Comprueba 'no dice que lo hayas cambiado' ($x.Consola -notmatch 'Has cambiado') $x.Consola
+  Comprueba 'PENDIENTE.md: ninguno' ((Seccion (Pendiente $e) 'Ficheros que has cambiado').Trim() -eq 'Ninguno.')
+  Igual 'ninguna llamada nueva' $n @(Llamadas-De $e).Count
+  [System.IO.File]::WriteAllText($r, "a-mano=1`r`n")
+  $y = Corre $e
+  Comprueba 'un cambio de verdad se dice' ($y.Consola -match 'Has cambiado config/pre/variables') $y.Consola
+}
+
+$Pruebas['c9 (j15) carpeta de los entornos: sale de $Cfg.ConfigMapCarpeta, no de un literal'] = {
+  $e = Nuevo-Escenario 'j15'
+  Planes-Buenos $e
+  Move-Item -LiteralPath (Join-Path $e.Ref 'config') -Destination (Join-Path $e.Ref 'entornos')
+  foreach ($env in @('des', 'pre', 'pro')) {
+    $f = Ficheros-Entorno $env (Ficheros-Referencia) $Valores[$env]
+    $g = [ordered]@{}
+    foreach ($k in $f.Keys) { $g[($k -replace '^config/', 'entornos/')] = $f[$k] }
+    Plan $e "configmap-entorno-$env" $g
+  }
+  $antes = $Cfg.ConfigMapCarpeta
+  $Cfg.ConfigMapCarpeta = 'entornos'
+  try { $x = Corre $e } finally { $Cfg.ConfigMapCarpeta = $antes }
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'los entornos estan en entornos/' ((Existe-Destino $e 'entornos/pre/variables') -and (Existe-Destino $e 'entornos/pro/secretos'))
+  Comprueba 'y no hay carpeta config/' (-not (Existe-Destino $e 'config'))
+  Igual 'pre hecha' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
+  Comprueba 'el prompt dice la carpeta' ((Prompt-De $e 'configmap-entorno-pre').Contains('entornos/pre'))
+  Igual 'el valor por defecto de la clave es config' 'config' $antes
 }
 
 Invoke-Banco $Pruebas 'tests/probar-configmap.ps1'

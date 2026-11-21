@@ -7,6 +7,7 @@
 #                   borra     lista de rutas relativas que borra
 #                   salida    texto que escribe en .rescate/tareas/<id>.json
 #                   falla     true: sale con 1 sin escribir nada
+#                   copiaPrompt  ruta relativa: escribe en ella el prompt que ha recibido (una IA que copia todo lo que ve)
 #   C9_LLAMADAS   fichero: cada llamada anade 'id|reintento (0 o 1)|flags|carpeta de trabajo'
 #   C9_PROMPTS    carpeta: guarda el prompt de cada llamada como <id>-<n>.md
 $texto = ''
@@ -20,7 +21,7 @@ if ($texto -match 'tareas/([\w\-\.]+)\.prompt\.md') {
 }
 $reintento = 0
 if ($prompt -cmatch 'CORRECCI') { $reintento = 1 }
-$flags = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=)' }) -join ' ')
+$flags = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=|deny-tool=)' }) -join ' ')
 if ($env:C9_LLAMADAS) { [System.IO.File]::AppendAllText($env:C9_LLAMADAS, "$id|$reintento|$flags|$raiz`n") }
 if ($env:C9_PROMPTS) {
   $n = 1
@@ -49,6 +50,12 @@ if ($plan.ficheros) {
     if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
     [System.IO.File]::WriteAllText($ruta, [string]$p.Value)
   }
+}
+if ($plan.copiaPrompt) {
+  $ruta = [System.IO.Path]::Combine($raiz, ($plan.copiaPrompt -replace '/', [System.IO.Path]::DirectorySeparatorChar))
+  $d = [System.IO.Path]::GetDirectoryName($ruta)
+  if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+  [System.IO.File]::WriteAllText($ruta, $prompt)
 }
 if ($null -ne $plan.salida) {
   $dir = [System.IO.Path]::Combine($raiz, '.rescate', 'tareas')
