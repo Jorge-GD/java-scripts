@@ -458,13 +458,18 @@ function New-IndicePropiedades($Entradas) {
   return $indice
 }
 
-# Donde esta una clave en el migrado: la entrada del mismo perfil, y si no la de otro perfil que va por variable. Sin ninguna, Otros
-# dice los perfiles en los que si esta.
+# Donde esta una clave en el migrado, por este orden: la entrada del mismo perfil; la del perfil default (en Spring Boot lo de
+# application vale tambien con otro perfil, salvo que application-<p> lo cambie); y la de otro perfil que va por variable. Las dos primeras
+# se comparan con el valor del original (Comparable); la tercera no. Sin ninguna, Otros dice los perfiles en los que si esta.
 function Find-EnMigrado($Indice, [string]$Canonica, [string]$Perfil) {
-  $r = [pscustomobject]@{ Entrada = $null; Variable = $null; Otros = @() }
+  $r = [pscustomobject]@{ Entrada = $null; Variable = $null; Comparable = $false; Otros = @() }
   if (-not $Indice.ContainsKey($Canonica)) { return $r }
   $lista = $Indice[$Canonica].ToArray()
-  foreach ($e in $lista) { if ($e.perfil -ceq $Perfil) { $r.Entrada = $e; $r.Variable = Get-VariablePropiedad $e.valor; return $r } }
+  foreach ($p in @($Perfil, 'default')) {
+    foreach ($e in $lista) {
+      if ($e.perfil -ceq $p) { $r.Entrada = $e; $r.Variable = Get-VariablePropiedad $e.valor; $r.Comparable = $true; return $r }
+    }
+  }
   foreach ($e in $lista) {
     $v = Get-VariablePropiedad $e.valor
     if ($v) { $r.Entrada = $e; $r.Variable = $v; return $r }
@@ -493,7 +498,7 @@ function Get-EstadoPropiedad($L, $Indice, $Meta) {
   $valorIgual = $null
   if ($null -ne $f.Entrada) {
     $destino = $f.Entrada
-    if ($destino.perfil -ceq $L.perfil -and $destino.valor -ceq $L.valor) { $estado = 'igual' }
+    if ($f.Comparable -and $destino.valor -ceq $L.valor) { $estado = 'igual' }
     elseif ($f.Variable) {
       $estado = 'por-variable'
       $variable = $f.Variable
