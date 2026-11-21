@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, convivencia.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -142,6 +142,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lanzadores.ps1')
 . (Join-Path $PSScriptRoot 'practicas.ps1')
 . (Join-Path $PSScriptRoot 'propiedades.ps1')
+. (Join-Path $PSScriptRoot 'convivencia.ps1')
 . (Join-Path $PSScriptRoot 'huella.ps1')
 . (Join-Path $PSScriptRoot 'arreglo-practicas.ps1')
 . (Join-Path $PSScriptRoot 'tests-reglas.ps1')
@@ -202,6 +203,11 @@ function Save-Estado {
 function Save-Informes {
   try { Write-Informes -Salida $Salida }
   catch { Aviso ('No he podido escribir las paginas del informe: ' + $_.Exception.Message) }
+}
+
+# Mide la convivencia del viejo y el nuevo en pre (convivencia.ps1, datos\convivencia.json), solo si ya hay mapa.json: una parada antes del mapa no dice nada. Nunca para.
+function Save-Convivencia {
+  if (Test-Path -LiteralPath (Join-Path $Datos 'mapa.json')) { Invoke-Convivencia $LegacyRoot $RepoRoot $Datos }
 }
 
 # Para el trabajo y lo deja en estado.json con un texto de ayuda para pegar en Copilot.
@@ -866,6 +872,7 @@ function Invoke-Cierre {
   Bien "Juntado: $n commits en $RamaMigrado ($($antes.Substring(0, 7))..$($sha.Substring(0, 7)))."
   Info "Para deshacerlo: $deshacer"
   Info 'No hago push: el push es tuyo.'
+  Save-Convivencia
   Save-Informes
   return 0
 }
@@ -1040,6 +1047,7 @@ try {
   if ($sigue) {
     $Estado['fase'] = 'lectura-hecha'
     Save-Estado
+    Save-Convivencia
     Save-Informes
     Invoke-FaseCorreccion
     $sigue = -not $script:Parada
@@ -1058,6 +1066,7 @@ try {
   if (@($script:Todas | Where-Object { $_.estado -eq 'atascada' }).Count -gt 0) { Aviso "Las tareas atascadas estan en $(Join-Path $Datos 'tareas') (estado 'atascada', con su motivo)." }
   $Estado['fin'] = (Get-Date).ToString('s')
   Save-Estado
+  Save-Convivencia
   Save-Informes
   if ($script:Parada -and $Estado['parada'].motivo -ne 'tope-de-tiempo') { exit 2 }
   exit 0
