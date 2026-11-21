@@ -5513,5 +5513,168 @@ $Pruebas['m60 (g) un CREATE TABLE que H2 rechaza junto con una propiedad sin val
   Comprueba 'y la del CREATE TABLE' ($x.T.motivo.Contains($sql)) $x.T.motivo
 }
 
+$Pruebas['m60 (h) cuatro propiedades distintas sin valor: la pista nombra las tres primeras y no la cuarta (tope de 3 claves)'] = {
+  $x = Motivo-M60 'm60-h' 'prop-cuatro'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Comprueba 'el motivo lleva la pista con las tres primeras, en orden' ($x.T.motivo.Contains((Pista-M60 'app.uno.dir, app.dos.dir, app.tres.dir'))) $x.T.motivo
+  Igual 'y las claves de la pista son solo esas tres (la cuarta, app.cuatro.dir, no)' 'app.uno.dir, app.dos.dir, app.tres.dir' ([regex]::Match($x.T.motivo, 'Falta una propiedad en el test: (.*?)\. En el servidor').Groups[1].Value)
+}
+
+# ===================== M61: el test que se escribe otra vez sabe que fallo antes =====================
+# Estos escenarios usan m61-mvn.ps1 (lo de m40-mvn.ps1 y, ademas, los guiones de abajo) y el Copilot de m40 o el de m56:
+#   RESCATE_M56 = '<nombre>:<id de tarea>'   el arnes cuyo id casa deja un test cuyo mvn test acaba con drop-en, drop-es o drop-create (ver m61-mvn.ps1)
+#   RESCATE_M61 = '<nombre>:<regex sobre job/caso>'   create-es, create-en o create-despues: el original no corre el caso porque H2 rechaza un CREATE TABLE
+#   RESCATE_M40: como en m40 (tablas=<n>/<T_A>:<id> y falta-tabla=T_A:<job/caso>)
+
+$M61Sentencia = 'CREATE TABLE IF NOT EXISTS PUBLIC.IF[*] (IF VARCHAR(4000),NOT VARCHAR(4000),EXISTS VARCHAR(4000),T_COMIS VARCHAR(4000))'
+$M61TablaMal = 'El test del original crea mal una tabla: ' + $M61Sentencia.Substring(0, 60)
+$M61Bloque = 'Lo que fallo la otra vez'
+
+function Escenario-M61([string]$Nombre, $Casos, [string]$Copilot = 'm40') {
+  $e = Escenario-M40 $Nombre $Casos $Copilot
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos "$Copilot-copilot.ps1"); MvnExe = (Join-Path $falsos 'm61-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+function Prueba-M61($E, [string[]]$A = @(), [string]$M61 = '', [string]$M40 = '', [string]$M56 = '') {
+  $env:RESCATE_M61 = $M61; $env:RESCATE_M40 = $M40; $env:RESCATE_M56 = $M56
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M61 = ''; $env:RESCATE_M40 = ''; $env:RESCATE_M56 = '' }
+}
+
+# La pista del DROP de M61, con la tabla ($Tabla) que dice H2.
+function Pista-M61([string]$Tabla) {
+  return "El test borra las tablas una a una y una depende de otra ($Tabla). No borres tablas: usa una base H2 en memoria con un nombre unico en cada ejecucion (jdbc:h2:mem:<nombre>;DB_CLOSE_DELAY=-1) o, si tiene que limpiar, DROP ALL OBJECTS al principio."
+}
+
+# La pista del CREATE TABLE de M56 con el inventario del original de Escenario-M40 (T_A, en su Repo.java).
+$M61PistaCreate = "El test crea mal una tabla ($($M61Sentencia.Substring(0, 60))). No saques las tablas del SQL del codigo: escribe un CREATE TABLE fijo para cada una de estas, con las columnas que usa el codigo: T_A ($SitioTablaM40)."
+
+$Pruebas['m61 (a) el caso vacio del migrado falla con el DROP de H2 (en ingles y en espanol): el motivo del reintento y el de Show-Atascado llevan la pista con T_GRUPO, DROP ALL OBJECTS y jdbc:h2:mem:'] = {
+  foreach ($l in @('en', 'es')) {
+    $e = Escenario-M61 "m61-a-$l" ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+    $r = Prueba-M61 $e -M56 "drop-${l}:arnes-migrado"
+    $p = Pista-M61 'T_GRUPO'
+    Igual "($l) sale con 1 (el arnes del migrado queda atascado)" 1 $r.Codigo
+    Igual "($l) dos llamadas al arnes del migrado" 2 @(Llamadas-Arnes $e 'migrado').Count
+    $t = Tarea-Arnes $e 'migrado'
+    Igual "($l) la tarea queda atascada con dos intentos" 'atascada,2' "$($t.estado),$($t.intentos)"
+    $reintento = Registro-Arnes $e 'migrado' 2
+    Comprueba "($l) el prompt del reintento lleva la pista, con T_GRUPO, DROP ALL OBJECTS y jdbc:h2:mem:" ($reintento.Contains($p) -and $reintento.Contains('DROP ALL OBJECTS') -and $reintento.Contains('jdbc:h2:mem:')) (Cola $reintento)
+    Comprueba "($l) el motivo de la tarea la lleva, tras lo que ya decia (que no dejo estado.txt)" ($t.motivo.Contains($p) -and $t.motivo -match 'no ha dejado estado\.txt') $t.motivo
+    $pegar = @($r.Salida -split "`n" | Where-Object { $_.Contains('Estoy ejecutando prueba-local.ps1') })
+    Comprueba "($l) el texto para pegar en Copilot (Show-Atascado) la lleva" ($pegar.Count -eq 1 -and $pegar[0].Contains($p)) (Cola $r.Salida)
+    Comprueba "($l) el primer prompt, que no sabe de ningun fallo, no" (-not (Registro-Arnes $e 'migrado' 1).Contains('DROP ALL OBJECTS') -and -not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
+  }
+}
+
+$Pruebas['m61 (b) tres casos cuyo original no corre porque H2 rechaza un CREATE TABLE (en espanol, en ingles y desde la segunda ejecucion): cada motivo lleva el prefijo nuevo y sale una sola linea de aviso con 3 caso(s) y -RehacerOriginal'] = {
+  $e = Escenario-M61 'm61-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M61 $e -M40 'tablas=1/T_A:arnes-original' -M61 'create-es:^cargaJob/caso-01;create-en:^cargaJob/caso-02;create-despues:^cargaJob/caso-03'
+  Igual 'sale con 1 (ningun caso se compara)' 1 $r.Codigo
+  Igual 'los tres casos: no se pudo preparar' 'no se pudo preparar,no se pudo preparar,no se pudo preparar' ((Resultados $e) -join ',')
+  foreach ($c in @('caso-01', 'caso-02', 'caso-03')) {
+    $m = [string](Caso $e 'cargaJob' $c).motivo
+    Comprueba "$c lleva el prefijo nuevo y los 60 primeros caracteres de la sentencia" ($m.Contains($M61TablaMal)) $m
+    Comprueba "$c no lleva la sentencia entera ni el texto de H2" (-not $m.Contains($M61Sentencia) -and $m -notmatch 'Sintaxis|Syntax error') $m
+  }
+  Igual 'el caso 1 (la IA lo prepara y no corre): una sola llamada, sin reintento' 1 @(Llamadas-Casos $e | Where-Object { $_.id -eq 'caso-cargaJob-01' }).Count
+  Igual 'el caso 3 (corre al prepararlo y no al ejecutarlo): una sola llamada' 1 @(Llamadas-Casos $e | Where-Object { $_.id -eq 'caso-cargaJob-03' }).Count
+  $linea = '3 caso(s) no se pudieron preparar porque el test del original crea mal sus tablas: relanza con -RehacerOriginal.'
+  Igual 'la linea de aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($linea))).Count
+  Igual 'y ninguna otra con esa cuenta' 1 ([regex]::Matches($r.Salida, 'caso\(s\) no se pudieron preparar porque')).Count
+}
+
+$Pruebas['m61 (c) un caso sin tabla (m40) y otro con la tabla mal creada: salen los dos avisos, cada uno con 1'] = {
+  $e = Escenario-M61 'm61-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M61 $e -M40 'tablas=1/T_A:arnes-original;falta-tabla=T_A:^cargaJob/caso-01' -M61 'create-es:^cargaJob/caso-02'
+  Igual 'sale con 1' 1 $r.Codigo
+  Igual 'los dos casos: no se pudo preparar' 'no se pudo preparar,no se pudo preparar' ((Resultados $e) -join ',')
+  Comprueba 'el caso 1 lleva el motivo de la tabla que falta' ([string](Caso $e 'cargaJob' 'caso-01').motivo).Contains("La base de prueba no tiene la tabla T_A (el test no la crea; la usa $SitioTablaM40).") ''
+  Comprueba 'el caso 2 lleva el prefijo de la tabla mal creada' ([string](Caso $e 'cargaJob' 'caso-02').motivo).Contains($M61TablaMal) ''
+  $sin = '1 caso(s) no se pudieron preparar porque el test del original no crea sus tablas: relanza con -RehacerOriginal.'
+  $mal = '1 caso(s) no se pudieron preparar porque el test del original crea mal sus tablas: relanza con -RehacerOriginal.'
+  Igual 'el aviso de la tabla que falta, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($sin))).Count
+  Igual 'el aviso de la tabla mal creada, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($mal))).Count
+}
+
+$Pruebas['m61 (d) con el prueba-local.json de unos casos que no se pudieron preparar por un CREATE TABLE y -RehacerOriginal: el primer intento del test del original lleva el bloque con la pista del CREATE TABLE y el inventario, una vez; el del migrado no'] = {
+  $e = Escenario-M61 'm61-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M61 $e -M40 'tablas=1/T_A:arnes-original' -M61 'create-es:^cargaJob/caso-01;create-en:^cargaJob/caso-02;create-despues:^cargaJob/caso-03'
+  Igual 'el primer lanzamiento sale con 1' 1 $r.Codigo
+  Comprueba 'su primer prompt del original no lleva el bloque' (-not (Registro-Arnes $e 'original' 1).Contains($M61Bloque)) ''
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  $primero = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento del original lleva el bloque' ($primero.Contains($M61Bloque)) (Cola $primero)
+  Comprueba 'con la pista del CREATE TABLE y el inventario de tablas' ($primero.Contains($M61PistaCreate)) (Cola $primero)
+  Igual 'la pista, una sola vez (los tres casos dicen lo mismo)' 1 ([regex]::Matches($primero, 'El test crea mal una tabla')).Count
+  Comprueba 'el primer intento del migrado, que se traduce del original, no lleva bloque (no tiene nada suyo que decir)' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
+}
+
+$Pruebas['m61 (d2) las pistas de los casos del prueba-local.json de antes: solo los no se pudo preparar, sin repetir y como mucho 3'] = {
+  $e = Escenario-M61 'm61-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $quita = { param([string]$Clave) "En el original error.txt: java.lang.IllegalArgumentException: Could not resolve placeholder '$Clave' in value `"`${$Clave}`"" }
+  $caso = { param([string]$N, [string]$Resultado, [string]$Clave) [ordered]@{ job = 'cargaJob'; caso = $N; titulo = ''; resultado = $Resultado; motivo = (& $quita $Clave); diferencias = @(); fallos = @() } }
+  $o = Lee-Json $e.Json
+  $o.casos = @((& $caso 'caso-01' 'distinto' 'app.k5'), (& $caso 'caso-02' 'no se pudo preparar' 'app.k1'), (& $caso 'caso-03' 'no se pudo preparar' 'app.k1'), (& $caso 'caso-04' 'no se pudo preparar' 'app.k2'), (& $caso 'caso-05' 'no se pudo preparar' 'app.k3'), (& $caso 'caso-06' 'no se pudo preparar' 'app.k4'))
+  [System.IO.File]::WriteAllText($e.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  $primero = Registro-Arnes $e 'original' 1
+  Comprueba 'el bloque lleva las pistas de app.k1, app.k2 y app.k3' ($primero.Contains($M61Bloque) -and $primero.Contains((Pista-M60 'app.k1')) -and $primero.Contains((Pista-M60 'app.k2')) -and $primero.Contains((Pista-M60 'app.k3'))) (Cola $primero)
+  Igual 'la de app.k1, una sola vez (dos casos la dicen)' 1 ([regex]::Matches($primero, [regex]::Escape((Pista-M60 'app.k1')))).Count
+  Comprueba 'ni la cuarta distinta (app.k4: el tope es 3)' (-not $primero.Contains('app.k4')) (Cola $primero)
+  Comprueba 'ni la de un caso distinto (app.k5: solo cuentan los que no se pudieron preparar)' (-not $primero.Contains('app.k5')) (Cola $primero)
+}
+
+$Pruebas['m61 (e) el test del migrado atascado con el DROP, relanzado sin opciones: el primer intento nuevo lleva el motivo de antes (y la huella de su tarea no cambia)'] = {
+  $e = Escenario-M61 'm61-e' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M61 $e -M56 'drop-en:arnes-migrado'
+  Igual 'el primer lanzamiento sale con 1 (migrado atascado)' 1 $r.Codigo
+  $antes = Tarea-Arnes $e 'migrado'
+  Igual 'la tarea queda atascada con dos intentos' 'atascada,2' "$($antes.estado),$($antes.intentos)"
+  Comprueba 'su motivo lleva la pista del DROP' ($antes.motivo.Contains((Pista-M61 'T_GRUPO'))) $antes.motivo
+  $r = Prueba $e
+  Igual 'relanzado sin opciones sale con 0' 0 $r.Codigo
+  Igual 'el migrado: dos llamadas de antes y una nueva' 3 @(Llamadas-Arnes $e 'migrado').Count
+  Igual 'el original, que estaba hecho: ninguna nueva' 1 @(Llamadas-Arnes $e 'original').Count
+  $ahora = Tarea-Arnes $e 'migrado'
+  Igual 'la tarea nueva queda hecha con un intento' 'hecha,1' "$($ahora.estado),$($ahora.intentos)"
+  $primero = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el primer intento nuevo lleva el bloque' ($primero.Contains($M61Bloque)) (Cola $primero)
+  Comprueba 'con el motivo de antes, entero' ($primero.Contains($antes.motivo)) (Cola $primero)
+  Comprueba 'y su pista del DROP (T_GRUPO, DROP ALL OBJECTS)' ($primero.Contains((Pista-M61 'T_GRUPO')) -and $primero.Contains('DROP ALL OBJECTS')) (Cola $primero)
+  Igual 'la huella de la tarea es la misma que antes del bloque' $antes.entradas.huella $ahora.entradas.huella
+}
+
+$Pruebas['m61 (f) un lanzamiento sin nada que rehacer: el prompt de los dos tests no lleva bloque, su huella no cambia y no hay llamadas'] = {
+  $e = Escenario-M61 'm61-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $huellas = @((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ','
+  $llamadas = (Llamadas $e).Count
+  foreach ($repo in @('original', 'migrado')) { Comprueba "el prompt del $repo no lleva bloque" (-not (Registro-Arnes $e $repo 1).Contains($M61Bloque)) '' }
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas' $llamadas (Llamadas $e).Count
+  Igual 'la huella de los dos tests es la misma' $huellas (@((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ',')
+  Comprueba 'las tareas no guardan nada de antes' ([string](Tarea-Arnes $e 'original').entradas.previo -eq '' -and [string](Tarea-Arnes $e 'migrado').entradas.previo -eq '') ''
+  Comprueba 'y los tests guardados siguen siendo los de antes (no se escriben otra vez)' ((Tarea-Arnes $e 'original').estado -eq 'hecha' -and (Tarea-Arnes $e 'migrado').estado -eq 'hecha') ''
+}
+
+$Pruebas['m61 (g) el DROP junto con un CREATE TABLE que H2 rechaza: salen las dos pistas (el DROP es compatible con las demas)'] = {
+  $e = Escenario-M61 'm61-g' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M61 $e -M56 'drop-create:arnes-migrado'
+  Igual 'sale con 1' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'migrado'
+  Comprueba 'el motivo lleva la pista del DROP' ($t.motivo.Contains((Pista-M61 'T_GRUPO'))) $t.motivo
+  Comprueba 'y la del CREATE TABLE' ($t.motivo.Contains("El test crea mal una tabla ($($M61Sentencia.Substring(0, 60))).")) $t.motivo
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
