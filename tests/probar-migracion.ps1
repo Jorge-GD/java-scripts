@@ -7531,11 +7531,12 @@ function C4-Pasada([string]$Nombre, $Orden = $null, $Local = $null) {
 }
 
 # El diagnostico del cierre que da el motor falso: por defecto, el B que ya estaba antes y un aviso; con $CommitEn, ademas hace un commit en esa carpeta.
-function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '', [string]$RamaEn = '') {
+function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '', [string]$RamaEn = '', [int]$Falla = 0) {
   if ($null -eq $Hallazgos) { $Hallazgos = @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'), (Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests')) }
   $c = [ordered]@{ md = (Md-Diagnostico $Md); hallazgos = @($Hallazgos) }
   if ($CommitEn) { $c.commitEn = $CommitEn }
   if ($RamaEn) { $c.ramaEn = $RamaEn }
+  if ($Falla -ne 0) { $c.falla = $Falla }
   return [ordered]@{ cierre = $c }
 }
 
@@ -7884,6 +7885,43 @@ $Pruebas['c4 (q) tu carpeta cambia de rama mientras se miden las puertas (otra r
   Igual 'la rama otra no se mueve' $antes (GitEn $e.Migrado @('rev-parse', 'otra'))
   Igual 'tu rama (main) no se mueve' $antes (GitEn $e.Migrado @('rev-parse', 'main'))
   Igual 'el worktree sigue en su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+$Pruebas['c4 (r) un arnes de la prueba en local sin hacer (atascado, o ausente) aunque todos los jobs salgan iguales: para con cierre-prueba-local, dice que arnes no esta hecho y tu rama no se mueve'] = {
+  foreach ($caso in @(@('original', 'atascada'), @('migrado', 'ausente'))) {
+    $cual = $caso[0]
+    $e = C4-Pasada ('c4-r-' + $cual)
+    $f = Get-Ruta $e.Out 'datos/prueba-local.json'
+    $j = Lee-Json $f
+    if ($caso[1] -eq 'ausente') { $j.arneses.PSObject.Properties.Remove($cual) } else { $j.arneses.$cual = 'atascada' }
+    Guarda-Json $f $j
+    $antes = C4-Head $e
+    $rescate = C4-Head-Wt $e
+    $r = C4-Cierre $e
+    Igual "$cual $($caso[1]): sale con 2" 2 $r.Codigo
+    $s = Estado $e
+    $otro = @('original', 'migrado') | Where-Object { $_ -ne $cual }
+    Comprueba "$cual $($caso[1]): parada cierre-prueba-local que dice que el arnes del $cual no esta hecho y no el del $otro" ($s.parada.motivo -eq 'cierre-prueba-local' -and $s.parada.detalle.Contains("el arnes del $cual no esta hecho") -and -not $s.parada.detalle.Contains("el arnes del $otro")) "$($s.parada.motivo): $($s.parada.detalle)"
+    Igual "$cual $($caso[1]): tu rama no se mueve" $antes (C4-Head $e)
+    Igual "$cual $($caso[1]): el worktree no se mueve" $rescate (C4-Head-Wt $e)
+    Comprueba "$cual $($caso[1]): no hay cierre hecho" ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+  }
+}
+
+$Pruebas['c4 (s) tu rama avanzo (se junta en el worktree) y el motor del diagnostico se cae: para con cierre-motor, el worktree vuelve a su HEAD de antes sin merge a medias ni cambios y tu rama no se mueve'] = {
+  $e = C4-Pasada 'c4-s'
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'docs/NOTAS.md' "notas`n"
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: OK' '' '' 3)
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-motor con el codigo de salida del motor' ($s.parada.motivo -eq 'cierre-motor' -and $s.parada.detalle.Contains('ha salido con codigo 3')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'el diagnostico del cierre se lanzo una vez (la junta en el worktree ya se habia hecho)' ($diag + 1) (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'tu rama no se mueve' $tuyo (C4-Head $e)
+  Igual 'el worktree vuelve a su HEAD de antes' $rescate (C4-Head-Wt $e)
   Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
   Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
 }
