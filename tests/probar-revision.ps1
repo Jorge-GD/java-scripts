@@ -798,4 +798,20 @@ $Pruebas['26 m) los .java de src/test no son unidad ni entran en un step, aunque
   }
 }
 
+$Pruebas['27 m) hallazgos repetidos: la misma regla en la misma linea de dos ficheros de una unidad no es el mismo hallazgo: revision.json conserva los dos'] = {
+  $paso = "  public Step paso(JobRepository repo, PlatformTransactionManager tm) {`n    return new StepBuilder(`"paso`", repo).<Recibo, Recibo>chunk(10, tm).writer(escritorDos()).build();`n  }`n"
+  $e = Nuevo-Escenario 'm4' @{
+    ($P + 'PasoDos.java') = (Clase 'public class PasoDos' $paso)
+    ($P + 'EscritorDos.java') = (Clase 'public class EscritorDos' "  int a;`n  TransactionManager tm;`n")
+  } @{
+    'revision-paso.json' = (Salida @(
+        (Hallazgo @{ regla = 'SB-TRANSACCION'; fichero = ($P + 'EscritorDos.java'); linea = 5; cita = 'TransactionManager tm;'; texto = 'Del escritor.' }),
+        (Hallazgo @{ regla = 'SB-TRANSACCION'; fichero = ($P + 'PasoDos.java'); linea = 5; cita = '.<Recibo, Recibo>chunk(10, tm)'; texto = 'Del step.' })))
+  }
+  $t = @(Pasada $e)
+  Igual 'una unidad, hecha, con sus dos ficheros' 'hecha|PasoDos,EscritorDos' "$($t[0].estado)|$(Cortos $t[0].entradas.ficheros)"
+  $j = Lee-Json $e.Json
+  Igual 'revision.json conserva los dos, el del step primero' 'PasoDos:5,EscritorDos:5' ((@($j.hallazgos) | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.fichero) + ':' + $_.linea }) -join ',')
+}
+
 Invoke-Banco $Pruebas 'tests/probar-revision.ps1'
