@@ -967,7 +967,7 @@ function Repair-PomSoloTest([string]$Antes, [string]$Ruta) {
 
 # Los ficheros donde el batch de $Dir (una copia) puede nombrar tablas y columnas: los .java, .sql, .xml, .properties y .yml/.yaml de su src/main, por su ruta
 # relativa (Get-Rel) -> la ruta completa.
-function Get-FicherosCodigo([string]$Dir) {
+function Get-FicherosConSql([string]$Dir) {
   $ficheros = @{}
   $raiz = Join-Ruta $Dir 'src/main'
   if (-not (Test-Path -LiteralPath $raiz)) { return $ficheros }
@@ -976,13 +976,13 @@ function Get-FicherosCodigo([string]$Dir) {
 }
 
 # El primer sitio (fichero:linea, el fichero por su ruta ordenada) donde el codigo de $Dir (una copia) nombra la columna $Columna: como palabra entera (COD_ZONA
-# no esta en COD_ZONA_OLD), sin distinguir mayusculas y en cualquier texto de Get-FicherosCodigo, con o sin comentarios. '' si no la nombra. Una vez por copia y
+# no esta en COD_ZONA_OLD), sin distinguir mayusculas y en cualquier texto de Get-FicherosConSql, con o sin comentarios. '' si no la nombra. Una vez por copia y
 # columna ($script:SitiosColumna): recorre src/main.
 function Get-SitioColumna([string]$Dir, [string]$Columna) {
   $clave = $Dir + '|' + $Columna.ToUpperInvariant()
   if (-not $script:SitiosColumna.ContainsKey($clave)) {
     $sitio = ''
-    $ficheros = Get-FicherosCodigo $Dir
+    $ficheros = Get-FicherosConSql $Dir
     foreach ($rel in (Sort-Ordinal @($ficheros.Keys))) {
       $texto = [System.IO.File]::ReadAllText($ficheros[$rel])
       $m = [regex]::Match($texto, '(?i)(?<!\w)' + [regex]::Escape($Columna) + '(?!\w)')
@@ -1000,7 +1000,7 @@ function Get-SitioColumna([string]$Dir, [string]$Columna) {
 # lleva otra palabra de SQL (SELECT, INSERT, DELETE, MERGE, WHERE, VALUES, SET u ORDER BY) o si su nombre va todo en mayusculas (" FROM T_X ", un
 # trozo de SQL partido con +). Es aproximado, con regex y sin Java: puede dar alguna que no es y no ve las que se arman con variables.
 function Get-TablasBatch([string]$Dir) {
-  $ficheros = Get-FicherosCodigo $Dir
+  $ficheros = Get-FicherosConSql $Dir
   $sitios = @{}
   foreach ($rel in (Sort-Ordinal @($ficheros.Keys))) {
     $texto = [System.IO.File]::ReadAllText($ficheros[$rel])
