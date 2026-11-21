@@ -7531,10 +7531,11 @@ function C4-Pasada([string]$Nombre, $Orden = $null, $Local = $null) {
 }
 
 # El diagnostico del cierre que da el motor falso: por defecto, el B que ya estaba antes y un aviso; con $CommitEn, ademas hace un commit en esa carpeta.
-function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '') {
+function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '', [string]$RamaEn = '') {
   if ($null -eq $Hallazgos) { $Hallazgos = @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'), (Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests')) }
   $c = [ordered]@{ md = (Md-Diagnostico $Md); hallazgos = @($Hallazgos) }
   if ($CommitEn) { $c.commitEn = $CommitEn }
+  if ($RamaEn) { $c.ramaEn = $RamaEn }
   return [ordered]@{ cierre = $c }
 }
 
@@ -7868,6 +7869,22 @@ $Pruebas['c4 (o) alguien avanza tu rama mientras se miden las puertas: el fast-f
   $s = Estado $e
   Igual 'parada cierre-no-ff' 'cierre-no-ff' $s.parada.motivo
   Comprueba 'tu rama tiene el commit de ese alguien y no el arreglo' ((GitEn $e.Migrado @('log', '-1', '--format=%s')) -eq 'alguien avanza tu rama' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Migrado 'src/main/java/com/acme/life/Arreglo.java'))) (Cola $r.Salida)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+$Pruebas['c4 (q) tu carpeta cambia de rama mientras se miden las puertas (otra rama, ancestro de la de rescate): para con cierre-no-ff, ni esa rama ni la tuya se mueven y el worktree queda donde estaba'] = {
+  $e = C4-Pasada 'c4-q'
+  $antes = C4-Head $e
+  $rescate = C4-Head-Wt $e
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: OK' '' $e.Migrado)
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'tu carpeta esta en otra rama (el cambio de rama ocurrio)' 'otra' (GitEn $e.Migrado @('rev-parse', '--abbrev-ref', 'HEAD'))
+  $s = Estado $e
+  Comprueba 'parada cierre-no-ff que dice que tu carpeta ya no esta en tu rama' ($s.parada.motivo -eq 'cierre-no-ff' -and $s.parada.detalle.Contains('Tu carpeta ya no esta en tu rama (otra; antes main): no he movido nada.')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'la rama otra no se mueve' $antes (GitEn $e.Migrado @('rev-parse', 'otra'))
+  Igual 'tu rama (main) no se mueve' $antes (GitEn $e.Migrado @('rev-parse', 'main'))
+  Igual 'el worktree sigue en su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
   Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
 }
 

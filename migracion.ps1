@@ -842,6 +842,10 @@ function Invoke-Cierre {
     $r = [regex]::Match("$l", '^([0-9a-f]+)\|(.*)$')
     if ($r.Success) { $revisar += [ordered]@{ hash = $r.Groups[1].Value; asunto = $r.Groups[2].Value } }
   }
+  $ramaAhora = Get-Rama $MigradoRoot
+  if ($ramaAhora -cne $RamaMigrado) {
+    return (Stop-Cierre 'no-ff' "Tu carpeta ya no esta en tu rama ($ramaAhora; antes $RamaMigrado): no he movido nada. Vuelve a tu rama y lanza otra vez -Cierre" $antesWt)
+  }
   $deshacer = 'git -C "' + $MigradoRoot + '" reset --hard ' + $antes
   $Estado['cierre'] = [ordered]@{ antes = $antes; sha = $sha; cuando = (Get-Date).ToString('s'); juntada = $juntada; hecho = $false; deshacer = $deshacer; avisos = @($avisos); revisar = @($revisar) }
   Save-Estado
