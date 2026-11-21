@@ -645,7 +645,7 @@ function New-WorktreeRescate([string]$Dir) {
       Where-Object { $_ -match ('^' + [regex]::Escape($prefijo) + '\d{8}-\d{4}$') } | Sort-Object -Descending)
   if ($sinUnir.Count -gt 0) {
     Fallo ('Hay una rama de rescate con arreglos que no estan en tu rama: ' + ($sinUnir -join ', ') + '. No creo otra, para no dejarla olvidada.')
-    Info "Unirla a tu rama:        git -C `"$OrigenRoot`" merge $($sinUnir[0])"
+    Info "Unirla a tu rama:        recupera su carpeta (la linea de abajo) y lanza .\migracion.ps1 -Legacy <original> -Migrado `"$OrigenRoot`" -Plantilla <referencia> -Cierre"
     Info "Seguir trabajando en ella: git -C `"$OrigenRoot`" worktree add `"$Dir`" $($sinUnir[0])"
     Info "No la quieres:           git -C `"$OrigenRoot`" branch -D $($sinUnir[0])"
     Info 'Despues, lanza el mismo comando.'

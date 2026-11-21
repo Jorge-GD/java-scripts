@@ -102,9 +102,9 @@ Mientras espera a Copilot o a Maven escribe una línea cada minuto (`... sigue: 
 # 3 ter) Forma corta para subir la cobertura: escribe tests, una clase por lote, hasta el objetivo (80 %)
 .\rescate.ps1 -Repo C:\ruta\batch -Cobertura
 
-# 4) Al acabar: revisar y traer los cambios a tu rama
+# 4) Al acabar: revisar y juntar los cambios con tu rama (con -Cierre, si vienes de migracion.ps1)
 git -C C:\ruta\batch-life diff --stat <tu-rama>...<rama-rescate>
-git -C C:\ruta\batch-life merge <rama-rescate>
+.\migracion.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\batch-life -Plantilla C:\ruta\referencia -Cierre
 git -C C:\ruta\batch-life worktree remove C:\ruta\batch-life-rescate
 ```
 
@@ -255,6 +255,8 @@ Lo que dicen las páginas de esa última fase: la página 3 (`3-original-vs-migr
 ### Los lanzadores (.sh)
 
 Si el original se lanza con scripts de shell (`.sh`, `.ksh`, o un script con `#!`), `migracion.ps1` los lee tras el mapa de jobs (fase `lanzadores`, código en `lanzadores.ps1`): el script saca sin IA los parámetros, los `exit`, lo que mueve o borra y el job al que lanza cada uno, y la IA cuenta de cada script cómo se lanza, qué hace antes y después del java y con qué códigos acaba, con citas que se comprueban. Dentro de `comparar`, otra tarea mira si cada acción del `.sh` está en el migrado, y se rehace solo si cambian los ficheros del migrado que mira (o cuáles son), no por cualquier commit nuevo. Salen en tres sitios: «Cómo se lanza» en cada job de la página 1, la sección «Lanzadores» de la página 3 y, en «Lo que te toca» de la portada, lo que hacía un `.sh` y no está en el migrado. Si lo hace la plataforma (una planificación, un configmap), no sale en el código: compruébalo allí. La prueba en local lanza los dos jar directamente y no pasa por los `.sh`. Si los scripts están fuera de la carpeta del original, pasa `-Lanzadores <carpeta>`; queda en `datos\estado.json`.
+
+`-Cierre` junta por fast-forward, después de las puertas, la corrección con tu rama, sin IA y sin hacer push. Las puertas son que compile, que los tests no empeoren, que no haya errores nuevos y que la prueba en local salga igual; si una falla, no mueve ni tu rama ni la de rescate y para con su motivo (`cierre-*`). Al acabar, la portada del informe dice lo juntado, los commits que tocan la configuración y que revisar antes del push, y cómo deshacerlo: `cierre.deshacer` en `datos\estado.json` (un `git reset --hard` a donde estaba tu rama). Va solo: `.\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -Cierre`.
 
 ## prueba-local.ps1
 
