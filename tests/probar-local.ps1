@@ -5677,5 +5677,20 @@ $Pruebas['m61 (g) el DROP junto con un CREATE TABLE que H2 rechaza: salen las do
   Comprueba 'y la del CREATE TABLE' ($t.motivo.Contains("El test crea mal una tabla ($($M61Sentencia.Substring(0, 60))).")) $t.motivo
 }
 
+$Pruebas['m61 (h) lo que fallo la otra vez no se pierde si un lanzamiento se para antes de llamar a la IA (se dice que no a la pregunta): el siguiente lo lleva en su primer intento'] = {
+  $e = Escenario-M61 'm61-h' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M61 $e -M56 'drop-en:arnes-migrado'
+  Igual 'el primer lanzamiento sale con 1 (migrado atascado)' 1 $r.Codigo
+  $antes = Tarea-Arnes $e 'migrado'
+  $n = (Llamadas $e).Count
+  $r = Prueba $e @() '' 'n'
+  Comprueba 'con n dice que no se ha hecho nada' ($r.Salida -match 'No se ha hecho nada') (Cola $r.Salida)
+  Igual 'sin llamadas nuevas' $n (Llamadas $e).Count
+  $r = Prueba $e
+  Igual 'el tercer lanzamiento sale con 0' 0 $r.Codigo
+  $primero = Registro-Arnes $e 'migrado' 1
+  Comprueba 'su primer intento lleva el bloque, con el motivo del primer lanzamiento y su pista del DROP' ($primero.Contains($M61Bloque) -and $primero.Contains($antes.motivo) -and $primero.Contains((Pista-M61 'T_GRUPO'))) (Cola $primero)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
