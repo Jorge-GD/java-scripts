@@ -252,6 +252,8 @@ Después, si ya no la quieres, quita la carpeta de rescate: `git -C C:\ruta\migr
 
 En `1-batch-original.html`, cada job tiene «Cómo probarlo en pre»: qué lanzar, con qué datos y qué tiene que salir. La prueba en local simula lo de fuera (base de datos, SFTP, correo). La conexión de verdad solo se prueba en pre.
 
+Antes de lanzar nada en pre, mira en «Cómo probarlo en pre» de cada job si puedes lanzar el viejo y el nuevo a la vez o uno detrás de otro. En cada lanzamiento (y tras `-Cierre`) `migracion.ps1` lo dice, sin IA, con los motivos y qué reponer entre una ejecución y la otra; lo deja en `datos\convivencia.json`. Por defecto es uno detrás de otro: solo sale «a la vez» si ninguno de los dos escribe nada que el otro lea. Las tablas `BATCH_` no se comparten nunca: el nuevo necesita su propio esquema o prefijo.
+
 ## Paso 7. Subir y otra vuelta de Sonar
 
 1. `git push` de tu rama.
