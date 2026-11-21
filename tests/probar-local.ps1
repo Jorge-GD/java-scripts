@@ -3266,7 +3266,7 @@ function Tarea-Caso-M40($E, [string]$Job, [string]$Caso) { return (Lee-Json (Get
 function Inventario-M40([string]$Raiz, [string]$Extra = '') {
   $f = Join-Path $Dir 'm40-inventario.ps1'
   $cuerpo = "foreach (`$t in @(Get-TablasBatch `$Raiz)) { 'T|' + `$t.tabla + '|' + `$t.sitio }`n" + $Extra
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Get-TablasSql', 'Get-NombreTabla')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-FicherosConSql', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Get-TablasSql', 'Get-NombreTabla')) + "`n" + $cuerpo))
   return (Lanzar $f @($Raiz))
 }
 
@@ -5690,6 +5690,157 @@ $Pruebas['m61 (h) lo que fallo la otra vez no se pierde si un lanzamiento se par
   Igual 'el tercer lanzamiento sale con 0' 0 $r.Codigo
   $primero = Registro-Arnes $e 'migrado' 1
   Comprueba 'su primer intento lleva el bloque, con el motivo del primer lanzamiento y su pista del DROP' ($primero.Contains($M61Bloque) -and $primero.Contains($antes.motivo) -and $primero.Contains((Pista-M61 'T_GRUPO'))) (Cola $primero)
+}
+
+# ===================== M62: la columna que el test del original no crea =====================
+# Estos escenarios usan m62-mvn.ps1 (lo de m61-mvn.ps1 y, ademas, los guiones de abajo) y el Copilot de m40 o el de m56. El original lleva, ademas del Repo.java de
+# M40 (INSERT INTO T_A (ID, NOMBRE) en la linea 4), un Zonas.java con el SQL en minusculas en la linea 4: select cod_zona, importe from T_A where cod_zona_old ...
+#   RESCATE_M62 = 'nombre=TABLA.COLUMNA:regex sobre job/caso'   es o en (siempre) y despues o despues-en (desde la segunda ejecucion): el original no corre el caso
+#                                                               porque a la tabla le falta la columna, en espanol o en ingles (ver m62-mvn.ps1)
+#   RESCATE_M56 = 'columnas:arnes-original'                     el test del arnes del original falla con cinco columnas que faltan (COD_ZONA dos veces, IMPORTE, ID y NOMBRE)
+#   RESCATE_M40: como en m40 (tablas=<n>/<T_A>:<id> y falta-tabla=T_A:<job/caso>)
+
+$M62Sitio = 'src/main/java/com/acme/viejo/Zonas.java:4'
+$M62Motivo = "El test del original no crea la columna T_A.COD_ZONA (la usa $M62Sitio)."
+$M62Aviso = ' caso(s) no se pudieron preparar porque el test del original no crea una columna que usa el codigo: relanza con -RehacerOriginal.'
+
+function Escenario-M62([string]$Nombre, $Casos, [string]$Copilot = 'm40') {
+  $e = Escenario-M61 $Nombre $Casos $Copilot
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos "$Copilot-copilot.ps1"); MvnExe = (Join-Path $falsos 'm62-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  Escribe $e.Legacy 'src/main/java/com/acme/viejo/Zonas.java' "package com.acme.viejo;`n`npublic class Zonas {`n  static final String Z = `"select cod_zona, importe from T_A where cod_zona_old is null`";`n}`n"
+  [void](GitEn $e.Legacy @('add', 'src/main/java/com/acme/viejo/Zonas.java'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'zonas con sql'))
+  return $e
+}
+
+function Prueba-M62($E, [string[]]$A = @(), [string]$M62 = '', [string]$M40 = '', [string]$M56 = '') {
+  $env:RESCATE_M62 = $M62
+  try { return (Prueba-M61 $E $A '' $M40 $M56) }
+  finally { $env:RESCATE_M62 = '' }
+}
+
+# La pista de la columna que falta, con su tabla (o sin ella si $Tabla es '') y el sitio donde la usa el codigo.
+function Pista-M62([string]$Tabla, [string]$Columna, [string]$Sitio = $M62Sitio) {
+  if ($Tabla) { return "La tabla $Tabla de la base limpia no tiene la columna $Columna, que usa el codigo ($Sitio): anadela en su CREATE TABLE." }
+  return "Una tabla de la base limpia no tiene la columna $Columna, que usa el codigo ($Sitio): anadela en su CREATE TABLE."
+}
+
+$Pruebas['m62 (a) un caso nuevo cuyo original falla con Columna/Column "COD_ZONA" y el codigo la usa (en espanol y en ingles; el SQL va en minusculas): el motivo lleva el prefijo, la tabla y el sitio, sin reintento (una sola llamada), y sale la linea de aviso'] = {
+  foreach ($l in @('es', 'en')) {
+    $e = Escenario-M62 "m62-a-$l" ([ordered]@{ cargaJob = @('importe=10.00') })
+    $r = Prueba-M62 $e -M40 'tablas=1/T_A:arnes-original' -M62 "${l}=T_A.COD_ZONA:^cargaJob/caso-01"
+    Igual "($l) sale con 1 (ningun caso se compara)" 1 $r.Codigo
+    Igual "($l) el caso: no se pudo preparar" 'no se pudo preparar' ((Resultados $e) -join ',')
+    $m = [string](Caso $e 'cargaJob' 'caso-01').motivo
+    Comprueba "($l) el motivo lleva el prefijo, la tabla, la columna y el sitio" ($m.Contains($M62Motivo)) $m
+    Comprueba "($l) y no el texto de H2 ni las columnas de la base de prueba" (-not $m.Contains('no encontrada') -and -not $m.Contains('not found') -and -not $m.Contains('Sus columnas')) $m
+    Igual "($l) una sola llamada para el caso: no hay reintento" 1 @(Llamadas-Casos $e).Count
+    $t = Tarea-Caso-M40 $e 'cargaJob' '01'
+    Igual "($l) la tarea queda atascada tras un solo intento" 'atascada,1' "$($t.estado),$($t.intentos)"
+    Igual "($l) la linea de aviso, una vez" 1 ([regex]::Matches($r.Salida, [regex]::Escape("1$M62Aviso"))).Count
+  }
+}
+
+$Pruebas['m62 (b) una columna que el codigo no usa (QQ): el motivo de siempre (la tabla, la columna y las de la base de prueba), con reintento y sin aviso'] = {
+  $e = Escenario-M62 'm62-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M62 $e -M40 'tablas=1/T_A:arnes-original' -M62 'es=T_A.QQ:^cargaJob/caso-01'
+  Igual 'sale con 1' 1 $r.Codigo
+  $m = [string](Caso $e 'cargaJob' 'caso-01').motivo
+  Comprueba 'el motivo es el de siempre, con las columnas de la base de prueba' ($m.Contains('La tabla T_A no tiene la columna QQ. Sus columnas en la base de prueba son: ID, NOMBRE.')) $m
+  Comprueba 'y no lleva el prefijo' (-not $m.Contains('El test del original no crea la columna')) $m
+  Igual 'dos llamadas para el caso: hay reintento' 2 @(Llamadas-Casos $e).Count
+  $t = Tarea-Caso-M40 $e 'cargaJob' '01'
+  Igual 'la tarea queda atascada tras dos intentos' 'atascada,2' "$($t.estado),$($t.intentos)"
+  Comprueba 'el prompt del reintento lleva el motivo de siempre' ((Registro-Caso-M40 $e 'cargaJob' '01' 2).Contains('La tabla T_A no tiene la columna QQ.')) (Cola (Registro-Caso-M40 $e 'cargaJob' '01' 2))
+  Comprueba 'no sale la linea de aviso de la columna' (-not $r.Salida.Contains('no crea una columna que usa el codigo')) (Cola $r.Salida)
+}
+
+$Pruebas['m62 (c) tres casos que corrian al prepararlos y cuyo original nuevo ya no crea la columna (en espanol y en ingles): cada motivo lleva el prefijo y sale una sola linea de aviso con 3 caso(s) y -RehacerOriginal'] = {
+  $e = Escenario-M62 'm62-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M62 $e -M40 'tablas=1/T_A:arnes-original' -M62 'despues=T_A.COD_ZONA:^cargaJob/caso-01;despues-en=T_A.COD_ZONA:^cargaJob/caso-02;despues=T_A.COD_ZONA:^cargaJob/caso-03'
+  Igual 'sale con 1 (ningun caso se compara)' 1 $r.Codigo
+  Igual 'los tres casos: no se pudo preparar' 'no se pudo preparar,no se pudo preparar,no se pudo preparar' ((Resultados $e) -join ',')
+  foreach ($c in @('caso-01', 'caso-02', 'caso-03')) {
+    $m = [string](Caso $e 'cargaJob' $c).motivo
+    Comprueba "$c lleva el prefijo, la tabla, la columna y el sitio" ($m.Contains($M62Motivo)) $m
+    Comprueba "$c no lleva el texto de H2 ni el de siempre" (-not $m.Contains('no encontrada') -and -not $m.Contains('not found') -and -not $m.StartsWith('En el original')) $m
+  }
+  Igual 'una sola llamada por caso (corrian al prepararlos)' 3 @(Llamadas-Casos $e).Count
+  Igual 'la linea de aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape("3$M62Aviso"))).Count
+  Igual 'y ninguna otra con esa cuenta' 1 ([regex]::Matches($r.Salida, 'caso\(s\) no se pudieron preparar porque')).Count
+}
+
+$Pruebas['m62 (c2) un caso sin tabla (m40) y otro sin columna: salen los dos avisos, cada uno con 1'] = {
+  $e = Escenario-M62 'm62-c2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M62 $e -M40 'tablas=1/T_A:arnes-original;falta-tabla=T_A:^cargaJob/caso-01' -M62 'es=T_A.COD_ZONA:^cargaJob/caso-02'
+  Igual 'sale con 1' 1 $r.Codigo
+  Igual 'los dos casos: no se pudo preparar' 'no se pudo preparar,no se pudo preparar' ((Resultados $e) -join ',')
+  Comprueba 'el caso 1 lleva el motivo de la tabla que falta' ([string](Caso $e 'cargaJob' 'caso-01').motivo).Contains("La base de prueba no tiene la tabla T_A (el test no la crea; la usa $SitioTablaM40).") ''
+  Comprueba 'el caso 2 lleva el prefijo de la columna' ([string](Caso $e 'cargaJob' 'caso-02').motivo).Contains($M62Motivo) ''
+  $sin = '1 caso(s) no se pudieron preparar porque el test del original no crea sus tablas: relanza con -RehacerOriginal.'
+  Igual 'el aviso de la tabla que falta, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($sin))).Count
+  Igual 'el aviso de la columna, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape("1$M62Aviso"))).Count
+}
+
+$Pruebas['m62 (d) con el prueba-local.json de unos casos sin la columna y -RehacerOriginal: el primer intento del test del original lleva el bloque con la pista de T_A y COD_ZONA, una vez; el del migrado no'] = {
+  $e = Escenario-M62 'm62-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M62 $e -M40 'tablas=1/T_A:arnes-original' -M62 'despues=T_A.COD_ZONA:^cargaJob/caso-01;despues-en=T_A.COD_ZONA:^cargaJob/caso-02;es=T_A.COD_ZONA:^cargaJob/caso-03'
+  Igual 'el primer lanzamiento sale con 1' 1 $r.Codigo
+  Comprueba 'su primer prompt del original no lleva el bloque' (-not (Registro-Arnes $e 'original' 1).Contains($M61Bloque)) ''
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  $primero = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento del original lleva el bloque' ($primero.Contains($M61Bloque)) (Cola $primero)
+  Comprueba 'con la pista de T_A, COD_ZONA y el sitio' ($primero.Contains((Pista-M62 'T_A' 'COD_ZONA'))) (Cola $primero)
+  Igual 'la pista, una sola vez (los tres casos dicen lo mismo)' 1 ([regex]::Matches($primero, 'no tiene la columna COD_ZONA')).Count
+  Comprueba 'el primer intento del migrado, que se traduce del original, no lleva bloque' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
+}
+
+$Pruebas['m62 (d2) un prueba-local.json de antes de M62 (el motivo trae el error de H2, en espanol y en ingles, o sin SQL): la pista sale con la tabla del SQL o sin tabla, y una columna que el codigo no usa (ZONA) no da pista'] = {
+  $e = Escenario-M62 'm62-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $h2 = { param([string]$Dicho, [string]$Sql) "En el original error.txt: org.springframework.jdbc.datasource.init.ScriptStatementFailedException: Failed to execute SQL script statement #1 of file [C:\obra\datos.sql]: $Sql; nested exception is org.h2.jdbc.JdbcSQLSyntaxErrorException: $Dicho" }
+  $sql = { param([string]$C) "INSERT INTO T_A (ID, $C) VALUES ('01', 'Z1')" }
+  $caso = { param([string]$N, [string]$Motivo) [ordered]@{ job = 'cargaJob'; caso = $N; titulo = ''; resultado = 'no se pudo preparar'; motivo = $Motivo; diferencias = @(); fallos = @() } }
+  $o = Lee-Json $e.Json
+  $o.casos = @(
+    (& $caso 'caso-01' (& $h2 'Columna "COD_ZONA" no encontrada; Sentencia SQL: ' (& $sql 'COD_ZONA'))),
+    (& $caso 'caso-02' (& $h2 'Column "COD_ZONA" not found; SQL statement: ' (& $sql 'COD_ZONA'))),
+    (& $caso 'caso-03' (& $h2 'Columna "ZONA" no encontrada; Sentencia SQL: ' (& $sql 'ZONA'))),
+    (& $caso 'caso-04' 'En el original error.txt: org.h2.jdbc.JdbcSQLSyntaxErrorException: Column "NOMBRE" not found'))
+  [System.IO.File]::WriteAllText($e.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  $primero = Registro-Arnes $e 'original' 1
+  Comprueba 'el bloque lleva la pista de T_A y COD_ZONA, con la tabla que sale del SQL' ($primero.Contains($M61Bloque) -and $primero.Contains((Pista-M62 'T_A' 'COD_ZONA'))) (Cola $primero)
+  Igual 'la de COD_ZONA, una sola vez (dos casos la dicen)' 1 ([regex]::Matches($primero, 'no tiene la columna COD_ZONA')).Count
+  Comprueba 'y la de NOMBRE, sin tabla (el motivo no trae SQL), con el sitio de Repo.java' ($primero.Contains((Pista-M62 '' 'NOMBRE' $SitioTablaM40))) (Cola $primero)
+  Comprueba 'ZONA solo sale dentro de otras palabras en el codigo: no da pista' (-not $primero.Contains('columna ZONA')) (Cola $primero)
+}
+
+$Pruebas['m62 (e) el test del original falla con cinco columnas que faltan (COD_ZONA dos veces, IMPORTE, ID y NOMBRE): la pista nombra las tres primeras distintas, una vez cada una y en orden, con su tabla y su sitio'] = {
+  $e = Escenario-M62 'm62-e' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M62 $e -M56 'columnas:arnes-original'
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda atascada con dos intentos' 'atascada,2' "$($t.estado),$($t.intentos)"
+  $pista = (Pista-M62 'T_A' 'COD_ZONA') + ' ' + (Pista-M62 'T_A' 'IMPORTE') + ' ' + (Pista-M62 'T_A' 'ID' $SitioTablaM40)
+  Comprueba 'el motivo lleva las tres pistas, en una sola' ($t.motivo.Contains($pista)) $t.motivo
+  Igual 'y las columnas son solo esas tres, cada una una vez (NOMBRE, la cuarta distinta, no)' 'COD_ZONA,IMPORTE,ID' (@([regex]::Matches($t.motivo, 'no tiene la columna (\w+)') | ForEach-Object { $_.Groups[1].Value }) -join ',')
+  Comprueba 'el prompt del reintento lleva la pista' ((Registro-Arnes $e 'original' 2).Contains($pista)) (Cola (Registro-Arnes $e 'original' 2))
+}
+
+$Pruebas['m62 (f) una columna que solo aparece dentro de otras palabras del codigo (ZONA, en COD_ZONA y COD_ZONA_OLD): no cuenta como usada, y el caso sigue como hoy (motivo de siempre y reintento)'] = {
+  $e = Escenario-M62 'm62-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M62 $e -M40 'tablas=1/T_A:arnes-original' -M62 'es=T_A.ZONA:^cargaJob/caso-01'
+  Igual 'sale con 1' 1 $r.Codigo
+  $m = [string](Caso $e 'cargaJob' 'caso-01').motivo
+  Comprueba 'el motivo es el de siempre' ($m.Contains('La tabla T_A no tiene la columna ZONA.') -and -not $m.Contains('El test del original no crea la columna')) $m
+  Igual 'dos llamadas para el caso: hay reintento' 2 @(Llamadas-Casos $e).Count
+  Comprueba 'no sale la linea de aviso de la columna' (-not $r.Salida.Contains('no crea una columna que usa el codigo')) (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================

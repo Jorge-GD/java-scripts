@@ -166,6 +166,7 @@ Para encontrar el commit que rompe un caso:
   El test del original no se toca. Las claves que salieron «no se arregla» se vuelven a probar con el test nuevo.
 - **Si casos salen «no se pudo preparar» con «La base de prueba no tiene la tabla X»**, el test guardado del original no crea esa tabla (es de antes de que se comprobaran las tablas). Escríbelo otra vez con `-RehacerOriginal` (y con él el del migrado, que lo traduce); al acabar, la consola cuenta cuántos casos son. Los casos que quedaron «sin probar en local» por lo mismo se vuelven a preparar en ese lanzamiento (la consola dice cuántos). Si un test queda atascado, relanzar el mismo comando lo vuelve a intentar con dos intentos nuevos.
 - **Si casos salen «no se pudo preparar» con «El test del original crea mal una tabla»**, el test del original saca mal las tablas del SQL del código: escríbelo otra vez con `-RehacerOriginal`; la consola cuenta cuántos casos son, y el primer intento del test nuevo recibe lo que falló la otra vez (el último motivo de su tarea de antes y las pistas de esos casos).
+- **Si casos salen «no se pudo preparar» con «El test del original no crea la columna T.C (la usa fichero:línea)»**, el test del original crea la tabla sin una columna que el código usa y los casos cargan: escríbelo otra vez con `-RehacerOriginal`; la consola cuenta cuántos casos son, y el primer intento del test nuevo recibe la pista con la tabla, la columna y el sitio del código (hasta tres columnas).
 
 ### Volver a comprobar, cuando quieras
 

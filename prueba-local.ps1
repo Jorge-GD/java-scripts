@@ -176,6 +176,11 @@ $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not fou
 # (Get-PistaArnes sobre el prueba-local.json de antes, donde el motivo ya no trae el error).
 $PrefijoTablaMal = 'El test del original crea mal una tabla: '
 $PatronCreateTabla = '(?im)(?:(?:Syntax error in SQL statement|Error de Sintaxis en sentencia SQL)\s+"|' + [regex]::Escape($PrefijoTablaMal) + ')(?<s>CREATE TABLE.*?)(?:"\s*;|$)'
+# Lo que dice el motivo de un caso cuyo original no corre porque el test no crea una columna que usa el codigo (Get-MotivoColumna): la cuenta del final de la prueba
+# lo busca. $PatronColumnaSinCrear es ese motivo ya dicho (grupos t, la tabla si se sabe; c, la columna; s, el sitio: Get-PistaArnes sobre el prueba-local.json
+# de antes, donde el motivo ya no trae el error de H2).
+$PrefijoSinColumna = 'El test del original no crea la columna '
+$PatronColumnaSinCrear = [regex]::Escape($PrefijoSinColumna) + '(?:(?<t>\w+)\.)?(?<c>\w+) \(la usa (?<s>.+?:\d+)\)'
 # Un DROP TABLE que H2 rechaza porque otra tabla depende de la que se borra (grupo 1, la tabla): 'Cannot drop "X" because' o 'Imposible eliminar "X" debido a que'.
 $PatronDrop = '(?i)(?:Cannot drop|Imposible eliminar)\s+"([^"]+)"\s+(?:because|debido a que)'
 # Una propiedad sin valor en el test (Get-PistaArnes), por su clave (grupo k): los mensajes de Spring y de Spring Boot ('Could not resolve placeholder 'x'',
@@ -960,6 +965,34 @@ function Repair-PomSoloTest([string]$Antes, [string]$Ruta) {
   return $deshecho
 }
 
+# Los ficheros donde el batch de $Dir (una copia) puede nombrar tablas y columnas: los .java, .sql, .xml, .properties y .yml/.yaml de su src/main, por su ruta
+# relativa (Get-Rel) -> la ruta completa.
+function Get-FicherosConSql([string]$Dir) {
+  $ficheros = @{}
+  $raiz = Join-Ruta $Dir 'src/main'
+  if (-not (Test-Path -LiteralPath $raiz)) { return $ficheros }
+  foreach ($f in @(Get-ChildItem -LiteralPath $raiz -Recurse -File | Where-Object { $_.Extension -match '^\.(java|sql|xml|properties|ya?ml)$' })) { $ficheros[(Get-Rel $Dir $f.FullName)] = $f.FullName }
+  return $ficheros
+}
+
+# El primer sitio (fichero:linea, el fichero por su ruta ordenada) donde el codigo de $Dir (una copia) nombra la columna $Columna: como palabra entera (COD_ZONA
+# no esta en COD_ZONA_OLD), sin distinguir mayusculas y en cualquier texto de Get-FicherosConSql, con o sin comentarios. '' si no la nombra. Una vez por copia y
+# columna ($script:SitiosColumna): recorre src/main.
+function Get-SitioColumna([string]$Dir, [string]$Columna) {
+  $clave = $Dir + '|' + $Columna.ToUpperInvariant()
+  if (-not $script:SitiosColumna.ContainsKey($clave)) {
+    $sitio = ''
+    $ficheros = Get-FicherosConSql $Dir
+    foreach ($rel in (Sort-Ordinal @($ficheros.Keys))) {
+      $texto = [System.IO.File]::ReadAllText($ficheros[$rel])
+      $m = [regex]::Match($texto, '(?i)(?<!\w)' + [regex]::Escape($Columna) + '(?!\w)')
+      if ($m.Success) { $sitio = $rel + ':' + @($texto.Substring(0, $m.Index) -split "`n").Count; break }
+    }
+    $script:SitiosColumna[$clave] = $sitio
+  }
+  return $script:SitiosColumna[$clave]
+}
+
 # El inventario de tablas del batch de $Dir (una copia): las que su codigo nombra en SQL, cada una con su primer sitio (fichero:linea, el fichero
 # ordenado por su ruta), por orden de nombre. Se buscan en src/main: dentro de las cadenas entre comillas dobles de los .java (no en sus
 # comentarios) y en @Table(name = "X"), y en el texto de los .sql, .xml, .properties y .yml/.yaml (sin sus lineas de comentario). Las cadenas de
@@ -967,10 +1000,7 @@ function Repair-PomSoloTest([string]$Antes, [string]$Ruta) {
 # lleva otra palabra de SQL (SELECT, INSERT, DELETE, MERGE, WHERE, VALUES, SET u ORDER BY) o si su nombre va todo en mayusculas (" FROM T_X ", un
 # trozo de SQL partido con +). Es aproximado, con regex y sin Java: puede dar alguna que no es y no ve las que se arman con variables.
 function Get-TablasBatch([string]$Dir) {
-  $raiz = Join-Ruta $Dir 'src/main'
-  if (-not (Test-Path -LiteralPath $raiz)) { return @() }
-  $ficheros = @{}
-  foreach ($f in @(Get-ChildItem -LiteralPath $raiz -Recurse -File | Where-Object { $_.Extension -match '^\.(java|sql|xml|properties|ya?ml)$' })) { $ficheros[(Get-Rel $Dir $f.FullName)] = $f.FullName }
+  $ficheros = Get-FicherosConSql $Dir
   $sitios = @{}
   foreach ($rel in (Sort-Ordinal @($ficheros.Keys))) {
     $texto = [System.IO.File]::ReadAllText($ficheros[$rel])
@@ -1099,7 +1129,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   return ''
 }
 
-# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de cuatro maneras que el motivo solo no explica: '' o una frase por pista.
+# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de cinco maneras que el motivo solo no explica: '' o una frase por pista.
 # $Lineas son las del fallo: lo que ya trae el motivo (error.txt del caso vacio o lo que dice Maven), la salida de Maven y su causa (sale de los informes
 # de surefire): los mismos sitios de donde sale hoy el motivo.
 #  - Una propiedad sin valor ($PatronPropiedad): el job o el bean lee una propiedad que en el servidor llega por el configmap o por una variable de entorno y el
@@ -1113,6 +1143,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 #    la tabla): se le dan las tablas del codigo (Get-TablasBatch de la copia del arnes) para que escriba un CREATE TABLE fijo de cada una.
 #  - Un DROP TABLE que H2 rechaza ($PatronDrop: el test borra las tablas una a una antes de crearlas y una depende de otra): se le dice que no borre tablas y
 #    que use una base H2 en memoria con un nombre unico en cada ejecucion o, si tiene que limpiar, DROP ALL OBJECTS al principio. Va con las demas.
+#  - Una columna que la base limpia no tiene y que usa el codigo (Get-PistaColumnas): el test crea la tabla sin ella. Va con las demas.
 function Get-PistaArnes($T, [string[]]$Lineas) {
   $pistas = @()
   $texto = $Lineas -join "`n"
@@ -1139,7 +1170,44 @@ function Get-PistaArnes($T, [string[]]$Lineas) {
   if ($drop.Success) {
     $pistas += "El test borra las tablas una a una y una depende de otra ($($drop.Groups[1].Value)). No borres tablas: usa una base H2 en memoria con un nombre unico en cada ejecucion (jdbc:h2:mem:<nombre>;DB_CLOSE_DELAY=-1) o, si tiene que limpiar, DROP ALL OBJECTS al principio."
   }
+  $columnas = Get-PistaColumnas $T $texto
+  if ($columnas) { $pistas += $columnas }
   return ($pistas -join ' ')
+}
+
+# La pista de las columnas que le faltan a la base limpia del test y que usa el codigo, de $Texto (las lineas de un fallo): una frase por columna, hasta 3
+# distintas (tabla y columna) y en el orden en que salen, todas en una sola pista. Salen de dos sitios: el error de H2 (Column o Columna "X" not found o
+# no encontrada: solo si el codigo de la copia del arnes la usa, con la tabla del SQL de su linea o de la de abajo; sin SQL, 'Una tabla') y el motivo de
+# Get-MotivoColumna (el prueba-local.json de un lanzamiento con M62, donde el motivo ya no trae el error). '' si no hay ninguna.
+function Get-PistaColumnas($T, [string]$Texto) {
+  $hay = @()
+  foreach ($m in [regex]::Matches($Texto, $PatronColumnaSinCrear)) {
+    $hay += [pscustomobject]@{ indice = $m.Index; tabla = $m.Groups['t'].Value; columna = $m.Groups['c'].Value; sitio = $m.Groups['s'].Value }
+  }
+  foreach ($m in [regex]::Matches($Texto, $PatronTablaFalta)) {
+    if ($m.Groups[1].Value -notmatch '(?i)^columna?$') { continue }
+    $columna = ($m.Groups[2].Value -split '\.')[-1]
+    $sitio = Get-SitioColumna $T.entradas.copia $columna
+    if (-not $sitio) { continue }
+    $ini = $Texto.LastIndexOf([char]10, $m.Index) + 1
+    $fin = $Texto.IndexOf([char]10, $m.Index)
+    if ($fin -ge 0) { $fin = $Texto.IndexOf([char]10, $fin + 1) }
+    if ($fin -lt 0) { $fin = $Texto.Length }
+    $tabla = [string]@(Get-TablasSql $Texto.Substring($ini, $fin - $ini) | ForEach-Object { $_.tabla })[0]
+    $hay += [pscustomobject]@{ indice = $m.Index; tabla = $tabla; columna = $columna; sitio = $sitio }
+  }
+  $vistas = @{}
+  $frases = @()
+  foreach ($h in @($hay | Sort-Object indice)) {
+    $clave = $h.tabla + '|' + $h.columna.ToUpperInvariant()
+    if ($vistas.ContainsKey($clave)) { continue }
+    $vistas[$clave] = $true
+    $de = 'Una tabla'
+    if ($h.tabla) { $de = "La tabla $($h.tabla)" }
+    $frases += "$de de la base limpia no tiene la columna $($h.columna), que usa el codigo ($($h.sitio)): anadela en su CREATE TABLE."
+    if ($frases.Count -ge 3) { break }
+  }
+  return ($frases -join ' ')
 }
 
 # Los 60 primeros caracteres del CREATE TABLE que H2 rechaza en $Texto ($PatronCreateTabla), o '' si no hay.
@@ -1342,6 +1410,30 @@ function Save-Caso($T) {
   }
 }
 
+# La tabla de un error de columna ($Texto, el de un caso en el original): la primera del SQL del error que tiene su tablas\<TABLA>.csv en el caso vacio del job
+# $Job o, si ninguna, la primera; '' si el error no trae SQL.
+function Get-TablaDelError([string]$Texto, [string]$Job) {
+  $tablas = @(Get-TablasSql $Texto | ForEach-Object { $_.tabla })
+  foreach ($t in $tablas) { if (Test-Path -LiteralPath (Join-Ruta $Local "salidas/vacio/$Job/tablas/$t.csv")) { return $t } }
+  if ($tablas.Count -eq 0) { return '' }
+  return $tablas[0]
+}
+
+# 'El test del original no crea la columna <TABLA>.<COLUMNA> (la usa <fichero:linea>).' si $Texto (el error de un caso en el original) dice que falta una columna
+# (Column o Columna "X" not found / no encontrada) y el codigo del original la usa (Get-SitioColumna): el caso no tiene la culpa, es el test del original, y se
+# arregla con -RehacerOriginal. Sin la tabla (el error no trae SQL), sale la columna sola. '' si no es eso. Lo usan Get-MotivoBase (un caso que la IA prepara) y
+# Get-Resultado (uno hecho de antes cuyo original ya no corre); la cuenta del final de la prueba busca $PrefijoSinColumna.
+function Get-MotivoColumna([string]$Texto, [string]$Job) {
+  $m = [regex]::Match($Texto, $PatronTablaFalta)
+  if (-not $m.Success -or $m.Groups[1].Value -notmatch '(?i)^columna?$') { return '' }
+  $nombre = ($m.Groups[2].Value -split '\.')[-1]
+  $sitio = Get-SitioColumna $CopiaOrig $nombre
+  if (-not $sitio) { return '' }
+  $tabla = Get-TablaDelError $Texto $Job
+  if ($tabla) { $nombre = "$tabla.$nombre" }
+  return "$PrefijoSinColumna$nombre (la usa $sitio)."
+}
+
 # Lo que se le dice a la IA de un caso que no corre en el original por la base de prueba: $Texto es su motivo (con el error de Maven o de su
 # error.txt) y lleva 'Table "X" not found', 'Tabla "X" no encontrada' o lo mismo con Column o Columna (H2 acaba esa linea con 42102, 42S02,
 # 42122 o 42S22, pero sin el nombre no hay nada que decir), o el CREATE TABLE que H2 rechaza. $null si no es eso. Si no, un objeto con el Motivo y si es
@@ -1349,8 +1441,9 @@ function Save-Caso($T) {
 #  - un CREATE TABLE rechazado (Get-MotivoTablaMal): el test del original crea mal una tabla, y la IA de los casos no lo ve ni puede arreglarlo; definitivo;
 #  - una tabla del inventario del original (Get-TablasBatch): el test no la crea y la IA no lo ve ni puede crearla; definitivo;
 #  - una tabla que el codigo no usa: inventada; la IA la corrige;
-#  - una columna: la tabla es la primera del SQL del error que tiene su tablas\<TABLA>.csv en el caso vacio del job (o la primera) y, si esta, se
-#    dicen las columnas de su primera linea.
+#  - una columna que el codigo usa (Get-MotivoColumna): el test del original no la crea, y la IA de los casos no lo ve ni puede crearla; definitivo;
+#  - una columna que el codigo no usa: la tabla es la primera del SQL del error que tiene su tablas\<TABLA>.csv en el caso vacio del job (o la primera) y, si esta, se
+#    dicen las columnas de su primera linea; la IA la corrige.
 function Get-MotivoBase([string]$Texto, [string]$Job) {
   $m = [regex]::Match($Texto, $PatronTablaFalta)
   if (-not $m.Success) {
@@ -1366,10 +1459,10 @@ function Get-MotivoBase([string]$Texto, [string]$Job) {
     if ($sitio.Count -gt 0) { return [pscustomobject]@{ Motivo = "$PrefijoSinTabla$tabla (el test no la crea; la usa $($sitio[0].sitio))."; Definitivo = $true } }
     return [pscustomobject]@{ Motivo = "La tabla $tabla no existe en el batch: usa solo tablas que use su codigo."; Definitivo = $false }
   }
-  $tablas = @(Get-TablasSql $Texto | ForEach-Object { $_.tabla })
-  if ($tablas.Count -eq 0) { return [pscustomobject]@{ Motivo = "La columna $nombre no existe en la base de prueba."; Definitivo = $false } }
-  $tabla = $tablas[0]
-  foreach ($t in $tablas) { if (Test-Path -LiteralPath (Join-Ruta $Local "salidas/vacio/$Job/tablas/$t.csv")) { $tabla = $t; break } }
+  $sinCrear = Get-MotivoColumna $Texto $Job
+  if ($sinCrear) { return [pscustomobject]@{ Motivo = $sinCrear; Definitivo = $true } }
+  $tabla = Get-TablaDelError $Texto $Job
+  if (-not $tabla) { return [pscustomobject]@{ Motivo = "La columna $nombre no existe en la base de prueba."; Definitivo = $false } }
   $frase = "La tabla $tabla no tiene la columna $nombre."
   $csv = Join-Ruta $Local "salidas/vacio/$Job/tablas/$tabla.csv"
   if (Test-Path -LiteralPath $csv) {
@@ -1860,6 +1953,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) {
     $porque = Get-Porque $s1 $script:Maven["original|$j|$c"]
     $o.motivo = Get-MotivoTablaMal $porque
+    if (-not $o.motivo) { $o.motivo = Get-MotivoColumna $porque $j }
     if (-not $o.motivo) { $o.motivo = 'En el original ' + $porque }
     return $o
   }
@@ -2828,6 +2922,7 @@ $script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sa
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
 $script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
 $script:InventarioOrig = $null   # las tablas que usa el codigo del original (Get-TablasBatch), la primera vez que hacen falta (Get-MotivoBase)
+$script:SitiosColumna = @{}   # por (copia|COLUMNA): el sitio donde el codigo la nombra o '' (Get-SitioColumna)
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 $script:Arbol = $null   # el arbol de dependencias del migrado (Get-ArbolDependencias), la primera vez que un grupo lo pide
@@ -2963,9 +3058,9 @@ try {
   # 8. Con -Regresion: los casos que salen iguales se quedan como tests en la rama de rescate (un commit); no cambia la salida
   if ($Regresion) { Invoke-Regresion $res }
   Info ''
-  foreach ($c in @(@($PrefijoSinTabla, 'no crea'), @($PrefijoTablaMal, 'crea mal'))) {   # una linea por causa: el test del original no crea una tabla, o la crea mal
+  foreach ($c in @(@($PrefijoSinTabla, 'no crea sus tablas'), @($PrefijoTablaMal, 'crea mal sus tablas'), @($PrefijoSinColumna, 'no crea una columna que usa el codigo'))) {   # una linea por causa
     $n = @($res | Where-Object { $_.resultado -eq 'no se pudo preparar' -and $_.motivo.Contains($c[0]) }).Count
-    if ($n -gt 0) { Aviso "$n caso(s) no se pudieron preparar porque el test del original $($c[1]) sus tablas: relanza con -RehacerOriginal." }
+    if ($n -gt 0) { Aviso "$n caso(s) no se pudieron preparar porque el test del original $($c[1]): relanza con -RehacerOriginal." }
   }
   Show-Tiempos
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
