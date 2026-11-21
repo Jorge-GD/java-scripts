@@ -597,8 +597,9 @@ $Pruebas['14 nunca lanza ni para: sin mapa.json no escribe nada y dice una linea
 }
 
 # ================================ LA PAGINA 1 ================================
-# El hash de la pagina 1 del escenario de pagina sin convivencia.json, medido con el codigo de antes de C2 (667216e): tiene que seguir igual.
-$HashPagina1SinConvivencia = '82BDDA8C49159DADC10A7FF7653F09795190C732829D10C181FA6C5A928DA52F'
+# El hash de la pagina 1 del escenario de pagina sin convivencia.json, sin su bloque <style> (el CSS cambia con cada pieza), medido con el codigo de antes
+# de C2 (667216e): lo demas de la pagina tiene que seguir igual.
+$HashPagina1SinConvivencia = 'CB8753FB650616214BFB3A7A448ABAF8C197D1AD3345CAC12C50FC515E38985D'
 
 function Nueva-Salida([string]$Nombre) {
   $lee = @{
@@ -617,6 +618,8 @@ function Nueva-Salida([string]$Nombre) {
 
 function Pagina([string]$Salida, [string]$Nombre) { return ([System.IO.File]::ReadAllText((Join-Path $Salida $Nombre)) -replace "`r`n", "`n") }
 
+function Sin-Estilo([string]$Html) { return [regex]::Replace($Html, '(?s)<style>.*?</style>', '') }
+
 function Hash-Texto([string]$Texto) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   return (([BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Texto)))) -replace '-', '')
@@ -633,7 +636,7 @@ $Pruebas['15 k) pagina 1 con convivencia.json: el bloque arriba de "Como probarl
   $sin = Pagina $e.Raiz '1-batch-original.html'
   $sinOtras = @('index.html', '2-problemas.html', '3-original-vs-migrado.html', '4-correcciones.html', '5-buenas-practicas.html' | ForEach-Object { Hash-Texto (Pagina $e.Raiz $_) })
   Comprueba 'sin convivencia.json la pagina no lleva ningun bloque conv' ($sin -notmatch 'class="conv')
-  Igual 'sin convivencia.json la pagina 1 es la de antes (hash medido en 667216e)' $HashPagina1SinConvivencia (Hash-Texto $sin)
+  Igual 'sin convivencia.json la pagina 1 es la de antes, sin el CSS (hash medido en 667216e)' $HashPagina1SinConvivencia (Hash-Texto (Sin-Estilo $sin))
   [void](Mide $e)
   Comprueba 'Invoke-Convivencia ha dejado convivencia.json' (Test-Path -LiteralPath $e.Json)
   Write-Informes -Salida $e.Raiz
@@ -669,7 +672,7 @@ $Pruebas['15 k) pagina 1 con convivencia.json: el bloque arriba de "Como probarl
   $json.jobs = @($json.jobs | Where-Object { $_.job -cne 'cargaJob' -and $_.job -cne 'resumenJob' -and $_.job -cne 'avisoJob' })
   Escribe-Json $e.Json $json
   Write-Informes -Salida $e.Raiz
-  Igual 'con un convivencia.json sin esos jobs la pagina 1 es la de antes' $HashPagina1SinConvivencia (Hash-Texto (Pagina $e.Raiz '1-batch-original.html'))
+  Igual 'con un convivencia.json sin esos jobs la pagina 1 es la de antes' $HashPagina1SinConvivencia (Hash-Texto (Sin-Estilo (Pagina $e.Raiz '1-batch-original.html')))
 }
 
 $Pruebas['16 k) pagina 1 con un convivencia.json hecho a mano: mas de 8 motivos dicen "y N mas", la marca de IA sale en los de la ficha y todo se escapa'] = {

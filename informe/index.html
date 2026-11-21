@@ -1,7 +1,7 @@
 <header class="cab-port">
   <h1>La pasada sobre <code>{{BATCH}}</code></h1>
   {{{ESTADO}}}
-  {{{SIGUIENTE}}}
+  {{{SIGUIENTE}}}{{{ENTREGA}}}
   <dl class="ficha">
     <div><dt>Migrado</dt><dd>{{MIGRADO}}</dd></div>
     <div><dt>Original</dt><dd>{{ORIGINAL}}</dd></div>
@@ -88,8 +88,27 @@
 <!--TROZO siguiente-local-incompleta-uno--><p class="lede">1 de {{M}} casos no se ha podido probar. Hasta que se pruebe, no se puede asegurar que tu código haga lo mismo que el original. El motivo está en la <a href="3-original-vs-migrado.html">página 3</a>; mientras tanto, puedes probarlo en pre con el guion de la <a href="1-batch-original.html">página 1</a>. Relanza el mismo comando: lo hecho no se repite y este caso se intenta otra vez:</p><!--FIN-->
 <!--TROZO siguiente-parar-con-problemas--><p class="lede">Tu código da lo mismo que el original. Para corregir los {{N}} problemas de la <a href="2-problemas.html">página 2</a>:</p><!--FIN-->
 <!--TROZO siguiente-parar-con-problemas-uno--><p class="lede">Tu código da lo mismo que el original. Para corregir el problema de la <a href="2-problemas.html">página 2</a>:</p><!--FIN-->
-<!--TROZO siguiente-corregido--><p class="lede">Revisa los cambios y tráelos a tu rama:</p><!--FIN-->
+<!--TROZO siguiente-corregido--><p class="lede">Revisa los cambios y júntalos con tu rama con <code>-Cierre</code>: las dos primeras líneas te los enseñan y la tercera los junta, por fast-forward y solo si pasan las puertas. Se puede deshacer:</p><!--FIN-->
 <!--TROZO siguiente-pre--><p class="lede">Pruébalo en pre: cada job tiene su guion en la <a href="1-batch-original.html">página 1</a>.</p><!--FIN-->
+<!--TROZO siguiente-juntado--><p class="lede">Ya está en tu rama: {{{COMMITS}}}, de <code>{{ANTES}}</code> a <code>{{SHA}}</code>. Revisa los commits marcados antes del push (están en «Entrega», más abajo). El push es tuyo: el script no sube nada. Después prueba en pre con el guion de la <a href="1-batch-original.html">página 1</a>. Para ver lo juntado:</p><!--FIN-->
+<!--TROZO siguiente-parada-cierre-pendiente--><p class="lede">La pasada todavía no está lista para juntar. Tu rama no se ha movido.</p>
+  <p>{{DETALLE}}</p>
+  <p>Haz lo que falta y lanza <code>-Cierre</code> otra vez:</p><!--FIN-->
+<!--TROZO siguiente-parada-cierre-prueba-local--><p class="lede">La prueba en local no da para juntar. Tu rama no se ha movido.</p>
+  <p>{{DETALLE}}</p>
+  <p>Arréglalo, relanza la pasada y, cuando acabe, lanza <code>-Cierre</code> otra vez. La pasada se lanza así:</p><!--FIN-->
+<!--TROZO siguiente-parada-cierre-cambios-sin-commit--><p class="lede">Tu carpeta tiene cambios sin commit y el script no los toca, para no perderlos. Tu rama no se ha movido.</p>
+  <p>{{DETALLE}}</p>
+  <p>Haz commit o apártalos con <code>git stash</code> y lanza <code>-Cierre</code> otra vez:</p><!--FIN-->
+<!--TROZO siguiente-parada-cierre-conflicto--><p class="lede">Tu rama ha avanzado y sus cambios y los de la pasada no se pueden juntar solos. Tu rama no se ha movido y la carpeta de rescate ha vuelto a como estaba.</p>
+  <p>{{DETALLE}}</p>
+  <p>El detalle trae el texto para pegar en Copilot. Junta las dos ramas en la carpeta de rescate, haz commit y lanza <code>-Cierre</code> otra vez:</p><!--FIN-->
+<!--TROZO siguiente-parada-cierre-puertas--><p class="lede">Lo que se iba a juntar no pasa las puertas. Tu rama no se ha movido.</p>
+  <p>{{DETALLE}}</p>
+  <p>Arregla lo que dice el detalle en la carpeta de rescate, haz commit y lanza <code>-Cierre</code> otra vez:</p><!--FIN-->
+<!--TROZO siguiente-parada-cierre-no-ff--><p class="lede">Tu rama o tu carpeta ha cambiado mientras se medían las puertas y ya no avanza por fast-forward. Tu rama no se ha movido.</p>
+  <p>{{DETALLE}}</p>
+  <p>Vuelve a tu rama, deja tu carpeta limpia y lanza <code>-Cierre</code> otra vez:</p><!--FIN-->
 <!--TROZO toca-nada--><p>Nada que revisar: ninguna tarea atascada, ninguna clase sin ficha, ninguna duda, ninguna regla sin caso de prueba, ningún dato con nombres de clase, ninguna diferencia con el original, ningún caso distinto al ejecutar los dos, ningún arreglo atascado y ninguna variable nueva.</p><!--FIN-->
 <!--TROZO toca-grupo--><div class="grupo">
   <h3>{{TITULO}}</h3> {{{ETIQUETA}}}
@@ -228,3 +247,70 @@
 <!--TROZO cob-linea-medida-->{{{PCT}}} de las líneas ({{CUBIERTAS}} de {{TOTAL}}). {{{VEREDICTO}}}<!--FIN-->
 <!--TROZO cob-cuando-antes-->antes de corregir<!--FIN-->
 <!--TROZO cob-cuando-despues-->después de corregir<!--FIN-->
+<!--TROZO entrega-->
+  <section class="panel" id="entrega" aria-labelledby="t-entrega">
+    <h2 id="t-entrega">Entrega</h2>
+{{{JUNTADO}}}
+    <h3>Lista de entrega</h3>
+    <ul class="filas">
+{{{FILAS}}}
+    </ul>
+  </section><!--FIN-->
+<!--TROZO entrega-fila-->      <li class="fila s-{{ESTADO}}">{{{MARCA}}}<span class="d">{{{NOMBRE}}} {{{ETIQUETA}}}</span><span class="q">{{{TEXTO}}} <a href="{{ENLACE}}">Ver el detalle</a></span></li><!--FIN-->
+<!--TROZO entrega-marca-bien--><span class="sev sev-bien"><svg aria-hidden="true"><use href="#e-ia"/></svg>Bien</span><!--FIN-->
+<!--TROZO entrega-marca-revisar--><span class="sev sev-revisar"><svg aria-hidden="true"><use href="#e-aviso"/></svg>Revisar</span><!--FIN-->
+<!--TROZO entrega-marca-falta--><span class="sev sev-falta"><svg aria-hidden="true"><use href="#e-sin"/></svg>Falta</span><!--FIN-->
+<!--TROZO entrega-nombre-prueba-local-->Prueba en local<!--FIN-->
+<!--TROZO entrega-nombre-puertas-->Puertas al juntar<!--FIN-->
+<!--TROZO entrega-nombre-limpieza-->Limpieza<!--FIN-->
+<!--TROZO entrega-nombre-propiedades-->Propiedades<!--FIN-->
+<!--TROZO entrega-nombre-convivencia-->Convivencia en pre<!--FIN-->
+<!--TROZO entrega-prueba-local-bien-->{{M}} de {{M}} jobs tienen algún caso igual al original y ninguno distinto.<!--FIN-->
+<!--TROZO entrega-prueba-local-revisar-->Hay que revisar la prueba en local ({{N}}): {{TEXTOS}}.<!--FIN-->
+<!--TROZO entrega-prueba-local-falta-->No hay datos de la prueba en local: sin ella no se sabe si el migrado hace lo mismo que el original.<!--FIN-->
+<!--TROZO entrega-puertas-bien-->Las puertas han pasado antes de mover tu rama: compila, los tests no empeoran y no hay errores nuevos.<!--FIN-->
+<!--TROZO entrega-puertas-falta-->Todavía no se ha juntado, así que las puertas no han pasado.<!--FIN-->
+<!--TROZO entrega-limpieza-bien-->Ningún aviso de limpieza al juntar.<!--FIN-->
+<!--TROZO entrega-limpieza-revisar-->Avisos de limpieza al juntar: {{N}}. Están en la lista de avisos de arriba, los que empiezan por «limpieza:».<!--FIN-->
+<!--TROZO entrega-limpieza-falta-->Sin juntar no hay avisos de limpieza medidos.<!--FIN-->
+<!--TROZO entrega-propiedades-bien-->Ninguna propiedad del original falta en el migrado.<!--FIN-->
+<!--TROZO entrega-propiedades-revisar-->Propiedades del original que faltan en el migrado: {{N}}.<!--FIN-->
+<!--TROZO entrega-propiedades-sin-renombres-->Sin medir los renombres de Spring Boot 3: una clave vieja que Boot 3 ya no lee puede parecer igual.<!--FIN-->
+<!--TROZO entrega-propiedades-falta-->No hay datos de propiedades (<code>datos\propiedades.json</code>): no se sabe si falta alguna.<!--FIN-->
+<!--TROZO entrega-convivencia-bien-->{{N}} a la vez, {{M}} uno detrás de otro.<!--FIN-->
+<!--TROZO entrega-convivencia-falta-->No hay datos de convivencia: no se sabe qué jobs pueden correr a la vez en pre.<!--FIN-->
+<!--TROZO juntado-panel--><section class="panel" id="juntado" aria-labelledby="t-juntado">
+  <h2 id="t-juntado">Juntado con tu rama</h2>
+{{{CUERPO}}}
+</section><!--FIN-->
+<!--TROZO juntado-sin--><p>Todavía no se ha juntado con tu rama: tu rama sigue como estaba. Cuando hayas revisado los cambios, júntalos con <code>-Cierre</code>. Solo avanza tu rama, por fast-forward, si pasan las puertas.</p>
+  <pre class="cmd">{{COMANDO}}</pre><!--FIN-->
+<!--TROZO juntado-hecho-->  <p>{{{ETIQUETA}}}</p>
+  <p><b>Qué se ha juntado:</b> {{{COMMITS}}} en tu rama, de <code>{{ANTES}}</code> a <code>{{SHA}}</code>.{{{JUNTADA}}}</p>
+  <p><b>Cuándo:</b> {{CUANDO}}</p>
+  <h3>Cómo deshacerlo</h3>
+  <p>Devuelve tu rama a donde estaba antes de juntar. Ojo: también quita los commits que hayas hecho después.</p>
+  <pre class="cmd">{{DESHACER}}</pre>
+{{{REVISAR}}}
+{{{AVISOS}}}<!--FIN-->
+<!--TROZO juntado-juntada--> Tu rama había avanzado desde la pasada: el script la juntó antes con la de rescate, en la carpeta de rescate y no en la tuya.<!--FIN-->
+<!--TROZO juntado-commits-uno-->1 commit<!--FIN-->
+<!--TROZO juntado-commits-otros-->{{N}} commits<!--FIN-->
+<!--TROZO juntado-commits-sin-->los commits<!--FIN-->
+<!--TROZO juntado-revisar--><h3>Revisa antes del push</h3>
+  <p>Estos commits tocan la configuración (<code>src/main/resources</code>). Mira que no lleven valores ni secretos de otro entorno:</p>
+  <ul class="pg-l">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO juntado-revisar-nada--><h3>Revisa antes del push</h3>
+  <p>Ningún commit toca la configuración.</p><!--FIN-->
+<!--TROZO juntado-revisar-item-->    <li><code>{{HASH}}</code> {{ASUNTO}}</li><!--FIN-->
+<!--TROZO juntado-avisos--><h3>Avisos que no paran el cierre</h3>
+  <ul class="pg-l">
+{{{ITEMS}}}{{{MAS}}}
+  </ul><!--FIN-->
+<!--TROZO juntado-avisos-nada--><h3>Avisos que no paran el cierre</h3>
+  <p>Ninguno.</p><!--FIN-->
+<!--TROZO juntado-aviso-->    <li>{{TEXTO}}</li><!--FIN-->
+<!--TROZO juntado-avisos-mas-->
+    <li>y {{N}} más (están todos en <code>estado.json</code>, en <code>cierre.avisos</code>)</li><!--FIN-->

@@ -11,10 +11,12 @@ desde cualquier script que lo necesite. Cargarlo no ejecuta nada.
 FUNCION PUBLICA
   Write-Informes -Salida <carpeta migracion-<batch>>
     Lee <Salida>\datos (estado.json, tareas\, fichas\, mapa.json, lanzadores.json, fichas-sh\, comparacion-sh\, jobs\, resumen.json, pruebas\, comparacion\, variables.json,
-    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md, correcciones.json, prueba-local.json y practicas-<Cuando>.json) y escribe
+    hallazgos-antes.json, diagnostico-antes.md, hallazgos-despues.json, diagnostico-despues.md, correcciones.json, prueba-local.json, propiedades.json, convivencia.json y practicas-<Cuando>.json) y escribe
     <Salida>\index.html, 1-batch-original.html, 2-problemas.html, 3-original-vs-migrado.html, 4-correcciones.html y 5-buenas-practicas.html con lo que haya. Un dato que falta (una fase sin hacer)
     sale como "todavia no hay datos: la fase X no ha terminado". Volver a llamarla con los mismos datos deja los mismos
     bytes (las paginas no dependen de la hora). Todo texto que viene de los datos se escapa.
+    Despues de migracion.ps1 -Cierre (estado.cierre.hecho = true) la portada lleva el bloque Entrega (lo juntado, como deshacerlo, los commits a
+    revisar, los avisos y la lista de entrega: Get-ListaEntrega) y la pagina 4, "Juntado con tu rama"; con propiedades.json, la pagina 2 lleva el area Propiedades.
 
   Get-SiguientePaso -Est <estado.json> -D <datos del informe>
     Lo unico que le toca hacer ahora a la persona, y su comando listo para copiar: la primera de ocho situaciones que se cumple (ver FLUJO.md,
@@ -293,7 +295,7 @@ function Read-DatosInforme([string]$Salida) {
     Practicas = (Read-Practicas $datos); Arreglos = (Read-JsonSuave (Join-Path $datos 'practicas-arreglos.json'))
     Reglas = (Read-JsonSuave (Join-Path $datos 'tests-reglas.json'))
     Comparacion = (Read-Comparaciones $datos); CoberturaCasos = (Read-JsonSuave (Join-Path $datos 'prueba-local-cobertura.json')); LineasCasos = $null
-    Lanzadores = @(); LanzadoresLeidos = $false; Convivencia = (Read-JsonSuave (Join-Path $datos 'convivencia.json'))
+    Lanzadores = @(); LanzadoresLeidos = $false; Convivencia = (Read-JsonSuave (Join-Path $datos 'convivencia.json')); Propiedades = (Read-JsonSuave (Join-Path $datos 'propiedades.json'))
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
   }
   if ($D.CoberturaCasos -and [string]$D.CoberturaCasos.estado -ceq 'ok') { $D.LineasCasos = Get-LineasCasos $D.CoberturaCasos }
@@ -1315,7 +1317,7 @@ function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
       COBERTURA = (Get-PanelCobertura $T $D.CobAntes); RESPUESTA = $respuesta; GRUPOS = ((@($conErrores) + @($soloAvisos) | ForEach-Object { Get-GrupoProblemasHtml $T $_ }) -join "`n"); SINPROB = $sinProblemas
     }
   }
-  return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag })
+  return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag; PROPIEDADES = (Get-PropiedadesHtml $D $T) })
 }
 
 # Cada area de las dos fotos, en el orden de la tabla de antes (las que solo salen despues, al final): Antes y Despues (sus errores y
@@ -1482,7 +1484,7 @@ function Get-ResultadoCorreccion($D, $T) {
       INCOMPLETA = $incompleta; COBERTURA = (Get-PanelCoberturaCambio $D $T); ETIQUETA = $medido; BUILD_ANTES = $antes.Frase; ETIQUETA_ANTES = $antes.Etiqueta; BUILD_DESPUES = $despues.Frase; ETIQUETA_DESPUES = $despues.Etiqueta
       TOTAL = $total; COMMITS = "$(@($c.commits).Count)"; ATASCADOS = "$(@($c.atascados).Count)"; LEYENDA = (Format-Trozo $T 'leyenda-barras')
       GRUPOS = (($con | ForEach-Object { Get-GrupoCorreccionHtml $T $_ $max }) -join "`n"); SINPROB = $sinProblemas; SUELTOS = $sueltos; VARIABLES = $variables
-      RAMA = $c.rama; BASE = $c.base; WORKTREE = $D.Estado.worktree; MIGRADO = $D.Estado.migrado
+      JUNTADO = (Get-JuntadoPanelHtml $D $T); CIERRE = (Get-ComandoCierre $D.Estado); RAMA = $c.rama; BASE = $c.base; WORKTREE = $D.Estado.worktree; MIGRADO = $D.Estado.migrado
     })
 }
 
@@ -1737,12 +1739,18 @@ function Format-ArgComando([string]$Valor) {
   return ('"' + $Valor + '"')
 }
 
+# El principio de todo comando de migracion.ps1: las tres carpetas, entre comillas.
+function Get-ComandoBase($Est) { return ('.\migracion.ps1 -Legacy "' + $Est.legacy + '" -Migrado "' + $Est.migrado + '" -Plantilla "' + $Est.plantilla + '"') }
+
+# El comando que junta la correccion con tu rama, sin IA: va solo, lo demas sale de estado.json.
+function Get-ComandoCierre($Est) { return ((Get-ComandoBase $Est) + ' -Cierre') }
+
 # La linea con la que se lanzo la pasada, montada con estado.json: las rutas entre comillas, el modelo si lo hay, -SoloInforme o -Si segun
 # $Respuesta (parar o corregir), las opciones del lanzamiento que guarda migracion.ps1 (-Practicas, -Reglas, -MaxHoras y -Limite si no son 0,
 # -SinPruebaLocal; un estado.json de antes no las trae y no salen) y -JavaLegacy si hay ($Java). -Reintentar no: es de una sola vez. Con
 # $ConPruebaLocal no sale -SinPruebaLocal: es el comando que hace la prueba en local que se salto.
 function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java, [switch]$ConPruebaLocal) {
-  $c = '.\migracion.ps1 -Legacy "' + $Est.legacy + '" -Migrado "' + $Est.migrado + '" -Plantilla "' + $Est.plantilla + '"'
+  $c = Get-ComandoBase $Est
   if ($Est.modelo) { $c += ' -Modelo ' + (Format-ArgComando ([string]$Est.modelo)) }
   if ($Respuesta -ceq 'parar') { $c += ' -SoloInforme' } elseif ($Respuesta -ceq 'corregir') { $c += ' -Si' }
   if ($Est.practicas -eq $true) { $c += ' -Practicas' }
@@ -1757,12 +1765,14 @@ function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java, [switch]$Con
 # Lo que hay que hacer ahora: la primera de estas situaciones que se cumple. Devuelve Caso (corriendo, parada, cortada, distinto-corregido,
 # distinto, local-jdk, local-fallo, local-incompleta, local-saltada, parar-con-problemas, corregido o pre), Comando ('' si no hay), y lo que dicen los textos: Fase, Motivo,
 # Detalle, Registro, Worktree, N y M (con local-incompleta, los casos sin preparar y el total de casos). $Est es estado.json; $D, los datos del informe (Correccion, PruebaLocal y Diag.Errores).
+# Con -Cierre: una parada cierre-* da el comando de -Cierre (la de la prueba en local, el de la pasada) y, si estado.cierre.hecho = true, corregido y pre siguen
+# siendo su Caso pero con Juntado = true: N son los commits juntados, Antes y Sha (7 caracteres) y Comando el git log de lo juntado.
 #   1 fin vacio: sigue corriendo        2 parada      (extra: fin escrito pero la fase sin acabar, por -Limite: cortada)
 #   3 distintos y hubo correccion       4 distintos sin correccion
 #   5 la prueba en local fallo (con el JDK del original: local-jdk), o tiene casos que no se pudieron preparar y ninguno distinto (local-incompleta), o se salto
 #   6 respuesta parar y quedan errores en la pagina 2        7 correccion completa con commits        8 lo demas: pre
 function Get-SiguientePaso($Est, $D) {
-  $r = [ordered]@{ Caso = ''; Fase = [string]$Est.fase; Motivo = ''; Detalle = ''; Registro = ''; Worktree = [string]$Est.worktree; N = 0; M = 0; Comando = '' }
+  $r = [ordered]@{ Caso = ''; Fase = [string]$Est.fase; Motivo = ''; Detalle = ''; Registro = ''; Worktree = [string]$Est.worktree; N = 0; M = 0; Comando = ''; Juntado = $false; Antes = ''; Sha = '' }
   $respuesta = [string]$Est.respuesta
   $java = [string]$Est.javaLegacy
   $pasada = Get-ComandoPasada $Est $respuesta $java
@@ -1782,6 +1792,8 @@ function Get-SiguientePaso($Est, $D) {
   if (-not ([string]$Est.fin).Trim()) { $r.Caso = 'corriendo'; $r.Comando = $pasada }
   elseif ($Est.parada) {
     $r.Caso = 'parada'; $r.Motivo = [string]$Est.parada.motivo; $r.Detalle = [string]$Est.parada.detalle; $r.Registro = [string]$Est.parada.registro; $r.Comando = $pasada
+    if ($r.Motivo -ceq 'cierre-prueba-local') { $r.Comando = Get-ComandoPasada $Est $respuesta $java -ConPruebaLocal }
+    elseif ($r.Motivo -clike 'cierre-*') { $r.Comando = Get-ComandoCierre $Est }
   }
   elseif ([string]$Est.fase -cne 'hecha') { $r.Caso = 'cortada'; $r.Comando = $pasada }
   elseif ($distintos -gt 0 -and $corregido) {
@@ -1803,9 +1815,14 @@ function Get-SiguientePaso($Est, $D) {
     if (-not $rama) { $rama = [string]$D.Correccion.rama }
     $git = 'git -C "' + $Est.migrado + '" '
     $r.Caso = 'corregido'
-    $r.Comando = (@(($git + 'log --oneline ' + (Format-ArgComando ($origen + '..' + $rama))), ($git + 'diff --stat ' + (Format-ArgComando ($origen + '...' + $rama))), ($git + 'merge ' + (Format-ArgComando $rama))) -join "`n")
+    $r.Comando = (@(($git + 'log --oneline ' + (Format-ArgComando ($origen + '..' + $rama))), ($git + 'diff --stat ' + (Format-ArgComando ($origen + '...' + $rama))), (Get-ComandoCierre $Est)) -join "`n")
   }
   else { $r.Caso = 'pre' }
+  $cierre = Get-CierreHecho $Est
+  if ($cierre -and ($r.Caso -ceq 'corregido' -or $r.Caso -ceq 'pre')) {
+    $r.Juntado = $true; $r.Antes = Get-HashCorto $cierre.antes; $r.Sha = Get-HashCorto $cierre.sha; $r.N = Get-NumCommitsJuntados $Est
+    $r.Comando = 'git -C "' + $Est.migrado + '" log --oneline ' + (Format-ArgComando ([string]$cierre.antes + '..' + [string]$cierre.sha))
+  }
   return [pscustomobject]$r
 }
 
@@ -1815,15 +1832,204 @@ function Get-SiguienteHtml($D, $T) {
   if (-not $D.Estado) { return '' }
   $s = Get-SiguientePaso $D.Estado $D
   $nombre = 'siguiente-' + $s.Caso
-  if ($s.Caso -ceq 'parada') {
+  if ($s.Juntado) { $nombre = 'siguiente-juntado' }
+  elseif ($s.Caso -ceq 'parada') {
     $nombre = 'siguiente-parada-' + $s.Motivo
     if (-not $T.ContainsKey($nombre)) { $nombre = 'siguiente-parada-otro' }
   }
   if ($s.N -eq 1 -and $T.ContainsKey("$nombre-uno")) { $nombre += '-uno' }
-  $texto = Format-Trozo $T $nombre @{ FASE = $s.Fase; MOTIVO = $s.Motivo; DETALLE = $s.Detalle; REGISTRO = $s.Registro; WORKTREE = $s.Worktree; N = "$($s.N)"; M = "$($s.M)" }
+  $commits = ''
+  if ($s.Juntado) { $commits = Get-TextoCommits $T $s.N }
+  $texto = Format-Trozo $T $nombre @{ FASE = $s.Fase; MOTIVO = $s.Motivo; DETALLE = $s.Detalle; REGISTRO = $s.Registro; WORKTREE = $s.Worktree; N = "$($s.N)"; M = "$($s.M)"; COMMITS = $commits; ANTES = $s.Antes; SHA = $s.Sha }
   $comando = ''
   if ($s.Comando) { $comando = Format-Trozo $T 'siguiente-comando' @{ COMANDO = $s.Comando } }
   return (Format-Trozo $T 'siguiente' @{ TEXTO = $texto; COMANDO = $comando })
+}
+
+# ================================ LO JUNTADO CON -CIERRE ================================
+# estado.cierre si el cierre junto de verdad (hecho = true); $null si no hay cierre o paro a medias.
+function Get-CierreHecho($Est) {
+  if ($Est -and $Est.cierre -and $Est.cierre.hecho -eq $true) { return $Est.cierre }
+  return $null
+}
+
+function Get-HashCorto($Hash) {
+  $h = [string]$Hash
+  if ($h.Length -gt 7) { return $h.Substring(0, 7) }
+  return $h
+}
+
+# Cuantos commits entraron en tu rama: los que hay de antes a sha en tu carpeta. 0 si git no lo dice.
+function Get-NumCommitsJuntados($Est) {
+  $n = 0
+  $g = Invoke-Git ([string]$Est.migrado) @('rev-list', '--count', ([string]$Est.cierre.antes + '..' + [string]$Est.cierre.sha))
+  if ($g.Codigo -eq 0 -and [int]::TryParse((@($g.Salida) -join '').Trim(), [ref]$n)) { return $n }
+  return 0
+}
+
+# "3 commits", "1 commit" o, si no se sabe cuantos, "los commits".
+function Get-TextoCommits($T, [int]$N) {
+  if ($N -eq 1) { return (Format-Trozo $T 'juntado-commits-uno') }
+  if ($N -gt 1) { return (Format-Trozo $T 'juntado-commits-otros' @{ N = "$N" }) }
+  return (Format-Trozo $T 'juntado-commits-sin')
+}
+
+# Lo juntado, igual en la portada (dentro de Entrega) y en la pagina 4: cuantos commits, de donde a donde y cuando, como deshacerlo, que revisar
+# antes del push y los 10 primeros avisos. Solo con cierre.hecho; sin el, ''.
+function Get-JuntadoHtml($D, $T) {
+  $c = Get-CierreHecho $D.Estado
+  if (-not $c) { return '' }
+  $revisar = Format-Trozo $T 'juntado-revisar-nada'
+  $commits = @($c.revisar | Where-Object { $null -ne $_ })
+  if ($commits.Count -gt 0) { $revisar = Format-Trozo $T 'juntado-revisar' @{ ITEMS = (Format-Lista $T 'juntado-revisar-item' $commits { param($x) @{ HASH = $x.hash; ASUNTO = $x.asunto } }) } }
+  $avisos = Format-Trozo $T 'juntado-avisos-nada'
+  $todos = @($c.avisos | Where-Object { $null -ne $_ })
+  if ($todos.Count -gt 0) {
+    $mas = ''
+    if ($todos.Count -gt 10) { $mas = Format-Trozo $T 'juntado-avisos-mas' @{ N = "$($todos.Count - 10)" } }
+    $avisos = Format-Trozo $T 'juntado-avisos' @{ ITEMS = (Format-Lista $T 'juntado-aviso' @($todos | Select-Object -First 10) { param($x) @{ TEXTO = $x } }); MAS = $mas }
+  }
+  $juntada = ''
+  if ($c.juntada -eq $true) { $juntada = Format-Trozo $T 'juntado-juntada' }
+  return (Format-Trozo $T 'juntado-hecho' @{
+      ETIQUETA = (Format-Trozo $T 'et-medido'); COMMITS = (Get-TextoCommits $T (Get-NumCommitsJuntados $D.Estado)); ANTES = (Get-HashCorto $c.antes); SHA = (Get-HashCorto $c.sha)
+      JUNTADA = $juntada; CUANDO = (Get-TextoFecha $T $c.cuando); DESHACER = $c.deshacer; REVISAR = $revisar; AVISOS = $avisos
+    })
+}
+
+# El panel "Juntado con tu rama" de la pagina 4: lo juntado o, sin cierre.hecho, que todavia no se ha juntado y el comando de -Cierre.
+function Get-JuntadoPanelHtml($D, $T) {
+  $cuerpo = Get-JuntadoHtml $D $T
+  if (-not $cuerpo) { $cuerpo = Format-Trozo $T 'juntado-sin' @{ COMANDO = (Get-ComandoCierre $D.Estado) } }
+  return (Format-Trozo $T 'juntado-panel' @{ CUERPO = $cuerpo })
+}
+
+# Una fila de la lista de entrega: el punto (Id), si esta bien, hay que revisarlo o falta (Estado), el trozo de su etiqueta de origen (Origen:
+# et-medido, et-ia o et-sin), la pagina donde se ve y los valores de su frase. La frase es el trozo entrega-<Id>-<Estado> de index.html y el
+# nombre, entrega-nombre-<Id>: un punto nuevo es una funcion que da su fila mas esos trozos. Nota, si la hay, es el trozo de una frase que se anade a la de la fila.
+function New-FilaEntrega([string]$Id, [string]$Estado, [string]$Enlace, $Valores = @{}, [string]$Origen = 'et-medido', [string]$Nota = '') {
+  return [pscustomobject]@{ Id = $Id; Estado = $Estado; Origen = $Origen; Enlace = $Enlace; Valores = $Valores; Nota = $Nota }
+}
+
+# Lo que falta para dar por buena la prueba en local: sus dos arneses hechos y, en cada job de mapa.json, algun caso igual y ninguno distinto.
+# Un job sin fila en prueba-local.json cuenta como sin caso igual. Sin el JSON, una sola frase. La usan el cierre (migracion.ps1) y la fila Prueba en local.
+function Get-FallosPruebaLocal($Pl, $Mapa) {
+  if (-not $Pl) { return @('no hay datos\prueba-local.json: la pasada no hizo la prueba en local') }
+  $f = @()
+  foreach ($a in @('original', 'migrado')) { if ([string]$Pl.arneses.$a -cne 'hecha') { $f += "el arnes del $a no esta hecho" } }
+  foreach ($j in @($Mapa.jobs | Where-Object { $null -ne $_ })) {
+    $p = @($Pl.jobs | Where-Object { [string]$_.job -ceq [string]$j.job })
+    if ($p.Count -eq 0 -or [int]$p[0].iguales -lt 1) { $f += "el job $($j.job) no tiene ningun caso igual" }
+    if ($p.Count -gt 0 -and [int]$p[0].distintos -gt 0) { $f += "el job $($j.job) tiene $([int]$p[0].distintos) casos distintos" }
+  }
+  return $f
+}
+
+# Bien si Get-FallosPruebaLocal no dice nada; revisar con su cuenta y sus textos si dice algo. Sin prueba-local.json o sin jobs en mapa.json, falta.
+function Get-FilaEntregaLocal($D) {
+  $enlace = '3-original-vs-migrado.html'
+  $jobs = @($D.Mapa.jobs | Where-Object { $null -ne $_ })
+  if (-not $D.PruebaLocal -or $jobs.Count -eq 0) { return (New-FilaEntrega 'prueba-local' 'falta' $enlace) }
+  $mal = @(Get-FallosPruebaLocal $D.PruebaLocal $D.Mapa)
+  $estado = 'bien'
+  if ($mal.Count -gt 0) { $estado = 'revisar' }
+  return (New-FilaEntrega 'prueba-local' $estado $enlace @{ N = "$($mal.Count)"; M = "$($jobs.Count)"; TEXTOS = ($mal -join '; ') })
+}
+
+# Las puertas pasaron si el cierre junto.
+function Get-FilaEntregaPuertas($D) {
+  $estado = 'falta'
+  if (Get-CierreHecho $D.Estado) { $estado = 'bien' }
+  return (New-FilaEntrega 'puertas' $estado '4-correcciones.html#juntado')
+}
+
+# Bien si ningun aviso del cierre empieza por "limpieza:". Sin cierre, falta.
+function Get-FilaEntregaLimpieza($D) {
+  $c = Get-CierreHecho $D.Estado
+  if (-not $c) { return (New-FilaEntrega 'limpieza' 'falta' '5-buenas-practicas.html') }
+  $n = @($c.avisos | Where-Object { $null -ne $_ -and [string]$_ -clike 'limpieza:*' }).Count
+  $estado = 'bien'
+  if ($n -gt 0) { $estado = 'revisar' }
+  return (New-FilaEntrega 'limpieza' $estado '5-buenas-practicas.html' @{ N = "$n" })
+}
+
+# Las claves del original que faltan en el migrado: falta mas renombrada-falta. Sin propiedades.json medido, falta. Con los renombres de Spring Boot 3 sin medir
+# sigue en bien o revisar, pero su frase lo dice: una clave vieja que Boot 3 ya no lee puede parecer igual.
+function Get-FilaEntregaPropiedades($D) {
+  $enlace = '2-problemas.html#g-propiedades'
+  if (-not $D.Propiedades -or -not $D.Propiedades.resumen) { return (New-FilaEntrega 'propiedades' 'falta' $enlace) }
+  $n = @($D.Propiedades.legacy | Where-Object { $null -ne $_ -and @('falta', 'renombrada-falta') -ccontains [string]$_.estado }).Count
+  $estado = 'bien'
+  if ($n -gt 0) { $estado = 'revisar' }
+  $nota = ''
+  if ([string]$D.Propiedades.renombres.estado -ceq 'no se pudo medir') { $nota = 'entrega-propiedades-sin-renombres' }
+  return (New-FilaEntrega 'propiedades' $estado $enlace @{ N = "$n" } 'et-medido' $nota)
+}
+
+# Bien si hay convivencia.json: dice cuantos jobs van a la vez y cuantos uno detras de otro.
+function Get-FilaEntregaConvivencia($D) {
+  $enlace = '1-batch-original.html'
+  if (-not $D.Convivencia -or -not $D.Convivencia.fijos) { return (New-FilaEntrega 'convivencia' 'falta' $enlace) }
+  $jobs = @($D.Convivencia.jobs | Where-Object { $null -ne $_ })
+  $aLaVez = @($jobs | Where-Object { [string]$_.veredicto -ceq 'a-la-vez' }).Count
+  return (New-FilaEntrega 'convivencia' 'bien' $enlace @{ N = "$aLaVez"; M = "$($jobs.Count - $aLaVez)" })
+}
+
+# Las filas de la lista de entrega, en su orden.
+function Get-ListaEntrega($D) {
+  return @((Get-FilaEntregaLocal $D), (Get-FilaEntregaPuertas $D), (Get-FilaEntregaLimpieza $D), (Get-FilaEntregaPropiedades $D), (Get-FilaEntregaConvivencia $D))
+}
+
+# El bloque "Entrega" de la portada: lo juntado y la lista de entrega. '' sin cierre.hecho.
+function Get-EntregaHtml($D, $T) {
+  if (-not (Get-CierreHecho $D.Estado)) { return '' }
+  $filas = Format-Lista $T 'entrega-fila' (Get-ListaEntrega $D) {
+    param($f)
+    $nota = ''
+    if ($f.Nota) { $nota = ' ' + (Format-Trozo $T $f.Nota) }
+    @{
+      ESTADO = $f.Estado; MARCA = (Format-Trozo $T "entrega-marca-$($f.Estado)"); NOMBRE = (Format-Trozo $T "entrega-nombre-$($f.Id)")
+      ETIQUETA = (Format-Trozo $T $f.Origen); TEXTO = ((Format-Trozo $T "entrega-$($f.Id)-$($f.Estado)" $f.Valores) + $nota); ENLACE = $f.Enlace
+    }
+  }
+  return (Format-Trozo $T 'entrega' @{ JUNTADO = (Get-JuntadoHtml $D $T); FILAS = $filas })
+}
+
+# La gravedad con que sale en la pagina 2 cada estado de una clave del original: la que no llega al migrado es un error; la que llega distinta o ya no existe, un aviso.
+$GravedadPropiedad = @{ 'falta' = 'error'; 'renombrada-falta' = 'error'; 'ya-no-existe' = 'aviso'; 'distinto' = 'aviso' }
+
+# Una fila del area Propiedades: la clave, su estado en palabras, donde esta (en el original o en el migrado) y el nombre nuevo si lo hay.
+# Nunca el valor: de un secreto no se escribe y el de las demas no hace falta para saber que hacer.
+function Get-FilaPropiedadHtml($T, $X, [string]$Estado, [string]$Lado, [string]$Sev) {
+  $donde = [string]$X.fichero
+  if ([int]$X.linea -gt 0) { $donde += ':' + [int]$X.linea }
+  $texto = (Format-Trozo $T "prop-estado-$Estado") + (Format-Trozo $T "prop-donde-$Lado" @{ DONDE = $donde })
+  if ($X.renombradaA) { $texto += Format-Trozo $T 'prop-nuevo' @{ NOMBRE = $X.renombradaA } }
+  if ($X.secreto -eq $true) { $texto += Format-Trozo $T 'prop-secreto' }
+  return (Format-Trozo $T 'fila-prop' @{ SEV = $Sev; MARCA = (Format-Trozo $T "marca-$Sev"); CLAVE = $X.clave; TEXTO = $texto })
+}
+
+# El area Propiedades de la pagina 2, de datos\propiedades.json: las claves del original que faltan, que Spring Boot 3 renombra o ya no tiene o que
+# llegan con otro valor, y las del migrado que nadie lee. '' sin el JSON o con la medida cortada (sin resumen).
+function Get-PropiedadesHtml($D, $T) {
+  $p = $D.Propiedades
+  if (-not $p -or -not $p.resumen) { return '' }
+  $errores = @()
+  $avisos = @()
+  foreach ($x in @($p.legacy | Where-Object { $null -ne $_ -and $GravedadPropiedad.ContainsKey([string]$_.estado) })) {
+    $sev = $GravedadPropiedad[[string]$x.estado]
+    $fila = Get-FilaPropiedadHtml $T $x ([string]$x.estado) 'original' $sev
+    if ($sev -ceq 'error') { $errores += $fila } else { $avisos += $fila }
+  }
+  foreach ($x in @($p.migrado | Where-Object { $null -ne $_ -and $_.sinLeer -eq $true })) { $avisos += (Get-FilaPropiedadHtml $T $x 'sinleer' 'migrado' 'aviso') }
+  $filas = (@($errores) + @($avisos)) -join "`n"
+  if ($errores.Count + $avisos.Count -eq 0) { $filas = Format-Trozo $T 'prop-ninguna' }
+  $como = Format-Trozo $T 'area-como' @{ TEXTO = (Format-Trozo $T 'arregla-propiedades') }
+  if ([string]$p.renombres.estado -ceq 'no se pudo medir') { $como += "`n  " + (Format-Trozo $T 'prop-sin-renombres' @{ MOTIVO = $p.renombres.motivo }) }
+  return ("`n" + (Format-Trozo $T 'area-grupo' @{
+        ID = 'propiedades'; NOMBRE = (Get-NombreArea $T 'propiedades'); CUENTA = (Get-CuentaHtml $T $errores.Count $avisos.Count 'par')
+        ETIQUETA = (Format-Trozo $T 'et-medido'); COMO = $como; FILAS = $filas
+      }))
 }
 
 function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
@@ -1854,7 +2060,7 @@ function Get-CuerpoIndex($D, $T, [string]$Cuerpo) {
       BATCH = (Get-BatchInforme $D); ESTADO = $estado; MIGRADO = (Get-Hoja $e.migrado); ORIGINAL = (Get-Hoja $e.legacy); PLANTILLA = (Get-Hoja $e.plantilla)
       MODELO = $modelo; EMPEZO = (Get-TextoFecha $T $e.creado); DURACION_ROTULO = $rotulo; DURACION = $duracion
       ETIQUETA = (Format-Trozo $T 'et-medido'); ETIQUETA_FASES = (Format-Trozo $T 'et-medido')
-      HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente']; PARADA = $parada; SIGUIENTE = (Get-SiguienteHtml $D $T)
+      HECHAS = $c['hecha']; ATASCADAS = $c['atascada']; PENDIENTES = $c['pendiente']; PARADA = $parada; SIGUIENTE = (Get-SiguienteHtml $D $T); ENTREGA = (Get-EntregaHtml $D $T)
       TOCA = (Get-TocaHtml $D $T); PROBLEMAS = (Get-ProblemasPortada $D $T); FASES = $fases; FICHEROS = (Get-FicherosHtml $D $T)
     })
 }
@@ -1879,6 +2085,10 @@ function Write-Informes {
   $marco = Split-Plantilla (Read-PlantillaInforme 'marco.html')
   $estilo = Read-PlantillaInforme 'estilo.css'
   $batch = Get-BatchInforme $D
+  # lo juntado sale en la portada y en la pagina 4: sus trozos (juntado-*) estan en index.html y van a todas las paginas, junto a los del marco
+  $portada = Split-Plantilla (Read-PlantillaInforme 'index.html')
+  $comunes = Merge-Trozos $marco.Trozos @{}
+  foreach ($k in @($portada.Trozos.Keys | Where-Object { $_ -clike 'juntado-*' })) { $comunes[$k] = $portada.Trozos[$k] }
   $paginas = @(
     @{ Fichero = 'index.html'; Actual = 'ACTUAL_INDEX'; Titulo = 'titulo-index'; Cuerpo = { param($D, $T, $C) Get-CuerpoIndex $D $T $C } },
     @{ Fichero = '1-batch-original.html'; Actual = 'ACTUAL_ORIGINAL'; Titulo = 'titulo-original'; Cuerpo = { param($D, $T, $C) Get-CuerpoOriginal $D $T $C } },
@@ -1889,7 +2099,7 @@ function Write-Informes {
   )
   foreach ($p in $paginas) {
     $plantilla = Split-Plantilla (Read-PlantillaInforme $p.Fichero)
-    $T = Merge-Trozos $marco.Trozos $plantilla.Trozos
+    $T = Merge-Trozos $comunes $plantilla.Trozos
     $v = @{ TITULO = (Format-Trozo $T $p.Titulo @{ BATCH = $batch }); ESTILO = $estilo; BATCH = $batch; CUERPO = (& $p.Cuerpo $D $T $plantilla.Cuerpo); ACTUAL_INDEX = ''; ACTUAL_ORIGINAL = ''; ACTUAL_PROBLEMAS = ''; ACTUAL_COMPARAR = ''; ACTUAL_CORRECCIONES = ''; ACTUAL_PRACTICAS = '' }
     $v[$p.Actual] = Format-Trozo $T 'actual'
     Save-PaginaInforme (Join-Path $Salida $p.Fichero) (Expand-Plantilla $marco.Cuerpo $v)

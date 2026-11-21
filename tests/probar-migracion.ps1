@@ -1767,7 +1767,8 @@ $Pruebas['64 pagina de problemas: cada hallazgo en el grupo de su area con fiche
       -not ((Grupo-De $p $cat).Contains((Cuenta-Es $n 'error' 'errores') + ', ' + (Cuenta-Es $m 'aviso' 'avisos')))
     })
   Igual 'cada grupo dice sus errores y sus avisos' 0 $malos.Count
-  Igual 'un grupo por cada area con hallazgos' $cats.Count ([regex]::Matches($p, 'class="prob-grupo"').Count)
+  Comprueba 'con el propiedades.json medido de la corrida sale el area Propiedades' ($p.Contains('id="g-propiedades"'))
+  Igual 'un grupo por cada area con hallazgos, mas el area Propiedades' ($cats.Count + 1) ([regex]::Matches($p, 'class="prob-grupo"').Count)
   $md = Lee $e.Out 'datos/diagnostico-antes.md'
   $tabla = @([regex]::Matches($md, '(?m)^\| (\w+) \| \d+ \| \d+ \|\s*$') | ForEach-Object { $_.Groups[1].Value })
   $vacias = @($tabla | Where-Object { $cats -notcontains $_ })
@@ -1793,7 +1794,7 @@ $Pruebas['65 pagina de problemas: errores antes que avisos, areas con errores an
   $p = $x.P
   Comprueba 'dentro de un area, el error va antes que el aviso (aunque en los datos va despues)' ($p.IndexOf('DETALLE-ERROR-HEX') -ge 0 -and $p.IndexOf('DETALLE-ERROR-HEX') -lt $p.IndexOf('DETALLE-AVISO-HEX'))
   $orden = (@([regex]::Matches($p, 'class="prob-grupo" aria-labelledby="g-(\w+)"') | ForEach-Object { $_.Groups[1].Value })) -join ' '
-  Igual 'los grupos: primero los que tienen errores en el orden de la tabla, despues los de solo avisos' 'build hexagonal e2e tests rara estructura' $orden
+  Igual 'los grupos: primero los que tienen errores en el orden de la tabla, despues los de solo avisos y, al final, el area Propiedades (con su propiedades.json medido)' 'build hexagonal e2e tests rara estructura propiedades' $orden
   Comprueba 'linea 0 sale sin :0' ($p.Contains('pom.xml') -and -not $p.Contains('pom.xml:0'))
   Comprueba 'con linea sale fichero:linea' ($p.Contains('src/main/java/com/acme/Error1.java:12'))
   $fila = [regex]::Match($p, '(?s)<li class="fila[^"]*">(?:(?!</li>).)*DETALLE-SIN-FICHERO.*?</li>').Value
@@ -2237,7 +2238,7 @@ $Pruebas['77 pagina 4: numeros antes y despues por area, commits y hallazgos que
   $co = Panel-De $p 'codigo'
   $st = Lee-Json (Get-Ruta $x.Dir 'datos/estado.json')
   Comprueba 'donde esta el codigo: la rama y el worktree' ($co.Contains('rescate/main-20260101-0000') -and $co.Contains((Html $st.worktree))) $co
-  Comprueba 'las tres ordenes de git (diff, merge y worktree remove), escapadas' ($co.Contains('diff --stat main...rescate/main-20260101-0000') -and $co.Contains('merge rescate/main-20260101-0000') -and $co.Contains('worktree remove') -and $co -match 'Nada se ha subido') $co
+  Comprueba 'las tres ordenes (diff, el cierre con -Cierre y worktree remove), escapadas' ($co.Contains('diff --stat main...rescate/main-20260101-0000') -and $co.Contains('-Cierre') -and $co.Contains('worktree remove') -and $co -match 'Nada se ha subido') $co
   Comprueba 'sin JavaScript ni nada externo' ($p -notmatch '(?i)<script' -and $p -notmatch 'https?://' -and $p -notmatch '<link|<img|@import')
   Comprueba 'enlaces a las otras paginas y todos llevan a un sitio que existe' ($p -match 'href="index\.html"' -and $p -match 'href="1-batch-original\.html"' -and $p -match 'href="2-problemas\.html"' -and (@([regex]::Matches($p, '(?i)\b(?:src|href)\s*=\s*"(?!#)([^"]*)"') | Where-Object { -not (Test-Path -LiteralPath (Get-Ruta $x.Dir $_.Groups[1].Value)) }).Count -eq 0))
   # la corrida incompleta lo avisa; sin variables nuevas no sale la seccion
@@ -3938,8 +3939,8 @@ $Pruebas['m16 siguiente: fila 7, correccion completa: las 3 lineas de git del pa
   $esperado = @(
     'git -C "C:\ruta\migrado" log --oneline feat/recibos..rescate/feat-recibos-20261118-0900',
     'git -C "C:\ruta\migrado" diff --stat feat/recibos...rescate/feat-recibos-20261118-0900',
-    'git -C "C:\ruta\migrado" merge rescate/feat-recibos-20261118-0900') -join "`n"
-  Igual 'las 3 lineas de git' $esperado ($s.Comando -replace "`r", '')
+    '.\migracion.ps1 -Legacy "C:\ruta\original" -Migrado "C:\ruta\migrado" -Plantilla "C:\ruta\referencia" -Cierre') -join "`n"
+  Igual 'las 3 lineas: log, diff y -Cierre' $esperado ($s.Comando -replace "`r", '')
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir'; ramaOrigen = '' }) (Datos-Siguiente 0 (Correccion-Siguiente))
   Comprueba 'sin ramaOrigen, la base de correcciones.json' ($s.Comando -match 'log --oneline feat/recibos\.\.rescate') $s.Comando
   $s = Siguiente (Estado-Siguiente @{ respuesta = 'corregir' }) (Datos-Siguiente 2 (Correccion-Siguiente) 0)
@@ -4027,7 +4028,7 @@ $Pruebas['m16 siguiente: la portada de una parada, de una pasada con problemas p
   $c = Correccion-Siguiente
   $i = Salida-Siguiente 'siguiente-corregido' (Estado-Siguiente @{ respuesta = 'corregir' }) @{ 'correcciones.json' = $c; 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
   $t = Texto-Plano (Panel-De $i 'siguiente-paso')
-  Comprueba 'corregido: revisa y trae los cambios, con las 3 lineas de git' ($t -match 'Revisa los cambios y tr.elos a tu rama' -and $t -match 'log --oneline feat/recibos\.\.rescate/feat-recibos-20261118-0900' -and $t -match 'diff --stat feat/recibos\.\.\.rescate' -and $t -match 'merge rescate/feat-recibos-20261118-0900') $t
+  Comprueba 'corregido: revisa y junta los cambios con -Cierre, con las 3 lineas' ($t -match 'Revisa los cambios y j.ntalos con tu rama con -Cierre' -and $t -match 'log --oneline feat/recibos\.\.rescate/feat-recibos-20261118-0900' -and $t -match 'diff --stat feat/recibos\.\.\.rescate' -and $t -match 'migracion\.ps1 -Legacy "C:\\ruta\\original" -Migrado "C:\\ruta\\migrado" -Plantilla "C:\\ruta\\referencia" -Cierre') $t
   $i = Salida-Siguiente 'siguiente-pre' (Estado-Siguiente) @{ 'prueba-local.json' = (Datos-Siguiente 0).PruebaLocal }
   $s = Panel-De $i 'siguiente-paso'
   Comprueba 'pre: sin comando y con la pagina 1' ($s -notmatch '<pre' -and (Texto-Plano $s) -match 'Pru.balo en pre: cada job tiene su guion en la p.gina 1' -and $s -match 'href="1-batch-original\.html"') $s
@@ -5575,7 +5576,7 @@ $Pruebas['m24 config.json del repo: las claves de rescate.ps1 (PalabrasConfigAnt
 }
 
 # ===================== LOS COMANDOS DEL FINAL SE PEGAN ENTEROS (m27) =====================
-$Pruebas['m27 pagina 4: las tres ordenes de git, cada una en su linea con git -C "<carpeta del migrado>" delante y la explicacion detras de #'] = {
+$Pruebas['m27 pagina 4: las tres ordenes, cada una en su linea: las de git con git -C "<carpeta del migrado>" delante, la del cierre con .\migracion.ps1 -Cierre, y la explicacion detras de #'] = {
   $c = Corrida-Dos $GuionBase
   $d = Datos-Pagina4
   $x = Correccion-Con $c.E 'm27-p4' $d.Antes $d.Despues $d.Corr
@@ -5583,11 +5584,11 @@ $Pruebas['m27 pagina 4: las tres ordenes de git, cada una en su linea con git -C
   $co = Panel-De $x.P4 'codigo'
   $lineas = @([regex]::Match($co, '(?s)<pre class="cmd">(.*?)</pre>').Groups[1].Value -split "`r?`n" | Where-Object { $_ })
   Igual 'tres lineas' 3 $lineas.Count
-  Comprueba 'cada una empieza por git -C " (nada delante)' (@($lineas | Where-Object { $_.StartsWith('git -C "') }).Count -eq 3) ($lineas -join ' / ')
-  Comprueba 'con la carpeta del migrado entre comillas' (@($lineas | Where-Object { $_.StartsWith('git -C "' + (Html $st.migrado) + '" ') }).Count -eq 3) ($lineas -join ' / ')
-  Comprueba 'y la explicacion detras de #, tras una orden que acaba antes' (@($lineas | Where-Object { $_ -match '^git -C "[^"]+" \S.*\S\s+# \S' }).Count -eq 3) ($lineas -join ' / ')
+  Comprueba 'las de git empiezan por git -C " (nada delante) y la del cierre por .\migracion.ps1' (@($lineas | Where-Object { $_.StartsWith('git -C "') }).Count -eq 2 -and $lineas[1].StartsWith('.\migracion.ps1 -Legacy ')) ($lineas -join ' / ')
+  Comprueba 'con la carpeta del migrado entre comillas, tambien la del cierre' (@($lineas | Where-Object { $_.StartsWith('git -C "' + (Html $st.migrado) + '" ') }).Count -eq 2 -and $lineas[1].Contains('-Migrado &quot;' + (Html $st.migrado) + '&quot;')) ($lineas -join ' / ')
+  Comprueba 'y la explicacion detras de #, tras una orden que acaba antes' (@($lineas | Where-Object { $_ -match '^(git -C "[^"]+" |\.\\migracion\.ps1 )\S.*\S\s+# \S' }).Count -eq 3) ($lineas -join ' / ')
   Comprueba 'ver: diff --stat con la base y la rama' ($lineas[0] -match '^git -C "[^"]+" diff --stat main\.\.\.rescate/main-20260101-0000\s+# ver qu. ha cambiado$') $lineas[0]
-  Comprueba 'traer: merge, con la alternativa del PR en el comentario' ($lineas[1] -match '^git -C "[^"]+" merge rescate/main-20260101-0000\s+# traerlo a tu rama \(o sube la rama y abre un PR\)$') $lineas[1]
+  Comprueba 'traer: -Cierre, con la alternativa del PR en el comentario' ($lineas[1] -match '^\.\\migracion\.ps1 .* -Cierre\s+# j.ntalo con tu rama por fast-forward, despu.s de las puertas \(o sube la rama y abre un PR\)$') $lineas[1]
   Comprueba 'borrar: worktree remove del worktree, al acabar con prueba-local.ps1, y la rama se conserva' ($lineas[2] -match ('^git -C "[^"]+" worktree remove "' + [regex]::Escape((Html $st.worktree)) + '"\s+# borrar el worktree cuando acabes con prueba-local\.ps1 \(la rama se conserva\)$')) $lineas[2]
   Comprueba 'antes de ellas, la frase que dice que se copia cada linea entera' ($co -match 'Copia cada l.nea entera; lo que va detr.s de <code>#</code> es solo la explicaci.n') $co
   Comprueba 'sigue sin JavaScript ni nada externo' ($x.P4 -notmatch '(?i)<script' -and $x.P4 -notmatch 'https?://')
@@ -7081,7 +7082,8 @@ $Pruebas['m41 (d) una rama rescate/<rama>-<fecha> con un commit sin unir y sin w
     $r = Migra $e (Basicos $e)
     Igual "$rama : sale con 1" 1 $r.Codigo
     Comprueba "$rama : nombra las dos, la mas nueva primero, y dice que no crea otra" ($r.Salida.Contains("Hay una rama de rescate con arreglos que no estan en tu rama: $otra, $vieja. No creo otra, para no dejarla olvidada.")) (Cola $r.Salida)
-    Comprueba "$rama : unirla a tu rama (la mas nueva)" ($r.Salida.Contains("Unirla a tu rama:        git -C `"$($e.Migrado)`" merge $otra")) (Cola $r.Salida)
+    Comprueba "$rama : unirla a tu rama (la mas nueva), si vienes de migracion.ps1, con -Cierre" ($r.Salida.Contains("Unirla a tu rama:        si vienes de migracion.ps1, recupera su carpeta (mas abajo) y lanza .\migracion.ps1 -Legacy <original> -Migrado `"$($e.Migrado)`" -Plantilla <referencia> -Cierre")) (Cola $r.Salida)
+    Comprueba "$rama : y, si no, con git merge de la mas nueva" ($r.Salida.Contains("                         si no: git -C `"$($e.Migrado)`" merge $otra")) (Cola $r.Salida)
     Comprueba "$rama : seguir trabajando en ella" ($r.Salida.Contains("Seguir trabajando en ella: git -C `"$($e.Migrado)`" worktree add `"$($e.Wt)`" $otra")) (Cola $r.Salida)
     Comprueba "$rama : no la quieres" ($r.Salida.Contains("No la quieres:           git -C `"$($e.Migrado)`" branch -D $otra")) (Cola $r.Salida)
     Comprueba "$rama : y que despues se lance el mismo comando" ($r.Salida.Contains('Despues, lanza el mismo comando.')) (Cola $r.Salida)

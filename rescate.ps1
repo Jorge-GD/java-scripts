@@ -102,9 +102,11 @@ USO
   .\rescate.ps1 -Modo deshacer -Repo C:\ruta\batch-life
 
   # 4) Al acabar. Los cambios estan en la rama rescate/... (el script te dice
-  #    el nombre). Revisalos y traelos a tu rama, o sube la rama y abre un PR:
+  #    el nombre). Revisalos y juntalos con tu rama con -Cierre de migracion.ps1
+  #    (fast-forward, despues de las puertas; sin migracion.ps1 no hay -Cierre),
+  #    o sube la rama y abre un PR:
   git -C C:\ruta\batch-life diff --stat <tu-rama>...<rama-rescate>
-  git -C C:\ruta\batch-life merge <rama-rescate>
+  .\migracion.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\batch-life -Plantilla C:\ruta\referencia -Cierre
   git -C C:\ruta\batch-life worktree remove C:\ruta\batch-life-rescate
 
   Si PowerShell bloquea el script:

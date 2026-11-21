@@ -750,19 +750,6 @@ function Test-CodigoCambiado([string]$Probado) {
   return ((Invoke-Git $RepoRoot @('diff', '--quiet', $Probado, 'HEAD', '--', 'src/main', 'pom.xml')).Codigo -ne 0)
 }
 
-# Lo que falta para dar por buena la prueba en local: sus dos arneses hechos y, en cada job de mapa.json, algun caso igual y ninguno distinto.
-function Get-FallosPruebaLocal($Pl, $Mapa) {
-  if (-not $Pl) { return @('no hay datos\prueba-local.json: la pasada no hizo la prueba en local') }
-  $f = @()
-  foreach ($a in @('original', 'migrado')) { if ([string]$Pl.arneses.$a -cne 'hecha') { $f += "el arnes del $a no esta hecho" } }
-  foreach ($j in @($Mapa.jobs | Where-Object { $null -ne $_ })) {
-    $p = @($Pl.jobs | Where-Object { [string]$_.job -ceq [string]$j.job })
-    if ($p.Count -eq 0 -or [int]$p[0].iguales -lt 1) { $f += "el job $($j.job) no tiene ningun caso igual" }
-    if ($p.Count -gt 0 -and [int]$p[0].distintos -gt 0) { $f += "el job $($j.job) tiene $([int]$p[0].distintos) casos distintos" }
-  }
-  return $f
-}
-
 function Get-TextoHallazgo($H) { return "$($H.Cat): $($H.Fichero):$($H.Linea) $($H.Detalle)" }
 
 # El cierre entero. Devuelve el codigo de salida: 0 si ha juntado o ya estaba juntado (o no habia nada), 2 si para.
