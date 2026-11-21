@@ -76,9 +76,9 @@ Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primer
 | Página | Qué cuenta | Para quién |
 |---|---|---|
 | `1-batch-original.html` | Qué hace el batch, job a job, y cómo probar cada job en pre | Negocio y tú |
-| `2-problemas.html` | Los problemas del migrado: estructura, hexagonal, SFTP, configuración, Javadoc, cobertura | Tú |
+| `2-problemas.html` | Los problemas del migrado: estructura, hexagonal, SFTP, configuración, Javadoc, cobertura, y la revisión por flujos con cada hallazgo de la IA (fichero:línea, cita y problema) | Tú |
 | `3-original-vs-migrado.html` | Caso a caso, si el migrado da lo mismo que el original | Tú |
-| `4-correcciones.html` | Qué se ha corregido y qué queda | Tú |
+| `4-correcciones.html` | Qué se ha corregido y qué queda, y las claves que la fase de propiedades añadió al yml con su commit | Tú |
 | `5-buenas-practicas.html` | Las buenas prácticas del migrado (javac, Lombok, el texto que cambia en Java 21 y la limpieza), qué hacer con cada incidencia y cuáles ya están arregladas | Tú |
 
 La página 5 mide javac (las APIs marcadas «for removal»), las comprobaciones de Lombok, el texto que cambia en Java 21 (juego de caracteres y formatos de fecha y número) y la limpieza: lo que no debería llegar al senior (restos de herramientas que están en git, marcas pendientes TODO, FIXME y XXX, código comentado y clases que nadie nombra en `src/main`). La limpieza solo avisa: no borra nada. PMD y SpotBugs se quitaron el 20-11: en tu equipo acababan siempre en «no se pudo medir» y costaban dos Maven por medida. Lo que se guardó antes con entradas de PMD o SpotBugs no se enseña.
