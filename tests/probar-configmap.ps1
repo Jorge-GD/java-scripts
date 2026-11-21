@@ -161,14 +161,24 @@ function Salida-Variables($Lista) {
   return (ConvertTo-Json -InputObject @{ variables = @($Lista | ForEach-Object { [ordered]@{ variable = $_[0]; clave = $_[1]; secreto = [bool]$_[2]; porque = 'Por el nombre.' } }) } -Depth 5)
 }
 
-# Los planes de una pasada sin fallos: la IA empareja env.reintentos con max.reintentos y escribe lo de siempre en cada tarea.
-function Planes-Buenos($E, [bool]$ConReintentos = $true) {
+# Lo que contesta la IA a la tarea de variables: cada variable con su clave del inventario (o ninguna). El script no empareja nada por su cuenta.
+$ParesBuenos = [ordered]@{
+  'env.cliente' = 'cliente'; 'env.lote-pedidos-endpoint' = 'lote.pedidos.endpoint'; 'env.reintentos' = 'max.reintentos'
+  'env.ruta-entrada' = 'ruta.entrada'; 'env.url-token' = 'url.token'; 'env.url-token-clave' = 'url.token.clave'
+}
+function Respuesta-Variables($Pares, [string[]]$Secretas = @()) {
+  return (Salida-Variables @($Pares.Keys | ForEach-Object { , @($_, $Pares[$_], ($Secretas -contains $_)) }))
+}
+
+# Los planes de una pasada sin fallos: la IA empareja las seis variables del yml de siempre y escribe lo de siempre en cada tarea.
+# Las variables de $Pendientes se quedan sin valor (<PENDIENTE>) en todos los entornos.
+function Planes-Buenos($E, [string[]]$Pendientes = @()) {
   $ref = Ficheros-Referencia
-  if ($ConReintentos) { Plan $E 'configmap-variables-1' $null (Salida-Variables @(, @('env.reintentos', 'max.reintentos', $false))) }
+  Plan $E 'configmap-variables-1' $null (Respuesta-Variables $ParesBuenos)
   foreach ($env in @('des', 'pre', 'pro')) {
     $v = [ordered]@{}
     foreach ($k in $Valores[$env].Keys) { $v[$k] = $Valores[$env][$k] }
-    if (-not $ConReintentos -or $env -eq 'des') { $v['env.reintentos'] = '<PENDIENTE>' }
+    foreach ($k in $Pendientes) { $v[$k] = '<PENDIENTE>' }
     Plan $E "configmap-entorno-$env" (Ficheros-Entorno $env $ref $v)
   }
   $ids = @{ '.plataforma/ci/props.env' = $IdProps; '.plataforma/cd/values.yaml' = $IdValues; '.plataforma/cd/pre/cd.yml' = $IdCdPre; '.plataforma/cd/pro/cd.yml' = $IdCdPro; '.github/workflows/cd.yml' = $IdFlujo }
@@ -279,18 +289,23 @@ $Pruebas['c9 (b1) variables: ${env.a} y ${env.b:x} salen, una resuelta dentro de
   Igual 'env.c: su fichero' 'src/main/resources/application-pro.properties' $v[2].fichero
 }
 
-$Pruebas['c9 (b2) variables: el emparejamiento por clave canonica (con o sin su primer trozo) no llama a la IA; las demas van a una tarea'] = {
-  $e = Nuevo-Escenario 'b2' @{ Yml = "a:`n  x: `${env.ruta-entrada}`n  y: `${env.lote-pedidos-endpoint}`n  z: `${env.url-token-clave}`n" }
-  Planes-Buenos $e $false
+$Pruebas['c9 (b2) variables: todas van a la tarea de la IA (el script no empareja nada) y la pareja que contesta es la que da los valores'] = {
+  $y = "a:`n  x: `${env.ruta-entrada}`n  y: `${env.lote-pedidos-endpoint}`n  z: `${env.url-token-clave}`n"
+  $e = Nuevo-Escenario 'b2' @{ Yml = $y }
+  Planes-Buenos $e
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables ([ordered]@{ 'env.lote-pedidos-endpoint' = 'lote.pedidos.endpoint'; 'env.ruta-entrada' = 'ruta.entrada'; 'env.url-token-clave' = 'url.token.clave' }))
   $x = Corre $e
   Igual 'sale con 0' 0 $x.R.Codigo
-  Comprueba 'ninguna llamada de configmap-variables' (-not ((Ids-De $e) -match 'configmap-variables')) (Ids-De $e)
+  Igual 'una sola llamada de variables, aunque el nombre case con una clave del inventario' 1 @(Llamadas-De $e | Where-Object { $_.Id -like 'configmap-variables-*' }).Count
+  $t = Tarea-Guardada $e 'configmap-variables-1'
+  Igual 'con las tres variables' 'env.lote-pedidos-endpoint,env.ruta-entrada,env.url-token-clave' (@($t.entradas.variables) -join ',')
+  Comprueba 'el valor de pre sale de la pareja de la IA' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.ruta-entrada = /data/pre/entrada'))
   $p = Pendiente $e
-  Comprueba 'env.ruta-entrada sale de ruta.entrada, por el script' ($p -match '(?m)^\| env\.ruta-entrada \|[^|]*`ruta\.entrada`[^|]*script[^|]*\|') $p
-  Comprueba 'env.lote-pedidos-endpoint, de lote.pedidos.endpoint' ($p -match '(?m)^\| env\.lote-pedidos-endpoint \|[^|]*`lote\.pedidos\.endpoint`') $p
+  Comprueba 'PENDIENTE.md dice que la pareja la puso la IA' ($p -match '(?m)^\| env\.ruta-entrada \|[^|]*`ruta\.entrada`[^|]*IA[^|]*\|') $p
+  Comprueba 'y la de lote.pedidos.endpoint tambien' ($p -match '(?m)^\| env\.lote-pedidos-endpoint \|[^|]*`lote\.pedidos\.endpoint`[^|]*IA')
 }
 
-$Pruebas['c9 (b3) variables: las que no casan van en tareas de 10 como mucho, con la lista cerrada de claves sin valores'] = {
+$Pruebas['c9 (b3) variables: van en tareas de 10 como mucho, con la lista cerrada de claves sin valores'] = {
   $y = (1..11 | ForEach-Object { 'v' + $_.ToString('00') + ': ${env.v' + $_.ToString('00') + '}' }) -join "`n"
   $e = Nuevo-Escenario 'b3' @{ Yml = $y }
   Plan $e 'configmap-variables-1' $null (Salida-Variables @(1..10 | ForEach-Object { , @('env.v' + $_.ToString('00'), 'ninguna', $false) }))
@@ -302,7 +317,7 @@ $Pruebas['c9 (b3) variables: las que no casan van en tareas de 10 como mucho, co
   Igual 'la segunda, 1' 1 @($t2.entradas.variables).Count
   Igual 'hay dos llamadas de variables' 2 @(Llamadas-De $e | Where-Object { $_.Id -like 'configmap-variables-*' }).Count
   $p = Prompt-De $e 'configmap-variables-1'
-  Comprueba 'el prompt lleva las claves del inventario' ($p.Contains('ruta.entrada') -and $p.Contains('max.reintentos'))
+  Comprueba 'el prompt lleva las claves del inventario' ($p.Contains('ruta.entrada') -and $p.Contains('max.reintentos') -and $p.Contains('url.token.clave'))
   Comprueba 'y ningun valor del inventario' (-not $p.Contains('/data/pre/entrada') -and -not $p.Contains($SecretoPre) -and -not $p.Contains('acme-pro'))
   Comprueba 'lleva la linea del yml de la variable' ($p -match 'v03: \$\{env\.v03\}')
   Comprueba 'y el trabajo se hace en el repo nuevo, con el migrado a la vista' ((@(Llamadas-De $e)[0]).Carpeta -eq $e.Destino -and (@(Llamadas-De $e)[0]).Flags.Contains('--add-dir=' + $e.Migrado))
@@ -311,28 +326,34 @@ $Pruebas['c9 (b3) variables: las que no casan van en tareas de 10 como mucho, co
 $Pruebas['c9 (b4) variables: una respuesta con una clave que no esta en la lista se reintenta con el motivo; la buena se usa'] = {
   $e = Nuevo-Escenario 'b4'
   Planes-Buenos $e
-  Plan $e 'configmap-variables-1' $null (Salida-Variables @(, @('env.reintentos', 'no.existe', $false)))
-  Plan $e 'configmap-variables-1' $null (Salida-Variables @(, @('env.reintentos', 'max.reintentos', $false))) $true
+  $mal = [ordered]@{}
+  foreach ($k in $ParesBuenos.Keys) { $mal[$k] = $ParesBuenos[$k] }
+  $mal['env.reintentos'] = 'no.existe'
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables $mal)
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables $ParesBuenos) $true
   [void](Corre $e)
   $l = @(Llamadas-De $e | Where-Object { $_.Id -eq 'configmap-variables-1' })
   Igual 'dos llamadas, la segunda con correccion' '0,1' (($l | ForEach-Object { $_.Reintento }) -join ',')
   $p2 = Prompt-De $e 'configmap-variables-1' 2
   Comprueba 'el segundo prompt lleva el motivo con la clave mala' ($p2.Contains('no.existe'))
   Igual 'la tarea queda hecha' 'hecha' (Tarea-Guardada $e 'configmap-variables-1').estado
-  $v = Lee-Destino $e 'config/pre/variables'
   Comprueba 'el prompt de pre ya lleva el valor de max.reintentos para env.reintentos' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.reintentos = 5'))
 }
 
-$Pruebas['c9 (b5) variables: una respuesta que falta, repetida o con una variable que no se pidio tambien se reintenta; dos fallos la dejan atascada y el emparejamiento sigue sin ella'] = {
+$Pruebas['c9 (b5) variables: una respuesta a la que falta una variable, o con una que no se pidio, tambien se reintenta; dos fallos la dejan atascada y las variables quedan sin pareja'] = {
   $e = Nuevo-Escenario 'b5'
-  Planes-Buenos $e
-  Plan $e 'configmap-variables-1' $null (Salida-Variables @(, @('env.otra', 'max.reintentos', $false)))
-  $x = Corre $e
+  Planes-Buenos $e @('env.reintentos')
+  $falta = [ordered]@{}
+  foreach ($k in $ParesBuenos.Keys) { if ($k -ne 'env.reintentos') { $falta[$k] = $ParesBuenos[$k] } }
+  $falta['env.otra'] = 'max.reintentos'
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables $falta)
+  [void](Corre $e)
   $t = Tarea-Guardada $e 'configmap-variables-1'
   Igual 'queda atascada' 'atascada' $t.estado
   Comprueba 'el motivo nombra la variable que faltaba' ($t.motivo.Contains('env.reintentos')) $t.motivo
+  Comprueba 'y la que no se pidio' ($t.motivo.Contains('env.otra')) $t.motivo
   Comprueba 'PENDIENTE.md la cuenta entre las atascadas' ((Seccion (Pendiente $e) 'Tareas atascadas').Contains('configmap-variables-1'))
-  Comprueba 'env.reintentos queda sin emparejar' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.reintentos = <PENDIENTE>'))
+  Comprueba 'sin pareja, todas las variables salen pendientes (menos la secreta)' ((Prompt-De $e 'configmap-entorno-pre').Contains('- env.ruta-entrada = <PENDIENTE>') -and (Prompt-De $e 'configmap-entorno-pre').Contains('- env.url-token-clave (secreto, sin valor)'))
 }
 
 # ---- (c) entornos ----
@@ -360,8 +381,7 @@ $Pruebas['c9 (c2) entornos: PENDIENTE.md lleva una tabla por entorno con de dond
   $p = Pendiente $e
   $pre = Seccion $p 'Entorno PRE'
   Comprueba 'hay seccion de PRE, de PRO y de DES' ((Seccion $p 'Entorno PRO') -and (Seccion $p 'Entorno DES') -and $pre)
-  Comprueba 'una variable con valor, por el script: valor puesto' ($pre -match '(?m)^\| env\.ruta-entrada \|[^|]*script[^|]*\| valor puesto \|')
-  Comprueba 'una emparejada por la IA lo dice' ($pre -match '(?m)^\| env\.reintentos \|[^|]*`max\.reintentos`[^|]*IA[^|]*\| valor puesto \|') $pre
+  Comprueba 'una variable con valor, emparejada por la IA: valor puesto' ($pre -match '(?m)^\| env\.ruta-entrada \|[^|]*`ruta\.entrada`[^|]*IA[^|]*\| valor puesto \|') $pre
   Comprueba 'la secreta: hay que pedir el Secret' ($pre -match '(?m)^\| env\.url-token-clave \|[^|]*\| secreto: hay que pedir el Secret \|') $pre
   Comprueba 'la que el inventario de pre no tiene: pendiente' ($pre -match '(?m)^\| env\.cliente \|[^|]*\| pendiente \|') $pre
   Comprueba 'en DES, todo pendiente (menos la secreta)' ((Seccion $p 'Entorno DES') -match '(?m)^\| env\.ruta-entrada \|[^|]*\| pendiente \|')
@@ -384,7 +404,7 @@ $Pruebas['c9 (d1) secretos: ni el valor del inventario ni el del vault salen en 
 $Pruebas['c9 (d2) secretos: la IA marca como secreta una variable que no lo parece: no sale su valor en el prompt y la tarea la pide como secreto'] = {
   $e = Nuevo-Escenario 'd2'
   Planes-Buenos $e
-  Plan $e 'configmap-variables-1' $null (Salida-Variables @(, @('env.reintentos', 'max.reintentos', $true)))
+  Plan $e 'configmap-variables-1' $null (Respuesta-Variables $ParesBuenos @('env.reintentos'))
   foreach ($env in @('des', 'pre', 'pro')) { Plan $e "configmap-entorno-$env" (Ficheros-Entorno $env (Ficheros-Referencia) $Valores[$env] @('env.reintentos')) }
   $x = Corre $e
   $pre = Prompt-De $e 'configmap-entorno-pre'
