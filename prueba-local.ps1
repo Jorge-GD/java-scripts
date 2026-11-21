@@ -908,29 +908,6 @@ function Repair-PomSoloTest([string]$Antes, [string]$Ruta) {
   return $deshecho
 }
 
-# El nombre de tabla de $Token (lo que sigue a FROM, JOIN, INTO, UPDATE o TABLE en el SQL): sin esquema ni comillas y en mayusculas. '' si no
-# vale como tabla: lleva ?, : o $; empieza por BATCH_ o TASK_ (Spring Batch y Spring Cloud Task); tiene menos de 3 caracteres; es DUAL o es una
-# palabra de SQL (o de las que siguen a un FROM en una frase: the, this, that).
-function Get-NombreTabla([string]$Token) {
-  if ($Token -match '[?:$]') { return '' }
-  $n = (($Token -split '\.')[-1] -replace '^["`''\[\\]+|["`''\]\\]+$', '').ToUpperInvariant()
-  if ($n.Length -lt 3 -or $n -notmatch '^[A-Z_][A-Z0-9_#]*$' -or $n -match '^(BATCH_|TASK_)') { return '' }
-  if ($n -match '^(SELECT|WHERE|SET|VALUES|AND|OR|NOT|NULL|AS|ON|IF|EXISTS|IN|BY|ORDER|GROUP|HAVING|LEFT|RIGHT|INNER|OUTER|CROSS|FULL|NATURAL|UNION|ALL|DISTINCT|ONLY|TABLE|INTO|FROM|JOIN|UPDATE|DELETE|INSERT|MERGE|USING|WITH|CASE|WHEN|THEN|ELSE|END|LIKE|BETWEEN|LIMIT|OFFSET|FETCH|FOR|DUAL|CASCADE|RESTRICT|CURRENT_TIMESTAMP|THE|THIS|THAT)$') { return '' }
-  return $n
-}
-
-# Las tablas que nombra el SQL de $Texto, cada una con el indice donde empieza su nombre: lo que sigue a FROM, JOIN, INTO (tambien MERGE INTO,
-# INSERT INTO), UPDATE o TABLE (con o sin IF [NOT] EXISTS), sin distinguir mayusculas. DELETE FROM sale por FROM. 'mayus' dice si el nombre, como
-# esta escrito (sin su esquema), no lleva ninguna minuscula.
-function Get-TablasSql([string]$Texto) {
-  $r = @()
-  foreach ($m in [regex]::Matches($Texto, '(?i)\b(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(?>([^\s(),;=<>\\]+))(?!=)')) {
-    $n = Get-NombreTabla $m.Groups[1].Value
-    if ($n) { $r += [pscustomobject]@{ tabla = $n; indice = $m.Groups[1].Index; mayus = (($m.Groups[1].Value -split '\.')[-1] -cnotmatch '[a-z]') } }
-  }
-  return $r
-}
-
 # El inventario de tablas del batch de $Dir (una copia): las que su codigo nombra en SQL, cada una con su primer sitio (fichero:linea, el fichero
 # ordenado por su ruta), por orden de nombre. Se buscan en src/main: dentro de las cadenas entre comillas dobles de los .java (no en sus
 # comentarios) y en @Table(name = "X"), y en el texto de los .sql, .xml, .properties y .yml/.yaml (sin sus lineas de comentario). Las cadenas de
