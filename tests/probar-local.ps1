@@ -5989,6 +5989,9 @@ $ok = $true
 try { Copy-Fichero $corto (Join-Path $Raiz 'm63-d/destino3.txt') } catch { $ok = $false }
 Salida 'E' (($script:Llamadas -join '|') -ceq ('item:' + $corto))
 Salida 'F' (-not $ok)
+$script:Llamadas = @(); $script:ItemFalla = $false
+Copy-Fichero $corto (Join-Path $Raiz 'm63-d/destino4.txt')
+Salida 'G' (($script:Llamadas -join '|') -ceq ('item:' + $corto))
 '@
   Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
   Igual 'A: si Copy-Item falla, prueba .NET con la misma ruta con prefijo, despues de Copy-Item' 'True' $x.V['A']
@@ -5997,6 +6000,7 @@ Salida 'F' (-not $ok)
   Igual 'D: y el fichero se copia' 'hola' $x.V['D']
   Igual 'E: un origen corto va solo con Copy-Item y su ruta, sin prefijo' 'True' $x.V['E']
   Igual 'F: y si falla, falla (no hay segundo intento)' 'True' $x.V['F']
+  Igual 'G: y si copia, se copia una sola vez' 'True' $x.V['G']
 }
 
 $Pruebas['m63 (e) con un origen largo en Windows y las dos copias fallando, Copy-Salida deja el fichero sin guardar con el motivo del ultimo error (el de .NET)'] = {
