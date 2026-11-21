@@ -37,7 +37,7 @@
   <p>Copia cada línea entera; lo que va detrás de <code>#</code> es solo la explicación:</p>
   <pre class="cmd">git -C "{{MIGRADO}}" diff --stat {{BASE}}...{{RAMA}}   # ver qué ha cambiado
 {{CIERRE}}   # júntalo con tu rama por fast-forward, después de las puertas (o sube la rama y abre un PR)
-git -C "{{MIGRADO}}" worktree remove "{{WORKTREE}}"   # borrar el worktree cuando acabes con prueba-local.ps1 (la rama se conserva)</pre>
+git -C "{{MIGRADO}}" worktree remove "{{WORKTREE}}"   # borrar el worktree después de juntar con -Cierre (la rama se conserva)</pre>
 </section><!--FIN-->
 <!--TROZO variables-nuevas--><section class="panel" id="variables-nuevas" aria-labelledby="t-variables">
   <h2 id="t-variables">Lo que necesita ahora para arrancar</h2>
