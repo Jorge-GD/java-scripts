@@ -397,6 +397,7 @@ $Pruebas['c9 (d1) secretos: ni el valor del inventario ni el del vault salen en 
   $x = Corre $e
   foreach ($v in @($SecretoPre, $SecretoPro, 'SECRETO_VAULT', 'SECRETO_VAULT_PRO', 'SECRETO_GV', 'HOST_NO_LEER')) { Igual "el valor $v no sale en ningun sitio" 0 (Sale-Valor $e $v $x.Consola) }
   Comprueba 'el prompt de pre no tiene ni el secreto de pro, ni vault' (-not (Prompt-De $e 'configmap-entorno-pre').Contains('SECRETO'))
+  Comprueba 'la lista de claves del prompt de variables no lleva las de vault.properties' ((Prompt-De $e 'configmap-variables-1') -notmatch '(?m)^- y\s*$')
   Comprueba 'sigue habiendo valores no secretos de pre' ((Lee-Destino $e 'config/pre/variables').Contains('/data/pre/entrada'))
   Comprueba 'la variable de la clave es secreta por el nombre, y la linea de secretos la nombra sin valor' ((Lee-Destino $e 'config/pre/secretos').Contains('"variable":"env.url-token-clave"'))
 }
@@ -595,6 +596,19 @@ $Pruebas['c9 (h1) relanzar: sin cambios en las entradas no hay ni una llamada; u
   [void](Corre $e)
   Igual 'un fichero que falta se escribe otra vez: su tarea y la revision de la plataforma' "configmap-plataforma-plataforma-ci-props-env,configmap-revision-plataforma" (Ids-Nuevos $e $m)
   Comprueba 'y esta' (Existe-Destino $e '.plataforma/ci/props.env')
+}
+
+$Pruebas['c9 (h5) relanzar: un fichero que el usuario ha cambiado no se rehace ni cuando cambian las entradas de su tarea'] = {
+  $e = Nuevo-Escenario 'h5'
+  Planes-Buenos $e
+  [void](Corre $e)
+  Escribe $e.Destino 'config/pre/variables' "pfx.variables.env.a-mano=1`n"
+  Escribe $e.Inv 'PRE/app.properties' "ruta.entrada=/data/pre/nueva`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.token=https://auth.pre.acme.test/token`nurl.token.clave=$SecretoPre`nmax.reintentos=5`n"
+  $m = @(Llamadas-De $e).Count
+  $x = Corre $e
+  Igual 'cambia el inventario de pre pero el usuario cambio su fichero: ninguna llamada' '' (Ids-Nuevos $e $m)
+  Igual 'el fichero sigue como lo dejo el usuario' "pfx.variables.env.a-mano=1`n" (Lee-Destino $e 'config/pre/variables')
+  Comprueba 'y PENDIENTE.md lo dice' ((Seccion (Pendiente $e) 'Ficheros que has cambiado').Contains('config/pre/variables'))
 }
 
 $Pruebas['c9 (h2) relanzar: un fichero suelto que cambia el usuario se conserva y se dice; PENDIENTE.md se escribe siempre'] = {
