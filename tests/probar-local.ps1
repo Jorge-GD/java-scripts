@@ -4785,5 +4785,225 @@ $Pruebas['m52 (i) -Reparar con un caso sin causa: el prompt dice que el migrado 
   Comprueba 'la consola si la dice' ($r.Salida.Contains('sin causa en la salida de Maven: mira registros\mvn-')) (Cola $r.Salida)
 }
 
+# ===================== M53: causas que la consola no daba (contexto de Spring, Maven sin excepcion, Maven bien sin salida) y dos fallos de -Reparar =====================
+# m53-mvn.ps1 (sobre m50-mvn.ps1) deja, segun el guion de RESCATE_M53, un migrado EXCEPCION con el aviso de Spring 'cancelling refresh attempt', uno sin estado.txt con un
+# '[ERROR] Failed to execute goal ...' de Maven, o uno sin estado.txt con Maven en 0; y, con RESCATE_M53_SUITE, tests unitarios que fallan con un <error message=...>.
+# m53-copilot.ps1 (sobre m25-copilot.ps1) imita al Copilot de verdad: rechaza con 'error: option' un --add-dir que no existe. Los nombres son inventados (com.acme, cargaJob).
+
+function Escenario-M53([string]$Nombre, $Casos, [switch]$Test, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm53-mvn.ps1'); CopilotExe = (Join-Path $falsos 'm53-copilot.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Test:$Test -Ajustes $aj)
+}
+
+# Lanza con los guiones $Guion de m53-mvn.ps1, las variables de entorno $Env (nombre -> valor) y, con $GuionCopilot, el guion del Copilot falso.
+function Prueba-M53($E, [string]$Guion, [string[]]$A = @(), [hashtable]$Env = @{}, [string]$GuionCopilot = '') {
+  $env:RESCATE_M53 = $Guion
+  foreach ($k in $Env.Keys) { Set-Item -Path "env:$k" -Value ([string]$Env[$k]) }
+  try { return (Prueba $E $A $GuionCopilot) }
+  finally {
+    $env:RESCATE_M53 = ''
+    foreach ($k in $Env.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+  }
+}
+
+function Fallo-M53($E, [string]$Job, [string]$Caso) { return @((Caso $E $Job $Caso).fallos | Where-Object { $_.lado -ceq 'migrado' })[0] }
+
+$CausaContexto53 = "org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'pasoPostProcessor': No qualifying bean of type 'org.springframework.batch.core.listener.StepExecutionListener' available: expected single matching bean but found 2: oyentePaso,oyenteEmpresa"
+$CausaNoTests53 = 'No tests matching pattern "PruebaLocalTest" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.)'
+$CausaSinSalida53 = 'Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso (mira si ve su carpeta en src\test\resources\prueba-local)'
+
+$Pruebas['m53 (a) el contexto de Spring no arranca (el migrado acaba EXCEPCION en 3 casos): la causa es la del aviso cancelling refresh attempt, no la del aviso de antes, y hay un solo grupo'] = {
+  $e = Escenario-M53 'm53-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M53 $e 'contexto'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M53 $e 'cargaJob' 'caso-02'
+  Igual 'el fallo del migrado: EXCEPCION, con la causa del aviso de Spring (lo que va despues de la marca)' "EXCEPCION|$CausaContexto53" "$($f.estado)|$($f.causa)"
+  Comprueba 'la consola dice el migrado acaba EXCEPCION con esa causa (la cabecera del grupo y el detalle de un caso)' ((Veces-M50 $r.Salida "el migrado acaba EXCEPCION: $CausaContexto53") -ge 2) (Cola $r.Salida)
+  Comprueba 'la consola no dice TypeNotPresentException ni sin causa' ($r.Salida -notmatch 'TypeNotPresentException' -and $r.Salida -notmatch 'sin causa en la salida') (Cola $r.Salida)
+  $g = @(Grupos-M50 $e)
+  Igual 'un solo grupo, de fallo, con los 3 casos' '1|fallo|3' "$($g.Count)|$($g[0].tipo)|$(@($g[0].casos).Count)"
+  Comprueba 'con la firma de la UnsatisfiedDependencyException' ("$($g[0].firma)".StartsWith('fallo|EXCEPCION|org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name')) "$($g[0].firma)"
+}
+
+$Pruebas['m53 (b) sin estado.txt y Maven con [ERROR] Failed to execute goal ... No tests matching pattern: la causa es el mensaje, sin el -> [Help 1], en la consola y en el JSON'] = {
+  $e = Escenario-M53 'm53-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M53 $e 'sin-tests'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M53 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: sin estado.txt, con el mensaje de Maven' "sin estado.txt|$CausaNoTests53" "$($f.estado)|$($f.causa)"
+  Comprueba 'la causa empieza por No tests matching pattern y no lleva -> [Help' ("$($f.causa)".StartsWith('No tests matching pattern') -and "$($f.causa)" -notmatch '-> \[Help') "$($f.causa)"
+  Comprueba 'la consola lo dice (el migrado no deja estado.txt: <causa>) y ya no dice sin causa' ($r.Salida.Contains("el migrado no deja estado.txt: $CausaNoTests53") -and $r.Salida -notmatch 'sin causa en la salida') (Cola $r.Salida)
+  Comprueba 'el registro del JSON se queda: registros\mvn-<n>-migrado-cargaJob-caso-01.log' ("$($f.registro)" -cmatch '^registros\\mvn-\d+-migrado-cargaJob-caso-01\.log$') "$($f.registro)"
+}
+
+$Pruebas['m53 (c) sin estado.txt, Maven con 0 y sin excepciones: la causa es que el test no ha dejado salida, en la consola, en el JSON y en la firma, y dos casos van al mismo grupo'] = {
+  $e = Escenario-M53 'm53-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M53 $e 'sin-salida'
+  Igual 'sale con 2' 2 $r.Codigo
+  $f = Fallo-M53 $e 'cargaJob' 'caso-01'
+  Igual 'el fallo del migrado: sin estado.txt, con la causa de que no ha dejado salida' "sin estado.txt|$CausaSinSalida53" "$($f.estado)|$($f.causa)"
+  Comprueba 'la consola lo dice y ya no dice sin causa en la salida de Maven' ($r.Salida.Contains("el migrado no deja estado.txt: $CausaSinSalida53") -and $r.Salida -notmatch 'sin causa en la salida') (Cola $r.Salida)
+  Comprueba 'el registro del JSON se queda' ("$($f.registro)" -cmatch '^registros\\mvn-\d+-migrado-cargaJob-caso-01\.log$') "$($f.registro)"
+  $g = @(Grupos-M50 $e)
+  Igual 'un solo grupo con los 2 casos' '1|2' "$($g.Count)|$(@($g[0].casos).Count)"
+  Comprueba 'con la causa en la firma y en la cabecera' ("$($g[0].firma)".StartsWith('fallo|sin estado.txt|Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso') -and "$($g[0].descripcion)".Contains($CausaSinSalida53)) "$($g[0].firma) // $($g[0].descripcion)"
+}
+
+$Pruebas['m53 (c2) sin estado.txt con Maven en 0 pero con la salida de Maven que si da causa (un FAILED del migrado, o EXCEPCION con causa) no cambia: solo el caso sin estado.txt y sin causa dice lo del test'] = {
+  $e = Escenario-M53 'm53-c2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M53 $e 'contexto:/caso-01$;sin-salida:/caso-02$'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'caso-01 (con EXCEPCION y su causa): la del aviso de Spring' "EXCEPCION|$CausaContexto53" "$((Fallo-M53 $e 'cargaJob' 'caso-01').estado)|$((Fallo-M53 $e 'cargaJob' 'caso-01').causa)"
+  Igual 'caso-02 (sin estado.txt): la de que no ha dejado salida' "sin estado.txt|$CausaSinSalida53" "$((Fallo-M53 $e 'cargaJob' 'caso-02').estado)|$((Fallo-M53 $e 'cargaJob' 'caso-02').causa)"
+  Igual 'dos grupos' 2 @(Grupos-M50 $e).Count
+}
+
+$Pruebas['m53 (d) -Reparar con un caso cuyo migrado no deja salida: la llamada se hace y --add-dir no lleva la carpeta salidas\migrado\<job>\<caso>, que no existe'] = {
+  $e = Escenario-M53 'm53-d' ([ordered]@{ cargaJob = @('importe=5.00') })
+  $falta = Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01'
+  $r = Prueba-M53 $e 'sin-salida' @('-Reparar') @{} 'reparar-nada'
+  Comprueba 'el migrado no dejo esa carpeta (lo que prueba el caso)' (-not (Test-Path -LiteralPath $falta)) $falta
+  $ll = @(Llamadas-Reparar $e)
+  Comprueba 'se llamo a Copilot para reparar' ($ll.Count -ge 1) (Cola $r.Salida)
+  Comprueba 'ninguna llamada lleva la carpeta que falta' (@($ll | Where-Object { $_.flags.Contains($falta) }).Count -eq 0) (($ll | ForEach-Object { $_.flags }) -join ' // ')
+  $dirs = @($ll | ForEach-Object { [regex]::Matches($_.flags, '--add-dir=(\S+)') | ForEach-Object { $_.Groups[1].Value } })
+  Comprueba 'todas las carpetas de --add-dir existen' ($dirs.Count -gt 0 -and @($dirs | Where-Object { -not (Test-Path -LiteralPath $_ -PathType Container) }).Count -eq 0) ($dirs -join ' ')
+  Comprueba 'el script no se para con Copilot no responde' ($r.Salida -notmatch 'Copilot no responde' -and $r.Salida -notmatch 'Copilot rechaza') (Cola $r.Salida)
+}
+
+$Pruebas['m53 (d2) Get-ArgsCopilot: --add-dir solo de las carpetas que existen (no de un fichero, de una ruta que no esta ni de una vacia)'] = {
+  $f = Join-Path $Dir 'm53-args.ps1'
+  $cuerpo = @'
+$Cfg = @{ CopilotArgs = @('-s', '--no-ask-user') }
+$ok = Join-Path $Raiz 'existe'
+[void](New-Item -ItemType Directory -Path $ok -Force)
+$fichero = Join-Path $Raiz 'fichero.txt'
+[System.IO.File]::WriteAllText($fichero, 'x')
+$falta = Join-Path $Raiz 'no-esta'
+'R todas ' + ((Get-ArgsCopilot 'texto' 'mod' 'high' @($ok, $falta, $fichero, '') $true) -join '|')
+'R ninguna ' + ((Get-ArgsCopilot 'texto' '' '' @($falta, '') $false) -join '|')
+'R sin-dirs ' + ((Get-ArgsCopilot 'texto' '' '' @() $false) -join '|')
+'@
+  $ok = Join-Path $Dir 'm53-args/existe'
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-ArgsCopilot')) + "`n" + $cuerpo))
+  [void](New-Item -ItemType Directory -Path (Join-Path $Dir 'm53-args') -Force)
+  $r = Lanzar $f @((Join-Path $Dir 'm53-args'))
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  Igual 'con una carpeta que existe, un fichero, una que no esta y una vacia: solo la que existe' "-p|texto|-s|--no-ask-user|--model=mod|--effort=high|--no-custom-instructions|--add-dir=$ok" $v['todas']
+  Igual 'sin ninguna que exista: sin --add-dir' '-p|texto|-s|--no-ask-user' $v['ninguna']
+  Igual 'sin carpetas: igual' '-p|texto|-s|--no-ask-user' $v['sin-dirs']
+}
+
+$Pruebas['m53 (e) una racha de llamadas que Copilot rechaza con error: option: el mensaje de parada dice que es un fallo del script, no que mire si Copilot funciona'] = {
+  $e = Nuevo-Escenario 'm53-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'm53-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn-local.ps1'); SegundosPorLlamada = 60; FallosSeguidos = 2 }))
+  $env:RESCATE_M53_RECHAZA = '1'
+  try { $r = Prueba $e } finally { Remove-Item -Path 'env:RESCATE_M53_RECHAZA' -ErrorAction SilentlyContinue }
+  Comprueba 'el script se para (sale con distinto de 0)' ($r.Codigo -ne 0) "rc=$($r.Codigo)"
+  Comprueba 'dice que Copilot rechaza los argumentos que le pasa el script, con la linea de error: option' ($r.Salida.Contains("Copilot rechaza los argumentos que le pasa el script (es un fallo del script, no de Copilot): error: option '--add-dir <directory>' argument '")) (Cola $r.Salida)
+  Comprueba 'y no dice Mira que Copilot funciona' ($r.Salida -notmatch 'Mira que Copilot funciona') (Cola $r.Salida)
+  Comprueba 'sigue diciendo cuantas llamadas han fallado y que se vuelva a lanzar el mismo comando' ($r.Salida -match 'llamadas seguidas han fallado' -and $r.Salida -match 'vuelve a lanzar el mismo comando: lo hecho se conserva') (Cola $r.Salida)
+}
+
+$Pruebas['m53 (e2) una racha de llamadas que fallan por otra cosa (sesion caducada): el mensaje de siempre, Mira que Copilot funciona'] = {
+  $e = Nuevo-Escenario 'm53-e2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'm53-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn-local.ps1'); SegundosPorLlamada = 60; FallosSeguidos = 2 }))
+  $env:RESCATE_M53_RECHAZA = 'sesion'
+  try { $r = Prueba $e } finally { Remove-Item -Path 'env:RESCATE_M53_RECHAZA' -ErrorAction SilentlyContinue }
+  Comprueba 'el script se para' ($r.Codigo -ne 0) "rc=$($r.Codigo)"
+  Comprueba 'dice Mira que Copilot funciona y no que rechaza los argumentos' ($r.Salida.Contains('Mira que Copilot funciona (sesion, cuota, red)') -and $r.Salida -notmatch 'rechaza los argumentos') (Cola $r.Salida)
+}
+
+# El motivo del reintento de -Reparar cuando el arreglo rompe un test: lleva el primer mensaje de fallo de los TEST-*.xml.
+$Pruebas['m53 (f) -Reparar: el arreglo rompe un test unitario con <error message="...found 2: a,b">: el motivo y el prompt del reintento llevan El primero falla con: y el mensaje (solo su primera linea)'] = {
+  $e = Escenario-M53 'm53-f' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $r = Prueba-M53 $e '' @('-Reparar') @{ RESCATE_M53_SUITE = 'mensaje' } 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Comprueba 'el motivo sigue diciendo que arregla el caso pero rompe tests y nombra el test' ($rep[0].motivo -match 'arregla el caso, pero rompe estos tests' -and $rep[0].motivo -match 'com\.acme\.nuevo\.ReglaTest') $rep[0].motivo
+  Comprueba 'y acaba con El primero falla con: el mensaje, con found 2' ($rep[0].motivo.Contains('Fallan 1 y antes fallaban 0. El primero falla con: Failed to load ApplicationContext for [x]: expected single matching bean but found 2: a,b.')) $rep[0].motivo
+  Comprueba 'sin la segunda linea del mensaje' ($rep[0].motivo -notmatch 'segunda linea') $rep[0].motivo
+  $p = @(Registros-Reparar $e 2)
+  Comprueba 'el prompt del reintento lleva El primero falla con: y found 2' ($p.Count -ge 1 -and $p[0].Contains('El primero falla con:') -and $p[0].Contains('found 2: a,b')) (Cola ($p -join ' '))
+}
+
+$Pruebas['m53 (f2) -Reparar: el <error> con message vacio y el texto en el cuerpo: lleva la primera linea con texto del cuerpo'] = {
+  $e = Escenario-M53 'm53-f2' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  $r = Prueba-M53 $e '' @('-Reparar') @{ RESCATE_M53_SUITE = 'cuerpo' } 'reparar-arregla'
+  Igual 'sale con 2' 2 $r.Codigo
+  $rep = @(Reparaciones $e)
+  Comprueba 'el motivo acaba con la primera linea del cuerpo (sin la linea en blanco de antes ni las de despues)' ($rep[0].motivo.Contains('El primero falla con: java.lang.IllegalStateException: Failed to load ApplicationContext for [x]: expected single matching bean but found 2: a,b.') -and $rep[0].motivo -notmatch 'DefaultCacheAware') $rep[0].motivo
+  $p = @(Registros-Reparar $e 2)
+  Comprueba 'y el prompt del reintento lo lleva' ($p.Count -ge 1 -and $p[0].Contains('El primero falla con: java.lang.IllegalStateException') -and $p[0].Contains('found 2: a,b')) (Cola ($p -join ' '))
+}
+
+$Pruebas['m53 (f3) -Reparar: un mensaje de 400 letras se recorta a 300; sin mensaje ni texto, el motivo no lleva El primero falla con'] = {
+  $e = Escenario-M53 'm53-f3' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  [void](Prueba-M53 $e '' @('-Reparar') @{ RESCATE_M53_SUITE = 'largo' } 'reparar-arregla')
+  $m = "$(@(Reparaciones $e)[0].motivo)"
+  Comprueba 'con 300 letras justas' ($m.Contains('El primero falla con: ' + ('L' * 300) + '.') -and -not $m.Contains('L' * 301)) $m
+  $e2 = Escenario-M53 'm53-f3b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') }) -Test
+  [void](Prueba-M53 $e2 '' @('-Reparar') @{ RESCATE_M53_SUITE = 'vacio' } 'reparar-arregla')
+  $v = "$(@(Reparaciones $e2)[0].motivo)"
+  Comprueba 'sin mensaje: el motivo de siempre, acabado en el recuento' ($v -match 'rompe estos tests' -and $v -match 'Fallan 1 y antes fallaban 0\.$' -and $v -notmatch 'El primero falla con') $v
+}
+
+# Get-CausaMaven con salidas de Maven inventadas (sin informes de surefire: la carpeta no existe), una fila por salida: 'R <id> <causa>'.
+$Pruebas['m53 (h) Get-CausaMaven: el aviso cancelling refresh attempt da la causa aunque sea WARN; un Failed to execute goal sin mas causa da su mensaje; lo demas, como antes'] = {
+  $f = Join-Path $Dir 'm53-causas.ps1'
+  $cuerpo = @'
+$ErrorActionPreference = 'Stop'
+$Desde = [datetime]'2026-11-20'
+function Fila([string]$Id, [string[]]$Salida) { 'R ' + $Id + ' ' + (Get-CausaMaven (Join-Path $Raiz 'no-existe') $Desde $Salida) }
+$U = "org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'a': found 2: x,y"
+$W = "2026-11-20T22:45:23.103+01:00  WARN 11116 --- [app] [main] s.c.a.AnnotationConfigApplicationContext : Exception encountered during context initialization - cancelling refresh attempt: $U"
+$T = '2026-11-20T22:45:20.512+01:00  WARN 11116 --- [app] [main] o.s.c.a.MergedAnnotation : Failed to introspect X: java.lang.TypeNotPresentException: Type com.acme.Falta not present'
+$G = '[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.6:test (default-test) on project batch-x: No tests matching pattern "PruebaLocalTest" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.) -> [Help 1]'
+Fila 'refresh-warn' @($W)
+Fila 'refresh-tras-aviso' @($T, $W)
+Fila 'refresh-gana-a-la-posterior' @($W, '[ERROR] otra java.lang.IllegalArgumentException: dos', 'java.lang.B: tres')
+Fila 'refresh-en-error' @("[ERROR] ... cancelling refresh attempt: $U")
+Fila 'refresh-sin-nivel' @("cancelling refresh attempt: $U")
+Fila 'refresh-recorte-300' @('x WARN cancelling refresh attempt: ' + ('a' * 400))
+Fila 'refresh-sin-dos-puntos' @('x WARN cancelling refresh attempt')
+Fila 'otro-aviso-sin-causa' @($T)
+Fila 'caused-gana-al-aviso' @($W, 'Caused by: java.lang.B: dos')
+Fila 'goal' @($G)
+Fila 'goal-primera' @($G, '[ERROR] Failed to execute goal org.x:y:1:z (a) on project p: otro mensaje -> [Help 1]')
+Fila 'goal-sin-help' @('[ERROR] Failed to execute goal org.x:y:1:z (a) on project p: sin ayuda')
+Fila 'goal-sin-plugin' @('[ERROR] Failed to execute goal on project batch-nuevo: Cannot access central in offline mode')
+Fila 'goal-con-excepcion' @('[ERROR] Failed to execute goal org.x:y:1:z (a) on project p: Fallo java.lang.IllegalStateException: uno -> [Help 1]')
+Fila 'goal-tras-excepcion' @('[ERROR] java.lang.IllegalStateException: antes', $G)
+Fila 'goal-en-warning' @('[WARNING] Failed to execute goal org.x:y:1:z (a) on project p: aviso -> [Help 1]')
+Fila 'goal-recorte-300' @('[ERROR] Failed to execute goal org.x:y:1:z (a) on project p: ' + ('b' * 400) + ' -> [Help 1]')
+Fila 'sin-nada' @('[INFO] BUILD SUCCESS')
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-CausaMaven', 'Test-SinNivelDeAviso')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($Dir)
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  $u = "org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'a': found 2: x,y"
+  Igual 'aviso WARN de Spring: la causa es lo que va despues de la marca' $u $v['refresh-warn']
+  Igual 'con un aviso WARN con otra excepcion antes: la del refresh' $u $v['refresh-tras-aviso']
+  Igual 'gana a las lineas posteriores (una excepcion con [ERROR] y otra sin nivel despues)' $u $v['refresh-gana-a-la-posterior']
+  Igual 'la linea con nivel ERROR: tambien' $u $v['refresh-en-error']
+  Igual 'sin nivel: tambien' $u $v['refresh-sin-nivel']
+  Igual 'se recorta a 300' 300 $v['refresh-recorte-300'].Length
+  Igual 'la marca sin los dos puntos y el espacio no vale: sin causa' '' $v['refresh-sin-dos-puntos']
+  Igual 'el resto de avisos sigue sin dar causa' '' $v['otro-aviso-sin-causa']
+  Igual 'el orden de las reglas no cambia: un Caused by gana (esta en la misma regla que el aviso)' 'Caused by: java.lang.B: dos' $v['caused-gana-al-aviso']
+  Igual 'Failed to execute goal sin mas causa: su mensaje, sin el -> [Help 1]' 'No tests matching pattern "PruebaLocalTest" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.)' $v['goal']
+  Igual 'se usa la primera de esas lineas' 'No tests matching pattern "PruebaLocalTest" were executed! (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.)' $v['goal-primera']
+  Igual 'sin -> [Help 1]: el mensaje entero' 'sin ayuda' $v['goal-sin-help']
+  Igual 'sin plugin (Failed to execute goal on project <p>:): el mensaje' 'Cannot access central in offline mode' $v['goal-sin-plugin']
+  Igual 'si el mensaje lleva una excepcion, gana la regla de la primera excepcion (desde la clase)' 'java.lang.IllegalStateException: uno -> [Help 1]' $v['goal-con-excepcion']
+  Igual 'una excepcion antes: la excepcion, no el goal' 'java.lang.IllegalStateException: antes' $v['goal-tras-excepcion']
+  Igual 'un [WARNING] con Failed to execute goal no cuenta' '' $v['goal-en-warning']
+  Igual 'se recorta a 300' 300 $v['goal-recorte-300'].Length
+  Igual 'sin nada: sin causa' '' $v['sin-nada']
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
