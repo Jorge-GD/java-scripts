@@ -687,4 +687,273 @@ $Pruebas['c5 (j) con cierre.hecho de una pasada anterior, una pasada nueva que c
   }
 }
 
+# ================================ C5b: LA REVISION POR FLUJOS Y LAS PROPIEDADES AL YML EN EL INFORME ================================
+# La pagina 2 con la revision por flujos (datos\revision.json de revision.ps1), la pagina 4 con las claves que la fase propiedades puso en el yml
+# (datos\propiedades-arreglo.json de arreglo-propiedades.ps1), las dos fases en la portada y -RevisarTodo en el comando de la pasada.
+$TxtRevision = Es 'Revisi\u00f3n por flujos'
+$TxtNada = Es 'La revisi\u00f3n no ha encontrado nada en'
+$TxtTodo = (Es 'revisado todo el c\u00f3digo') + ' \(\s*-RevisarTodo\s*\)'
+
+# La pagina sin el CSS, en SHA-256: lo que mide que una pagina es la de antes (medidas con el codigo de antes de C5b, 3050737).
+function Hash-Sin-Css([string]$Html) {
+  $sin = [regex]::Replace($Html, '(?s)<style>.*?</style>', '')
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  return ([System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sin))) -replace '-', '')
+}
+
+function Hallazgo-Base([string]$Regla, [string]$Titulo, [string]$Fichero, [int]$Linea, [string]$Cita, [string]$Texto) {
+  return [ordered]@{ regla = $Regla; titulo = $Titulo; fichero = $Fichero; linea = $Linea; cita = $Cita; texto = $Texto; unidad = 'step-cargaJob'; probado = $true }
+}
+
+# Dos reglas y tres hallazgos: dos de la primera y uno de la segunda. La cita del primero lleva < y &.
+$C5bHallazgos = @(
+  (Hallazgo-Base 'SB-LISTENER' 'Listener que nadie registra' 'src/main/java/com/acme/recibos/listener/RecibosListener.java' 14 'if (total < 0 && saldo > 0) { aviso(); }' 'RecibosListener no se registra en ningun step.')
+  (Hallazgo-Base 'SB-LISTENER' 'Listener que nadie registra' 'src/main/java/com/acme/recibos/listener/AuditoriaListener.java' 22 '@AfterStep' 'Nadie registra AuditoriaListener.')
+  (Hallazgo-Base 'SB-STEPSCOPE' '@StepScope que devuelve la interfaz' 'src/main/java/com/acme/recibos/config/CargaConfig.java' 41 'public ItemReader<Recibo> reader() {' 'El reader devuelve la interfaz y es un ItemStream.')
+)
+
+# revision.json de juguete: la forma de Save-Revision (revision.ps1), con tres reglas (la tercera sin hallazgos). $Cambios lo pisa campo a campo.
+function Revision-Base($Hallazgos = @(), [hashtable]$Cambios = @{}) {
+  $r = [ordered]@{
+    commit = 'abc1234def56'; todo = $false; unidades = 4; hechas = 4; atascadas = 0
+    reglas = @([ordered]@{ id = 'SB-LISTENER'; titulo = 'Listener que nadie registra' }, [ordered]@{ id = 'SB-STEPSCOPE'; titulo = '@StepScope que devuelve la interfaz' }, [ordered]@{ id = 'SB-CONTEXTO'; titulo = 'Objeto no serializable en el ExecutionContext' })
+    hallazgos = @($Hallazgos); descartados = 2
+  }
+  foreach ($k in $Cambios.Keys) { $r[$k] = $Cambios[$k] }
+  return $r
+}
+
+# propiedades-arreglo.json de juguete: la forma de Save-ResultadoPropiedades (arreglo-propiedades.ps1): hecha con dos claves y una que no aplica.
+function Arreglo-Base([hashtable]$Cambios = @{}) {
+  $r = [ordered]@{
+    estado = 'hecha'; commit = '9f8e7d6c5b4a'; pedidas = 3
+    anadidas = @([ordered]@{ clave = 'recibos.ruta'; fichero = 'src/main/resources/application.yml' }, [ordered]@{ clave = 'recibos.cola'; fichero = 'src/main/resources/application-pre.yml' })
+    noAplica = @([ordered]@{ clave = 'recibos.vieja'; motivo = 'Spring Boot 3 ya no la lee' }); motivo = ''; huella = 'h1'
+  }
+  foreach ($k in $Cambios.Keys) { $r[$k] = $Cambios[$k] }
+  return $r
+}
+
+# Una salida con corregir y las paginas completas (la de Datos-Pagina4) y el area Propiedades de la pagina 2; $Extra suma o pisa ficheros de datos\ y $Cambios, el estado.
+function C5b-Salida([string]$Nombre, $Extra = @{}, [hashtable]$Cambios = @{}) {
+  $datos = Datos-Pagina4
+  $datos['propiedades.json'] = (Propiedades-Base @((Prop-Legacy 'recibos.ruta' 'falta' 'src/main/resources/application.properties' 4)))
+  foreach ($k in $Extra.Keys) { $datos[$k] = $Extra[$k] }
+  return (Nueva-Salida $Nombre (Estado-Base $Cambios) $datos)
+}
+
+# Las lineas de fase de la portada: nombre, estado (data-e) y cuenta, en texto plano.
+function Lineas-Fase([string]$Html) {
+  return @([regex]::Matches($Html, '(?s)<li><span class="fase-n">(.*?)</span><span class="fase-e" data-e="(\w+)">.*?</span><span class="fase-c">(.*?)</span></li>') |
+      ForEach-Object { [pscustomobject]@{ Nombre = (Texto-Plano $_.Groups[1].Value); E = $_.Groups[2].Value; Cuenta = (Texto-Plano $_.Groups[3].Value) } })
+}
+
+function Fase-De($Lineas, [string]$Nombre) { return @($Lineas | Where-Object { $_.Nombre -ceq $Nombre })[0] }
+
+# El orden de Get-OrdenFases de una salida montada, en una sola linea.
+function Orden-De([string]$Salida) { return ((Get-OrdenFases (Read-DatosInforme $Salida)) -join ' ') }
+
+$OrdenLectura = 'diagnostico fichas-clase mapa lanzadores fichas-job resumen pruebas-pre casos-pre'
+$JsonPracticas = [ordered]@{ pasados = 1; atascados = 0; sinCambios = 0 }
+$JsonReglas = [ordered]@{ conTest = 2; reglasVigiladas = 3; atascadas = 0; saltadas = 0 }
+
+# ================================ (a) LA REVISION EN LA PAGINA 2 ================================
+$Pruebas['c5b (a) revision.json con 2 reglas y 3 hallazgos: la pagina 2 tiene la seccion con su etiqueta y sus cuentas, un grupo por regla y una fila por hallazgo con fichero:linea y la cita escapada'] = {
+  $s = C5b-Salida 'c5b-a' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos) })
+  $p2 = Pagina $s '2-problemas.html'
+  $sec = Panel-De $p2 'revision'
+  Comprueba 'hay una seccion Revision por flujos' ($sec.Length -gt 0 -and (Texto-Plano $sec).Contains($TxtRevision)) $sec
+  Comprueba 'con la etiqueta Leido por la IA, con prueba' ($sec -match 'et et-ia' -and (Texto-Plano $sec) -match (Es 'Le.do por la IA, con prueba')) $sec
+  foreach ($c in @(@('4', 'unidades'), @('4', 'hechas'), @('0', 'atascadas'), @('3', 'hallazgos'), @('2', 'descartados'))) {
+    Comprueba ('la cuenta ' + $c[1] + ' vale ' + $c[0]) ($sec -match ('<p[^>]*><b>' + $c[0] + '</b>' + $c[1] + '</p>')) $sec
+  }
+  Comprueba 'sin -RevisarTodo no lo dice' ((Texto-Plano $sec) -notmatch 'RevisarTodo') (Texto-Plano $sec)
+  Comprueba 'con 0 atascadas la cifra no va en rojo (sin cif-mal)' ($sec -notmatch 'cif-mal') $sec
+  $grupos = @([regex]::Matches($p2, '(?s)<section class="prob-grupo" aria-labelledby="g-revision-[^"]+">.*?</section>') | ForEach-Object { $_.Value })
+  Igual 'dos grupos, uno por cada regla con hallazgos (la tercera, sin ninguno, no sale)' 2 $grupos.Count
+  if ($grupos.Count -ne 2) { return }
+  $g1 = Texto-Plano $grupos[0]
+  $g2 = Texto-Plano $grupos[1]
+  Comprueba 'el primero lleva el titulo de la primera regla y 2 hallazgos' ($g1.Contains('Listener que nadie registra') -and $g1.Contains('2 hallazgos')) $g1
+  Comprueba 'el segundo, el de la segunda y 1 hallazgo' ($g2.Contains((Es '@StepScope que devuelve la interfaz')) -and $g2.Contains('1 hallazgo') -and -not $g2.Contains('1 hallazgos')) $g2
+  Comprueba 'los dos con la etiqueta Leido por la IA' ($grupos[0] -match 'et et-ia' -and $grupos[1] -match 'et et-ia')
+  Igual 'dos filas en el primero' 2 @([regex]::Matches($grupos[0], '<li class="fila')).Count
+  Igual 'una fila en el segundo' 1 @([regex]::Matches($grupos[1], '<li class="fila')).Count
+  Comprueba 'cada fila lleva su fichero:linea' ($grupos[0].Contains('<code class="d">src/main/java/com/acme/recibos/listener/RecibosListener.java:14</code>') -and $grupos[0].Contains('AuditoriaListener.java:22</code>') -and $grupos[1].Contains('CargaConfig.java:41</code>')) ($grupos -join ' // ')
+  Comprueba 'y el problema' ($g1.Contains('RecibosListener no se registra en ningun step.') -and $g2.Contains('El reader devuelve la interfaz')) $g1
+  Comprueba 'la cita sale escapada: < y & no van sueltos' ($grupos[0].Contains('if (total &lt; 0 &amp;&amp; saldo &gt; 0)') -and $grupos[1].Contains('ItemReader&lt;Recibo&gt;') -and $p2 -notmatch 'total < 0' -and $p2 -notmatch '&& saldo') $grupos[0]
+  Comprueba 'y la cita se lee entera en el texto de la pagina' ($g1.Contains('if (total < 0 && saldo > 0) { aviso(); }')) $g1
+  Comprueba 'va despues del area Propiedades' ($p2.IndexOf('id="revision"') -gt $p2.IndexOf('aria-labelledby="g-propiedades"') -and $p2.IndexOf('aria-labelledby="g-propiedades"') -gt 0)
+}
+
+$Pruebas['c5b (a) con todo = true dice revisado todo el codigo (-RevisarTodo); con atascadas dice cuantas son y que se relanza con -Reintentar'] = {
+  $s = C5b-Salida 'c5b-a-todo' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos @{ todo = $true; unidades = 5; hechas = 3; atascadas = 2 }) })
+  $sec = Panel-De (Pagina $s '2-problemas.html') 'revision'
+  $t = Texto-Plano $sec
+  Comprueba 'con todo: dice revisado todo el codigo (-RevisarTodo)' ($t -match $TxtTodo) $t
+  Comprueba 'las cuentas: 5 unidades, 3 hechas y 2 atascadas' ($sec -match '<b>5</b>unidades' -and $sec -match '<b>3</b>hechas' -and $sec -match '<b>2</b>atascadas') $sec
+  Comprueba 'con atascadas > 0 la cifra de atascadas va en rojo (cif-mal) y las demas no' ($sec -match '<p class="cif-mal"><b>2</b>atascadas</p>' -and ([regex]::Matches($sec, 'cif-mal')).Count -eq 1) $sec
+  Comprueba 'dice que hay 2 unidades atascadas y que se vuelven a intentar relanzando con -Reintentar' ($t -match 'Unidades atascadas: 2' -and $t.Contains('relanza el mismo comando con -Reintentar')) $t
+  $s0 = C5b-Salida 'c5b-a-sin-atascos' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos) })
+  Comprueba 'sin atascadas no hay aviso de relanzar' ((Texto-Plano (Panel-De (Pagina $s0 '2-problemas.html') 'revision')) -notmatch 'Reintentar')
+}
+
+# ================================ (b) 0 HALLAZGOS Y SIN JSON ================================
+$Pruebas['c5b (b) revision.json con 0 hallazgos: la linea no ha encontrado nada en N unidades y ningun grupo'] = {
+  $s = C5b-Salida 'c5b-b-cero' ([ordered]@{ 'revision.json' = (Revision-Base @() @{ unidades = 6; hechas = 6; descartados = 0 }) })
+  $p2 = Pagina $s '2-problemas.html'
+  $sec = Panel-De $p2 'revision'
+  $t = Texto-Plano $sec
+  Comprueba 'la seccion esta' ($sec.Length -gt 0 -and $t.Contains($TxtRevision)) $sec
+  Comprueba 'dice que la revision no ha encontrado nada en 6 unidades' ($t.Contains($TxtNada + ' 6 unidades')) $t
+  Comprueba 'las cuentas dicen 0 hallazgos' ($sec -match '<b>0</b>hallazgos') $sec
+  Igual 'no hay ningun grupo de regla' 0 @([regex]::Matches($p2, 'aria-labelledby="g-revision-')).Count
+  $con = C5b-Salida 'c5b-b-con' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos) })
+  Comprueba 'con hallazgos no sale esa linea' ((Texto-Plano (Panel-De (Pagina $con '2-problemas.html') 'revision')) -notmatch 'no ha encontrado nada')
+  $una = C5b-Salida 'c5b-b-una' ([ordered]@{ 'revision.json' = (Revision-Base @() @{ unidades = 1; hechas = 1; descartados = 0 }) })
+  $tu = Texto-Plano (Panel-De (Pagina $una '2-problemas.html') 'revision')
+  Comprueba 'con 1 unidad lo dice en singular' ($tu.Contains($TxtNada + ' 1 unidad.')) $tu
+  $atasc = C5b-Salida 'c5b-b-atasc' ([ordered]@{ 'revision.json' = (Revision-Base @() @{ unidades = 5; hechas = 3; atascadas = 2; descartados = 0 }) })
+  Comprueba 'con atascadas la linea cuenta las unidades hechas (3), no las 5' ((Texto-Plano (Panel-De (Pagina $atasc '2-problemas.html') 'revision')).Contains($TxtNada + ' 3 unidades')) 
+}
+
+$Pruebas['c5b (b) un hallazgo de una regla que revision.json no lista en reglas sale igual, con su titulo (o con su id si no lo trae)'] = {
+  $raros = @((Hallazgo-Base 'SB-OTRA' 'Regla que no esta en la lista' 'src/main/java/com/acme/recibos/Otra.java' 7 'new Otra()' 'Algo raro.'), (Hallazgo-Base 'SB-SINTITULO' '' 'src/main/java/com/acme/recibos/Sin.java' 0 'x' 'Sin titulo ni linea.'))
+  $s = C5b-Salida 'c5b-b-raros' ([ordered]@{ 'revision.json' = (Revision-Base $raros) })
+  $p2 = Pagina $s '2-problemas.html'
+  $t = Texto-Plano (Panel-De $p2 'revision')
+  Comprueba 'las cuentas dicen 2 hallazgos' ($p2 -match '<b>2</b>hallazgos')
+  Comprueba 'sale el grupo de la regla desconocida, con el titulo del hallazgo y su fichero:linea' ($p2 -match 'aria-labelledby="g-revision-SB-OTRA"' -and $p2.Contains('Regla que no esta en la lista') -and $p2.Contains('<code class="d">src/main/java/com/acme/recibos/Otra.java:7</code>'))
+  Comprueba 'y el que no trae titulo, con su id y el fichero sin linea' ($p2 -match '<h2 id="g-revision-SB-SINTITULO">SB-SINTITULO</h2>' -and $p2.Contains('<code class="d">src/main/java/com/acme/recibos/Sin.java</code>'))
+}
+
+# Las tres paginas de C5b-Salida sin revision.json ni propiedades-arreglo.json, medidas con el codigo de antes de C5b (3050737).
+$C5bHashIndice = 'DCD30B277DE55E398966347AE0F44BA473A64FCF9EC0D92F9DAAB244A196BA1A'
+$C5bHashProblemas = '643A626C3B5EF7DC5FA4855E1E466819EE22DA2B180B24234E8A836E489AC875'
+$C5bHashCorrecciones = '14FF13619A491D1583D531FA867711841977341860702DD0F4725FCF8EB0637F'
+
+$Pruebas['c5b (b) sin revision.json ni propiedades-arreglo.json la portada y las paginas 2 y 4 son las de antes, byte a byte (SHA-256 sin el CSS); un JSON roto tampoco cambia nada'] = {
+  $s = C5b-Salida 'c5b-b-sin'
+  $h = [ordered]@{ 'index.html' = $C5bHashIndice; '2-problemas.html' = $C5bHashProblemas; '4-correcciones.html' = $C5bHashCorrecciones }
+  foreach ($p in $h.Keys) {
+    $real = Hash-Sin-Css (Pagina $s $p)
+    if ($h[$p] -ceq 'PENDIENTE') { Write-Host "  HASH $p $real" }
+    Igual ($p + ': el mismo SHA-256 que antes del cambio') $h[$p] $real
+  }
+  $i = Pagina $s 'index.html'
+  Comprueba 'y no nombra ni las fases ni los JSON' ($i -notmatch 'Propiedades al yml' -and -not $i.Contains($TxtRevision) -and -not $i.Contains('revision.json') -and -not $i.Contains('propiedades-arreglo.json'))
+  $roto = C5b-Salida 'c5b-b-roto' ([ordered]@{ 'revision.json' = '{ esto no es json'; 'propiedades-arreglo.json' = '[[' })
+  foreach ($p in @('2-problemas.html', '4-correcciones.html')) { Igual ($p + ' con los dos JSON rotos: la de antes') $h[$p] (Hash-Sin-Css (Pagina $roto $p)) }
+  $fases = (Lineas-Fase $i | ForEach-Object { $_.Nombre + '=' + $_.E + '=' + $_.Cuenta }) -join ' / '
+  Igual 'la portada con los dos JSON rotos: las mismas fases con las mismas cuentas (los dos ficheros si salen en la lista de ficheros: existen)' $fases ((Lineas-Fase (Pagina $roto 'index.html') | ForEach-Object { $_.Nombre + '=' + $_.E + '=' + $_.Cuenta }) -join ' / ')
+}
+
+# ================================ (c) EL ORDEN DE LAS FASES ================================
+$Pruebas['c5b (c) Get-OrdenFases con corregir y los dos JSON: ... reglas, propiedades, revision, prueba-local, hecha; sin ellos, el orden de siempre; con parar, ni propiedades ni revision'] = {
+  $dos = [ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos); 'propiedades-arreglo.json' = (Arreglo-Base) }
+  $todo = [ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos); 'propiedades-arreglo.json' = (Arreglo-Base); 'practicas-arreglos.json' = $JsonPracticas; 'tests-reglas.json' = $JsonReglas }
+  Igual 'con practicas, reglas y los dos JSON' "$OrdenLectura lectura-hecha correccion comparar practicas reglas propiedades revision prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-todo' $todo))
+  Igual 'con los dos JSON' "$OrdenLectura lectura-hecha correccion comparar propiedades revision prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-dos' $dos))
+  Igual 'sin ellos, el orden de siempre' "$OrdenLectura lectura-hecha correccion comparar prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-sin'))
+  Igual 'sin ellos pero con practicas y reglas, el de siempre' "$OrdenLectura lectura-hecha correccion comparar practicas reglas prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-pr' ([ordered]@{ 'practicas-arreglos.json' = $JsonPracticas; 'tests-reglas.json' = $JsonReglas })))
+  Igual 'solo propiedades-arreglo.json: sale propiedades' "$OrdenLectura lectura-hecha correccion comparar propiedades prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-prop' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base) })))
+  Igual 'solo revision.json: sale revision' "$OrdenLectura lectura-hecha correccion comparar revision prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-rev' ([ordered]@{ 'revision.json' = (Revision-Base) })))
+  Igual 'con parar y los dos JSON: el orden de parar, sin las dos fases' "$OrdenLectura comparar lectura-hecha correccion prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-parar' $dos @{ respuesta = 'parar' }))
+  Igual 'la pasada en la fase revision, sin su JSON: sale revision y no propiedades' "$OrdenLectura lectura-hecha correccion comparar revision prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-en-rev' ([ordered]@{}) @{ fase = 'revision'; fin = '' }))
+  Igual 'la pasada en la fase propiedades, sin su JSON: sale propiedades y no revision' "$OrdenLectura lectura-hecha correccion comparar propiedades prueba-local hecha" (Orden-De (C5b-Salida 'c5b-c-en-prop' ([ordered]@{}) @{ fase = 'propiedades'; fin = '' }))
+}
+
+# ================================ (d) LA LINEA DE CADA FASE ================================
+$Pruebas['c5b (d) la portada: la linea de revision lleva unidades, hechas, atascadas, hallazgos y descartados; la de propiedades, las claves anadidas y el commit'] = {
+  $s = C5b-Salida 'c5b-d' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos @{ unidades = 5; hechas = 4; atascadas = 1 }); 'propiedades-arreglo.json' = (Arreglo-Base) })
+  $l = Lineas-Fase (Pagina $s 'index.html')
+  $nombres = @($l | ForEach-Object { $_.Nombre })
+  $i = [array]::IndexOf($nombres, 'Propiedades al yml')
+  Comprueba 'las dos lineas salen, propiedades, revision y luego la prueba en local' ($i -ge 0 -and $nombres[$i + 1] -ceq $TxtRevision -and $nombres[$i + 2] -ceq 'Prueba en local') ($nombres -join ' / ')
+  $r = Fase-De $l $TxtRevision
+  Comprueba 'revision: 5 unidades, 4 hechas, 1 atascadas, 3 hallazgos, 2 descartados' ($r.Cuenta -match '5 unidades' -and $r.Cuenta -match '4 hechas' -and $r.Cuenta -match '1 atascadas' -and $r.Cuenta -match '3 hallazgos' -and $r.Cuenta -match '2 descartados') $r.Cuenta
+  Igual 'revision: hecha (la pasada esta en hecha)' 'hecha' $r.E
+  $p = Fase-De $l 'Propiedades al yml'
+  Comprueba 'propiedades: 2 claves anadidas, 1 no aplica y el commit con 7 caracteres' ($p.Cuenta -match '2 claves a.adidas' -and $p.Cuenta -match 'no aplican: 1' -and $p.Cuenta.Contains('commit 9f8e7d6') -and -not $p.Cuenta.Contains('9f8e7d6c')) $p.Cuenta
+  Igual 'propiedades: hecha' 'hecha' $p.E
+  # el resto de estados de propiedades-arreglo.json
+  $sin = Fase-De (Lineas-Fase (Pagina (C5b-Salida 'c5b-d-sin-faltan' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base @{ estado = 'sin-faltan'; commit = ''; pedidas = 0; anadidas = @(); noAplica = @() }) })) 'index.html')) 'Propiedades al yml'
+  Comprueba 'sin-faltan: ninguna clave faltaba' ($sin.Cuenta -match 'ninguna clave') $sin.Cuenta
+  $sc = Fase-De (Lineas-Fase (Pagina (C5b-Salida 'c5b-d-sin-cambios' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base @{ estado = 'sin-cambios'; commit = ''; anadidas = @() }) })) 'index.html')) 'Propiedades al yml'
+  Comprueba 'sin-cambios: 0 claves anadidas y sin commit' ($sc.Cuenta -match '0 claves a.adidas' -and $sc.Cuenta -notmatch 'commit') $sc.Cuenta
+  $at = Fase-De (Lineas-Fase (Pagina (C5b-Salida 'c5b-d-atascada' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base @{ estado = 'atascada'; commit = ''; anadidas = @(); noAplica = @(); motivo = 'la IA no dejo resultado' }) })) 'index.html')) 'Propiedades al yml'
+  Comprueba 'atascada: lo dice' ($at.Cuenta -match 'atascada') $at.Cuenta
+}
+
+$Pruebas['c5b (d) la fase revision en curso, sin revision.json: su estado es curso y las tareas revision-flujo dan la cuenta; propiedades queda hecha'] = {
+  $t1 = [ordered]@{ id = 'rev-1'; tipo = 'revision-flujo'; estado = 'hecha' }
+  $t2 = [ordered]@{ id = 'rev-2'; tipo = 'revision-flujo'; estado = 'pendiente' }
+  $s = C5b-Salida 'c5b-d-curso' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base); 'tareas/rev-1.json' = $t1; 'tareas/rev-2.json' = $t2 }) @{ fase = 'revision'; fin = '' }
+  $l = Lineas-Fase (Pagina $s 'index.html')
+  $r = Fase-De $l $TxtRevision
+  Igual 'revision: por aqui va' 'curso' $r.E
+  Comprueba 'con las tareas: 1 hecha, 0 atascadas, 1 pendiente' ($r.Cuenta -match 'hechas: 1' -and $r.Cuenta -match 'atascadas: 0' -and $r.Cuenta -match 'pendientes: 1') $r.Cuenta
+  Igual 'propiedades: hecha' 'hecha' (Fase-De $l 'Propiedades al yml').E
+}
+
+# ================================ (e) LAS PROPIEDADES EN LA PAGINA 4 ================================
+$Pruebas['c5b (e) propiedades-arreglo.json con 2 claves: la pagina 4 las nombra con su fichero y el commit, dice las que no aplican y enlaza al area Propiedades de la pagina 2'] = {
+  $s = C5b-Salida 'c5b-e' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base) })
+  $p4 = Pagina $s '4-correcciones.html'
+  $sec = Panel-De $p4 'propiedades-arreglo'
+  Comprueba 'hay un panel de propiedades anadidas' ($sec.Length -gt 0) 'sin id="propiedades-arreglo"'
+  $t = Texto-Plano $sec
+  Comprueba 'con la etiqueta Medido' ($sec -match 'et et-medido') $sec
+  Comprueba 'nombra recibos.ruta con su fichero' ($sec -match '<code>recibos\.ruta</code> <code>src/main/resources/application\.yml</code>') $sec
+  Comprueba 'y recibos.cola con el suyo' ($sec -match '<code>recibos\.cola</code> <code>src/main/resources/application-pre\.yml</code>') $sec
+  Comprueba 'el commit con 7 caracteres' ($sec.Contains('<code>9f8e7d6</code>') -and -not $sec.Contains('9f8e7d6c')) $sec
+  Comprueba 'las que no aplican, con su motivo' ($t.Contains('recibos.vieja') -and $t.Contains('Spring Boot 3 ya no la lee')) $t
+  Comprueba 'enlaza al area Propiedades de la pagina 2' ($sec.Contains('href="2-problemas.html#g-propiedades"')) $sec
+  Comprueba 'no repite lo que pinta la pagina 2: ninguna fila fila ni la clave que falta' ($sec -notmatch '<li class="fila' -and $t -notmatch 'application\.properties')
+  $p2 = Pagina $s '2-problemas.html'
+  Comprueba 'y la pagina 2 sigue con su area Propiedades como antes' ($p2 -match 'aria-labelledby="g-propiedades"' -and $p2 -notmatch 'id="propiedades-arreglo"')
+}
+
+$Pruebas['c5b (e) propiedades-arreglo.json sin-faltan no pinta panel; sin-cambios dice que no se anadio nada; atascada dice el motivo, todo escapado'] = {
+  $nada = C5b-Salida 'c5b-e-sin-faltan' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base @{ estado = 'sin-faltan'; commit = ''; pedidas = 0; anadidas = @(); noAplica = @() }) })
+  Comprueba 'sin-faltan: ni panel' ((Panel-De (Pagina $nada '4-correcciones.html') 'propiedades-arreglo').Length -eq 0)
+  $sc = C5b-Salida 'c5b-e-sin-cambios' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base @{ estado = 'sin-cambios'; commit = ''; anadidas = @() }) })
+  $t = Texto-Plano (Panel-De (Pagina $sc '4-correcciones.html') 'propiedades-arreglo')
+  Comprueba 'sin-cambios: dice que no se ha anadido ninguna clave, y que no aplican' ($t -match (Es 'ninguna clave') -and $t.Contains('recibos.vieja')) $t
+  $at = C5b-Salida 'c5b-e-atascada' ([ordered]@{ 'propiedades-arreglo.json' = (Arreglo-Base @{ estado = 'atascada'; commit = ''; anadidas = @(); noAplica = @(); motivo = 'el yml <roto> & sin cerrar' }) })
+  $sec = Panel-De (Pagina $at '4-correcciones.html') 'propiedades-arreglo'
+  Comprueba 'atascada: dice el motivo, escapado' ($sec.Contains('el yml &lt;roto&gt; &amp; sin cerrar') -and $sec -notmatch '<roto>') $sec
+  Comprueba 'y no lista ninguna clave anadida' ($sec -notmatch '<code>recibos\.ruta</code>')
+}
+
+# ================================ (f) -RevisarTodo EN EL COMANDO DE LA PASADA ================================
+$Pruebas['c5b (f) Get-ComandoPasada con revisarTodo verdadero lleva -RevisarTodo, despues de -Practicas y -Reglas; sin el, no; la portada lo repite'] = {
+  $con = (ConvertTo-Json -InputObject (Estado-Base @{ revisarTodo = $true }) -Depth 8) | ConvertFrom-Json
+  Igual 'con revisarTodo: -RevisarTodo al final' ($ComandoPasada + ' -Si -RevisarTodo') (Get-ComandoPasada $con 'corregir' '')
+  $sin = (ConvertTo-Json -InputObject (Estado-Base @{ revisarTodo = $false }) -Depth 8) | ConvertFrom-Json
+  Igual 'con revisarTodo falso: sin el' ($ComandoPasada + ' -Si') (Get-ComandoPasada $sin 'corregir' '')
+  $viejo = (ConvertTo-Json -InputObject (Estado-Base) -Depth 8) | ConvertFrom-Json
+  Igual 'sin el campo (un estado.json de antes): sin el' ($ComandoPasada + ' -Si') (Get-ComandoPasada $viejo 'corregir' '')
+  $todos = (ConvertTo-Json -InputObject (Estado-Base @{ practicas = $true; reglas = $true; revisarTodo = $true; maxHoras = 2; limite = 5; sinPruebaLocal = $true }) -Depth 8) | ConvertFrom-Json
+  Igual 'con las demas opciones: despues de -Reglas y antes de -MaxHoras' ($ComandoPasada + ' -Si -Practicas -Reglas -RevisarTodo -MaxHoras 2 -Limite 5 -SinPruebaLocal') (Get-ComandoPasada $todos 'corregir' '')
+  Igual 'con -ConPruebaLocal tambien lo lleva' ($ComandoPasada + ' -Si -RevisarTodo') (Get-ComandoPasada $con 'corregir' '' -ConPruebaLocal)
+  $s = Nueva-Salida 'c5b-f' (Estado-Base @{ revisarTodo = $true; fase = 'resumen' }) ([ordered]@{})
+  $paso = Paso-De $s
+  Igual 'cortada: el comando del siguiente paso lleva -RevisarTodo' 'cortada' $paso.Caso
+  Igual 'y es la pasada con -RevisarTodo' ($ComandoPasada + ' -Si -RevisarTodo') $paso.Comando
+  Igual 'la portada ensena ese mismo comando' $paso.Comando ((Comando-De (Panel-De (Pagina $s 'index.html') 'siguiente-paso')).Trim())
+  $c = Get-ComandoCierre $con
+  Comprueba 'el comando de -Cierre no lo lleva (no se mezcla)' ($c -notmatch 'RevisarTodo') $c
+}
+
+# ================================ (g) LOS DOS FICHEROS EN LA PORTADA ================================
+$Pruebas['c5b (g) portada, Que es cada fichero: datos/revision.json y datos/propiedades-arreglo.json salen con su frase y solo si existen'] = {
+  $con = C5b-Salida 'c5b-g' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos); 'propiedades-arreglo.json' = (Arreglo-Base) })
+  $i = Pagina $con 'index.html'
+  Comprueba 'datos/revision.json sale con su explicacion' ($i -match '<code>datos/revision\.json</code></p><p>[^<]+') (Texto-Plano $i)
+  Comprueba 'datos/propiedades-arreglo.json tambien' ($i -match '<code>datos/propiedades-arreglo\.json</code></p><p>[^<]+')
+  $sin = Pagina (C5b-Salida 'c5b-g-sin') 'index.html'
+  Comprueba 'sin ellos no salen' (-not $sin.Contains('datos/revision.json') -and -not $sin.Contains('datos/propiedades-arreglo.json'))
+}
+
 Invoke-Banco $Pruebas 'probar-entrega.ps1 (C5a: los informes despues de -Cierre)'
