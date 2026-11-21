@@ -8004,7 +8004,7 @@ $Pruebas['c7 (b) pasada lista y carpeta de rescate quitada con git worktree remo
   C7-Comprueba-Remonta 'c7-b' 'git'
 }
 
-$Pruebas['c7 (c) la rama de rescate ya esta juntada a mano en tu rama y la carpeta esta borrada: "Ya esta todo en tu rama", sale con 0, sin carpeta, sin Maven y sin diagnostico'] = {
+$Pruebas['c7 (c) la rama de rescate ya esta juntada a mano en tu rama y la carpeta esta borrada: "Tu rama ya tiene todo lo de la de rescate", sale con 0, sin carpeta, sin Maven y sin diagnostico'] = {
   $e = C4-Pasada 'c7-c'
   $rescate = C4-Head-Wt $e
   $rama = [string](Estado $e).rama
@@ -8014,7 +8014,7 @@ $Pruebas['c7 (c) la rama de rescate ya esta juntada a mano en tu rama y la carpe
   $mvn = @(Llamadas-Mvn $e).Count
   $r = C4-Cierre $e
   Igual 'sale con 0' 0 $r.Codigo
-  Comprueba 'dice que ya esta todo en tu rama, con el nombre de la rama de rescate' ($r.Salida.Contains("Ya esta todo en tu rama: la de rescate ($rama) no tiene nada que no tengas. No hace falta -Cierre.")) (Cola $r.Salida)
+  Comprueba 'dice que tu rama ya tiene todo lo de la de rescate, con su nombre, y que si la pasada no llego a corregir, se lance con -Si' ($r.Salida.Contains("Tu rama ya tiene todo lo de la de rescate ($rama): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre.")) (Cola $r.Salida)
   Comprueba 'no crea la carpeta de rescate' (-not (Test-Path -LiteralPath $e.Wt))
   Igual 'ningun diagnostico nuevo' $diag (Llamadas-Motor $e 'diagnostico').Count
   Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
@@ -8088,7 +8088,7 @@ $Pruebas['c7 (g) carpeta de rescate y rama borradas con el commit probado todavi
   Comprueba 'estado.cierre hecho, con ese sha' ($null -ne $s.cierre -and $s.cierre.hecho -eq $true -and $s.cierre.sha -eq $probado) (Cola $r.Salida)
 }
 
-$Pruebas['c7 (h) carpeta de rescate y rama borradas con el commit probado ya juntado a mano en tu rama: "Ya esta todo en tu rama", sale con 0, sin carpeta, sin rama nueva, sin Maven y sin diagnostico'] = {
+$Pruebas['c7 (h) carpeta de rescate y rama borradas con el commit probado ya juntado a mano en tu rama: "Tu rama ya tiene todo lo de la de rescate", sale con 0, sin carpeta, sin rama nueva, sin Maven y sin diagnostico'] = {
   $e = C4-Pasada 'c7-h'
   $rama = [string](Estado $e).rama
   $rescate = C4-Head-Wt $e
@@ -8100,7 +8100,7 @@ $Pruebas['c7 (h) carpeta de rescate y rama borradas con el commit probado ya jun
   $mvn = @(Llamadas-Mvn $e).Count
   $r = C4-Cierre $e
   Igual 'sale con 0' 0 $r.Codigo
-  Comprueba 'dice que ya esta todo en tu rama' ($r.Salida.Contains("Ya esta todo en tu rama: la de rescate ($rama) no tiene nada que no tengas. No hace falta -Cierre.")) (Cola $r.Salida)
+  Comprueba 'dice que tu rama ya tiene todo lo de la de rescate' ($r.Salida.Contains("Tu rama ya tiene todo lo de la de rescate ($rama): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre.")) (Cola $r.Salida)
   Comprueba 'no crea la carpeta ni la rama' (-not (Test-Path -LiteralPath $e.Wt) -and -not (GitEn $e.Migrado @('branch', '--list', $rama)))
   Igual 'ningun diagnostico nuevo' $diag (Llamadas-Motor $e 'diagnostico').Count
   Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
@@ -8117,6 +8117,26 @@ $Pruebas['c7 (i) la carpeta de rescate falta pero hay otra cosa en su sitio (no 
   Comprueba 'dice que no ha podido montar la carpeta de rescate desde su rama y que mire que tiene la carpeta' ($r.Salida.Contains("No he podido montar la carpeta de rescate ($($e.Wt)) desde su rama ($rama)") -and $r.Salida.Contains('git -C "' + $e.Wt + '" status')) (Cola $r.Salida)
   Comprueba 'lo que habia en su sitio sigue ahi' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'notas.txt'))
   Igual 'tu rama no se mueve' $antes (C4-Head $e)
+}
+
+$Pruebas['c7 (j) la pasada se lanzo con la respuesta "parar" (no corrigio nada), la rama de rescate no tiene commits propios y la carpeta esta borrada: dice que contestaste "parar" y que se lance con -Si, sale con 0 y no monta nada'] = {
+  $e = Nuevo-Escenario 'c7-j' @('Clase1')
+  $p = Migra $e (Basicos $e)
+  Igual 'la pasada sale con 0' 0 $p.Codigo
+  $s = Estado $e
+  Comprueba 'la pasada dejo la respuesta parar, su rama y su carpeta' ($s.respuesta -eq 'parar' -and [bool]$s.rama -and (Test-Path -LiteralPath $e.Wt)) (Cola $p.Salida)
+  $antes = C4-Head $e
+  $mvn = @(Llamadas-Mvn $e).Count
+  Remove-Item -LiteralPath $e.Wt -Recurse -Force
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que la pasada no corrigio nada porque contestaste "parar", y que se lance con -Si y despues -Cierre' ($r.Salida.Contains('La pasada no corrigio nada: contestaste "parar". Para corregir, lanza la pasada con -Si; despues, -Cierre.')) (Cola $r.Salida)
+  Comprueba 'no dice que tu rama ya lo tiene todo' ($r.Salida -notmatch 'Tu rama ya tiene todo')
+  Comprueba 'no monta la carpeta de rescate' (-not (Test-Path -LiteralPath $e.Wt))
+  Igual 'ningun diagnostico' 0 (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Comprueba 'sin estado.cierre' ($null -eq (Estado $e).cierre)
 }
 
 # ============================ W1: CONVIVENCIA (C2) EN migracion.ps1 ============================
