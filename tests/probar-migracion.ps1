@@ -7846,7 +7846,8 @@ $Pruebas['c4 (m) -Cierre con -SoloInforme, -Si, -Practicas, -Reglas o -Reintenta
 }
 
 $Pruebas['c4 (n) la rama de rescate no tiene commits que juntar: "No hay nada que juntar" y sale con 0, sin parada; sin pasada previa, para con "lanza antes la pasada"'] = {
-  $e = C4-Pasada 'c4-n' (C4-Orden @())
+  $o = Orden-Base
+  $e = C4-Pasada 'c4-n' $o
   $antes = C4-Head $e
   $r = C4-Cierre $e
   Igual 'sale con 0' 0 $r.Codigo

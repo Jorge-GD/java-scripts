@@ -103,6 +103,14 @@ USO
   .\migracion.ps1 ... -SinPruebaLocal # no hace la ultima fase (ejecutar el original y el migrado)
   .\migracion.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original para prueba-local.ps1, si no compila con el de Maven
   .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
+  .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -Cierre   # sin IA: junta la correccion con tu rama (fast-forward) si todo esta probado
+
+  Cierre (-Cierre, solo, sin IA): lo unico que avanza tu rama. Comprueba que la pasada esta corregida y probada (todos los jobs con casos iguales y
+  ninguno distinto, sobre el codigo de ahora) y que tu carpeta no tiene cambios sin commit; si tu rama avanzo, la junta con la de rescate en la
+  carpeta de rescate (un conflicto lo deja como estaba y para con el texto para Copilot); mide lo juntado (compila, tests y ningun error nuevo
+  frente a tu rama) y, si el codigo cambio, repite la prueba en local; solo entonces avanza tu rama con merge --ff-only y dice como deshacerlo.
+  Si algo falla, nada se mueve (parada cierre-<motivo>). Los commits que tocan src/main/resources se listan para revisarlos. No hace push.
+  estado.json lleva cierre (antes, sha, cuando, juntada, hecho, deshacer, avisos y revisar) y relanzar la pasada no lo deshace.
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).
   Los ajustes de ajustes.json (y de .rescate\config.json del migrado) pisan las claves
@@ -124,7 +132,8 @@ param(
   [switch]$Reglas,            # antes de la prueba en local, escribir un test unitario por cada regla de negocio (la fase reglas)
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
   [string]$JavaLegacy = '',   # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
-  [string]$Lanzadores = ''    # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
+  [string]$Lanzadores = '',   # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
+  [switch]$Cierre             # sin IA: juntar la correccion con tu rama, por fast-forward y despues de las puertas (Invoke-Cierre); va solo
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
@@ -165,6 +174,12 @@ function Get-Batch([string]$Raiz) {
   }
   if (-not $id) { $id = Split-Path $Raiz -Leaf }
   return ($id -replace '[^\w\.\-]', '-')
+}
+
+# Una hora de estado.json como texto 's': PowerShell 7 lee las fechas ISO de un JSON como fecha y al escribirlas cambiaria el formato.
+function Get-HoraTexto($V) {
+  if ($V -is [datetime]) { return $V.ToString('s') }
+  return [string]$V
 }
 
 # ============================ AJUSTES Y ESTADO ============================
@@ -228,8 +243,10 @@ function Invoke-DiagnosticoMotor([string]$Cuando) {
   if ($r.Codigo -ne 0 -or -not (Test-Path -LiteralPath $hMotor) -or -not (Test-Path -LiteralPath $mMotor)) {
     $ultimas = Get-UltimasLineas $r.Salida
     $que = 'el diagnostico'
+    $motivo = 'motor'
     if ($Cuando -eq 'despues') { $que = 'el diagnostico de despues' }
-    Set-Parada 'motor' "$que (rescate.ps1 -Modo diagnostico) ha salido con codigo $($r.Codigo): $ultimas" $registro
+    elseif ($Cuando -eq 'cierre') { $que = 'el diagnostico del cierre'; $motivo = 'cierre-motor' }
+    Set-Parada $motivo "$que (rescate.ps1 -Modo diagnostico) ha salido con codigo $($r.Codigo): $ultimas" $registro
     $script:Parada = $true
     return $false
   }
@@ -308,6 +325,7 @@ function Invoke-FaseDiagnostico {
     $guardado = Join-Path $Datos 'diagnostico-antes.json'
     if (Test-Path -LiteralPath $guardado) { try { $viejo = [string](Read-Json $guardado).commit } catch { $viejo = '' } }
     if ($viejo -ceq $commit) { return }
+    if ($previo.cierre.hecho -eq $true -and $commit -ceq [string]$previo.cierre.sha) { return }   # el commit que junto -Cierre no es un cambio tuyo
     $v7 = 'sin-commit'
     if ($viejo.Length -ge 7) { $v7 = $viejo.Substring(0, 7) }
     $donde = Move-Apartado $ApartarAlRehacer $v7
@@ -522,15 +540,16 @@ function Invoke-FaseTareas([string]$Fase) {
 }
 
 # ============================== CORRECCION ==============================
-# Los hallazgos de antes que ya no estan despues, comparando area, fichero y detalle (no la linea: cambiar de linea no es arreglarse).
-function Get-Resueltos {
+# Los hallazgos de $De (un .json de datos\) que no estan en $En, comparando area, fichero y detalle (no la linea: cambiar de linea no es arreglarse
+# ni estropear). Con (despues, antes) son los resueltos; con (antes, cierre), lo que el cierre trae de nuevo.
+function Get-Faltantes([string]$En, [string]$De) {
   $quedan = @{}
-  foreach ($h in @(Read-Json (Join-Path $Datos 'hallazgos-despues.json') | Where-Object { $null -ne $_ })) {
+  foreach ($h in @(Read-Json (Join-Path $Datos $En) | Where-Object { $null -ne $_ })) {
     $k = "$($h.Cat)|$($h.Fichero)|$($h.Detalle)"
     $quedan[$k] = 1 + [int]$quedan[$k]
   }
   $res = @()
-  foreach ($h in @(Read-Json (Join-Path $Datos 'hallazgos-antes.json') | Where-Object { $null -ne $_ })) {
+  foreach ($h in @(Read-Json (Join-Path $Datos $De) | Where-Object { $null -ne $_ })) {
     $k = "$($h.Cat)|$($h.Fichero)|$($h.Detalle)"
     if ([int]$quedan[$k] -gt 0) { $quedan[$k] = [int]$quedan[$k] - 1 } else { $res += $h }
   }
@@ -579,7 +598,7 @@ function Get-VariablesNuevas {
 # datos\correcciones.json: lo que paso en la corrida, con parada o sin ella.
 function Save-Correcciones([int]$Codigo, [bool]$Completa) {
   $resueltos = @()
-  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-despues.json')) { $resueltos = @(Get-Resueltos) }
+  if (Test-Path -LiteralPath (Join-Path $Datos 'hallazgos-despues.json')) { $resueltos = @(Get-Faltantes 'hallazgos-despues.json' 'hallazgos-antes.json') }
   $c = [ordered]@{
     completa = $Completa; codigo = $Codigo; rama = (Get-Rama $RepoRoot); base = $RamaMigrado
     commits = @(Get-CommitsRescate); atascados = @(Get-Atascados); resueltos = $resueltos; variablesNuevas = @(Get-VariablesNuevas)
@@ -697,10 +716,170 @@ function Invoke-FasePruebaLocal {
   }
 }
 
+# ================================== CIERRE ==================================
+# migracion.ps1 -Cierre: juntar la correccion con tu rama sin IA. Como la cola de merge de GitHub, se prueba el resultado en una rama aparte (aqui, la
+# carpeta de rescate) y solo si pasa todo avanza tu rama, por fast-forward. Propiedad: si una puerta falla, no se mueve ni tu rama ni la de rescate.
+# Las areas del diagnostico donde un error nuevo para el cierre; lo demas se avisa.
+$AreasPuertas = @('build', 'estructura', 'hexagonal', 'ficheros', 'config', 'tests')
+
+# Deja la carpeta de rescate en $Sha, como estaba antes de juntar (aborta un merge a medias). Dice si ha quedado en $Sha y limpia.
+function Restore-Rescate([string]$Sha) {
+  [void](Invoke-Git $RepoRoot @('merge', '--abort'))
+  [void](Invoke-Git $RepoRoot @('reset', '--hard', $Sha))
+  return ((Get-Head $RepoRoot) -ceq $Sha -and @(Get-SinCommit $RepoRoot).Count -eq 0)
+}
+
+# Para el cierre (parada cierre-$Motivo) y sale con 2. Con $AntesWt, deja antes la carpeta de rescate en ese commit.
+function Stop-Cierre([string]$Motivo, [string]$Detalle, [string]$AntesWt = '', [string]$Registro = '') {
+  if ($AntesWt -and -not (Restore-Rescate $AntesWt)) { $Detalle += " ATENCION: no he podido dejar la carpeta de rescate en $($AntesWt.Substring(0, 7)) y limpia: mira git -C `"$RepoRoot`" status." }
+  if (-not $Registro) { $Registro = $Registros }
+  Set-Parada "cierre-$Motivo" $Detalle $Registro
+  return 2
+}
+
+# Hay cambios en src/main o en el pom entre el commit que probo la prueba en local y el HEAD de la carpeta de rescate? Un commit que git no conoce, o
+# sin dato, cuenta como cambio.
+function Test-CodigoCambiado([string]$Probado) {
+  if (-not $Probado) { return $true }
+  return ((Invoke-Git $RepoRoot @('diff', '--quiet', $Probado, 'HEAD', '--', 'src/main', 'pom.xml')).Codigo -ne 0)
+}
+
+# Lo que falta para dar por buena la prueba en local: sus dos arneses hechos y, en cada job de mapa.json, algun caso igual y ninguno distinto.
+function Get-FallosPruebaLocal($Pl, $Mapa) {
+  if (-not $Pl) { return @('no hay datos\prueba-local.json: la pasada no hizo la prueba en local') }
+  $f = @()
+  foreach ($a in @('original', 'migrado')) { if ([string]$Pl.arneses.$a -cne 'hecha') { $f += "el arnes del $a no esta hecho" } }
+  foreach ($j in @($Mapa.jobs | Where-Object { $null -ne $_ })) {
+    $p = @($Pl.jobs | Where-Object { [string]$_.job -ceq [string]$j.job })
+    if ($p.Count -eq 0 -or [int]$p[0].iguales -lt 1) { $f += "el job $($j.job) no tiene ningun caso igual" }
+    if ($p.Count -gt 0 -and [int]$p[0].distintos -gt 0) { $f += "el job $($j.job) tiene $([int]$p[0].distintos) casos distintos" }
+  }
+  return $f
+}
+
+function Get-TextoHallazgo($H) { return "$($H.Cat): $($H.Fichero):$($H.Linea) $($H.Detalle)" }
+
+# El cierre entero. Devuelve el codigo de salida: 0 si ha juntado o ya estaba juntado (o no habia nada), 2 si para.
+function Invoke-Cierre {
+  $previa = $Estado['cierre']
+  if ($previa -and $previa.hecho -eq $true -and (Get-Head $MigradoRoot) -ceq [string]$previa.sha) {
+    Info "Ya esta juntado ($(([string]$previa.sha).Substring(0, 7))). Para deshacer: $($previa.deshacer)"
+    return 0
+  }
+  # 1. Precondiciones: la primera que falla para sin tocar nada
+  $D = Read-DatosInforme $Salida
+  $paso = Get-SiguientePaso $Estado $D
+  if ($paso.Caso -cne 'corregido' -and $paso.Caso -cne 'pre') {
+    $t = "La pasada no esta lista para juntar (caso $($paso.Caso))."
+    if ($paso.Comando) { $t += " Lo que toca antes:`n$($paso.Comando)" }
+    return (Stop-Cierre 'pendiente' $t)
+  }
+  if ([int]((Invoke-Git $RepoRoot @('rev-list', '--count', "$RamaMigrado..HEAD")).Salida -join '') -eq 0) {
+    Info "No hay nada que juntar: la rama de rescate no tiene commits que no esten ya en tu rama ($RamaMigrado)."
+    return 0
+  }
+  $mal = @(Get-FallosPruebaLocal $D.PruebaLocal $D.Mapa)
+  if ($mal.Count -gt 0) { return (Stop-Cierre 'prueba-local' ('La prueba en local no da para juntar: ' + ($mal -join '; ') + '.')) }
+  # si tu rama ya estaba en lo probado y el codigo ha cambiado, lo cambio alguien en la carpeta de rescate; si tu rama avanzo (o se junto a mano), se repite la prueba mas abajo
+  $probado = [string]$D.PruebaLocal.commitMigrado
+  $cambiado = Test-CodigoCambiado $probado
+  if ($cambiado -and (Invoke-Git $RepoRoot @('merge-base', '--is-ancestor', $RamaMigrado, $probado)).Codigo -eq 0) {
+    return (Stop-Cierre 'prueba-local' 'el codigo ha cambiado desde la prueba en local: relanza la pasada.')
+  }
+  $sucio = @(Get-SinCommit $MigradoRoot)
+  if ($sucio.Count -gt 0) { return (Stop-Cierre 'cambios-sin-commit' "Tu carpeta tiene cambios sin commit ($(Get-ListaFicheros $sucio)): haz commit o stash y vuelve a lanzar.") }
+
+  # 2. Si tu rama avanzo, se junta en la carpeta de rescate, nunca en la tuya
+  $antesWt = Get-Head $RepoRoot
+  $juntada = ((Invoke-Git $RepoRoot @('merge-base', '--is-ancestor', $RamaMigrado, 'HEAD')).Codigo -ne 0)
+  if ($juntada) {
+    Info "Tu rama ($RamaMigrado) ha avanzado desde la pasada: la junto con la de rescate en $RepoRoot, no en tu carpeta."
+    $m = Invoke-Git $RepoRoot @('merge', '--no-ff', '--no-edit', $RamaMigrado)
+    if ($m.Codigo -ne 0) {
+      $choques = @((Invoke-Git $RepoRoot @('diff', '--name-only', '--diff-filter=U')).Salida | Where-Object { $_ })
+      $que = Get-UltimasLineas $m.Salida
+      if ($choques.Count -gt 0) { $que = Get-ListaFicheros $choques }
+      return (Stop-Cierre 'conflicto' ("Al juntar tu rama ($RamaMigrado) con la de rescate no se puede solo: $que. No he cambiado nada. Para pegar en Copilot: junta la rama $RamaMigrado en la carpeta $RepoRoot " +
+        "(git merge $RamaMigrado), respeta los cambios de los dos lados, haz commit y lanza otra vez: .\migracion.ps1 -Legacy `"$LegacyRoot`" -Migrado `"$MigradoRoot`" -Plantilla `"$PlantillaRoot`" -Cierre") $antesWt)
+    }
+    $cambiado = Test-CodigoCambiado $probado
+  }
+
+  # 3. Las puertas, sobre el HEAD de la carpeta de rescate: no peor que tu rama
+  Info 'Puertas: mido lo que se va a juntar (diagnostico, cobertura y buenas practicas)...'
+  if (-not (Invoke-DiagnosticoMotor 'cierre')) { [void](Restore-Rescate $antesWt); return 2 }
+  $estadoCierre = Get-EstadoBuild ([System.IO.File]::ReadAllText((Join-Path $Datos 'diagnostico-cierre.md'), $Utf8))
+  $estadoAntes = Get-EstadoBuild ([System.IO.File]::ReadAllText((Join-Path $Datos 'diagnostico-antes.md'), $Utf8))
+  $fallos = @()
+  if ($estadoCierre -cnotlike 'compila: SI*') { $fallos += "no compila o no se ha podido comprobar (el diagnostico dice '$estadoCierre')" }
+  if ($estadoCierre -ceq 'compila: SI | tests: FALLAN' -and $estadoAntes -cne $estadoCierre) { $fallos += 'los tests fallan y en tu rama no fallaban' }
+  foreach ($h in @(Get-Faltantes 'hallazgos-antes.json' 'hallazgos-cierre.json' | Where-Object { $_.Sev -ceq 'error' -and $AreasPuertas -ccontains [string]$_.Cat })) { $fallos += ('error nuevo: ' + (Get-TextoHallazgo $h)) }
+  if ($fallos.Count -gt 0) { return (Stop-Cierre 'puertas' ('Lo juntado no pasa las puertas: ' + ($fallos -join '; ') + '. No he movido nada.') $antesWt (Join-Path $Registros 'diagnostico-cierre.log')) }
+  if ($cambiado) {
+    if ($SinPruebaLocal) { return (Stop-Cierre 'puertas' 'Lo juntado cambia el codigo y hay que repetir la prueba en local: lanza -Cierre sin -SinPruebaLocal.' $antesWt) }
+    Info 'Lo juntado cambia el codigo que se probo: repito la prueba en local.'
+    $fase = $Estado['fase']
+    Invoke-FasePruebaLocal
+    $Estado['fase'] = $fase
+    $mal = @("la prueba en local ha salido con fallo: $($Estado['pruebaLocal'].detalle)")
+    if ([string]$Estado['pruebaLocal'].resultado -ceq 'hecha') { $mal = @(Get-FallosPruebaLocal (Read-JsonSuave (Join-Path $Datos 'prueba-local.json')) $D.Mapa) }
+    if ($mal.Count -gt 0) { return (Stop-Cierre 'puertas' ('La prueba en local repetida con lo juntado no sale igual: ' + ($mal -join '; ') + '. No he movido nada.') $antesWt) }
+  }
+  # lo que no para se avisa: los errores que ya estaban o de otras areas y las incidencias de limpieza
+  $avisos = @(@(Read-Json (Join-Path $Datos 'hallazgos-cierre.json') | Where-Object { $_.Sev -ceq 'error' }) | ForEach-Object { Get-TextoHallazgo $_ })
+  $prac = Read-JsonSuave (Join-Path $Datos 'practicas-cierre.json')
+  foreach ($i in @($prac.incidencias | Where-Object { $_ -and $_.area -ceq 'limpieza' })) { $avisos += "limpieza: $($i.fichero):$($i.linea) $($i.texto)" }
+  if ($avisos.Count -gt 0) {
+    Aviso "Avisos que no paran el cierre ($($avisos.Count); todos en estado.json, cierre.avisos):"
+    foreach ($a in @($avisos | Select-Object -First 10)) { Info "  $a" }
+  }
+
+  # 4. Avanzar tu rama: antes se apunta como deshacerlo
+  $sha = Get-Head $RepoRoot
+  $antes = Get-Head $MigradoRoot
+  $revisar = @()
+  foreach ($l in @((Invoke-Git $RepoRoot @('log', '--format=%h|%s', "$antes..$sha", '--', 'src/main/resources')).Salida)) {
+    $r = [regex]::Match("$l", '^([0-9a-f]+)\|(.*)$')
+    if ($r.Success) { $revisar += [ordered]@{ hash = $r.Groups[1].Value; asunto = $r.Groups[2].Value } }
+  }
+  $deshacer = 'git -C "' + $MigradoRoot + '" reset --hard ' + $antes
+  $Estado['cierre'] = [ordered]@{ antes = $antes; sha = $sha; cuando = (Get-Date).ToString('s'); juntada = $juntada; hecho = $false; deshacer = $deshacer; avisos = @($avisos); revisar = @($revisar) }
+  Save-Estado
+  $ff = Invoke-Git $MigradoRoot @('merge', '--ff-only', (Get-Rama $RepoRoot))
+  if ($ff.Codigo -ne 0 -or (Get-Head $MigradoRoot) -cne $sha) {
+    $Estado['cierre'] = $previa
+    return (Stop-Cierre 'no-ff' ("Tu rama ($RamaMigrado) ha cambiado mientras se median las puertas y ya no avanza por fast-forward: " + (Get-UltimasLineas $ff.Salida) + ". Tu carpeta no ha cambiado. Vuelve a lanzar -Cierre.") $antesWt)
+  }
+  $Estado['cierre']['hecho'] = $true
+  Save-Estado
+
+  # 5. Lo que hay que revisar antes del push, y como acaba
+  $n = [int]((Invoke-Git $RepoRoot @('rev-list', '--count', "$antes..$sha")).Salida -join '')
+  if ($revisar.Count -gt 0) {
+    Aviso 'Estos commits tocan la configuracion: revisalos antes de hacer push:'
+    foreach ($c in $revisar) { Info "  $($c.hash) $($c.asunto)" }
+  }
+  Bien "Juntado: $n commits en $RamaMigrado ($($antes.Substring(0, 7))..$($sha.Substring(0, 7)))."
+  Info "Para deshacerlo: $deshacer"
+  Info 'No hago push: el push es tuyo.'
+  Save-Informes
+  return 0
+}
+
+# Una excepcion que nadie esperaba: se deja en estado.json para que el relanzamiento no sea a ciegas, y sale con 2.
+function Stop-ErrorInterno($Ex) {
+  $donde = ''
+  if ($Ex.InvocationInfo -and $Ex.InvocationInfo.ScriptName) { $donde = ' (' + (Split-Path $Ex.InvocationInfo.ScriptName -Leaf) + ':' + $Ex.InvocationInfo.ScriptLineNumber + ')' }
+  try { $Estado['fin'] = (Get-Date).ToString('s'); Set-Parada 'error-interno' ($Ex.Exception.Message + $donde) $Registros }
+  catch { Fallo ('Error interno: ' + $Ex.Exception.Message + $donde + ' (y no he podido escribir estado.json: ' + $_.Exception.Message + ')') }
+  exit 2
+}
+
 # ================================= MAIN =================================
 $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original (Java 8).' }
 if ($SoloInforme -and $Si) { Stop-Arranque 'Usa -SoloInforme o -Si, no los dos.' }
+if ($Cierre -and ($SoloInforme -or $Si -or $Practicas -or $Reglas -or $Reintentar)) { Stop-Arranque '-Cierre va solo: no lo mezcles con -SoloInforme, -Si, -Practicas, -Reglas ni -Reintentar.' }
 $respondeSi = [bool]$Si
 
 # 1. Herramientas y repos (antes, los ajustes: pueden cambiar donde estan)
@@ -737,6 +916,13 @@ $Registros = Join-Path $Salida 'registros'
 foreach ($d in @($Datos, $Registros)) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
 $previo = $null
 if (Test-Path -LiteralPath (Join-Path $Datos 'estado.json')) { try { $previo = Read-Json (Join-Path $Datos 'estado.json') } catch { $previo = $null } }
+# la carpeta de rescate, si ya existe (la de este repo y su rama rescate/)
+$OrigenRoot = $MigradoRoot
+$Worktree = ''
+$dirWt = Get-DirRescate
+$hayWt = Test-WorktreeRescate $dirWt
+# -Cierre junta lo que dejo una pasada: sin su estado o sin su carpeta de rescate no hay nada que juntar (antes de preguntar nada)
+if ($Cierre -and (-not $previo -or -not $hayWt)) { Stop-Arranque 'No hay nada que juntar: lanza antes la pasada.' }
 # la carpeta de los .sh: la que se da, o la del lanzamiento anterior si ya no esta en la linea de comandos
 $LanzadoresRoot = ''
 if ($Lanzadores) {
@@ -762,20 +948,27 @@ $H0 = [pscustomobject]@{ Legacy = (Get-Huella $LegacyRoot); Plantilla = (Get-Hue
 # y de la pregunta: con otro modelo, la aptitud gasta una llamada a Copilot, y parar despues la tira. Si no existe, no hay nada que mirar y se
 # crea mas abajo. El estado de este lanzamiento se arma aqui para que la parada quede en estado.json (donde-estoy.ps1 no dira "terminado"); hasta
 # que se decidan, el modelo, la aptitud y la respuesta son los del lanzamiento anterior: una parada no da por pasado lo que no se ha probado.
-$OrigenRoot = $MigradoRoot
-$Worktree = ''
-$dirWt = Get-DirRescate
-$hayWt = Test-WorktreeRescate $dirWt
+$cierreAnterior = $null
+if ($previo -and $previo.cierre) { $cierreAnterior = $previo.cierre; $cierreAnterior.cuando = Get-HoraTexto $cierreAnterior.cuando }
 $Estado = [ordered]@{
   version = 1; batch = $batch; legacy = $LegacyRoot; migrado = $MigradoRoot; plantilla = $PlantillaRoot
   worktree = $dirWt; rama = $(if ($hayWt) { Get-Rama $dirWt }); ramaOrigen = $RamaMigrado; javaLegacy = $JavaLegacy; lanzadores = $LanzadoresRoot
   modelo = $previo.modelo; aptitud = $previo.aptitud; respuesta = $previo.respuesta
-  fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null
+  fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null; cierre = $cierreAnterior
 }
-# En PowerShell 7 ConvertFrom-Json deja el texto ISO como fecha: se vuelve a escribir igual que la primera vez.
-if ($previo -and $previo.creado) { $Estado['creado'] = if ($previo.creado -is [datetime]) { $previo.creado.ToString('s') } else { [string]$previo.creado } }
-# las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
-$Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal
+if ($previo -and $previo.creado) { $Estado['creado'] = Get-HoraTexto $previo.creado }
+if ($Cierre) {
+  # -Cierre no es una pasada: lo suyo (fase, fin, parada, prueba en local y opciones) se queda como estaba; solo se quita la parada de un cierre anterior, que se vuelve a intentar
+  foreach ($k in @('fase', 'pruebaLocal', 'practicas', 'reglas', 'maxHoras', 'limite', 'sinPruebaLocal')) { $Estado[$k] = $previo.$k }
+  if (-not $JavaLegacy) { $JavaLegacy = [string]$previo.javaLegacy }   # la prueba en local que repite el cierre usa el JDK del original de la pasada
+  $Estado['javaLegacy'] = $JavaLegacy
+  $Estado['fin'] = Get-HoraTexto $previo.fin
+  if ([string]$previo.parada.motivo -notlike 'cierre-*') { $Estado['parada'] = $previo.parada }
+}
+else {
+  # las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
+  $Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal
+}
 if ($hayWt) {
   $RepoRoot = $dirWt
   Undo-IntentoCortado $Estado['rama']
@@ -788,6 +981,15 @@ if ($hayWt) {
       'Despues, lanza el mismo comando.') $Registros
     exit 1
   }
+}
+
+# -Cierre (sin IA): ni prueba de aptitud (5) ni pregunta (6); la carpeta de rescate ya existe y el estado de la pasada se conserva (arriba)
+if ($Cierre) {
+  Read-Config $RepoRoot $false
+  [void](Set-Despierto $true)
+  try { exit (Invoke-Cierre) }
+  catch { Stop-ErrorInterno $_ }
+  finally { [void](Set-Despierto $false) }
 }
 
 # 5. Prueba de aptitud (se salta si ya paso con este modelo)
@@ -856,15 +1058,7 @@ try {
   if ($script:Parada -and $Estado['parada'].motivo -ne 'tope-de-tiempo') { exit 2 }
   exit 0
 }
-catch {
-  # una excepcion que nadie esperaba: se deja en estado.json para que el relanzamiento no sea a ciegas
-  $ex = $_
-  $donde = ''
-  if ($ex.InvocationInfo -and $ex.InvocationInfo.ScriptName) { $donde = ' (' + (Split-Path $ex.InvocationInfo.ScriptName -Leaf) + ':' + $ex.InvocationInfo.ScriptLineNumber + ')' }
-  try { $Estado['fin'] = (Get-Date).ToString('s'); Set-Parada 'error-interno' ($ex.Exception.Message + $donde) $Registros }
-  catch { Fallo ('Error interno: ' + $ex.Exception.Message + $donde + ' (y no he podido escribir estado.json: ' + $_.Exception.Message + ')') }
-  exit 2
-}
+catch { Stop-ErrorInterno $_ }
 finally {
   [void](Set-Despierto $false)
 }
