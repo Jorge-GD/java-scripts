@@ -919,8 +919,37 @@ $OrigenRoot = $MigradoRoot
 $Worktree = ''
 $dirWt = Get-DirRescate
 $hayWt = Test-WorktreeRescate $dirWt
-# -Cierre junta lo que dejo una pasada: sin su estado o sin su carpeta de rescate no hay nada que juntar (antes de preguntar nada)
-if ($Cierre -and (-not $previo -or -not $hayWt)) { Stop-Arranque 'No hay nada que juntar: lanza antes la pasada.' }
+# -Cierre junta lo que dejo una pasada: sin su estado no hay pasada (antes de preguntar nada)
+if ($Cierre -and -not $previo) { Stop-Arranque "No encuentro la pasada de este batch: falta $(Join-Path $Datos 'estado.json'). Lanza el -Cierre con los mismos -Legacy y -Migrado que la pasada." }
+# Sin su carpeta de rescate (borrada a mano, como pudo llevar a hacer la pagina 4 antes del cierre) se monta otra vez desde su rama; si la rama
+# tampoco esta, desde el commit que probo la prueba en local; y si eso ya esta en tu rama, no hay nada que montar ni que medir.
+if ($Cierre -and -not $hayWt) {
+  [void](Invoke-Git $MigradoRoot @('worktree', 'prune'))   # una carpeta borrada a mano sigue registrada: sin esto su rama no se podria montar otra vez
+  $ramaRescate = [string]$previo.rama
+  $juntar = ''
+  $recrear = $false
+  if ($ramaRescate) {
+    $juntar = ((Invoke-Git $MigradoRoot @('rev-parse', '--verify', '-q', "refs/heads/$ramaRescate")).Salida -join '').Trim()
+    if (-not $juntar) {
+      $probado = [string](Read-JsonSuave (Join-Path $Datos 'prueba-local.json')).commitMigrado
+      if ($probado -and (Invoke-Git $MigradoRoot @('cat-file', '-e', "$probado^{commit}")).Codigo -eq 0) { $juntar = $probado; $recrear = $true }
+    }
+  }
+  if (-not $juntar) { Stop-Arranque "No esta la carpeta de rescate ($dirWt) ni su rama ($ramaRescate): no queda nada que juntar. Si ya lo juntaste a mano, no hace falta -Cierre. Para rehacer los arreglos, relanza la pasada sin -Cierre." }
+  if ([int]((Invoke-Git $MigradoRoot @('rev-list', '--count', "$RamaMigrado..$juntar")).Salida -join '') -eq 0) {
+    if ([string]$previo.respuesta -ceq 'parar') { Info 'La pasada no corrigio nada: contestaste "parar". Para corregir, lanza la pasada con -Si; despues, -Cierre.' }
+    else { Info "Tu rama ya tiene todo lo de la de rescate ($ramaRescate): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre." }
+    exit 0
+  }
+  if ($recrear) {
+    [void](Invoke-Git $MigradoRoot @('branch', $ramaRescate, $juntar))
+    Info "La rama de rescate ($ramaRescate) no estaba: la creo otra vez desde lo que se probo ($($juntar.Substring(0, 7)))."
+  }
+  $r = Invoke-Git $MigradoRoot @('worktree', 'add', '-q', $dirWt, $ramaRescate)
+  if ($r.Codigo -ne 0) { Stop-Arranque ("No he podido montar la carpeta de rescate ($dirWt) desde su rama ($ramaRescate): " + ($r.Salida -join ' ') + "`nMira si la carpeta tiene algo tuyo (git -C `"$dirWt`" status); despues, muevela o borrala y lanza otra vez el mismo -Cierre.") }
+  Info "La carpeta de rescate no estaba: la monto otra vez desde su rama ($ramaRescate) en $dirWt."
+  $hayWt = Test-WorktreeRescate $dirWt
+}
 # la carpeta de los .sh: la que se da, o la del lanzamiento anterior si ya no esta en la linea de comandos
 $LanzadoresRoot = ''
 if ($Lanzadores) {

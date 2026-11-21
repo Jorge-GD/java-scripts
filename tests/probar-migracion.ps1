@@ -5589,7 +5589,7 @@ $Pruebas['m27 pagina 4: las tres ordenes, cada una en su linea: las de git con g
   Comprueba 'y la explicacion detras de #, tras una orden que acaba antes' (@($lineas | Where-Object { $_ -match '^(git -C "[^"]+" |\.\\migracion\.ps1 )\S.*\S\s+# \S' }).Count -eq 3) ($lineas -join ' / ')
   Comprueba 'ver: diff --stat con la base y la rama' ($lineas[0] -match '^git -C "[^"]+" diff --stat main\.\.\.rescate/main-20260101-0000\s+# ver qu. ha cambiado$') $lineas[0]
   Comprueba 'traer: -Cierre, con la alternativa del PR en el comentario' ($lineas[1] -match '^\.\\migracion\.ps1 .* -Cierre\s+# j.ntalo con tu rama por fast-forward, despu.s de las puertas \(o sube la rama y abre un PR\)$') $lineas[1]
-  Comprueba 'borrar: worktree remove del worktree, al acabar con prueba-local.ps1, y la rama se conserva' ($lineas[2] -match ('^git -C "[^"]+" worktree remove "' + [regex]::Escape((Html $st.worktree)) + '"\s+# borrar el worktree cuando acabes con prueba-local\.ps1 \(la rama se conserva\)$')) $lineas[2]
+  Comprueba 'borrar: worktree remove del worktree, despues de juntar con -Cierre, y la rama se conserva' ($lineas[2] -match ('^git -C "[^"]+" worktree remove "' + [regex]::Escape((Html $st.worktree)) + '"\s+# borrar el worktree despu.s de juntar con -Cierre \(la rama se conserva\)$')) $lineas[2]
   Comprueba 'antes de ellas, la frase que dice que se copia cada linea entera' ($co -match 'Copia cada l.nea entera; lo que va detr.s de <code>#</code> es solo la explicaci.n') $co
   Comprueba 'sigue sin JavaScript ni nada externo' ($x.P4 -notmatch '(?i)<script' -and $x.P4 -notmatch 'https?://')
 }
@@ -7886,7 +7886,7 @@ $Pruebas['c4 (m) -Cierre con -SoloInforme, -Si, -Practicas, -Reglas o -Reintenta
   }
 }
 
-$Pruebas['c4 (n) la rama de rescate no tiene commits que juntar: "No hay nada que juntar" y sale con 0, sin parada; sin pasada previa, para con "lanza antes la pasada"'] = {
+$Pruebas['c4 (n) la rama de rescate no tiene commits que juntar: "No hay nada que juntar" y sale con 0, sin parada'] = {
   $o = Orden-Base
   $e = C4-Pasada 'c4-n' $o
   $antes = C4-Head $e
@@ -7896,10 +7896,6 @@ $Pruebas['c4 (n) la rama de rescate no tiene commits que juntar: "No hay nada qu
   $s = Estado $e
   Comprueba 'sin parada y sin estado.cierre' ($null -eq $s.parada -and $null -eq $s.cierre)
   Igual 'tu rama no se mueve' $antes (C4-Head $e)
-  $sin = Nuevo-Escenario 'c4-n-sin' @('Clase1')
-  $r = C4-Cierre $sin
-  Comprueba 'sin pasada previa sale con 1 y dice que se lance antes' ($r.Codigo -eq 1 -and $r.Salida.Contains('No hay nada que juntar: lanza antes la pasada')) "$($r.Codigo): $(Cola $r.Salida)"
-  Comprueba 'y no crea el worktree' (-not (Test-Path -LiteralPath $sin.Wt))
 }
 
 $Pruebas['c4 (o) alguien avanza tu rama mientras se miden las puertas: el fast-forward no se puede, para con cierre-no-ff y tu carpeta no cambia'] = {
@@ -7970,6 +7966,177 @@ $Pruebas['c4 (p) FLUJO.md: la regla 1 dice que tu rama solo avanza con -Cierre, 
   $regla = [regex]::Match($f, '(?m)^1\. .*$').Value
   Comprueba 'la regla 1 nombra -Cierre, el fast-forward y las puertas' ($regla -match 'migracion\.ps1 -Cierre' -and $regla -match 'fast-forward' -and $regla -match 'puertas' -and $regla -match 'deshacer') $regla
   Comprueba 'el flujo cuenta las precondiciones, las puertas y el no hacer push' ($f -match 'cierre-conflicto' -and $f -match 'cierre-puertas' -and $f -match 'No hace push') 'faltan cierre-conflicto, cierre-puertas o No hace push'
+}
+
+# ============================ C7: -Cierre SIN LA CARPETA DE RESCATE ============================
+# Una pasada de c4 lista para el cierre, a la que se le quita la carpeta de rescate: a mano (sigue registrada en git) o con git worktree remove.
+function C7-Pasada-Sin-Carpeta([string]$Nombre, [string]$Como = 'mano') {
+  $e = C4-Pasada $Nombre
+  if ($Como -eq 'git') { [void](GitEn $e.Migrado @('worktree', 'remove', $e.Wt)) }
+  else { Remove-Item -LiteralPath $e.Wt -Recurse -Force }
+  Comprueba "$Nombre : la carpeta de rescate ya no esta" (-not (Test-Path -LiteralPath $e.Wt))
+  return $e
+}
+
+# El cierre sobre una pasada sin su carpeta: la monta otra vez desde su rama y junta como si siempre hubiera estado.
+function C7-Comprueba-Remonta([string]$Nombre, [string]$Como) {
+  $e = C4-Pasada $Nombre
+  $rescate = C4-Head-Wt $e
+  $rama = [string](Estado $e).rama
+  if ($Como -eq 'git') { [void](GitEn $e.Migrado @('worktree', 'remove', $e.Wt)) }
+  else { Remove-Item -LiteralPath $e.Wt -Recurse -Force }
+  Comprueba "$Como : la carpeta de rescate ya no esta" (-not (Test-Path -LiteralPath $e.Wt))
+  $r = C4-Cierre $e
+  Igual "$Como : sale con 0" 0 $r.Codigo
+  Comprueba "$Como : dice que la monta otra vez desde su rama" ($r.Salida.Contains("La carpeta de rescate no estaba: la monto otra vez desde su rama ($rama) en $($e.Wt).")) (Cola $r.Salida)
+  Comprueba "$Como : la carpeta esta otra vez, en la rama de rescate" ((Test-Path -LiteralPath $e.Wt) -and (GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')) -eq $rama) (Cola $r.Salida)
+  Igual "$Como : tu rama esta en el sha de rescate" $rescate (C4-Head $e)
+  $s = Estado $e
+  Comprueba "$Como : estado.cierre hecho, con el sha de rescate, y sin parada" ($null -ne $s.cierre -and $s.cierre.hecho -eq $true -and $s.cierre.sha -eq $rescate -and $null -eq $s.parada) (Cola $r.Salida)
+  Igual "$Como : la rama del estado es la misma" $rama ([string]$s.rama)
+}
+
+$Pruebas['c7 (a) pasada lista y carpeta de rescate borrada a mano (sigue registrada en git): -Cierre la monta otra vez desde su rama, junta, sale con 0 y tu rama queda en el sha de rescate'] = {
+  C7-Comprueba-Remonta 'c7-a' 'mano'
+}
+
+$Pruebas['c7 (b) pasada lista y carpeta de rescate quitada con git worktree remove: igual que borrada a mano'] = {
+  C7-Comprueba-Remonta 'c7-b' 'git'
+}
+
+$Pruebas['c7 (c) la rama de rescate ya esta juntada a mano en tu rama y la carpeta esta borrada: "Tu rama ya tiene todo lo de la de rescate", sale con 0, sin carpeta, sin Maven y sin diagnostico'] = {
+  $e = C4-Pasada 'c7-c'
+  $rescate = C4-Head-Wt $e
+  $rama = [string](Estado $e).rama
+  [void](GitEn $e.Migrado @('merge', '--ff-only', '-q', $rama))
+  Remove-Item -LiteralPath $e.Wt -Recurse -Force
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $mvn = @(Llamadas-Mvn $e).Count
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que tu rama ya tiene todo lo de la de rescate, con su nombre, y que si la pasada no llego a corregir, se lance con -Si' ($r.Salida.Contains("Tu rama ya tiene todo lo de la de rescate ($rama): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre.")) (Cola $r.Salida)
+  Comprueba 'no crea la carpeta de rescate' (-not (Test-Path -LiteralPath $e.Wt))
+  Igual 'ningun diagnostico nuevo' $diag (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
+  Igual 'tu rama sigue en el sha de rescate' $rescate (C4-Head $e)
+  $s = Estado $e
+  Comprueba 'sin parada y sin estado.cierre' ($null -eq $s.parada -and $null -eq $s.cierre)
+}
+
+$Pruebas['c7 (d) -Cierre sin estado.json: para con 1 y dice que falta esa pasada, con la ruta de estado.json y que se lance con los mismos -Legacy y -Migrado; no crea la carpeta de rescate'] = {
+  $e = Nuevo-Escenario 'c7-d' @('Clase1')
+  $r = C4-Cierre $e
+  $estado = Join-Path (Join-Path $e.Out 'datos') 'estado.json'
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que no encuentra la pasada de este batch y que falta estado.json, con su ruta' ($r.Salida.Replace('\', '/').Contains('No encuentro la pasada de este batch: falta ' + $estado.Replace('\', '/') + '.')) (Cola $r.Salida)
+  Comprueba 'y que lance el -Cierre con los mismos -Legacy y -Migrado que la pasada' ($r.Salida.Contains('Lanza el -Cierre con los mismos -Legacy y -Migrado que la pasada.')) (Cola $r.Salida)
+  Comprueba 'ya no dice "lanza antes la pasada"' ($r.Salida -notmatch 'lanza antes la pasada')
+  Comprueba 'no crea la carpeta de rescate' (-not (Test-Path -LiteralPath $e.Wt))
+}
+
+# Rama y carpeta de rescate borradas (la rama con git branch -D, tras quitar la carpeta del registro de git).
+function C7-Sin-Carpeta-Ni-Rama([string]$Nombre) {
+  $e = C7-Pasada-Sin-Carpeta $Nombre
+  $rama = [string](Estado $e).rama
+  [void](GitEn $e.Migrado @('worktree', 'prune'))
+  [void](GitEn $e.Migrado @('branch', '-D', $rama))
+  Comprueba "$Nombre : la rama de rescate ya no esta" (-not (GitEn $e.Migrado @('branch', '--list', $rama)))
+  return $e
+}
+
+$Pruebas['c7 (e) carpeta de rescate y rama borradas y sin commit probado que recuperar (ni prueba-local.json, ni un commit que exista): para con 1, el mensaje nombra la carpeta y la rama y dice que se relance la pasada sin -Cierre; no crea carpeta ni rama y tu rama no se mueve'] = {
+  foreach ($caso in @('sin-prueba-local-json', 'commit-que-no-existe')) {
+    $e = C7-Sin-Carpeta-Ni-Rama "c7-e-$caso"
+    $rama = [string](Estado $e).rama
+    $antes = C4-Head $e
+    $f = Get-Ruta $e.Out 'datos/prueba-local.json'
+    if ($caso -eq 'sin-prueba-local-json') { Remove-Item -LiteralPath $f }
+    else {
+      $j = Lee-Json $f
+      Add-Member -InputObject $j -NotePropertyName commitMigrado -NotePropertyValue ('0123456789abcdef0123456789abcdef01234567') -Force
+      Guarda-Json $f $j
+    }
+    $r = C4-Cierre $e
+    Igual "$caso : sale con 1" 1 $r.Codigo
+    Comprueba "$caso : nombra la carpeta y la rama, y dice que no queda nada que juntar" ($r.Salida.Contains("No esta la carpeta de rescate ($($e.Wt)) ni su rama ($rama): no queda nada que juntar. Si ya lo juntaste a mano, no hace falta -Cierre.")) (Cola $r.Salida)
+    Comprueba "$caso : dice como rehacer los arreglos" ($r.Salida.Contains('Para rehacer los arreglos, relanza la pasada sin -Cierre.')) (Cola $r.Salida)
+    Comprueba "$caso : no crea la carpeta de rescate" (-not (Test-Path -LiteralPath $e.Wt))
+    Comprueba "$caso : ni la rama" (-not (GitEn $e.Migrado @('branch', '--list', $rama)))
+    Igual "$caso : tu rama no se mueve" $antes (C4-Head $e)
+  }
+}
+
+$Pruebas['c7 (f) informe/4-correcciones.html: el comentario de worktree remove dice borrar despues de juntar con -Cierre y ya no dice "cuando acabes con prueba-local"'] = {
+  $h = [System.IO.File]::ReadAllText((Join-Path (Join-Path (Split-Path -Parent $Script) 'informe') '4-correcciones.html'))
+  Comprueba 'ya no dice cuando acabes con prueba-local' ($h -notmatch 'cuando acabes con prueba-local')
+  Comprueba 'dice borrar el worktree despues de juntar con -Cierre, y que la rama se conserva' ($h -match 'worktree remove [^\r\n]*# borrar el worktree despu.s de juntar con -Cierre \(la rama se conserva\)')
+}
+
+$Pruebas['c7 (g) carpeta de rescate y rama borradas con el commit probado todavia en el repo: crea la rama otra vez con su nombre desde ese commit, monta la carpeta, junta, sale con 0 y tu rama queda en ese sha'] = {
+  $e = C7-Sin-Carpeta-Ni-Rama 'c7-g'
+  $rama = [string](Estado $e).rama
+  $probado = [string](Lee-Json (Get-Ruta $e.Out 'datos/prueba-local.json')).commitMigrado
+  Comprueba 'el commit probado sigue en el repo y no esta en tu rama' ((GitEn $e.Migrado @('cat-file', '-t', $probado)) -eq 'commit' -and -not (C4-Es-Ancestro $e $probado 'main'))
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que la rama no estaba y que la crea otra vez desde lo que se probo, con el sha corto' ($r.Salida.Contains("La rama de rescate ($rama) no estaba: la creo otra vez desde lo que se probo ($($probado.Substring(0, 7))).")) (Cola $r.Salida)
+  Comprueba 'y que monta la carpeta' ($r.Salida.Contains("La carpeta de rescate no estaba: la monto otra vez desde su rama ($rama) en $($e.Wt).")) (Cola $r.Salida)
+  Igual 'la rama de rescate vuelve a estar, en el commit probado' $probado (GitEn $e.Migrado @('rev-parse', $rama))
+  Comprueba 'la carpeta esta otra vez, en esa rama' ((Test-Path -LiteralPath $e.Wt) -and (GitEn $e.Wt @('rev-parse', '--abbrev-ref', 'HEAD')) -eq $rama)
+  Igual 'tu rama queda en el sha probado' $probado (C4-Head $e)
+  $s = Estado $e
+  Comprueba 'estado.cierre hecho, con ese sha' ($null -ne $s.cierre -and $s.cierre.hecho -eq $true -and $s.cierre.sha -eq $probado) (Cola $r.Salida)
+}
+
+$Pruebas['c7 (h) carpeta de rescate y rama borradas con el commit probado ya juntado a mano en tu rama: "Tu rama ya tiene todo lo de la de rescate", sale con 0, sin carpeta, sin rama nueva, sin Maven y sin diagnostico'] = {
+  $e = C4-Pasada 'c7-h'
+  $rama = [string](Estado $e).rama
+  $rescate = C4-Head-Wt $e
+  [void](GitEn $e.Migrado @('merge', '--ff-only', '-q', $rama))
+  Remove-Item -LiteralPath $e.Wt -Recurse -Force
+  [void](GitEn $e.Migrado @('worktree', 'prune'))
+  [void](GitEn $e.Migrado @('branch', '-d', $rama))
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $mvn = @(Llamadas-Mvn $e).Count
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que tu rama ya tiene todo lo de la de rescate' ($r.Salida.Contains("Tu rama ya tiene todo lo de la de rescate ($rama): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre.")) (Cola $r.Salida)
+  Comprueba 'no crea la carpeta ni la rama' (-not (Test-Path -LiteralPath $e.Wt) -and -not (GitEn $e.Migrado @('branch', '--list', $rama)))
+  Igual 'ningun diagnostico nuevo' $diag (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
+  Igual 'tu rama sigue en el sha de rescate' $rescate (C4-Head $e)
+}
+
+$Pruebas['c7 (i) la carpeta de rescate falta pero hay otra cosa en su sitio (no es un worktree): no la pisa, para con 1 diciendo que no ha podido montarla y que mire la carpeta, y tu rama no se mueve'] = {
+  $e = C7-Pasada-Sin-Carpeta 'c7-i'
+  $rama = [string](Estado $e).rama
+  $antes = C4-Head $e
+  Escribe $e.Wt 'notas.txt' "mis notas`n"
+  $r = C4-Cierre $e
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que no ha podido montar la carpeta de rescate desde su rama y que mire que tiene la carpeta' ($r.Salida.Contains("No he podido montar la carpeta de rescate ($($e.Wt)) desde su rama ($rama)") -and $r.Salida.Contains('git -C "' + $e.Wt + '" status')) (Cola $r.Salida)
+  Comprueba 'lo que habia en su sitio sigue ahi' (Test-Path -LiteralPath (Get-Ruta $e.Wt 'notas.txt'))
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+}
+
+$Pruebas['c7 (j) la pasada se lanzo con la respuesta "parar" (no corrigio nada), la rama de rescate no tiene commits propios y la carpeta esta borrada: dice que contestaste "parar" y que se lance con -Si, sale con 0 y no monta nada'] = {
+  $e = Nuevo-Escenario 'c7-j' @('Clase1')
+  $p = Migra $e (Basicos $e)
+  Igual 'la pasada sale con 0' 0 $p.Codigo
+  $s = Estado $e
+  Comprueba 'la pasada dejo la respuesta parar, su rama y su carpeta' ($s.respuesta -eq 'parar' -and [bool]$s.rama -and (Test-Path -LiteralPath $e.Wt)) (Cola $p.Salida)
+  $antes = C4-Head $e
+  $mvn = @(Llamadas-Mvn $e).Count
+  Remove-Item -LiteralPath $e.Wt -Recurse -Force
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que la pasada no corrigio nada porque contestaste "parar", y que se lance con -Si y despues -Cierre' ($r.Salida.Contains('La pasada no corrigio nada: contestaste "parar". Para corregir, lanza la pasada con -Si; despues, -Cierre.')) (Cola $r.Salida)
+  Comprueba 'no dice que tu rama ya lo tiene todo' ($r.Salida -notmatch 'Tu rama ya tiene todo')
+  Comprueba 'no monta la carpeta de rescate' (-not (Test-Path -LiteralPath $e.Wt))
+  Igual 'ningun diagnostico' 0 (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Comprueba 'sin estado.cierre' ($null -eq (Estado $e).cierre)
 }
 
 # ============================ W1: CONVIVENCIA (C2) EN migracion.ps1 ============================
