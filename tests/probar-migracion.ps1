@@ -1363,7 +1363,9 @@ $Pruebas['49 paginas: con todos los datos salen index.html y 1-batch-original.ht
     $x = Pruebas-De $e $job
     Comprueba "$job : lleva su titulo" ($a.Contains($f.titulo))
     Comprueba "$job : lleva el dibujo del flujo" ($a -match 'class="flujo"')
-    Igual "$job : un paso dibujado por cada paso de la ficha" @($f.pasos).Count ([regex]::Matches($a, 'class="paso"').Count)
+    # los cinco pasos del bloque de convivencia (datos/convivencia.json) tambien son class="paso": no cuentan
+    $sinConv = [regex]::Replace($a, '(?s)<div class="conv">.*?</div>', '')
+    Igual "$job : un paso dibujado por cada paso de la ficha" @($f.pasos).Count ([regex]::Matches($sinConv, 'class="paso"').Count)
     Comprueba "$job : lleva el bloque de como probarlo en pre" ($a -match ('id="pre-' + $job + '"'))
     Igual "$job : todos sus casos" @($x.casos).Count ([regex]::Matches($a, 'class="caso"').Count)
     Comprueba "$job : cada caso con lo que se mete y lo que tiene que pasar" (@($x.casos | Where-Object { $a.Contains($_.titulo) -and $a.Contains($_.entrada) -and $a.Contains($_.esperado) }).Count -eq @($x.casos).Count)
