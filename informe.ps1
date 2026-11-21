@@ -45,7 +45,7 @@ $IconosTipo = @{
   'externo'         = @('f-correo', 'externo')
 }
 # De que tipo son las tareas de cada fase del script (las demas fases no tienen tareas)
-$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'lanzadores' = 'ficha-sh'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'casos-pre' = 'caso-pre'; 'comparar' = 'comparar-pieza' }
+$TipoFase = @{ 'fichas-clase' = 'ficha-clase'; 'mapa' = 'definicion-job'; 'fichas-job' = 'ficha-job'; 'lanzadores' = 'ficha-sh'; 'resumen' = 'resumen'; 'pruebas-pre' = 'prueba-pre'; 'casos-pre' = 'caso-pre'; 'comparar' = 'comparar-pieza'; 'propiedades' = 'propiedades'; 'revision' = 'revision-flujo' }
 # Los cinco textos que el motor escribe en la linea "- Estado:" de diagnostico.md y el trozo de la frase de cada uno
 $TextosBuild = @(
   @('compila: no comprobado', 'no-comprobado'), @('compila: NO', 'no'), @('compila: SI | tests: no ejecutados', 'sin-tests'),
@@ -61,6 +61,7 @@ $FicherosInforme = @(
   @('datos/cobertura-antes.json', 'f-cobertura-antes', 'f-fichero', $false), @('datos/cobertura-despues.json', 'f-cobertura-despues', 'f-fichero', $false),
   @('datos/practicas-antes.json', 'f-practicas-antes-json', 'f-fichero', $false), @('datos/practicas-despues.json', 'f-practicas-despues-json', 'f-fichero', $false),
   @('datos/tests-reglas.json', 'f-tests-reglas-json', 'f-fichero', $false),
+  @('datos/propiedades-arreglo.json', 'f-propiedades-arreglo-json', 'f-fichero', $false), @('datos/revision.json', 'f-revision-json', 'f-fichero', $false),
   @('datos/correcciones.json', 'f-correcciones-json', 'f-fichero', $false), @('datos/prueba-local.json', 'f-prueba-local-json', 'f-fichero', $false),
   @('datos/prueba-local-cobertura.json', 'f-prueba-local-cobertura-json', 'f-fichero', $false),
   @('datos/mapa.json', 'f-mapa', 'f-fichero', $false), @('datos/resumen.json', 'f-resumen', 'f-fichero', $false),
@@ -304,6 +305,7 @@ function Read-DatosInforme([string]$Salida) {
     CobAntes = (Read-JsonSuave (Join-Path $datos 'cobertura-antes.json')); CobDespues = (Read-JsonSuave (Join-Path $datos 'cobertura-despues.json'))
     Practicas = (Read-Practicas $datos); Arreglos = (Read-JsonSuave (Join-Path $datos 'practicas-arreglos.json'))
     Reglas = (Read-JsonSuave (Join-Path $datos 'tests-reglas.json'))
+    PropiedadesArreglo = (Read-JsonSuave (Join-Path $datos 'propiedades-arreglo.json')); Revision = (Read-JsonSuave (Join-Path $datos 'revision.json'))
     Comparacion = (Read-Comparaciones $datos); CoberturaCasos = (Read-JsonSuave (Join-Path $datos 'prueba-local-cobertura.json')); LineasCasos = $null
     Lanzadores = @(); LanzadoresLeidos = $false; Convivencia = (Read-JsonSuave (Join-Path $datos 'convivencia.json')); Propiedades = (Read-JsonSuave (Join-Path $datos 'propiedades.json'))
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
@@ -1020,13 +1022,21 @@ function Get-TextoDuracion($T, $Desde, $Hasta) {
 # practicas (-Practicas) va despues de la correccion y de comparar y antes de prueba-local, y solo si la pasada la tiene: el estado esta en ella
 # o hay datos\practicas-arreglos.json. reglas (-Reglas) va despues de practicas y antes de prueba-local, con la misma regla: el estado esta en ella o hay
 # datos\tests-reglas.json.
+# Con corregir, propiedades y revision van despues de reglas y antes de prueba-local, y solo si la pasada llego a ellas (el estado esta en ellas) o hay su JSON:
+# datos\propiedades-arreglo.json y datos\revision.json.
 function Get-OrdenFases($D) {
   $lectura = @('diagnostico', 'fichas-clase', 'mapa', 'lanzadores', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   $practicas = @()
   if (($D.Estado -and [string]$D.Estado.fase -ceq 'practicas') -or $D.Arreglos) { $practicas = @('practicas') }
   $reglas = @()
   if (($D.Estado -and [string]$D.Estado.fase -ceq 'reglas') -or $D.Reglas) { $reglas = @('reglas') }
-  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') { return @($lectura + @('lectura-hecha', 'correccion', 'comparar') + $practicas + $reglas + @('prueba-local', 'hecha')) }
+  if ($D.Estado -and [string]$D.Estado.respuesta -ceq 'corregir') {
+    $propiedades = @()
+    if ([string]$D.Estado.fase -ceq 'propiedades' -or $D.PropiedadesArreglo) { $propiedades = @('propiedades') }
+    $revision = @()
+    if ([string]$D.Estado.fase -ceq 'revision' -or $D.Revision) { $revision = @('revision') }
+    return @($lectura + @('lectura-hecha', 'correccion', 'comparar') + $practicas + $reglas + $propiedades + $revision + @('prueba-local', 'hecha'))
+  }
   return @($lectura + @('comparar', 'lectura-hecha', 'correccion') + $practicas + $reglas + @('prueba-local', 'hecha'))
 }
 
@@ -1048,6 +1058,7 @@ function Get-FaseHtml($D, $T, [string]$Fase) {
   }
   elseif ([array]::IndexOf($orden, $Fase) -lt [array]::IndexOf($orden, $est)) { $e = 'hecha' }
   elseif ($Fase -eq $est) { $e = 'curso' }
+  elseif ($Fase -eq 'propiedades' -and $D.PropiedadesArreglo) { $e = 'hecha' }
   $ts = @($D.Tareas | Where-Object { $_.tipo -eq $Tipo })
   $cuenta = Format-Trozo $T 'cuenta-ninguna'
   if ($Fase -eq 'diagnostico') {
@@ -1078,6 +1089,22 @@ function Get-FaseHtml($D, $T, [string]$Fase) {
   elseif ($Fase -eq 'reglas') {
     $cuenta = Format-Trozo $T 'sin-valor'
     if ($D.Reglas) { $cuenta = Format-Trozo $T 'cuenta-reglas' @{ CLASES = "$([int]$D.Reglas.conTest)"; VIGILADAS = "$([int]$D.Reglas.reglasVigiladas)"; ATASCADAS = "$([int]$D.Reglas.atascadas)"; SALTADAS = "$([int]$D.Reglas.saltadas)" } }
+  }
+  elseif ($Fase -eq 'propiedades' -and $D.PropiedadesArreglo) {
+    $a = $D.PropiedadesArreglo
+    $cuenta = Format-Trozo $T 'cuenta-propiedades-ninguna'
+    if ([string]$a.estado -ceq 'atascada') { $cuenta = Format-Trozo $T 'cuenta-propiedades-atascada' }
+    elseif ([string]$a.estado -cne 'sin-faltan') {
+      $commit = ''
+      if ([string]$a.commit) { $commit = Format-Trozo $T 'cuenta-propiedades-commit' @{ COMMIT = (Get-HashCorto $a.commit) } }
+      $cuenta = Format-Trozo $T 'cuenta-propiedades' @{ ANADIDAS = "$(@($a.anadidas | Where-Object { $null -ne $_ }).Count)"; NOAPLICAN = "$(@($a.noAplica | Where-Object { $null -ne $_ }).Count)"; COMMIT = $commit }
+    }
+  }
+  elseif ($Fase -eq 'revision' -and $D.Revision) {
+    $cuenta = Format-Trozo $T 'cuenta-revision' @{
+      UNIDADES = "$([int]$D.Revision.unidades)"; HECHAS = "$([int]$D.Revision.hechas)"; ATASCADAS = "$([int]$D.Revision.atascadas)"
+      HALLAZGOS = "$(@($D.Revision.hallazgos | Where-Object { $null -ne $_ }).Count)"; DESCARTADOS = "$([int]$D.Revision.descartados)"
+    }
   }
   elseif ($ts.Count -gt 0) {
     $c = @{}
@@ -1306,6 +1333,55 @@ function Get-GrupoProblemasHtml($T, $A) {
     })
 }
 
+# Una fila de la revision por flujos: fichero:linea, el problema y, debajo, la cita literal del codigo (la plantilla la escapa).
+function Get-FilaHallazgoHtml($T, $H) {
+  $donde = [string]$H.fichero
+  if ([int]$H.linea -gt 0) { $donde += ':' + [int]$H.linea }
+  return (Format-Trozo $T 'fila-hallazgo' @{ MARCA = (Format-Trozo $T 'marca-aviso'); DONDE = $donde; TEXTO = $H.texto; CITA = $H.cita })
+}
+
+# La seccion "Revision por flujos" de la pagina 2, de datos\revision.json (Save-Revision de revision.ps1): las cuentas arriba y debajo un grupo por regla
+# (con el titulo de reglas) y cada hallazgo en una fila. Leido por la IA, con la cita comprobada por el script. Un hallazgo de una regla que reglas no lista
+# tambien sale, con su titulo o su id. '' sin el JSON: la pagina es la de antes.
+function Get-RevisionHtml($D, $T) {
+  $r = $D.Revision
+  if (-not $r) { return '' }
+  $hallazgos = @($r.hallazgos | Where-Object { $null -ne $_ })
+  $titulos = [ordered]@{}
+  foreach ($x in @($r.reglas | Where-Object { $null -ne $_ })) { $titulos[[string]$x.id] = [string]$x.titulo }
+  foreach ($h in $hallazgos) {
+    if ($titulos.Contains([string]$h.regla)) { continue }
+    $titulos[[string]$h.regla] = [string]$h.regla
+    if ([string]$h.titulo) { $titulos[[string]$h.regla] = [string]$h.titulo }
+  }
+  $grupos = @()
+  foreach ($id in @($titulos.Keys)) {
+    $suyos = @($hallazgos | Where-Object { [string]$_.regla -ceq $id })
+    if ($suyos.Count -eq 0) { continue }
+    $cuenta = 'cuenta-hallazgo-otros'
+    if ($suyos.Count -eq 1) { $cuenta = 'cuenta-hallazgo-uno' }
+    $grupos += (Format-Trozo $T 'area-grupo' @{
+        ID = "revision-$id"; NOMBRE = (ConvertTo-TextoHtml $titulos[$id]); CUENTA = (Format-Trozo $T $cuenta @{ N = "$($suyos.Count)" })
+        ETIQUETA = (Format-Trozo $T 'et-ia'); COMO = ''; FILAS = (@($suyos | ForEach-Object { Get-FilaHallazgoHtml $T $_ }) -join "`n")
+      })
+  }
+  $todo = ''
+  if ($r.todo -eq $true) { $todo = Format-Trozo $T 'revision-todo' }
+  $atascadas = [int]$r.atascadas
+  $aviso = ''
+  if ($atascadas -gt 0) { $aviso = Format-Trozo $T 'revision-atascadas' @{ N = "$atascadas" } }
+  $nada = ''
+  if ($hallazgos.Count -eq 0) {
+    $nada = Format-Trozo $T 'revision-nada' @{ N = "$([int]$r.hechas)" }
+    if ([int]$r.hechas -eq 1) { $nada = Format-Trozo $T 'revision-nada-una' }
+  }
+  $panel = Format-Trozo $T 'revision' @{
+    ETIQUETA = (Format-Trozo $T 'et-ia'); TODO = $todo; UNIDADES = "$([int]$r.unidades)"; HECHAS = "$([int]$r.hechas)"; ATASCADAS = "$atascadas"
+    HALLAZGOS = "$($hallazgos.Count)"; DESCARTADOS = "$([int]$r.descartados)"; AVISO = $aviso; NADA = $nada
+  }
+  return ("`n" + ((@($panel) + $grupos) -join "`n"))
+}
+
 function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
   $diag = Format-Trozo $T 'sin-datos' @{ FASE = 'diagnostico'; ETIQUETA = (Format-Trozo $T 'et-sin') }
   if ($D.Diag) {
@@ -1327,7 +1403,7 @@ function Get-CuerpoProblemas($D, $T, [string]$Cuerpo) {
       COBERTURA = (Get-PanelCobertura $T $D.CobAntes); RESPUESTA = $respuesta; GRUPOS = ((@($conErrores) + @($soloAvisos) | ForEach-Object { Get-GrupoProblemasHtml $T $_ }) -join "`n"); SINPROB = $sinProblemas
     }
   }
-  return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag; PROPIEDADES = (Get-PropiedadesHtml $D $T) })
+  return (Expand-Plantilla $Cuerpo @{ MIGRADO = (Get-Hoja $D.Estado.migrado); PLANTILLA = (Get-Hoja $D.Estado.plantilla); DIAGNOSTICO = $diag; PROPIEDADES = (Get-PropiedadesHtml $D $T); REVISION = (Get-RevisionHtml $D $T) })
 }
 
 # Cada area de las dos fotos, en el orden de la tabla de antes (las que solo salen despues, al final): Antes y Despues (sus errores y
@@ -1462,6 +1538,23 @@ function Get-AtascadosItemsHtml($T, $Atascados) {
     })
 }
 
+# El panel de la pagina 4 con lo que la fase propiedades puso en el yml, de datos\propiedades-arreglo.json (Save-ResultadoPropiedades de arreglo-propiedades.ps1):
+# el commit y cada clave con su fichero, las que no aplican con su motivo, o el motivo de la tarea atascada. Lo que sigue faltando lo pinta el area Propiedades
+# de la pagina 2 (Get-PropiedadesHtml): aqui solo se enlaza. '' sin el JSON o si no faltaba ninguna clave (sin-faltan): la pagina es la de antes.
+function Get-PropiedadesArregloHtml($D, $T) {
+  $a = $D.PropiedadesArreglo
+  if (-not $a -or [string]$a.estado -ceq 'sin-faltan') { return '' }
+  $anadidas = @($a.anadidas | Where-Object { $null -ne $_ })
+  $noAplica = @($a.noAplica | Where-Object { $null -ne $_ })
+  if ([string]$a.estado -ceq 'atascada') { $cuerpo = Format-Trozo $T 'propiedades-atascada' @{ MOTIVO = $a.motivo } }
+  elseif ($anadidas.Count -eq 0) { $cuerpo = Format-Trozo $T 'propiedades-ninguna' }
+  else { $cuerpo = Format-Trozo $T 'propiedades-hecha' @{ COMMIT = (Get-HashCorto $a.commit); ITEMS = (Format-Lista $T 'propiedades-clave' $anadidas { param($x) @{ CLAVE = $x.clave; FICHERO = $x.fichero } }) } }
+  if ($noAplica.Count -gt 0) {
+    $cuerpo += "`n  " + (Format-Trozo $T 'propiedades-noaplica' @{ ITEMS = (Format-Lista $T 'propiedades-noaplica-item' $noAplica { param($x) @{ CLAVE = $x.clave; MOTIVO = $x.motivo } }) })
+  }
+  return ("`n" + (Format-Trozo $T 'propiedades-arreglo' @{ ETIQUETA = (Format-Trozo $T 'et-medido-ia'); CUERPO = $cuerpo }))
+}
+
 # Lo que cuenta la pagina cuando hay correcciones.json y el diagnostico de despues.
 function Get-ResultadoCorreccion($D, $T) {
   $c = $D.Correccion
@@ -1493,7 +1586,7 @@ function Get-ResultadoCorreccion($D, $T) {
   return (Format-Trozo $T 'correccion-datos' @{
       INCOMPLETA = $incompleta; COBERTURA = (Get-PanelCoberturaCambio $D $T); ETIQUETA = $medido; BUILD_ANTES = $antes.Frase; ETIQUETA_ANTES = $antes.Etiqueta; BUILD_DESPUES = $despues.Frase; ETIQUETA_DESPUES = $despues.Etiqueta
       TOTAL = $total; COMMITS = "$(@($c.commits).Count)"; ATASCADOS = "$(@($c.atascados).Count)"; LEYENDA = (Format-Trozo $T 'leyenda-barras')
-      GRUPOS = (($con | ForEach-Object { Get-GrupoCorreccionHtml $T $_ $max }) -join "`n"); SINPROB = $sinProblemas; SUELTOS = $sueltos; VARIABLES = $variables
+      GRUPOS = (($con | ForEach-Object { Get-GrupoCorreccionHtml $T $_ $max }) -join "`n"); SINPROB = $sinProblemas; SUELTOS = $sueltos; VARIABLES = $variables; PROPIEDADES = (Get-PropiedadesArregloHtml $D $T)
       JUNTADO = (Get-JuntadoPanelHtml $D $T); CIERRE = (Get-ComandoCierre $D.Estado); RAMA = $c.rama; BASE = $c.base; WORKTREE = $D.Estado.worktree; MIGRADO = $D.Estado.migrado
     })
 }
@@ -1756,7 +1849,7 @@ function Get-ComandoBase($Est) { return ('.\migracion.ps1 -Legacy "' + $Est.lega
 function Get-ComandoCierre($Est) { return ((Get-ComandoBase $Est) + ' -Cierre') }
 
 # La linea con la que se lanzo la pasada, montada con estado.json: las rutas entre comillas, el modelo si lo hay, -SoloInforme o -Si segun
-# $Respuesta (parar o corregir), las opciones del lanzamiento que guarda migracion.ps1 (-Practicas, -Reglas, -MaxHoras y -Limite si no son 0,
+# $Respuesta (parar o corregir), las opciones del lanzamiento que guarda migracion.ps1 (-Practicas, -Reglas, -RevisarTodo, -MaxHoras y -Limite si no son 0,
 # -SinPruebaLocal; un estado.json de antes no las trae y no salen) y -JavaLegacy si hay ($Java). -Reintentar no: es de una sola vez. Con
 # $ConPruebaLocal no sale -SinPruebaLocal: es el comando que hace la prueba en local que se salto.
 function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java, [switch]$ConPruebaLocal) {
@@ -1765,6 +1858,7 @@ function Get-ComandoPasada($Est, [string]$Respuesta, [string]$Java, [switch]$Con
   if ($Respuesta -ceq 'parar') { $c += ' -SoloInforme' } elseif ($Respuesta -ceq 'corregir') { $c += ' -Si' }
   if ($Est.practicas -eq $true) { $c += ' -Practicas' }
   if ($Est.reglas -eq $true) { $c += ' -Reglas' }
+  if ($Est.revisarTodo -eq $true) { $c += ' -RevisarTodo' }
   if ([double]$Est.maxHoras -ne 0) { $c += ' -MaxHoras ' + [string]$Est.maxHoras }
   if ([int]$Est.limite -ne 0) { $c += ' -Limite ' + [string]$Est.limite }
   if ($Est.sinPruebaLocal -eq $true -and -not $ConPruebaLocal) { $c += ' -SinPruebaLocal' }

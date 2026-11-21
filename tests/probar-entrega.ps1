@@ -692,7 +692,7 @@ $Pruebas['c5 (j) con cierre.hecho de una pasada anterior, una pasada nueva que c
 # (datos\propiedades-arreglo.json de arreglo-propiedades.ps1), las dos fases en la portada y -RevisarTodo en el comando de la pasada.
 $TxtRevision = Es 'Revisi\u00f3n por flujos'
 $TxtNada = Es 'La revisi\u00f3n no ha encontrado nada en'
-$TxtTodo = Es 'revisado todo el c\u00f3digo (-RevisarTodo)'
+$TxtTodo = (Es 'revisado todo el c\u00f3digo') + ' \(\s*-RevisarTodo\s*\)'
 
 # La pagina sin el CSS, en SHA-256: lo que mide que una pagina es la de antes (medidas con el codigo de antes de C5b, 3050737).
 function Hash-Sin-Css([string]$Html) {
@@ -789,9 +789,9 @@ $Pruebas['c5b (a) con todo = true dice revisado todo el codigo (-RevisarTodo); c
   $s = C5b-Salida 'c5b-a-todo' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos @{ todo = $true; unidades = 5; hechas = 3; atascadas = 2 }) })
   $sec = Panel-De (Pagina $s '2-problemas.html') 'revision'
   $t = Texto-Plano $sec
-  Comprueba 'con todo: dice revisado todo el codigo (-RevisarTodo)' ($t.Contains($TxtTodo)) $t
+  Comprueba 'con todo: dice revisado todo el codigo (-RevisarTodo)' ($t -match $TxtTodo) $t
   Comprueba 'las cuentas: 5 unidades, 3 hechas y 2 atascadas' ($sec -match '<b>5</b>unidades' -and $sec -match '<b>3</b>hechas' -and $sec -match '<b>2</b>atascadas') $sec
-  Comprueba 'dice que 2 unidades se han atascado y que se relanza con -Reintentar' ($t -match '2 unidades' -and $t -match 'atascad' -and $t.Contains('-Reintentar')) $t
+  Comprueba 'dice que hay 2 unidades atascadas y que se vuelven a intentar relanzando con -Reintentar' ($t -match 'Unidades atascadas: 2' -and $t.Contains('relanza el mismo comando con -Reintentar')) $t
   $s0 = C5b-Salida 'c5b-a-sin-atascos' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos) })
   Comprueba 'sin atascadas no hay aviso de relanzar' ((Texto-Plano (Panel-De (Pagina $s0 '2-problemas.html') 'revision')) -notmatch 'Reintentar')
 }
@@ -826,7 +826,9 @@ $Pruebas['c5b (b) sin revision.json ni propiedades-arreglo.json la portada y las
   $i = Pagina $s 'index.html'
   Comprueba 'y no nombra ni las fases ni los JSON' ($i -notmatch 'Propiedades al yml' -and -not $i.Contains($TxtRevision) -and -not $i.Contains('revision.json') -and -not $i.Contains('propiedades-arreglo.json'))
   $roto = C5b-Salida 'c5b-b-roto' ([ordered]@{ 'revision.json' = '{ esto no es json'; 'propiedades-arreglo.json' = '[[' })
-  foreach ($p in $h.Keys) { Igual ($p + ' con los dos JSON rotos: la de antes') $h[$p] (Hash-Sin-Css (Pagina $roto $p)) }
+  foreach ($p in @('2-problemas.html', '4-correcciones.html')) { Igual ($p + ' con los dos JSON rotos: la de antes') $h[$p] (Hash-Sin-Css (Pagina $roto $p)) }
+  $fases = (Lineas-Fase $i | ForEach-Object { $_.Nombre + '=' + $_.E + '=' + $_.Cuenta }) -join ' / '
+  Igual 'la portada con los dos JSON rotos: las mismas fases con las mismas cuentas (los dos ficheros si salen en la lista de ficheros: existen)' $fases ((Lineas-Fase (Pagina $roto 'index.html') | ForEach-Object { $_.Nombre + '=' + $_.E + '=' + $_.Cuenta }) -join ' / ')
 }
 
 # ================================ (c) EL ORDEN DE LAS FASES ================================
