@@ -1717,7 +1717,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'convivencia.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'convivencia.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'revision.ps1', 'arreglo-propiedades.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1950,7 +1950,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'convivencia.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'convivencia.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'revision.ps1', 'arreglo-propiedades.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
@@ -7878,9 +7878,9 @@ $Pruebas['c4 (l) -Cierre dos veces: la segunda dice "Ya esta juntado" con como d
   Igual 'tu rama sigue en el sha' $s.cierre.sha (C4-Head $e)
 }
 
-$Pruebas['c4 (m) -Cierre con -SoloInforme, -Si, -Practicas, -Reglas o -Reintentar: Stop-Arranque "-Cierre va solo" (exit 1)'] = {
+$Pruebas['c4 (m) -Cierre con -SoloInforme, -Si, -Practicas, -Reglas, -RevisarTodo o -Reintentar: Stop-Arranque "-Cierre va solo" (exit 1)'] = {
   $e = Nuevo-Escenario 'c4-m' @('Clase1')
-  foreach ($f in @('-SoloInforme', '-Si', '-Practicas', '-Reglas', '-Reintentar')) {
+  foreach ($f in @('-SoloInforme', '-Si', '-Practicas', '-Reglas', '-RevisarTodo', '-Reintentar')) {
     $r = Migra $e @('-Legacy', $e.Legacy, '-Migrado', $e.Migrado, '-Plantilla', $e.Plantilla, '-Cierre', $f)
     Comprueba "-Cierre $f : sale con 1 y dice que va solo" ($r.Codigo -eq 1 -and $r.Salida.Contains('-Cierre va solo')) "$($r.Codigo): $(Cola $r.Salida)"
   }
@@ -8278,6 +8278,326 @@ $Pruebas['w1 (h) la cabecera de migracion.ps1 nombra convivencia.ps1, se carga c
   Comprueba 'habla de lanzar el viejo y el nuevo a la vez o uno detras de otro, con los motivos y que reponer' ($paso -match 'a la vez' -and $paso -match 'detr.s de otro' -and $paso -match 'motivos' -and $paso -match 'reponer') $paso
   Comprueba 'lo pone en C.mo probarlo en pre y dice que por defecto es uno detras de otro' ($paso -match 'C.mo probarlo en pre' -and $paso -match 'por defecto') $paso
   Comprueba 'y que las tablas BATCH_ no se comparten' ($paso -match 'BATCH_' -and $paso -match 'no se comparten') $paso
+}
+
+# ============ W2: la revision por flujos (C3) y el yml de propiedades (C6b) como fases de la pasada normal ============
+# Una pasada con el motor falso y el Copilot falso w2-copilot.ps1 (tests/falsos): lo de la revision lo escribe segun W2_RESPUESTAS, lo de las propiedades segun los planes de
+# c6b-copilot.ps1. La correccion de mentira deja dos clases nuevas que se nombran entre si (y una a App): ninguna sale como clase sin uso.
+$W2Dir = 'src/main/java/com/acme/life'
+$W2Arreglo = "package com.acme.life;`n`n/** Arreglo. */`npublic class Arreglo {`n    private Otro otro;`n    private App app;`n`n    void abre(java.lang.reflect.Field f) {`n        f.setAccessible(true);`n    }`n}`n"
+$W2Otro = "package com.acme.life;`n`n/** Otro. */`npublic class Otro {`n    private Arreglo arreglo;`n}`n"
+$W2Hallazgo = '{"hallazgos": [{"regla": "J21-INTERNOS", "fichero": "src/main/java/com/acme/life/Arreglo.java", "linea": 9, "cita": "f.setAccessible(true);", "texto": "Abre un campo con setAccessible."}]}'
+
+function W2-Escenario([string]$Nombre) { return (Nuevo-Escenario $Nombre @('Clase1') @{ CopilotExe = (Join-Path $falsos 'w2-copilot.ps1') }) }
+
+function W2-Orden {
+  $o = Orden-Base
+  $o.ficheros = [ordered]@{ "$W2Dir/Arreglo.java" = $W2Arreglo; "$W2Dir/Otro.java" = $W2Otro }
+  $o.commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')
+  return $o
+}
+
+# El mismo sistema con la prueba en local de mentira apuntando, en <orden>.w2, lo que ve cuando la llaman: el asunto del ultimo commit de la carpeta de rescate,
+# si ya esta datos/revision.json y si ya esta application.yml en la carpeta de rescate (una linea 'asunto|True|True').
+function W2-Sistema {
+  $sis = Join-Path $Dir 'sistema-motor-w2'
+  if (-not (Test-Path -LiteralPath $sis)) {
+    Copy-Item -LiteralPath (Split-Path -Parent (Sistema-Motor)) -Destination $sis -Recurse
+    $ruta = Join-Path $sis 'prueba-local.ps1'
+    $visto = @'
+$w2 = (@(& git -C ($Migrado + '-rescate') log -1 --format=%s) -join '') + '|' + (Test-Path -LiteralPath (Join-Path (@(Get-ChildItem -LiteralPath $Migrado -Directory -Filter 'migracion-*')[0].FullName) 'datos/revision.json')) + '|' + (Test-Path -LiteralPath (Join-Path ($Migrado + '-rescate') 'src/main/resources/application.yml')); [System.IO.File]::AppendAllText($env:PRUEBA_LOCAL_FALSA + '.w2', $w2 + "`n")
+'@
+    $lineas = @()
+    foreach ($l in [System.IO.File]::ReadAllLines($ruta)) { $lineas += $l; if ($l.StartsWith('[System.IO.File]::AppendAllText($env:PRUEBA_LOCAL_FALSA')) { $lineas += $visto } }
+    [System.IO.File]::WriteAllLines($ruta, $lineas)
+  }
+  return (Join-Path $sis 'migracion.ps1')
+}
+
+# Lo que vio la prueba en local de mentira en cada llamada: objetos { Asunto, Revision, Yml }.
+function W2-Vistas($E) {
+  $f = Get-Ruta $E.Raiz 'prueba-local-falsa.json.w2'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ } | ForEach-Object { $p = $_.Split('|'); [pscustomobject]@{ Asunto = $p[0]; Revision = $p[1]; Yml = $p[2] } })
+}
+
+function W2-Respuesta($E, [string]$Id, [string]$Json) {
+  $d = Get-Ruta $E.Raiz 'respuestas'
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  [System.IO.File]::WriteAllText((Join-Path $d ($Id + '.json')), $Json)
+}
+
+# El plan de la llamada $N de c6b-copilot.ps1 (las propiedades al yml).
+function W2-Plan($E, [int]$N, [hashtable]$P) {
+  $d = Get-Ruta $E.Raiz 'planes'
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  [System.IO.File]::WriteAllText((Join-Path $d "$N.json"), (ConvertTo-Json -InputObject $P -Depth 8))
+}
+
+# Las llamadas de revision que ha recibido el Copilot falso (un fichero por llamada, porque van varias a la vez): 'id|reintento', en el orden de ids.
+function W2-Llamadas($E) {
+  $d = Get-Ruta $E.Raiz 'w2-llamadas'
+  if (-not (Test-Path -LiteralPath $d)) { return @() }
+  return @(Get-ChildItem -LiteralPath $d -File | ForEach-Object { [System.IO.File]::ReadAllLines($_.FullName) } | Where-Object { $_ } | Sort-Object)
+}
+
+function W2-Llamadas-Propiedades($E) {
+  $f = Get-Ruta $E.Raiz 'c6b-llamadas.txt'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_ })
+}
+
+# El original con dos claves en su application.properties y el migrado sin ellas; el plan de la primera llamada las pone en el yml.
+function W2-Propiedades($E) {
+  Escribe $E.Legacy 'src/main/resources/application.properties' "app.ruta=/datos`napp.lote=100`n"
+  [void](GitEn $E.Legacy @('add', '-A'))
+  [void](GitEn $E.Legacy @('commit', '-q', '-m', 'propiedades'))
+  $yml = 'src/main/resources/application.yml'
+  W2-Plan $E 1 @{
+    ficheros = @{ $yml = "app:`n  ruta: /datos`n  lote: 100`n" }
+    salida = @{ anadidas = @(@{ clave = 'app.ruta'; fichero = $yml }, @{ clave = 'app.lote'; fichero = $yml }); noAplica = @() }
+  }
+}
+
+# migracion.ps1 con el motor y el Copilot de mentira. $Entorno pisa las variables de los falsos (W2_TOCA...).
+function W2-Migra($E, $Orden, [string[]]$A, $Local = $null, [hashtable]$Entorno = @{}) {
+  $env2 = @{ W2_RESPUESTAS = (Join-Path $E.Raiz 'respuestas'); W2_LLAMADAS = (Join-Path $E.Raiz 'w2-llamadas'); C6B_PLANES = (Join-Path $E.Raiz 'planes'); C6B_LLAMADAS = (Join-Path $E.Raiz 'c6b-llamadas.txt') }
+  foreach ($k in $Entorno.Keys) { $env2[$k] = $Entorno[$k] }
+  foreach ($k in $env2.Keys) { [Environment]::SetEnvironmentVariable($k, $env2[$k]) }
+  try { return (Migra-Motor $E $Orden $A (W2-Sistema) $Local) }
+  finally { foreach ($k in $env2.Keys) { [Environment]::SetEnvironmentVariable($k, '') } }
+}
+
+$Pruebas['w2 (a) una pasada que corrige hace la revision despues de corregir y de comparar y antes de la prueba en local: una tarea revision-* por clase, datos/revision.json con lo que da el falso, y la prueba en local ya lo tiene'] = {
+  $e = W2-Escenario 'w2-a'
+  W2-Respuesta $e 'revision-Arreglo' $W2Hallazgo
+  $r = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  $s = Estado $e
+  Comprueba 'sale con 0, con la fase hecha y la prueba en local hecha' ($r.Codigo -eq 0 -and $s.fase -eq 'hecha' -and $s.pruebaLocal.resultado -eq 'hecha') (Cola $r.Salida)
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'una tarea revision-flujo por clase que dejo la correccion' 'revision-Arreglo revision-Otro' (($t | ForEach-Object { $_.id }) -join ' ')
+  Igual 'las dos hechas' 2 (Cuenta-Estado $t 'hecha')
+  $pos = @(@('Correccion: ', 'Comparacion con el original:', 'Revision por flujos: 2 unidades', 'Revision por flujos: 2 hechas', 'Prueba en local: ') | ForEach-Object { $r.Salida.IndexOf($_) })
+  Comprueba 'la consola dice en este orden: la correccion, la comparacion, el aviso de la revision, su linea y la prueba en local' ($pos[0] -ge 0 -and $pos[1] -gt $pos[0] -and $pos[2] -gt $pos[1] -and $pos[3] -gt $pos[2] -and $pos[4] -gt $pos[3]) (($pos -join ' ') + ' ' + (Cola $r.Salida))
+  $j = Lee-Json (Get-Ruta $e.Out 'datos/revision.json')
+  Comprueba 'deja datos/revision.json' ($null -ne $j) (Cola $r.Salida)
+  if ($null -ne $j) {
+    Igual 'revision.json: 2 unidades, 2 hechas, 0 atascadas' '2 2 0' "$($j.unidades) $($j.hechas) $($j.atascadas)"
+    $h = @($j.hallazgos)
+    Igual 'un hallazgo: el que da el falso' 1 $h.Count
+    Comprueba 'es de J21-INTERNOS, en Arreglo.java, en la linea 9 y con la cita probada' ($h.Count -eq 1 -and $h[0].regla -eq 'J21-INTERNOS' -and $h[0].fichero -eq "$W2Dir/Arreglo.java" -and $h[0].linea -eq 9 -and $h[0].probado -eq $true) (ConvertTo-Json -InputObject $h -Compress)
+  }
+  Igual 'el Copilot falso recibio dos llamadas de revision, las dos primeras' 'revision-Arreglo|0 revision-Otro|0' ((W2-Llamadas $e) -join ' ')
+  $v = @(W2-Vistas $e)
+  Igual 'la prueba en local se llamo una vez' 1 $v.Count
+  Comprueba 'y cuando la llamaron ya estaba revision.json' ($v.Count -eq 1 -and $v[0].Revision -eq 'True') (($v | ForEach-Object { $_.Revision }) -join ' ')
+}
+
+$Pruebas['w2 (b) con parar no hay fase revision ni fase propiedades: ni tareas revision-*, ni revision.json, ni propiedades-arreglo.json, ni llamada a Copilot para ellas'] = {
+  $e = W2-Escenario 'w2-b'
+  W2-Propiedades $e
+  $r = W2-Migra $e (W2-Orden) (Basicos $e) (C4-Local)
+  $s = Estado $e
+  Comprueba 'sale con 0 y con la fase hecha' ($r.Codigo -eq 0 -and $s.fase -eq 'hecha') (Cola $r.Salida)
+  Igual 'ninguna tarea revision-flujo' 0 @(Tareas $e 'revision-flujo').Count
+  Comprueba 'ni datos/revision.json ni datos/propiedades-arreglo.json' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/revision.json')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/propiedades-arreglo.json')))
+  Igual 'el Copilot falso no recibio ninguna llamada de revision' 0 @(W2-Llamadas $e).Count
+  Igual 'ni de propiedades' 0 @(W2-Llamadas-Propiedades $e).Count
+  Comprueba 'la consola no habla ni de la revision ni de las propiedades al yml' ($r.Salida -notmatch 'Revision por flujos' -and $r.Salida -notmatch 'Propiedades al yml') (Cola $r.Salida)
+  Comprueba 'la opcion de -RevisarTodo se guarda como falsa' ($s.revisarTodo -eq $false)
+}
+
+$Pruebas['w2 (c) relanzar sin cambios no vuelve a llamar a Copilot para la revision: la huella de cada tarea es la misma'] = {
+  $e = W2-Escenario 'w2-c'
+  W2-Respuesta $e 'revision-Arreglo' $W2Hallazgo
+  $r1 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'la primera pasada sale con 0' 0 $r1.Codigo
+  Igual 'la primera hizo dos llamadas de revision' 2 @(W2-Llamadas $e).Count
+  $r2 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'la segunda sale con 0' 0 $r2.Codigo
+  Igual 'y no hizo ninguna llamada de revision mas' 2 @(W2-Llamadas $e).Count
+  Comprueba 'la consola cuenta unas 0 llamadas' ($r2.Salida.Contains('Revision por flujos: 2 unidades') -and $r2.Salida.Contains('unas 0 llamadas')) (Cola $r2.Salida)
+  $j = Lee-Json (Get-Ruta $e.Out 'datos/revision.json')
+  Comprueba 'revision.json sigue con el hallazgo' ($null -ne $j -and @($j.hallazgos).Count -eq 1) (Cola $r2.Salida)
+  Igual 'la correccion no se hizo otra vez' 1 @(Llamadas-Motor $e 'fix').Count
+}
+
+$Pruebas['w2 (d) las candidatas salen de las incidencias clase-sin-uso de practicas-despues.json y, sin el, de practicas-antes.json; sin ninguno, no hay; y la tarea de la unidad de esa clase las lleva en entradas.candidatas'] = {
+  $e = W2-Escenario 'w2-d'
+  $r = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'la primera pasada sale con 0' 0 $r.Codigo
+  $arreglo = "$W2Dir/Arreglo.java"
+  $otro = "$W2Dir/Otro.java"
+  $incid = { param($rel, $regla) [ordered]@{ area = 'limpieza'; fichero = $rel; linea = 4; herramienta = 'limpieza'; regla = $regla; origen = 'referencia'; sonar = ''; texto = 'de prueba'; queHago = '' } }
+  $fDes = Get-Ruta $e.Out 'datos/practicas-despues.json'
+  $fAnt = Get-Ruta $e.Out 'datos/practicas-antes.json'
+  $des = Lee-Json $fDes
+  $ant = Lee-Json $fAnt
+  Comprueba 'la pasada midio las buenas practicas de antes y de despues' ($null -ne $des -and $null -ne $ant) (Cola $r.Salida)
+  if ($null -eq $des -or $null -eq $ant) { return }
+  # despues: Arreglo dos veces (sin repetir) y otra regla en Otro (no cuenta); antes: Otro (no cuenta, porque hay despues)
+  $des.incidencias = @((& $incid $arreglo 'clase-sin-uso'), (& $incid $arreglo 'clase-sin-uso'), (& $incid $otro 'getter-setter-a-mano'))
+  $ant.incidencias = @((& $incid $otro 'clase-sin-uso'))
+  Guarda-Json $fDes $des
+  Guarda-Json $fAnt $ant
+  $r2 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'con practicas-despues.json: sale con 0' 0 $r2.Codigo
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'la tarea de Arreglo lleva su ruta, una vez, en entradas.candidatas' $arreglo (@($t | Where-Object { $_.id -eq 'revision-Arreglo' })[0].entradas.candidatas -join ',')
+  Igual 'la de Otro no lleva ninguna (lo de antes no cuenta si hay despues)' 0 @(@($t | Where-Object { $_.id -eq 'revision-Otro' })[0].entradas.candidatas).Count
+  # sin practicas-despues.json: las de practicas-antes.json
+  Remove-Item -LiteralPath $fDes -Force
+  $r3 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'sin practicas-despues.json: sale con 0' 0 $r3.Codigo
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'la tarea de Otro lleva su ruta (las de practicas-antes.json)' $otro (@($t | Where-Object { $_.id -eq 'revision-Otro' })[0].entradas.candidatas -join ',')
+  Igual 'la de Arreglo ya no lleva ninguna' 0 @(@($t | Where-Object { $_.id -eq 'revision-Arreglo' })[0].entradas.candidatas).Count
+  # sin ninguno de los dos: ninguna candidata
+  Remove-Item -LiteralPath $fAnt -Force
+  $r4 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'sin ningun json de buenas practicas: sale con 0' 0 $r4.Codigo
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'ninguna de las dos tareas lleva candidatas' 0 (@($t | ForEach-Object { @($_.entradas.candidatas).Count } | Measure-Object -Sum).Sum)
+}
+
+$Pruebas['w2 (e) una revision que toca un fichero del repositorio: queda deshecho, la tarea es invalida con su motivo y al segundo intento esta atascada; la pasada sigue y llega a la prueba en local'] = {
+  $e = W2-Escenario 'w2-e'
+  W2-Respuesta $e 'revision-Arreglo' $W2Hallazgo
+  $app = "$W2Dir/App.java"
+  $antes = Lee $e.Migrado $app
+  $r = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local) @{ W2_TOCA = $app }
+  $s = Estado $e
+  Comprueba 'sale con 0, con la fase hecha y la prueba en local hecha' ($r.Codigo -eq 0 -and $s.fase -eq 'hecha' -and $s.pruebaLocal.resultado -eq 'hecha') (Cola $r.Salida)
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'las dos tareas, atascadas' 2 (Cuenta-Estado $t 'atascada')
+  Comprueba 'con dos intentos y el ultimo invalido' (@($t | Where-Object { $_.intentos -eq 2 -and $_.ultimoEstado -eq 'invalida' }).Count -eq 2) (ConvertTo-Json -InputObject @($t | ForEach-Object { "$($_.intentos) $($_.ultimoEstado)" }) -Compress)
+  Comprueba 'y su motivo es que la lectura toco ficheros del repositorio' (@($t | Where-Object { $_.motivo -like 'La lectura toco ficheros del repositorio*' -and $_.motivo.Contains('App.java') }).Count -eq 2) (@($t | ForEach-Object { $_.motivo }) -join ' / ')
+  Igual 'el Copilot falso recibio las dos llamadas de cada una' 4 @(W2-Llamadas $e).Count
+  Igual 'la carpeta de rescate queda limpia' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'y App.java como estaba' $antes (Lee $e.Wt $app)
+  $j = Lee-Json (Get-Ruta $e.Out 'datos/revision.json')
+  Comprueba 'revision.json cuenta 2 atascadas y ningun hallazgo' ($null -ne $j -and $j.atascadas -eq 2 -and @($j.hallazgos).Count -eq 0) (Cola $r.Salida)
+  Igual 'la prueba en local se llamo una vez' 1 @(W2-Vistas $e).Count
+  Comprueba 'la consola avisa de las atascadas' ($r.Salida -match 'Atascada: revision-Arreglo' -and $r.Salida -match 'Revision por flujos: 0 hechas, 2 atascadas') (Cola $r.Salida)
+}
+
+$Pruebas['w2 (f) con -Limite 1 solo se inicia una tarea de revision; la pasada para ahi y relanzar sin el limite hace la otra'] = {
+  $e = W2-Escenario 'w2-f'
+  W2-Respuesta $e 'revision-Arreglo' $W2Hallazgo
+  $r1 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'la primera pasada sale con 0' 0 $r1.Codigo
+  # las tareas de lectura quedan hechas: se borra solo lo de la revision para que haya dos pendientes
+  Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos/tareas') -File -Filter 'revision-*.json' | Remove-Item -Force
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'datos/revision.json') -Force
+  Remove-Item -LiteralPath (Get-Ruta $e.Raiz 'w2-llamadas') -Recurse -Force
+  $r2 = W2-Migra $e (W2-Orden) ((Corrige $e) + @('-Limite', '1')) (C4-Local)
+  Igual 'con -Limite 1 sale con 0' 0 $r2.Codigo
+  Igual 'el Copilot falso recibio una sola llamada de revision' 1 @(W2-Llamadas $e).Count
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'una tarea hecha y la otra pendiente' '1 1' "$(Cuenta-Estado $t 'hecha') $(Cuenta-Estado $t 'pendiente')"
+  Comprueba 'la consola dice que quedan 1 tareas pendientes' ($r2.Salida.Contains('Limite de -Limite 1 alcanzado: quedan 1 tareas pendientes')) (Cola $r2.Salida)
+  Comprueba 'y la pasada para en la revision: sin prueba en local' ((Estado $e).fase -eq 'revision' -and @(W2-Vistas $e).Count -eq 1) "$((Estado $e).fase) $(@(W2-Vistas $e).Count)"
+  $r3 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'sin el limite sale con 0' 0 $r3.Codigo
+  Igual 'hace la llamada que faltaba: dos en total' 2 @(W2-Llamadas $e).Count
+  Comprueba 'y llega a la prueba en local' ((Estado $e).fase -eq 'hecha' -and @(W2-Vistas $e).Count -eq 2) "$((Estado $e).fase) $(@(W2-Vistas $e).Count)"
+}
+
+$Pruebas['w2 (g) con -RevisarTodo un .java sin cambios y sin papel tambien es unidad, y estado.json guarda la opcion (y la guarda falsa si se relanza sin ella)'] = {
+  $e = W2-Escenario 'w2-g'
+  $r1 = W2-Migra $e (W2-Orden) ((Corrige $e) + @('-RevisarTodo')) (C4-Local)
+  $s1 = Estado $e
+  Comprueba 'con -RevisarTodo sale con 0 y estado.revisarTodo es true' ($r1.Codigo -eq 0 -and $s1.revisarTodo -eq $true) (Cola $r1.Salida)
+  $t = @(Tareas $e 'revision-flujo')
+  Igual 'hay una tarea por cada .java: App, Arreglo y Otro' 'revision-App revision-Arreglo revision-Otro' (($t | ForEach-Object { $_.id }) -join ' ')
+  Comprueba 'la de App (sin cambios y sin papel) lleva todo en true' (@($t | Where-Object { $_.id -eq 'revision-App' -and $_.entradas.todo -eq $true }).Count -eq 1)
+  $j1 = Lee-Json (Get-Ruta $e.Out 'datos/revision.json')
+  Comprueba 'revision.json dice 3 unidades y todo' ($null -ne $j1 -and $j1.unidades -eq 3 -and $j1.todo -eq $true) (Cola $r1.Salida)
+  Igual 'el Copilot falso recibio tres llamadas' 3 @(W2-Llamadas $e).Count
+  $r2 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  $s2 = Estado $e
+  Comprueba 'sin -RevisarTodo sale con 0 y estado.revisarTodo es false' ($r2.Codigo -eq 0 -and $s2.revisarTodo -eq $false) (Cola $r2.Salida)
+  $j2 = Lee-Json (Get-Ruta $e.Out 'datos/revision.json')
+  Comprueba 'revision.json vuelve a 2 unidades y sin todo' ($null -ne $j2 -and $j2.unidades -eq 2 -and $j2.todo -eq $false) (Cola $r2.Salida)
+  Igual 'y no hay llamadas nuevas (la huella no cambia con -RevisarTodo)' 3 @(W2-Llamadas $e).Count
+}
+
+$Pruebas['w2 (h) una pasada con dos claves que faltan en el yml: la fase propiedades deja su commit antes de la revision y de la prueba en local, y la prueba en local lo ve'] = {
+  $e = W2-Escenario 'w2-h'
+  W2-Propiedades $e
+  W2-Respuesta $e 'revision-Arreglo' $W2Hallazgo
+  $r = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  $s = Estado $e
+  Comprueba 'sale con 0, con la fase hecha y la prueba en local hecha' ($r.Codigo -eq 0 -and $s.fase -eq 'hecha' -and $s.pruebaLocal.resultado -eq 'hecha') (Cola $r.Salida)
+  $asunto = 'rescate(propiedades): 2 claves del original en el yml'
+  $log = @((GitEn $e.Wt @('log', '--format=%s')) -split "`n")
+  Igual 'el ultimo commit de la carpeta de rescate es el de la fase propiedades' $asunto $log[0]
+  Comprueba 'y el de la correccion esta antes' ($log -contains 'rescate(estructura): lote 1, hallazgos 3 a 1') ($log -join ' / ')
+  $p = Lee-Json (Get-Ruta $e.Out 'datos/propiedades-arreglo.json')
+  Comprueba 'datos/propiedades-arreglo.json: hecha, con 2 anadidas y el commit de la carpeta de rescate' ($null -ne $p -and $p.estado -eq 'hecha' -and @($p.anadidas).Count -eq 2 -and $p.commit -eq (GitEn $e.Wt @('rev-parse', 'HEAD'))) (Cola $r.Salida)
+  $pos = @(@('Propiedades al yml: 2 anadidas', 'Revision por flujos: 2 unidades', 'Prueba en local: ') | ForEach-Object { $r.Salida.IndexOf($_) })
+  Comprueba 'la consola dice en este orden: las propiedades al yml, la revision y la prueba en local' ($pos[0] -ge 0 -and $pos[1] -gt $pos[0] -and $pos[2] -gt $pos[1]) (($pos -join ' ') + ' ' + (Cola $r.Salida))
+  $v = @(W2-Vistas $e)
+  Igual 'la prueba en local se llamo una vez' 1 $v.Count
+  Comprueba 'y vio el commit de las propiedades, application.yml y la revision hecha' ($v.Count -eq 1 -and $v[0].Asunto -eq $asunto -and $v[0].Yml -eq 'True' -and $v[0].Revision -eq 'True') (($v | ForEach-Object { "$($_.Asunto)|$($_.Revision)|$($_.Yml)" }) -join ' ')
+  Igual 'el Copilot falso recibio una llamada de propiedades' 1 @(W2-Llamadas-Propiedades $e).Count
+  $r2 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'relanzar sale con 0' 0 $r2.Codigo
+  Igual 'y no llama otra vez para las propiedades' 1 @(W2-Llamadas-Propiedades $e).Count
+  Comprueba 'ni hace otro commit' (@((GitEn $e.Wt @('log', '--format=%s')) -split "`n" | Where-Object { $_ -eq $asunto }).Count -eq 1)
+  Comprueba 'y su resultado sigue siendo hecha' ((Lee-Json (Get-Ruta $e.Out 'datos/propiedades-arreglo.json')).estado -eq 'hecha')
+}
+
+$Pruebas['w2 (i) al rehacer el diagnostico por un commit tuyo, propiedades-arreglo.json y revision.json se apartan con lo demas de la correccion en datos/anterior-<commit7>'] = {
+  $e = W2-Escenario 'w2-i'
+  W2-Propiedades $e
+  $r1 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'la primera pasada sale con 0' 0 $r1.Codigo
+  $v7 = (C4-Head $e).Substring(0, 7)
+  [void](C4-Commit-Usuario $e 'LEEME.txt' "un cambio tuyo`n")
+  $r2 = W2-Migra $e (W2-Orden) (Corrige $e) (C4-Local)
+  Igual 'la segunda sale con 0' 0 $r2.Codigo
+  $ant = Get-Ruta $e.Out "datos/anterior-$v7"
+  Comprueba 'lo de la correccion anterior queda en datos/anterior-<commit7>: correcciones.json, propiedades-arreglo.json y revision.json' ((@('correcciones.json', 'propiedades-arreglo.json', 'revision.json') | Where-Object { -not (Test-Path -LiteralPath (Join-Path $ant $_)) }).Count -eq 0) ((Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos') | ForEach-Object { $_.Name }) -join ' ')
+  Comprueba 'y la pasada de ahora deja los suyos' ((Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/propiedades-arreglo.json')) -and (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/revision.json')))
+}
+
+$Pruebas['w2 (j) migracion.ps1: carga revision.ps1 y arreglo-propiedades.ps1 despues de los de practicas, los nombra en Necesita, -RevisarTodo es un switch con su linea de uso, cada fase se llama en un solo sitio, y Invoke-Cierre usa Get-FallosBuild'] = {
+  $t = [System.IO.File]::ReadAllText($Script)
+  $i = @('practicas.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'revision.ps1', 'arreglo-propiedades.ps1') | ForEach-Object { $t.IndexOf("(Join-Path `$PSScriptRoot '$_')") }
+  Comprueba 'cargados con el Join-Path de los demas' (@($i | Where-Object { $_ -lt 0 }).Count -eq 0) ($i -join ' ')
+  Comprueba 'revision.ps1 y arreglo-propiedades.ps1 despues de practicas.ps1 y arreglo-practicas.ps1' ($i[3] -gt $i[0] -and $i[3] -gt $i[1] -and $i[4] -gt $i[3]) ($i -join ' ')
+  Comprueba 'la linea Necesita nombra los dos' ($t -match '(?m)^Necesita [^\r\n]*\brevision\.ps1' -and $t -match '(?m)^Necesita [^\r\n]*arreglo-propiedades\.ps1')
+  Comprueba 'parametro [switch]$RevisarTodo' ($t -match '(?m)^\s*\[switch\]\$RevisarTodo\b')
+  Comprueba 'la ayuda lo dice en el USO y describe las dos fases' ($t -match '(?m)^\s+\.\\migracion\.ps1 \.\.\. -RevisarTodo\b' -and $t -match '(?m)^\s+revision\s+con la respuesta corregir' -and $t -match '(?m)^\s+propiedades\s+con la respuesta corregir')
+  Igual 'la fase propiedades se llama en un solo sitio' 1 @([regex]::Matches($t, '(?m)^.*\bInvoke-FasePropiedades \$conservar.*$')).Count
+  Igual 'la fase revision se llama en un solo sitio' 1 @([regex]::Matches($t, "(?m)^.*Invoke-FaseTareas 'revision'.*`$")).Count
+  Comprueba 'las dos van solo con la respuesta corregir, las dos despues de -Practicas y -Reglas y antes de la prueba en local' ($t -match "(?s)Invoke-FaseReglas.*?Invoke-FasePropiedades.*?Invoke-FaseTareas 'revision'.*?Invoke-FasePruebaLocal" -and $t -match "(?m)^\s*if \(\`$sigue -and \`$respuesta -eq 'corregir'\) \{ \`$sigue = Invoke-FasePropiedades \`$conservar \}" -and $t -match "(?m)^\s*if \(\`$sigue -and \`$respuesta -eq 'corregir'\) \{ \`$sigue = Invoke-FaseTareas 'revision' \}")
+  Comprueba 'estado.json guarda revisarTodo y -Cierre lo conserva' ($t -match "(?m)\`$Estado\['revisarTodo'\] = \[bool\]\`$RevisarTodo" -and $t -match "'sinPruebaLocal', 'revisarTodo'\)")
+  Comprueba '-Cierre no se mezcla con -RevisarTodo' ($t -match '\$Cierre -and \([^\r\n]*\$RevisarTodo' -and $t.Contains('-Reglas, -RevisarTodo ni -Reintentar'))
+  $cierre = [regex]::Match($t, '(?s)function Invoke-Cierre \{.*?\r?\n\}\r?\n').Value
+  Comprueba 'Invoke-Cierre llama a Get-FallosBuild con tu rama y ya no lleva la regla del build escrita' ($cierre -match "Get-FallosBuild \`$estadoCierre \`$estadoAntes 'tu rama'" -and -not $cierre.Contains('tests: FALLAN') -and -not $cierre.Contains("-cnotlike 'compila: SI*'"))
+  $ap = [regex]::Match($t, '(?s)\$ApartarCorreccion = @\(.*?\r?\n\)').Value
+  Comprueba 'propiedades-arreglo.json y revision.json se apartan con lo demas de la correccion' ($ap.Contains("'datos/propiedades-arreglo.json'") -and $ap.Contains("'datos/revision.json'")) $ap
+  Comprueba 'Get-TareasFase tiene el caso revision, con las candidatas de las buenas practicas' ($t -match "(?s)function Get-TareasFase.*?'revision' \{.*?practicas-despues\.json.*?practicas-antes\.json.*?clase-sin-uso.*?Get-TareasRevision \`$RepoRoot \`$RamaMigrado \(\[bool\]\`$RevisarTodo\)")
+  Comprueba 'Save-Fase y Get-LineaFase tienen el suyo' ($t -match "'revision' \{ Save-Revision \`$Tareas \}" -and $t -match "'revision' \{ return \(Get-LineaRevision \`$Tareas\) \}")
+  Comprueba 'y Invoke-FaseTareas da el aviso antes de la primera ronda' ($t -match "if \(\`$Fase -eq 'revision'\) \{ Info \(Get-AvisoRevision \`$tareas\) \}")
+  $falso = [System.IO.File]::ReadAllBytes((Join-Path $falsos 'w2-copilot.ps1'))
+  Comprueba 'w2-copilot.ps1 es solo ASCII' (@($falso | Where-Object { $_ -gt 127 }).Count -eq 0)
+  Comprueba 'migracion.ps1 es solo ASCII' (@([System.IO.File]::ReadAllBytes($Script) | Where-Object { $_ -gt 127 }).Count -eq 0)
+}
+
+$Pruebas['w2 (k) FLUJO.md (Paso 2) cuenta la fase propiedades y la revision: que revisa, con que reglas, que solo lee, la cita comprobada, el tope de 5, -RevisarTodo y datos/revision.json'] = {
+  $f = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'FLUJO.md'))
+  $paso = [regex]::Match($f, '(?s)## Paso 2\. Corregir lo del informe.*?(?=\r?\n## |\z)').Value
+  Comprueba 'el Paso 2 existe' ($paso.Length -gt 0)
+  Comprueba 'dice que revisa un step con sus piezas o un fichero suelto' ($paso -match 'step' -and $paso -match 'fichero suelto') $paso
+  Comprueba 'con las 7 reglas del cat.logo' ($paso -match '7 reglas') $paso
+  Comprueba 'que solo lee, que cada hallazgo lleva una cita comprobada y el tope de 5 por unidad' ($paso -match 'solo lee' -and $paso -match 'cita comprobada' -and $paso -match '5 hallazgos por unidad') $paso
+  Comprueba 'que -RevisarTodo revisa todos los .java' ($paso -match '-RevisarTodo' -and $paso -match 'src/main/java') $paso
+  Comprueba 'y que el resultado va a datos\revision.json' ($paso.Contains('datos\revision.json')) $paso
+  Comprueba 'y las propiedades al yml, con su commit y datos\propiedades-arreglo.json' ($paso -match 'application\*\.yml|yml' -and $paso.Contains('datos\propiedades-arreglo.json')) $paso
+  Comprueba 'el cierre dice que tampoco admite -RevisarTodo' ($f -match 'no admite `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas`, `-RevisarTodo` ni `-Reintentar`')
 }
 
 # ================================ LANZADOR ================================
