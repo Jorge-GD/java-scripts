@@ -429,3 +429,6 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .sev-bien{color:var(--ok)}
 .sev-revisar{color:var(--toca)}
 .sev-falta{color:var(--mal)}
+#entrega>p,#juntado>p,#entrega .pg-l,#juntado .pg-l,#entrega .filas{margin-top:8px}
+#entrega>h3,#juntado>h3{margin-top:24px}
+#entrega .fila{grid-template-columns:7.5rem minmax(0,1fr)}
