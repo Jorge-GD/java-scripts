@@ -6024,5 +6024,187 @@ Salida 'D' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-e/destino/dato.txt'))
   Igual 'D: sin copiar' 'False' $x.V['D']
 }
 
+# ===================== M64: el test del migrado prepara lo que preparan los tests del repo =====================
+# Escenario-M64 es el de M61 con tests de ejemplo (@SpringBootTest, @SpringBatchTest) en las copias:
+#   migrado (rescate): CargaIT.java con un @BeforeEach en la linea 8 (preparaContexto) y OtraIT.java con un @Before en la 7 (inicia)
+#   original: ViejoIT.java con un @BeforeEach en la linea 7 (preparaViejo)
+# Con $SinPrepara los del migrado no tienen ningun metodo de preparacion (SinIT.java) y hay ademas un UnitTest.java con @BeforeEach pero sin arrancar el batch.
+
+$M64Cabecera = 'Estos tests preparan algo antes de lanzar el job: '
+$M64Fin = 'El test del original puede ser de otra version del framework y no hacerlo. Si este repositorio lo necesita (por ejemplo, un contexto que en produccion pone el arranque de la aplicacion), haz lo mismo en tu test antes de lanzar cada job. No lo uses para tapar un fallo del codigo de src/main.'
+$M64Frase = 'Si viene de una clase de una libreria porque al test le falta algo que en produccion prepara el arranque, preparalo como los tests de ejemplo. Si viene del codigo de src/main, no lo tapes: es un fallo del migrado.'
+$M64Npe = 'java.lang.NullPointerException: Cannot invoke "com.acme.marco.traza.ContextoTraza.aConstructor()" because "contexto" is null'
+$M64Otra = 'java.lang.IllegalStateException: Failed to load ApplicationContext'
+$M64Ruta = 'src/test/java/com/acme/nuevo/'
+
+function Escenario-M64([string]$Nombre, $Casos, [switch]$SinPrepara) {
+  $e = Escenario-M61 $Nombre $Casos
+  if ($SinPrepara) {
+    Escribe $e.Wt ($M64Ruta + 'SinIT.java') "package com.acme.nuevo;`n`n@SpringBootTest`npublic class SinIT {`n  @Test`n  void arranca() {}`n}`n"
+    Escribe $e.Wt ($M64Ruta + 'UnitTest.java') "package com.acme.nuevo;`n`npublic class UnitTest {`n  @BeforeEach`n  void inicia() {}`n}`n"
+  }
+  else {
+    Escribe $e.Wt ($M64Ruta + 'CargaIT.java') "package com.acme.nuevo;`n`n@SpringBootTest`npublic class CargaIT {`n  @Autowired JobLauncherTestUtils utils;`n`n  @BeforeEach`n  void preparaContexto() {`n    HolderTraza.actual().put(`"contextoTraza`", new ContextoTraza());`n  }`n}`n"
+    Escribe $e.Wt ($M64Ruta + 'OtraIT.java') "package com.acme.nuevo;`n`n@RunWith(SpringRunner.class)`n@SpringBatchTest`npublic class OtraIT {`n  @Before`n  public void inicia() throws Exception {`n  }`n}`n"
+  }
+  [void](GitEn $e.Wt @('add', 'src/test'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'tests de ejemplo'))
+  Escribe $e.Legacy 'src/test/java/com/acme/viejo/ViejoIT.java' "package com.acme.viejo;`n`n@SpringBootTest`npublic class ViejoIT {`n  @Autowired JobLauncherTestUtils utils;`n  @BeforeEach`n  void preparaViejo() {`n  }`n}`n"
+  [void](GitEn $e.Legacy @('add', 'src/test'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'test de ejemplo'))
+  return $e
+}
+
+# Un caso del prueba-local.json de antes: distinto, con los fallos que se digan ('migrado:FAILED:causa' u 'original:FAILED:causa', separados por ;).
+function Caso-M64([string]$N, [string]$Fallos) {
+  $f = @()
+  foreach ($x in @($Fallos -split ';' | Where-Object { $_ })) { $l, $est, $causa = $x -split ':', 3; $f += [ordered]@{ lado = $l; estado = $est; causa = $causa; registro = '' } }
+  return [ordered]@{ job = 'cargaJob'; caso = $N; titulo = ''; resultado = 'distinto'; motivo = ''; diferencias = @(); fallos = $f }
+}
+
+# Deja en el prueba-local.json de $E los casos de $Grupos: lista de (cuantos, fallos de cada caso).
+function Anterior-M64($E, $Grupos) {
+  $o = Lee-Json $E.Json
+  $casos = @()
+  $n = 0
+  foreach ($g in $Grupos) { for ($i = 0; $i -lt $g[0]; $i++) { $n++; $casos += , (Caso-M64 ('caso-' + $n.ToString('D2')) $g[1]) } }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+}
+
+$Pruebas['m64 (a) el migrado con tests de ejemplo que preparan algo (@BeforeEach, @Before): su prompt lleva el parrafo con fichero:linea y metodo de cada uno despues de la lista; el original no; la huella no cambia'] = {
+  $e = Escenario-M64 'm64-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $lista = "${M64Ruta}CargaIT.java:8 (preparaContexto), ${M64Ruta}OtraIT.java:7 (inicia)"
+  $parrafo = $M64Cabecera + $lista + '. ' + $M64Fin
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lleva el parrafo entero con sus dos metodos' ($mig.Contains($parrafo)) (Cola $mig)
+  $lineas = @($mig -split "`n")
+  $iUltimo = [array]::IndexOf($lineas, ($lineas | Where-Object { $_ -like '- *OtraIT.java' } | Select-Object -First 1))
+  Comprueba 'va despues de la lista de ejemplos y una linea en blanco' ($iUltimo -ge 0 -and $lineas[$iUltimo + 1] -ceq '' -and $lineas[$iUltimo + 2].StartsWith($M64Cabecera)) (Cola $mig)
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el prompt del original, con su propio @BeforeEach en un ejemplo, no lleva el parrafo' (-not $orig.Contains('Estos tests preparan') -and $orig.Contains('ViejoIT.java')) (Cola $orig)
+  $huella = (Tarea-Arnes $e 'migrado').entradas.huella
+  $llamadas = @(Llamadas-Arnes $e 'migrado').Count
+  [void](GitEn $e.Wt @('rm', '-q', "${M64Ruta}CargaIT.java", "${M64Ruta}OtraIT.java"))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'sin ejemplos'))
+  $r = Prueba $e
+  Igual 'sin los ejemplos sale con 0' 0 $r.Codigo
+  Igual 'la huella del migrado es la misma que con el parrafo' $huella (Tarea-Arnes $e 'migrado').entradas.huella
+  Igual 'y no se escribe otra vez (ninguna llamada nueva)' $llamadas @(Llamadas-Arnes $e 'migrado').Count
+}
+
+$Pruebas['m64 (a2) un ejemplo con seis metodos de preparacion (@BeforeAll, @BeforeClass, con otra anotacion de por medio, @Before, @BeforeEach) y un @Test: el parrafo nombra los cinco primeros, con su linea'] = {
+  $e = Nuevo-Escenario 'm64-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm61-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  Escribe $e.Wt ($M64Ruta + 'MuchosIT.java') "package com.acme.nuevo;`n`n@SpringBootTest`npublic class MuchosIT {`n  @BeforeAll`n  static void uno() {}`n  @BeforeClass`n  public static void dos() {}`n  @BeforeEach`n  @SuppressWarnings(`"unused`")`n  protected void tres() {}`n  @Before`n  public void cuatro() {}`n  @BeforeEach`n  void cinco() {}`n  @BeforeEach`n  void seis() {}`n  @Test`n  void noPrepara() {}`n}`n"
+  [void](GitEn $e.Wt @('add', 'src/test'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'tests de ejemplo'))
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $f = "${M64Ruta}MuchosIT.java"
+  $lista = "$f`:6 (uno), $f`:8 (dos), $f`:11 (tres), $f`:13 (cuatro), $f`:15 (cinco)"
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el parrafo nombra los cinco primeros, en orden' ($mig.Contains($M64Cabecera + $lista + '. ')) (Cola $mig)
+  Comprueba 'ni el sexto (seis) ni el @Test (noPrepara)' (-not $mig.Contains('seis') -and -not $mig.Contains('noPrepara')) (Cola $mig)
+}
+
+$Pruebas['m64 (b) sin metodos de preparacion en los ejemplos de la copia (o con ellos solo en un test que no arranca el batch o en la referencia): EJEMPLOS sale como hoy, sin el parrafo'] = {
+  $e = Escenario-M64 'm64-b1' ([ordered]@{ cargaJob = @('importe=10.00') }) -SinPrepara
+  $r = Prueba $e
+  Igual 'sin metodos de preparacion sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lista el ejemplo' ($mig.Contains("${M64Ruta}SinIT.java")) (Cola $mig)
+  Comprueba 'y no lleva el parrafo (el @BeforeEach de UnitTest, que no arranca el batch, no cuenta)' (-not $mig.Contains('Estos tests preparan') -and -not $mig.Contains('UnitTest.java')) (Cola $mig)
+  $e = Nuevo-Escenario 'm64-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $ref = Join-Path $e.Raiz 'referencia'
+  Escribe $ref 'src/test/java/com/ref/RefIT.java' "package com.ref;`n`n@SpringBootTest`npublic class RefIT {`n  @BeforeEach`n  void preparaRef() {`n  }`n}`n"
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm61-mvn.ps1'); SegundosPorLlamada = 60; Plantilla = $ref }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba $e
+  Igual 'con un ejemplo solo en la referencia sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lista el ejemplo de la referencia' ($mig.Contains('RefIT.java')) (Cola $mig)
+  Comprueba 'y no lleva el parrafo (solo cuentan los ejemplos de la copia)' (-not $mig.Contains('Estos tests preparan') -and -not $mig.Contains('preparaRef')) (Cola $mig)
+}
+
+$Pruebas['m64 (c) el prueba-local.json de antes con 13 casos del migrado FAILED con una NPE (y el original bien) y otros 2 con otra causa, con -RehacerArnes: el primer intento del migrado lleva la frase y las dos lineas, la de 13 primero'] = {
+  $e = Escenario-M64 'm64-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $l13 = "En 13 casos el migrado acaba FAILED y el original no: $M64Npe."
+  $l2 = "En 2 casos el migrado acaba FAILED y el original no: $M64Otra."
+  Comprueba 'el primer intento del migrado lleva el bloque de lo que fallo la otra vez' ($mig.Contains($M61Bloque)) (Cola $mig)
+  Comprueba 'con la linea de los 13 casos de la NPE' ($mig.Contains($l13)) (Cola $mig)
+  Comprueba 'y la de los 2 de la otra causa' ($mig.Contains($l2)) (Cola $mig)
+  Comprueba 'la frase de encima de las lineas, una sola vez' ($mig.Contains($M64Frase + "`n") -and [regex]::Matches($mig, [regex]::Escape($M64Frase)).Count -eq 1 -and $mig.IndexOf($M64Frase) -lt $mig.IndexOf($l13)) (Cola $mig)
+  Comprueba 'la de 13 va antes que la de 2' ($mig.IndexOf($l13) -lt $mig.IndexOf($l2)) (Cola $mig)
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento del original no lleva ni la frase ni las lineas (son del migrado)' (-not $orig.Contains($M64Frase) -and -not $orig.Contains('el migrado acaba')) (Cola $orig)
+  Comprueba 'la tarea del migrado guarda el bloque en entradas.previo (no en la huella)' ([string](Tarea-Arnes $e 'migrado').entradas.previo -match [regex]::Escape($l13)) ''
+}
+
+$Pruebas['m64 (d) una causa con un solo caso no sale; si los dos lados acaban FAILED o el migrado no deja estado.txt el caso no cuenta; EXCEPCION cuenta con su estado; solo las tres causas de mas casos'] = {
+  $e = Escenario-M64 'm64-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $solo = 'java.lang.ArithmeticException: / by zero'
+  $ambos = 'java.lang.IllegalArgumentException: los dos lados'
+  $sin = 'sin estado.txt del migrado'
+  $exc = 'java.lang.ClassNotFoundException: com.acme.Falta'
+  $c3 = 'java.lang.RuntimeException: tercera'
+  $c4 = 'java.lang.RuntimeException: cuarta'
+  Anterior-M64 $e @(@(1, "migrado:FAILED:$solo"), @(2, "migrado:FAILED:$ambos;original:FAILED:$ambos"), @(2, "migrado:sin estado.txt:$sin"), @(5, "migrado:EXCEPCION:$exc"), @(3, "migrado:FAILED:$c3"), @(2, "migrado:FAILED:$c4"), @(2, "migrado:FAILED:$M64Otra"))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'la causa de 5 casos sale con su estado (EXCEPCION)' ($mig.Contains("En 5 casos el migrado acaba EXCEPCION y el original no: $exc.")) (Cola $mig)
+  Comprueba 'la de 3 casos tambien' ($mig.Contains("En 3 casos el migrado acaba FAILED y el original no: $c3.")) (Cola $mig)
+  Comprueba 'de las de 2 casos, la primera por orden de firma (IllegalStateException va antes que RuntimeException) y nada mas: tres lineas en total' ([regex]::Matches($mig, 'En \d+ casos el migrado acaba').Count -eq 3 -and $mig.Contains("En 2 casos el migrado acaba FAILED y el original no: $M64Otra.")) (Cola $mig)
+  Comprueba 'la de un solo caso no sale' (-not $mig.Contains($solo)) (Cola $mig)
+  Comprueba 'la de los dos lados FAILED no sale' (-not $mig.Contains($ambos)) (Cola $mig)
+  Comprueba 'la de sin estado.txt no sale' (-not $mig.Contains($sin)) (Cola $mig)
+  Comprueba 'la cuarta causa (2 casos, despues de la otra por orden) no sale' (-not $mig.Contains($c4)) (Cola $mig)
+}
+
+$Pruebas['m64 (d2) la causa del migrado se corta en 200 letras y las causas que solo cambian en un numero o en el nombre del caso son una'] = {
+  $e = Escenario-M64 'm64-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $larga = 'java.lang.IllegalStateException: ' + ('x' * 300)
+  $o = Lee-Json $e.Json
+  $casos = @()
+  foreach ($n in 1..3) { $casos += , (Caso-M64 ('caso-0' + $n) "migrado:FAILED:no hay filas para el id 1$n en caso-0$n") }
+  foreach ($n in 4..5) { $casos += , (Caso-M64 ('caso-0' + $n) "migrado:FAILED:$larga") }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($e.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'las tres causas que solo cambian en el numero y el caso son una de 3 casos' ($mig.Contains('En 3 casos el migrado acaba FAILED y el original no: no hay filas para el id 1')) (Cola $mig)
+  Comprueba 'la larga sale cortada a 200 letras' ($mig.Contains('En 2 casos el migrado acaba FAILED y el original no: ' + $larga.Substring(0, 200) + '.') -and -not $mig.Contains($larga.Substring(0, 201))) (Cola $mig)
+}
+
+$Pruebas['m64 (e) un lanzamiento sin -RehacerArnes con ese mismo prueba-local.json: ni llamadas ni prompt nuevo ni nada guardado'] = {
+  $e = Escenario-M64 'm64-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $huellas = @((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ','
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"))
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas' $llamadas (Llamadas $e).Count
+  Comprueba 'el prompt del migrado no lleva ni el bloque ni la frase' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque) -and -not (Registro-Arnes $e 'migrado' 1).Contains($M64Frase)) ''
+  Comprueba 'la tarea del migrado no guarda nada de antes' ([string](Tarea-Arnes $e 'migrado').entradas.previo -eq '') ''
+  Igual 'la huella de los dos tests es la misma' $huellas (@((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ',')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
