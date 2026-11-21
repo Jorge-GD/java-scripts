@@ -193,6 +193,7 @@ function Get-VariablesPrompt($T, [string]$Leer) {
       $v.SCRIPT = $e.script; $v.DATOS = $e.datos
       $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
     }
+    'revision-flujo' { $r = Get-VariablesRevision $T; foreach ($k in $r.Keys) { $v[$k] = $r[$k] } }
     'comparar-pieza' {
       $v.FICHERO = $Leer; $v.CLASE = $e.clase; $v.DATOS = $e.datos
       $v.MIGRADO = ((@($e.migrado) | ForEach-Object { "MIGRADO: $_" }) -join "`n")
@@ -594,6 +595,7 @@ function Test-Salida($T, [string]$Dir, [string]$Leer) {
     'comparar-pieza' { return (Test-Comparar $T $Dir) }
     'ficha-sh' { return (Test-FichaSh $T $Dir) }
     'comparar-sh' { return (Test-CompararSh $T $Dir) }
+    'revision-flujo' { return (Test-Revision $T $Dir) }
     default { return (Test-Ficha $T $Dir $Leer) }
   }
 }
@@ -716,7 +718,7 @@ function Invoke-Ronda($Lote, [string]$Dir, [string]$RaizOrig) {
     $dirs = @()
     $esf = $Cfg.EsfuerzoRedaccion
     if ($t.entradas.fichero) { $leer = Join-Ruta $RaizOrig $t.entradas.fichero; $dirs = @($LegacyRoot); $esf = $Cfg.EsfuerzoLectura }
-    elseif ($t.tipo -eq 'comparar-sh') { $esf = $Cfg.EsfuerzoLectura }   # lee los ficheros del migrado, que ya son su carpeta de trabajo
+    elseif ($t.tipo -in @('comparar-sh', 'revision-flujo')) { $esf = $Cfg.EsfuerzoLectura }   # leen los ficheros del migrado, que ya son su carpeta de trabajo
     $motivo = ''
     if ($t.intentos -gt 0) {
       $esf = $Cfg.EsfuerzoReintento

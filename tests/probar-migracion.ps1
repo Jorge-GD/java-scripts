@@ -1363,7 +1363,9 @@ $Pruebas['49 paginas: con todos los datos salen index.html y 1-batch-original.ht
     $x = Pruebas-De $e $job
     Comprueba "$job : lleva su titulo" ($a.Contains($f.titulo))
     Comprueba "$job : lleva el dibujo del flujo" ($a -match 'class="flujo"')
-    Igual "$job : un paso dibujado por cada paso de la ficha" @($f.pasos).Count ([regex]::Matches($a, 'class="paso"').Count)
+    # los cinco pasos del bloque de convivencia (datos/convivencia.json) tambien son class="paso": no cuentan
+    $sinConv = [regex]::Replace($a, '(?s)<div class="conv">.*?</div>', '')
+    Igual "$job : un paso dibujado por cada paso de la ficha" @($f.pasos).Count ([regex]::Matches($sinConv, 'class="paso"').Count)
     Comprueba "$job : lleva el bloque de como probarlo en pre" ($a -match ('id="pre-' + $job + '"'))
     Igual "$job : todos sus casos" @($x.casos).Count ([regex]::Matches($a, 'class="caso"').Count)
     Comprueba "$job : cada caso con lo que se mete y lo que tiene que pasar" (@($x.casos | Where-Object { $a.Contains($_.titulo) -and $a.Contains($_.entrada) -and $a.Contains($_.esperado) }).Count -eq @($x.casos).Count)
@@ -1715,7 +1717,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'convivencia.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1947,7 +1949,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'convivencia.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
@@ -7531,11 +7533,12 @@ function C4-Pasada([string]$Nombre, $Orden = $null, $Local = $null) {
 }
 
 # El diagnostico del cierre que da el motor falso: por defecto, el B que ya estaba antes y un aviso; con $CommitEn, ademas hace un commit en esa carpeta.
-function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '', [string]$RamaEn = '') {
+function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '', [string]$RamaEn = '', [int]$Falla = 0) {
   if ($null -eq $Hallazgos) { $Hallazgos = @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'), (Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests')) }
   $c = [ordered]@{ md = (Md-Diagnostico $Md); hallazgos = @($Hallazgos) }
   if ($CommitEn) { $c.commitEn = $CommitEn }
   if ($RamaEn) { $c.ramaEn = $RamaEn }
+  if ($Falla -ne 0) { $c.falla = $Falla }
   return [ordered]@{ cierre = $c }
 }
 
@@ -7783,6 +7786,41 @@ $Pruebas['c4 (i) un error de hexagonal nuevo en el cierre para; el mismo error s
   Comprueba 'y sale en avisos' ((@((Estado $g).cierre.avisos) -join ' | ') -match 'paridad:') (@((Estado $g).cierre.avisos) -join ' | ')
 }
 
+$Pruebas['c4 (t) un error de una puerta que ya estaba una vez y el cierre trae dos veces (mismo area, fichero y detalle, otra linea): el repetido es nuevo, para con cierre-puertas y tu rama no se mueve; con las mismas dos veces antes y despues no para'] = {
+  $hex = 'el dominio importa infraestructura'
+  $fich = 'src/main/java/com/acme/life/Arreglo.java'
+  $b = Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'
+  $o = C4-Orden
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' $fich 7 $hex))
+  $e = C4-Pasada 'c4-t-nuevo' $o
+  $antes = C4-Head $e
+  $r = C4-Cierre $e (C4-Orden-Cierre @($b, (Hallazgo 'hexagonal' 'error' $fich 3 $hex), (Hallazgo 'hexagonal' 'error' $fich 11 $hex)))
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'cierre-puertas con UN error nuevo de hexagonal, en ese fichero' ($s.parada.motivo -eq 'cierre-puertas' -and $s.parada.detalle.Contains('error nuevo: hexagonal: ' + $fich) -and ([regex]::Matches($s.parada.detalle, 'error nuevo: ')).Count -eq 1) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+  # las mismas dos veces antes y despues: no hay nada nuevo
+  $o2 = C4-Orden
+  $o2.antes.hallazgos = @($o2.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' $fich 7 $hex), (Hallazgo 'hexagonal' 'error' $fich 8 $hex))
+  $f = C4-Pasada 'c4-t-igual' $o2
+  $r = C4-Cierre $f (C4-Orden-Cierre @($b, (Hallazgo 'hexagonal' 'error' $fich 3 $hex), (Hallazgo 'hexagonal' 'error' $fich 11 $hex)))
+  Igual 'con las mismas dos veces sale con 0' 0 $r.Codigo
+  Comprueba 'y el cierre esta hecho' ((Estado $f).cierre.hecho -eq $true) (Cola $r.Salida)
+}
+
+$Pruebas['c4 (u) correcciones.json: un hallazgo repetido (mismo area, fichero y detalle) que antes estaba dos veces y despues una cuenta una vez como resuelto'] = {
+  $e = Nuevo-Escenario 'c4-u' @('Clase1')
+  $o = Orden-Base
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 8 'clase suelta B'))
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  Comprueba 'hay correcciones.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'resueltos: A, el secreto y una de las dos B (la otra sigue, solo cambio de linea)' 'clase suelta A|secreto en claro|clase suelta B' (@($c.resueltos | ForEach-Object { $_.Detalle }) -join '|')
+}
+
 $Pruebas['c4 (j) un commit de rescate que toca src/main/resources/application.yml sale en revisar, en el estado y en la consola, y uno que no lo toca no'] = {
   $o = C4-Orden @('rescate(config): secreto en claro', 'rescate(estructura): lote 2, hallazgos 2 a 1')
   $o.ficheros['src/main/resources/application.yml'] = "batch:`n  chunk: 10`n"
@@ -7888,11 +7926,189 @@ $Pruebas['c4 (q) tu carpeta cambia de rama mientras se miden las puertas (otra r
   Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
 }
 
+$Pruebas['c4 (r) un arnes de la prueba en local sin hacer (atascado, o ausente) aunque todos los jobs salgan iguales: para con cierre-prueba-local, dice que arnes no esta hecho y tu rama no se mueve'] = {
+  foreach ($caso in @(@('original', 'atascada'), @('migrado', 'ausente'))) {
+    $cual = $caso[0]
+    $e = C4-Pasada ('c4-r-' + $cual)
+    $f = Get-Ruta $e.Out 'datos/prueba-local.json'
+    $j = Lee-Json $f
+    if ($caso[1] -eq 'ausente') { $j.arneses.PSObject.Properties.Remove($cual) } else { $j.arneses.$cual = 'atascada' }
+    Guarda-Json $f $j
+    $antes = C4-Head $e
+    $rescate = C4-Head-Wt $e
+    $r = C4-Cierre $e
+    Igual "$cual $($caso[1]): sale con 2" 2 $r.Codigo
+    $s = Estado $e
+    $otro = @('original', 'migrado') | Where-Object { $_ -ne $cual }
+    Comprueba "$cual $($caso[1]): parada cierre-prueba-local que dice que el arnes del $cual no esta hecho y no el del $otro" ($s.parada.motivo -eq 'cierre-prueba-local' -and $s.parada.detalle.Contains("el arnes del $cual no esta hecho") -and -not $s.parada.detalle.Contains("el arnes del $otro")) "$($s.parada.motivo): $($s.parada.detalle)"
+    Igual "$cual $($caso[1]): tu rama no se mueve" $antes (C4-Head $e)
+    Igual "$cual $($caso[1]): el worktree no se mueve" $rescate (C4-Head-Wt $e)
+    Comprueba "$cual $($caso[1]): no hay cierre hecho" ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+  }
+}
+
+$Pruebas['c4 (s) tu rama avanzo (se junta en el worktree) y el motor del diagnostico se cae: para con cierre-motor, el worktree vuelve a su HEAD de antes sin merge a medias ni cambios y tu rama no se mueve'] = {
+  $e = C4-Pasada 'c4-s'
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'docs/NOTAS.md' "notas`n"
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: OK' '' '' 3)
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-motor con el codigo de salida del motor' ($s.parada.motivo -eq 'cierre-motor' -and $s.parada.detalle.Contains('ha salido con codigo 3')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'el diagnostico del cierre se lanzo una vez (la junta en el worktree ya se habia hecho)' ($diag + 1) (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'tu rama no se mueve' $tuyo (C4-Head $e)
+  Igual 'el worktree vuelve a su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
 $Pruebas['c4 (p) FLUJO.md: la regla 1 dice que tu rama solo avanza con -Cierre, por fast-forward y despues de las puertas, y se puede deshacer; y hay un paso que cuenta el cierre'] = {
   $f = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'FLUJO.md'))
   $regla = [regex]::Match($f, '(?m)^1\. .*$').Value
   Comprueba 'la regla 1 nombra -Cierre, el fast-forward y las puertas' ($regla -match 'migracion\.ps1 -Cierre' -and $regla -match 'fast-forward' -and $regla -match 'puertas' -and $regla -match 'deshacer') $regla
   Comprueba 'el flujo cuenta las precondiciones, las puertas y el no hacer push' ($f -match 'cierre-conflicto' -and $f -match 'cierre-puertas' -and $f -match 'No hace push') 'faltan cierre-conflicto, cierre-puertas o No hace push'
+}
+
+# ============================ W1: CONVIVENCIA (C2) EN migracion.ps1 ============================
+# Las lineas 'Convivencia: ...' de la consola.
+function W1-Lineas([string]$Salida) { return @($Salida -split "`n" | Where-Object { $_ -match '^Convivencia: ' }) }
+
+# Un datos/convivencia.json de antes, con otro contenido, para ver si se vuelve a escribir. Devuelve su ruta.
+function W1-Viejo($E) {
+  $ruta = Get-Ruta $E.Out 'datos/convivencia.json'
+  Guarda-Json $ruta ([ordered]@{ jobs = @([ordered]@{ job = 'viejo'; veredicto = 'a-la-vez'; motivos = @(); reponer = @() }); fijos = [ordered]@{ batch = 'viejo'; serie = @(); aLaVez = 'viejo' } })
+  return $ruta
+}
+
+# Un fichero con un motivo de convivencia (un escritor de tabla): el codigo de un arreglo o de un commit tuyo.
+$W1Escritor = "package com.acme.life;`n`n/** Escribe. */`npublic class Escribe {`n    private JdbcBatchItemWriter<Object> escritor;`n}`n"
+
+$Pruebas['w1 (a) una pasada completa deja datos/convivencia.json con un job por cada job de mapa.json, en su orden, y la pagina 1 lleva el bloque de convivencia de cada job'] = {
+  $c = Corrida-Dos $GuionBase
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $jobs = @((Mapa $e).jobs | ForEach-Object { $_.job })
+  Igual 'el mapa tiene dos jobs' 2 $jobs.Count
+  $cv = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  Comprueba 'deja datos/convivencia.json' ($null -ne $cv) (Cola $c.R.Salida)
+  if ($null -eq $cv) { return }
+  Igual 'un job por cada job de mapa.json, en su orden' ($jobs -join ' ') (@($cv.jobs | ForEach-Object { $_.job }) -join ' ')
+  $h = Pagina $e.Out '1-batch-original.html'
+  foreach ($j in $jobs) { Comprueba "la pagina 1 lleva el bloque de convivencia de $j" ((Articulo $h $j).Contains('<div class="conv">')) (Articulo $h $j) }
+  $l = W1-Lineas $c.R.Salida
+  Igual 'la consola dice la linea Convivencia: dos veces (lectura-hecha y el final)' 2 $l.Count
+  Comprueba 'con las cuentas de sus 2 jobs' ($l.Count -gt 0 -and $l[0] -match '^Convivencia: 2 jobs, \d+ a la vez y \d+ uno detras de otro \(datos\\convivencia\.json\)\.') ($l -join ' | ')
+}
+
+$Pruebas['w1 (b) una pasada que para antes del mapa no escribe convivencia.json ni dice Convivencia en la consola'] = {
+  $e = Escenario-Dos 'w1-b'
+  $r = Migra $e ((Basicos $e) + @('-Limite', '1'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'queda tarea pendiente: la pasada paro antes del mapa' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/mapa.json'))) (Cola $r.Salida)
+  Comprueba 'no hay datos/convivencia.json' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json')))
+  Comprueba 'la consola no dice Convivencia' ($r.Salida -notmatch 'Convivencia') (Cola $r.Salida)
+}
+
+$Pruebas['w1 (c) con la respuesta parar (sin corregir), convivencia se mide en lectura-hecha, antes de decir que no se corrige, y otra vez al final'] = {
+  $c = Corrida-Dos $GuionBase
+  Igual 'la respuesta es parar' 'parar' (Estado $c.E).respuesta
+  $s = $c.R.Salida
+  $sinCorregir = $s.IndexOf('No se corrige nada')
+  $primera = $s.IndexOf('Convivencia: ')
+  $ultima = $s.LastIndexOf('Convivencia: ')
+  Comprueba 'dice que no se corrige nada' ($sinCorregir -ge 0) (Cola $s)
+  Comprueba 'la primera linea Convivencia: sale antes de eso (la de lectura-hecha)' ($primera -ge 0 -and $primera -lt $sinCorregir) (Cola $s)
+  Comprueba 'la ultima sale despues (la del final)' ($ultima -gt $sinCorregir) (Cola $s)
+  Comprueba 'y deja datos/convivencia.json' (Test-Path -LiteralPath (Get-Ruta $c.E.Out 'datos/convivencia.json'))
+}
+
+$Pruebas['w1 (d) tras un -Cierre que junta, convivencia.json se ha vuelto a escribir; un segundo -Cierre (ya juntado) no lo toca'] = {
+  $e = C4-Pasada 'w1-d'
+  $ruta = W1-Viejo $e
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'junta' ((Estado $e).cierre.hecho -eq $true) (Cola $r.Salida)
+  $cv = Lee-Json $ruta
+  Igual 'el JSON viejo se ha sustituido: ahora tiene el job de mapa.json' 'batch' (@($cv.jobs | ForEach-Object { $_.job }) -join ' ')
+  $l = W1-Lineas $r.Salida
+  Igual 'la consola dice la linea Convivencia: una vez' 1 $l.Count
+  Comprueba 'y la dice al final, despues de que no hace push' ($r.Salida.LastIndexOf('Convivencia: ') -gt $r.Salida.IndexOf('No hago push')) (Cola $r.Salida)
+  $viejo = W1-Viejo $e
+  $hash = Hash-De $viejo
+  $r2 = C4-Cierre $e
+  Igual 'el segundo sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que ya esta juntado' ($r2.Salida -match 'Ya esta juntado') (Cola $r2.Salida)
+  Igual 'no toca convivencia.json' $hash (Hash-De $viejo)
+  Comprueba 'ni dice Convivencia' ($r2.Salida -notmatch 'Convivencia') (Cola $r2.Salida)
+}
+
+$Pruebas['w1 (d2) tu commit nuevo toca src/main: tras juntar, convivencia mide el arbol ya juntado (con tu fichero)'] = {
+  $e = C4-Pasada 'w1-d2'
+  [void](C4-Commit-Usuario $e 'src/main/java/com/acme/life/Escribe.java' $W1Escritor)
+  $antes = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  Comprueba 'antes de juntar, la pasada dejo su convivencia.json' ($null -ne $antes)
+  if ($null -eq $antes) { return }
+  Igual 'y no veia tu fichero' 0 @(@($antes.jobs)[0].motivos | Where-Object { $_.fichero -eq 'src/main/java/com/acme/life/Escribe.java' }).Count
+  $r = C4-Cierre $e $null (C4-Local 3 0)
+  Igual 'sale con 0' 0 $r.Codigo
+  $cv = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  $m = @(@($cv.jobs)[0].motivos | Where-Object { $_.lado -eq 'migrado' -and $_.fichero -eq 'src/main/java/com/acme/life/Escribe.java' })
+  Igual 'despues, el job lleva un motivo del migrado en tu fichero' 1 $m.Count
+}
+
+$Pruebas['w1 (e) un -Cierre que para por una precondicion no llama a Invoke-Convivencia: ni toca convivencia.json ni dice Convivencia'] = {
+  $e = C4-Pasada 'w1-e'
+  $viejo = W1-Viejo $e
+  $hash = Hash-De $viejo
+  Escribe $e.Migrado 'src/main/java/com/acme/life/App.java' "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int mio = 1;`n}`n"
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'para por cambios sin commit' 'cierre-cambios-sin-commit' (Estado $e).parada.motivo
+  Igual 'convivencia.json no cambia' $hash (Hash-De $viejo)
+  Comprueba 'la consola no dice Convivencia' ($r.Salida -notmatch 'Convivencia') (Cola $r.Salida)
+}
+
+$Pruebas['w1 (f) si Invoke-Convivencia falla por dentro, la pasada sigue y acaba igual'] = {
+  $e = Escenario-Dos 'w1-f'
+  $r1 = Migra $e (Basicos $e)
+  Igual 'la primera pasada sale con 0' 0 $r1.Codigo
+  Comprueba 'y deja convivencia.json' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json')) (Cola $r1.Salida)
+  # el fichero temporal de Write-Json es una carpeta: escribir convivencia.json falla dentro de Invoke-Convivencia
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json') -Force -ErrorAction SilentlyContinue
+  [void](New-Item -ItemType Directory -Path (Get-Ruta $e.Out 'datos/convivencia.json.tmp') -Force)
+  $r2 = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0, como la primera' $r1.Codigo $r2.Codigo
+  Comprueba 'la consola dice que no se pudo medir' ($r2.Salida -match 'Convivencia: no se pudo medir') (Cola $r2.Salida)
+  $s = Estado $e
+  Comprueba 'la pasada acaba igual: fase hecha, sin parada' ($s.fase -eq 'hecha' -and $null -eq $s.parada) "$($s.fase) $($s.parada)"
+  Comprueba 'no deja convivencia.json' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json')))
+  Comprueba 'y las paginas se montan' ((Pagina $e.Out '1-batch-original.html').Length -gt 0 -and (Pagina $e.Out 'index.html').Length -gt 0)
+}
+
+$Pruebas['w1 (g) una pasada que corrige mide la convivencia al final, sobre el codigo ya corregido'] = {
+  $o = C4-Orden
+  $o.ficheros['src/main/java/com/acme/life/Escribe.java'] = $W1Escritor
+  $e = C4-Pasada 'w1-g' $o
+  $cv = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  Comprueba 'deja datos/convivencia.json' ($null -ne $cv)
+  if ($null -eq $cv) { return }
+  $m = @(@($cv.jobs)[0].motivos | Where-Object { $_.lado -eq 'migrado' -and $_.fichero -eq 'src/main/java/com/acme/life/Escribe.java' })
+  Igual 'el job lleva un motivo del migrado en el fichero que dejo la correccion' 1 $m.Count
+  Igual 'y su veredicto es en-serie' 'en-serie' @($cv.jobs)[0].veredicto
+}
+
+$Pruebas['w1 (h) la cabecera de migracion.ps1 nombra convivencia.ps1, se carga con los demas, y FLUJO.md (Paso 6) cuenta que dice si en pre se lanza a la vez o uno detras de otro'] = {
+  $mig = [System.IO.File]::ReadAllText($Script)
+  Comprueba 'la linea Necesita nombra convivencia.ps1' ($mig -match '(?m)^Necesita [^\r\n]*convivencia\.ps1')
+  Comprueba 'se carga justo despues de propiedades.ps1' ($mig -match "(?m)^\. \(Join-Path \`$PSScriptRoot 'propiedades\.ps1'\)\r?\n\. \(Join-Path \`$PSScriptRoot 'convivencia\.ps1'\)")
+  $f = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'FLUJO.md'))
+  $paso = [regex]::Match($f, '(?s)## Paso 6\. Pre.*?(?=\r?\n## |\z)').Value
+  Comprueba 'el Paso 6 existe' ($paso.Length -gt 0)
+  Comprueba 'dice que migracion.ps1 lo dice sin IA en cada lanzamiento y tras -Cierre' ($paso -match 'migracion\.ps1' -and $paso -match 'sin IA' -and $paso -match 'cada lanzamiento' -and $paso -match '-Cierre') $paso
+  Comprueba 'habla de lanzar el viejo y el nuevo a la vez o uno detras de otro, con los motivos y que reponer' ($paso -match 'a la vez' -and $paso -match 'detr.s de otro' -and $paso -match 'motivos' -and $paso -match 'reponer') $paso
+  Comprueba 'lo pone en C.mo probarlo en pre y dice que por defecto es uno detras de otro' ($paso -match 'C.mo probarlo en pre' -and $paso -match 'por defecto') $paso
+  Comprueba 'y que las tablas BATCH_ no se comparten' ($paso -match 'BATCH_' -and $paso -match 'no se comparten') $paso
 }
 
 # ================================ LANZADOR ================================
