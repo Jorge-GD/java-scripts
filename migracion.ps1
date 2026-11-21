@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, convivencia.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, convivencia.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, revision.ps1, arreglo-propiedades.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -25,8 +25,9 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
   si falla otra vez la tarea queda atascada y se sigue.
   Orden de las fases (datos\estado.json lleva la fase en que va; cada tarea hecha se salta al relanzar, y una fase se
   hace aunque la anterior tenga atascadas). Con la respuesta "corregir":
-    fichas-clase, mapa, lanzadores, fichas-job, resumen, pruebas-pre, casos-pre, lectura-hecha, correccion, comparar y prueba-local.
-  Con "parar" (o -SoloInforme): las mismas fases de lectura, comparar, lectura-hecha y prueba-local. Si la correccion
+    fichas-clase, mapa, lanzadores, fichas-job, resumen, pruebas-pre, casos-pre, lectura-hecha, correccion, comparar, practicas y reglas (si las pides),
+    propiedades, revision y prueba-local.
+  Con "parar" (o -SoloInforme): las mismas fases de lectura, comparar, lectura-hecha y prueba-local (sin propiedades ni revision). Si la correccion
   se para, o hay tareas pendientes (-Limite), no se sigue con nada mas. Al acabar todo, sin parada ni pendientes, la
   fase es hecha, y estado.json lleva fin (vacio mientras corre; la hora al salir, de cualquier forma).
     mapa        jobs del original (contrato de rescate.ps1 -Modo pre -SinIA, o el que ya haya en
@@ -70,6 +71,14 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
     reglas      solo con -Reglas, despues de practicas y antes de prueba-local: un test unitario por clase con un caso por cada regla de
                 negocio que la comparacion da por igual (tests-reglas.ps1). El script cambia la linea de cada regla (un operador) y solo
                 se queda con el test si falla con el cambio: un commit por test; datos\tests-reglas.json. Sin -Reglas la fase no existe
+    propiedades con la respuesta corregir, despues de practicas y reglas y antes de revision: pone en el yml del migrado las claves del original que faltan
+                (datos\propiedades.json) con una sola tarea y un commit (arreglo-propiedades.ps1). Solo se queda con el cambio si compila, no fallan mas tests
+                que antes y ninguna clave empeora; datos\propiedades-arreglo.json. Una tarea que no sale bien se avisa (atascada) y la pasada sigue
+    revision    con la respuesta corregir, despues de propiedades y antes de prueba-local: revisa el arbol final por flujos (revision.ps1) y solo lee. Una tarea por
+                unidad (un step con sus piezas, o un fichero suelto) con las 7 reglas del catalogo y como mucho 5 hallazgos por unidad, cada uno con una cita que
+                el script comprueba. Mira lo que cambio frente a tu rama, lo que tiene papel de Spring Batch y las clases sin uso de datos\practicas-despues.json
+                (o de practicas-antes.json); con -RevisarTodo, todos los .java de src/main/java. Lo que una lectura toque del repositorio se deshace y la tarea no
+                vale. Va con -Limite, -MaxHoras y los fallos seguidos de Copilot como las demas fases; datos\revision.json
     prueba-local  prueba-local.ps1 -Si (con el mismo modelo, y -JavaLegacy si lo das) ejecuta el original y el migrado con las
                 mismas entradas: datos\prueba-local.json y registros\prueba-local.log; su salida sale por la consola mientras
                 corre. Siempre se lanza (al relanzar reutiliza lo hecho) salvo con -SinPruebaLocal. Un fallo se avisa y la
@@ -77,7 +86,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 fallo o saltada, codigo, minutos, detalle, jdkOriginal -true si el original no compila con el JDK de Maven- y registro); hasta llegar
                 a la fase vale null. estado.json lleva tambien ramaOrigen (la rama del migrado de la que sale la de rescate) y javaLegacy (el
                 valor de -JavaLegacy, o vacio): con ellos la portada monta el comando del siguiente paso. Y las opciones de ese lanzamiento: practicas, reglas,
-                maxHoras, limite y sinPruebaLocal (-Reintentar no se guarda: es de una sola vez); relanzar sin una de ellas la quita del comando.
+                revisarTodo, maxHoras, limite y sinPruebaLocal (-Reintentar no se guarda: es de una sola vez); relanzar sin una de ellas la quita del comando
+                (revisarTodo se guarda, pero la portada aun no lo pone en el comando).
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
   que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
   migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato), 4-correcciones.html (que se ha
@@ -100,6 +110,7 @@ USO
   .\migracion.ps1 ... -Reintentar      # repite las tareas de lectura atascadas y los ficheros atascados de la correccion
   .\migracion.ps1 ... -Practicas       # antes de la prueba en local, pasa a Lombok los getters y setters escritos a mano (un commit por fichero)
   .\migracion.ps1 ... -Reglas          # antes de la prueba en local, un test unitario por regla de negocio, comprobado cambiando su linea (un commit por test)
+  .\migracion.ps1 ... -RevisarTodo    # en la fase revision, mira todos los .java de src/main/java y no solo lo que cambio, lo que tiene papel y las candidatas
   .\migracion.ps1 ... -SinPruebaLocal # no hace la ultima fase (ejecutar el original y el migrado)
   .\migracion.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original para prueba-local.ps1, si no compila con el de Maven
   .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
@@ -130,6 +141,7 @@ param(
   [switch]$Reintentar,        # volver a intentar las tareas de lectura atascadas y los ficheros atascados de la correccion de un lanzamiento anterior
   [switch]$Practicas,         # antes de la prueba en local, pasar a Lombok los getters y setters escritos a mano (la fase practicas)
   [switch]$Reglas,            # antes de la prueba en local, escribir un test unitario por cada regla de negocio (la fase reglas)
+  [switch]$RevisarTodo,       # la fase revision mira todos los .java de src/main/java, y no solo lo que cambio, lo que tiene papel y las candidatas
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
   [string]$JavaLegacy = '',   # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
   [string]$Lanzadores = '',   # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
@@ -146,6 +158,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'huella.ps1')
 . (Join-Path $PSScriptRoot 'arreglo-practicas.ps1')
 . (Join-Path $PSScriptRoot 'tests-reglas.ps1')
+. (Join-Path $PSScriptRoot 'revision.ps1')
+. (Join-Path $PSScriptRoot 'arreglo-propiedades.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -301,6 +315,7 @@ function Save-Registro([string]$Ruta, $Salida) {
 # de otro punto de partida mezclaria dos cosas.
 $ApartarCorreccion = @(
   'datos/correcciones.json', 'datos/hallazgos-despues.json', 'datos/diagnostico-despues.md', 'datos/cobertura-despues.json', 'datos/practicas-despues.json',
+  'datos/propiedades-arreglo.json', 'datos/revision.json',
   'registros/correccion.log', 'registros/diagnostico-despues.log', 'registros/cobertura-despues.log', 'registros/practicas-despues.log'
 )
 $ApartarAlRehacer = @(
@@ -449,6 +464,13 @@ function Get-TareasFase([string]$Fase, [bool]$Conservar) {
     'pruebas-pre' { return @(Get-TareasPrueba (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'casos-pre' { return @(Get-TareasCaso (Read-Json (Join-Path $Datos 'mapa.json')) $Conservar) }
     'comparar' { return @(@(Get-TareasComparar $Conservar $RamaMigrado) + @(Get-TareasCompararSh $Conservar $RamaMigrado)) }
+    'revision' {
+      # las candidatas a codigo muerto: las clase-sin-uso de las buenas practicas de despues de corregir y, si no estan, de las de antes
+      $prac = $null
+      foreach ($n in @('practicas-despues.json', 'practicas-antes.json')) { if ($null -eq $prac) { $prac = Read-JsonSuave (Join-Path $Datos $n) } }
+      $cands = @($prac.incidencias | Where-Object { $_ -and $_.regla -ceq 'clase-sin-uso' } | ForEach-Object { [string]$_.fichero } | Select-Object -Unique)
+      return @(Get-TareasRevision $RepoRoot $RamaMigrado ([bool]$RevisarTodo) $cands $Conservar)
+    }
   }
 }
 
@@ -467,6 +489,7 @@ function Save-Fase([string]$Fase, $Tareas) {
       Save-Comparaciones @($Tareas | Where-Object { $_.tipo -eq 'comparar-pieza' })
       Save-ComparacionesSh @($Tareas | Where-Object { $_.tipo -eq 'comparar-sh' })
     }
+    'revision' { Save-Revision $Tareas }
   }
 }
 
@@ -519,10 +542,11 @@ function Get-LineaFase([string]$Fase, $Tareas) {
       if ($sh.Count -gt 0) { $l += "`n" + (Get-LineaCompararSh $sh) }
       return $l
     }
+    'revision' { return (Get-LineaRevision $Tareas) }
   }
 }
 
-# Una fase de tareas (las de lectura y comparar): sus tareas, las rondas, lo que deja en datos\, el informe y la linea de consola. Devuelve
+# Una fase de tareas (las de lectura, comparar y revision): sus tareas, las rondas, lo que deja en datos\, el informe y la linea de consola. Devuelve
 # si se puede seguir con lo que viene despues: sin parada y sin tareas pendientes (-Limite). $script:Todas y $script:Quedan acumulan lo que
 # hay al salir.
 function Invoke-FaseTareas([string]$Fase) {
@@ -537,6 +561,7 @@ function Invoke-FaseTareas([string]$Fase) {
     $atascadas0 = @($tareas | Where-Object { $_.estado -eq 'atascada' }).Count
     if ($atascadas0 -gt 0) { Aviso "$atascadas0 tareas atascadas de un lanzamiento anterior se conservan sin repetir. Para volver a intentarlas: -Reintentar (o cambia de modelo)." }
   }
+  if ($Fase -eq 'revision') { Info (Get-AvisoRevision $tareas) }
   Invoke-Fase $tareas
   Save-Fase $Fase $tareas
   Save-Informes
@@ -804,8 +829,7 @@ function Invoke-Cierre {
   $estadoCierre = Get-EstadoBuild ([System.IO.File]::ReadAllText((Join-Path $Datos 'diagnostico-cierre.md'), $Utf8))
   $estadoAntes = Get-EstadoBuild ([System.IO.File]::ReadAllText((Join-Path $Datos 'diagnostico-antes.md'), $Utf8))
   $fallos = @()
-  if ($estadoCierre -cnotlike 'compila: SI*') { $fallos += "no compila o no se ha podido comprobar (el diagnostico dice '$estadoCierre')" }
-  if ($estadoCierre -ceq 'compila: SI | tests: FALLAN' -and $estadoAntes -cne $estadoCierre) { $fallos += 'los tests fallan y en tu rama no fallaban' }
+  $fallos += @(Get-FallosBuild $estadoCierre $estadoAntes 'tu rama')
   foreach ($h in @(Get-Faltantes 'hallazgos-antes.json' 'hallazgos-cierre.json' | Where-Object { $_.Sev -ceq 'error' -and $AreasPuertas -ccontains [string]$_.Cat })) { $fallos += ('error nuevo: ' + (Get-TextoHallazgo $h)) }
   if ($fallos.Count -gt 0) { return (Stop-Cierre 'puertas' ('Lo juntado no pasa las puertas: ' + ($fallos -join '; ') + '. No he movido nada.') $antesWt (Join-Path $Registros 'diagnostico-cierre.log')) }
   if ($cambiado) {
@@ -877,7 +901,7 @@ function Stop-ErrorInterno($Ex) {
 $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original (Java 8).' }
 if ($SoloInforme -and $Si) { Stop-Arranque 'Usa -SoloInforme o -Si, no los dos.' }
-if ($Cierre -and ($SoloInforme -or $Si -or $Practicas -or $Reglas -or $Reintentar)) { Stop-Arranque '-Cierre va solo: no lo mezcles con -SoloInforme, -Si, -Practicas, -Reglas ni -Reintentar.' }
+if ($Cierre -and ($SoloInforme -or $Si -or $Practicas -or $Reglas -or $RevisarTodo -or $Reintentar)) { Stop-Arranque '-Cierre va solo: no lo mezcles con -SoloInforme, -Si, -Practicas, -Reglas, -RevisarTodo ni -Reintentar.' }
 $respondeSi = [bool]$Si
 
 # 1. Herramientas y repos (antes, los ajustes: pueden cambiar donde estan)
@@ -986,7 +1010,7 @@ $Estado = [ordered]@{
 if ($previo -and $previo.creado) { $Estado['creado'] = Get-HoraTexto $previo.creado }
 if ($Cierre) {
   # -Cierre no es una pasada: lo suyo (fase, fin, parada, prueba en local y opciones) se queda como estaba; solo se quita la parada de un cierre anterior, que se vuelve a intentar
-  foreach ($k in @('fase', 'pruebaLocal', 'practicas', 'reglas', 'maxHoras', 'limite', 'sinPruebaLocal')) { $Estado[$k] = $previo.$k }
+  foreach ($k in @('fase', 'pruebaLocal', 'practicas', 'reglas', 'maxHoras', 'limite', 'sinPruebaLocal', 'revisarTodo')) { $Estado[$k] = $previo.$k }
   if (-not $JavaLegacy) { $JavaLegacy = [string]$previo.javaLegacy }   # la prueba en local que repite el cierre usa el JDK del original de la pasada
   $Estado['javaLegacy'] = $JavaLegacy
   $Estado['fin'] = Get-HoraTexto $previo.fin
@@ -994,7 +1018,7 @@ if ($Cierre) {
 }
 else {
   # las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
-  $Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal
+  $Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal; $Estado['revisarTodo'] = [bool]$RevisarTodo
 }
 if ($hayWt) {
   $RepoRoot = $dirWt
@@ -1071,6 +1095,8 @@ try {
   }
   if ($sigue -and $Practicas) { $sigue = Invoke-FasePracticas $conservar }
   if ($sigue -and $Reglas) { $sigue = Invoke-FaseReglas $conservar }
+  if ($sigue -and $respuesta -eq 'corregir') { $sigue = Invoke-FasePropiedades $conservar }
+  if ($sigue -and $respuesta -eq 'corregir') { $sigue = Invoke-FaseTareas 'revision' }
   if ($sigue) {
     Invoke-FasePruebaLocal
     $Estado['fase'] = 'hecha'

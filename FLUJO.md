@@ -104,6 +104,8 @@ Carpetas que verás aparecer:
 - No repite la lectura del paso 1.
 - Arregla fichero a fichero en `C:\ruta\migrado-rescate`, con un commit por arreglo. Un arreglo solo se queda si compila, no fallan más tests que antes, bajan los problemas y no empeora nada.
 - Después vuelve a medir, a comparar y a ejecutar los dos. La página 4 dice qué ha quitado y qué queda.
+- Después de corregir y de comparar, si al migrado le faltan claves del original en sus `application*.properties` o `.yml` (las que dice `datos\propiedades.json`), la pasada las pone en el `.yml` con una sola llamada a Copilot y un commit (`rescate(propiedades): ...`). Solo se queda con el cambio si compila, no fallan más tests que antes y ninguna clave empeora, y el valor de un secreto no sale en ningún fichero. Si no sale bien, avisa y la pasada sigue. El resultado va a `datos\propiedades-arreglo.json`.
+- Antes de ejecutar los dos, la pasada revisa el árbol final por flujos. La IA solo lee: si toca un fichero, se deshace y esa tarea no vale. Cada llamada revisa una unidad, que es un step con sus piezas (reader, processor, writer, tasklet y listeners) o un fichero suelto, con las 7 reglas del catálogo: listener que nadie registra, `@StepScope` que devuelve la interfaz, gestor de transacciones que no es el de la base, objeto no serializable en el `ExecutionContext`, `@EnableBatchProcessing`, acceso a los internos del JDK y clase candidata a código muerto. Cada hallazgo lleva una cita comprobada por el script en el fichero (lo que no se puede comprobar se descarta) y salen como mucho 5 hallazgos por unidad. Mira lo que ha cambiado frente a tu rama, lo que tiene papel de Spring Batch y las clases sin uso que dicen las buenas prácticas; con `-RevisarTodo`, todos los `.java` de `src/main/java`. Respeta `-Limite` y `-MaxHoras`, y al relanzar no repite las unidades que no han cambiado. El resultado va a `datos\revision.json`.
 - Opcional: para que la corrección de `calidad` vaya como la de Sonar (la IA solo compila, cada lote pasa los tests ligeros y un control pasa la suite entera), pon en `C:\ruta\migrado-rescate\.rescate\config.json` (el que lee la corrección; antes de crear la copia vale el de `C:\ruta\migrado\.rescate\config.json`) `{"PasosSoloCompila": ["sonar", "calidad"], "PasosTestsElegidos": ["sonar", "calidad"]}`. Por defecto no cambia nada: mide el paso en `.rescate\intentos.tsv` antes y después.
 - Si una pasada anterior ya terminó la corrección, se la salta. Para volver a corregir, lanza el motor directamente:
 
@@ -191,7 +193,7 @@ git -C C:\ruta\migrado diff --stat <tu-rama>...<rama-rescate>
 
 El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'rescate/...'`). Si lo has perdido: `git -C C:\ruta\migrado worktree list`, o `rama` en `migracion-<batch>\datos\estado.json`. Si un commit no te convence, quítalo con `git -C C:\ruta\migrado-rescate revert <commit>` y, si ya hiciste la prueba en local, hazla otra vez.
 
-Cuando estés conforme, lanza el cierre. Va solo (no admite `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas` ni `-Reintentar`), no usa IA y no pregunta nada:
+Cuando estés conforme, lanza el cierre. Va solo (no admite `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas`, `-RevisarTodo` ni `-Reintentar`), no usa IA y no pregunta nada:
 
 ```powershell
 .\migracion.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Cierre
