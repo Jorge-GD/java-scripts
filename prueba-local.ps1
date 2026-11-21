@@ -170,6 +170,10 @@ $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no 
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
+# Una propiedad sin valor en el test (Get-PistaArnes), por su clave (grupo k): los mensajes de Spring y de Spring Boot ('Could not resolve placeholder 'x'',
+# 'Failed to bind properties under 'x''; la clave, lo que haya entre comillas) y, sin comillas, '<clave> is not configured|is not set|must be set|is required|is
+# missing' o en espanol 'no esta configurad|es obligatori', con la clave de al menos un punto (app.export.dir): una palabra suelta o una clase no cuentan.
+$PatronPropiedad = '(?i)(?:Could not resolve placeholder|Failed to bind properties under) ''(?<k>[^'']+)''|(?<k>[A-Za-z][\w-]*(?:\.[\w-]+)+)[ \t]+(?:is not configured|is not set|must be set|is required|is missing|no est\S+ configurad|es obligatori)'
 # Lo que se anade a JAVA_TOOL_OPTIONS en cada Maven del original (Invoke-Maven; lo leen Maven, javac y la JVM de surefire, y no pisa el argLine del pom): el original
 # es Java 8 u 11 y en Windows lee y escribe con la codificacion del sistema (Cp1252); en el servidor (Linux) y en el migrado (Java 18 o mas, JEP 400) es UTF-8.
 $OpcionJvmOriginal = '-Dfile.encoding=UTF-8'
@@ -1026,7 +1030,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) {
       $porque = Get-Porque $sal $r
       $m = "Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j $porque"
-      $pista = Get-PistaArnes $T (@($porque -split "`n") + @($r.Salida) + @($r.Causa))
+      $pista = Get-PistaArnes $T (@($r.Salida) + @($r.Causa) + @($porque -split "`n"))   # en el orden de la salida de Maven: es el de las claves de la pista de la propiedad
       if ($pista) { $m += "`n$pista" }
       return $m
     }
@@ -1060,9 +1064,13 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   return ''
 }
 
-# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de dos maneras que el motivo solo no explica: '' o una frase por pista.
+# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de tres maneras que el motivo solo no explica: '' o una frase por pista.
 # $Lineas son las del fallo: lo que ya trae el motivo (error.txt del caso vacio o lo que dice Maven), la salida de Maven y su causa (sale de los informes
 # de surefire): los mismos sitios de donde sale hoy el motivo.
+#  - Una propiedad sin valor ($PatronPropiedad): el job o el bean lee una propiedad que en el servidor llega por el configmap o por una variable de entorno y el
+#    test no se la da. Se nombran hasta 3 claves, sin repetir y en el orden en que salen, y se dice que se le de un valor (@TestPropertySource,
+#    @DynamicPropertySource, src/test/resources, @TempDir para una ruta). Con una clave no hay pista del bean: el bean falla por la propiedad (a veces es el propio job
+#    que se prueba) y sustituirlo por un mock despistaria. La pista del CREATE TABLE sigue aparte.
 #  - Un bean que falla al crearse (Spring: 'Error creating bean with name' y, en la misma linea, 'Factory method ... threw exception', 'Failed to instantiate'
 #    o BeanInstantiationException): casi siempre llama fuera al arrancar. Se nombra el ultimo bean de la linea, el mas interno, con el mensaje de su excepcion.
 #    Si en lo que sea sale una tabla o una columna que no esta ($PatronTablaFalta), no hay pista: eso lo cubre Get-MotivoBase.
@@ -1070,15 +1078,20 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 #    la tabla): se le dan las tablas del codigo (Get-TablasBatch de la copia del arnes) para que escriba un CREATE TABLE fijo de cada una.
 function Get-PistaArnes($T, [string[]]$Lineas) {
   $pistas = @()
+  $texto = $Lineas -join "`n"
+  $claves = @([regex]::Matches($texto, $PatronPropiedad) | ForEach-Object { $_.Groups['k'].Value } | Select-Object -Unique | Select-Object -First 3)
   $bean = @($Lineas | Where-Object { $_ -match "Error creating bean with name '[^']+'" -and $_ -match "Factory method '[^']*' threw exception|Failed to instantiate|BeanInstantiationException" })
-  if ($bean.Count -gt 0 -and @($Lineas | Where-Object { $_ -match $PatronTablaFalta }).Count -eq 0) {
+  if ($claves.Count -gt 0) {
+    $pistas += "Falta una propiedad en el test: $($claves -join ', '). En el servidor llega por el configmap o por una variable de entorno; en el test nadie le da valor. Dale un valor en el test (@TestPropertySource, @DynamicPropertySource o src/test/resources); si es una carpeta o un fichero, usa una carpeta temporal del test (@TempDir). No la sustituyas por un mock y no toques src/main."
+  }
+  elseif ($bean.Count -gt 0 -and @($Lineas | Where-Object { $_ -match $PatronTablaFalta }).Count -eq 0) {
     $nombre = [regex]::Match($bean[0], "^.*Error creating bean with name '([^']+)'").Groups[1].Value
     $detalle = ([regex]::Match($bean[0], '^.*threw exception with message: (.*)$').Groups[1].Value).Trim()
     if (-not $detalle) { $detalle = ($bean[0] -replace "^.*Error creating bean with name '[^']+'", '').Trim(' :') }
     if ($detalle.Length -gt 120) { $detalle = $detalle.Substring(0, 120) }
     $pistas += "El contexto de Spring no arranca: el bean $nombre falla al crearse ($detalle). Si llama fuera al arrancar (base de datos, Mongo, REST, ficheros), sustituyelo en el test por un @MockBean (@MockitoBean en Spring Boot 3.4 o posterior) o por un @Bean @Primary de prueba que no llame fuera. No toques src/main."
   }
-  $sql = [regex]::Match(($Lineas -join "`n"), '(?im)(?:Syntax error in SQL statement|Error de Sintaxis en sentencia SQL)\s+"(CREATE TABLE.*?)(?:"\s*;|$)')
+  $sql = [regex]::Match($texto, '(?im)(?:Syntax error in SQL statement|Error de Sintaxis en sentencia SQL)\s+"(CREATE TABLE.*?)(?:"\s*;|$)')
   if ($sql.Success) {
     $sentencia = $sql.Groups[1].Value
     if ($sentencia.Length -gt 60) { $sentencia = $sentencia.Substring(0, 60) }

@@ -1705,7 +1705,7 @@ $Pruebas['m28 (a) el arnes del original da error en el test: el motivo acaba con
   Igual 'el arnes queda atascado' 'atascada' $x.T.estado
   $m = [string]$x.T.motivo
   Comprueba 'el motivo sigue diciendo que el job no dejo estado.txt, con las lineas [ERROR] de Maven' ($m -match 'el job cargaJob no ha dejado estado\.txt\. Maven dice:' -and $m -match '\[ERROR\] Failed to execute goal') $m
-  Comprueba 'y acaba con una linea Causa: y el ULTIMO Caused by' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'y acaba con una linea Causa: y el ULTIMO Caused by (y, tras ella, la pista de M60: la causa es una propiedad sin valor)' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo + "`n" + (Pista-M60 'acme.entrada.ruta'))) $m
   Comprueba 'no el primero' ($m -notmatch 'Causa: Caused by: org\.springframework') $m
   Comprueba 'el prompt del reintento (registro del intento 2) lleva esa causa' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
   Comprueba 'la consola la ensena' ($x.R.Salida.Contains('Causa: ' + $M28Fondo)) (Cola $x.R.Salida)
@@ -1741,7 +1741,7 @@ $Pruebas['m28 (e) sin informe de surefire y con dos Caused by en la salida de Ma
   $x = Arnes-Falla-Surefire 'm28-e' 'arnes-surefire-salida'
   Igual 'sale con 1' 1 $x.R.Codigo
   $m = [string]$x.T.motivo
-  Comprueba 'el motivo acaba con Causa: y el ultimo Caused by de la salida' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'el motivo acaba con Causa: y el ultimo Caused by de la salida (y, tras ella, la pista de M60: la causa es una propiedad sin valor)' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo + "`n" + (Pista-M60 'acme.entrada.ruta'))) $m
   Comprueba 'el prompt del reintento la lleva' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
 }
 
@@ -5431,6 +5431,86 @@ $Pruebas['m59 (l) un caso no-aplica que se vuelve a preparar empieza con 0 inten
   Igual 'el caso se prepara otra vez' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
   $t = Lee-Json (Get-Ruta $e.Local 'tareas/caso-cargaJob-01.json')
   Igual 'la tarea queda hecha con 1 intento (el nuevo), no con 2' 'hecha,1' "$($t.estado),$($t.intentos)"
+}
+
+# ===================== M60: la pista de la propiedad que falta en el test =====================
+# Estos escenarios usan los falsos m40 y m56-copilot.ps1 (RESCATE_M56 = '<nombre>:<id de tarea>', como los de M56) y m60-mvn.ps1, que da la salida de
+# prop-export, placeholder, bind, bean-conexion, prop-dos o prop-create (ver m60-mvn.ps1) y, con los nombres de m56-mvn.ps1, la de siempre.
+
+function Escenario-M60([string]$Nombre, $Casos) {
+  $e = Escenario-M40 $Nombre $Casos 'm56'
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm56-copilot.ps1'); MvnExe = (Join-Path $falsos 'm60-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# La pista de la propiedad sin valor, con las claves ya unidas (', ').
+function Pista-M60([string]$Claves) {
+  return "Falta una propiedad en el test: $Claves. En el servidor llega por el configmap o por una variable de entorno; en el test nadie le da valor. Dale un valor en el test (@TestPropertySource, @DynamicPropertySource o src/test/resources); si es una carpeta o un fichero, usa una carpeta temporal del test (@TempDir). No la sustituyas por un mock y no toques src/main."
+}
+
+# El motivo del arnes del original tras un 'mvn test' que acaba con la salida $Guion (dos intentos y atascado).
+function Motivo-M60([string]$Nombre, [string]$Guion) {
+  $e = Escenario-M60 $Nombre ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M56 $e ($Guion + ':arnes-original')
+  return [pscustomobject]@{ E = $e; R = $r; T = (Tarea-Arnes $e 'original') }
+}
+
+$Pruebas['m60 (a) un job cuya propiedad no tiene valor (app.export.dir is not configured, dentro de la cadena de dos beans): el motivo del reintento y el de Show-Atascado llevan la propiedad y @TestPropertySource, y no @MockBean'] = {
+  $x = Motivo-M60 'm60-a' 'prop-export'
+  $p = Pista-M60 'app.export.dir'
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $x.R.Codigo
+  Igual 'dos llamadas al arnes del original' 2 @(Llamadas-Arnes $x.E 'original').Count
+  Igual 'la tarea queda atascada con dos intentos' 'atascada,2' "$($x.T.estado),$($x.T.intentos)"
+  Comprueba 'el motivo lleva la pista de la propiedad, tras lo que ya decia (que no dejo estado.txt)' ($x.T.motivo.Contains($p) -and $x.T.motivo -match 'no ha dejado estado\.txt') $x.T.motivo
+  Comprueba 'y no lleva @MockBean ni la pista del bean' ($x.T.motivo -notmatch '@MockBean' -and $x.T.motivo -notmatch 'El contexto de Spring no arranca') $x.T.motivo
+  $reintento = Registro-Arnes $x.E 'original' 2
+  Comprueba 'el prompt del reintento lleva la pista y no @MockBean' ($reintento.Contains($p) -and -not $reintento.Contains('@MockBean')) (Cola $reintento)
+  $pegar = @($x.R.Salida -split "`n" | Where-Object { $_.Contains('Estoy ejecutando prueba-local.ps1') })
+  Comprueba 'el texto para pegar en Copilot (Show-Atascado) la lleva y no lleva @MockBean' ($pegar.Count -eq 1 -and $pegar[0].Contains($p) -and -not $pegar[0].Contains('@MockBean')) (Cola $x.R.Salida)
+  Comprueba 'y la consola del atasco, tambien (app.export.dir y @TestPropertySource)' ($x.R.Salida.Contains('ha quedado atascado: ') -and $x.R.Salida.Contains('app.export.dir') -and $x.R.Salida.Contains('@TestPropertySource')) (Cola $x.R.Salida)
+}
+
+$Pruebas['m60 (b) Could not resolve placeholder app.sftp.host: la pista con app.sftp.host'] = {
+  $x = Motivo-M60 'm60-b' 'placeholder'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Comprueba 'el motivo lleva la pista con app.sftp.host' ($x.T.motivo.Contains((Pista-M60 'app.sftp.host'))) $x.T.motivo
+}
+
+$Pruebas['m60 (c) Failed to bind properties under app.limites: la pista con app.limites'] = {
+  $x = Motivo-M60 'm60-c' 'bind'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Comprueba 'el motivo lleva la pista con app.limites' ($x.T.motivo.Contains((Pista-M60 'app.limites'))) $x.T.motivo
+}
+
+$Pruebas['m60 (d) la cadena del bean de M56 (Error getting clientes, sin propiedad): sigue la pista del bean y no la de la propiedad'] = {
+  $x = Motivo-M60 'm60-d' 'bean'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Comprueba 'el motivo lleva la pista del bean' ($x.T.motivo.Contains($M56Bean)) $x.T.motivo
+  Comprueba 'y no la de la propiedad' ($x.T.motivo -notmatch 'Falta una propiedad en el test') $x.T.motivo
+}
+
+$Pruebas['m60 (e) java.lang.IllegalStateException: Connection refused dentro de una cadena de bean, y un host is not set (sin punto): no hay pista de propiedad; un paquete con puntos no cuenta como clave'] = {
+  $x = Motivo-M60 'm60-e' 'bean-conexion'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Comprueba 'el motivo no lleva la pista de la propiedad' ($x.T.motivo -notmatch 'Falta una propiedad en el test') $x.T.motivo
+  Comprueba 'y sigue con la del bean' ($x.T.motivo -match 'El contexto de Spring no arranca: el bean clientesFinder falla al crearse \(java\.lang\.IllegalStateException: Connection refused\)') $x.T.motivo
+}
+
+$Pruebas['m60 (f) dos propiedades, y la misma repetida tres veces (de tres maneras): salen las dos, cada una una vez y en el orden en que salen'] = {
+  $x = Motivo-M60 'm60-f' 'prop-dos'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  Comprueba 'el motivo lleva la pista con app.sftp.host y app.export.dir' ($x.T.motivo.Contains((Pista-M60 'app.sftp.host, app.export.dir'))) $x.T.motivo
+  Igual 'y la pista una sola vez' 1 ([regex]::Matches($x.T.motivo, 'Falta una propiedad en el test').Count)
+}
+
+$Pruebas['m60 (g) un CREATE TABLE que H2 rechaza junto con una propiedad sin valor: salen las dos pistas'] = {
+  $x = Motivo-M60 'm60-g' 'prop-create'
+  Igual 'sale con 1' 1 $x.R.Codigo
+  $sentencia = 'CREATE TABLE IF NOT EXISTS PUBLIC.IF[*] (IF VARCHAR(4000),NOT VARCHAR(4000),EXISTS VARCHAR(4000),T_COMIS VARCHAR(4000))'
+  $sql = "El test crea mal una tabla ($($sentencia.Substring(0, 60))). No saques las tablas del SQL del codigo: escribe un CREATE TABLE fijo para cada una de estas, con las columnas que usa el codigo: T_A ($SitioTablaM40)."
+  Comprueba 'el motivo lleva la pista de la propiedad' ($x.T.motivo.Contains((Pista-M60 'app.export.dir'))) $x.T.motivo
+  Comprueba 'y la del CREATE TABLE' ($x.T.motivo.Contains($sql)) $x.T.motivo
 }
 
 # ================================ LANZADOR ================================
