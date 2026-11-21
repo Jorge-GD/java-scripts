@@ -768,6 +768,7 @@ $Pruebas['c5b (a) revision.json con 2 reglas y 3 hallazgos: la pagina 2 tiene la
     Comprueba ('la cuenta ' + $c[1] + ' vale ' + $c[0]) ($sec -match ('<p[^>]*><b>' + $c[0] + '</b>' + $c[1] + '</p>')) $sec
   }
   Comprueba 'sin -RevisarTodo no lo dice' ((Texto-Plano $sec) -notmatch 'RevisarTodo') (Texto-Plano $sec)
+  Comprueba 'con 0 atascadas la cifra no va en rojo (sin cif-mal)' ($sec -notmatch 'cif-mal') $sec
   $grupos = @([regex]::Matches($p2, '(?s)<section class="prob-grupo" aria-labelledby="g-revision-[^"]+">.*?</section>') | ForEach-Object { $_.Value })
   Igual 'dos grupos, uno por cada regla con hallazgos (la tercera, sin ninguno, no sale)' 2 $grupos.Count
   if ($grupos.Count -ne 2) { return }
@@ -791,6 +792,7 @@ $Pruebas['c5b (a) con todo = true dice revisado todo el codigo (-RevisarTodo); c
   $t = Texto-Plano $sec
   Comprueba 'con todo: dice revisado todo el codigo (-RevisarTodo)' ($t -match $TxtTodo) $t
   Comprueba 'las cuentas: 5 unidades, 3 hechas y 2 atascadas' ($sec -match '<b>5</b>unidades' -and $sec -match '<b>3</b>hechas' -and $sec -match '<b>2</b>atascadas') $sec
+  Comprueba 'con atascadas > 0 la cifra de atascadas va en rojo (cif-mal) y las demas no' ($sec -match '<p class="cif-mal"><b>2</b>atascadas</p>' -and ([regex]::Matches($sec, 'cif-mal')).Count -eq 1) $sec
   Comprueba 'dice que hay 2 unidades atascadas y que se vuelven a intentar relanzando con -Reintentar' ($t -match 'Unidades atascadas: 2' -and $t.Contains('relanza el mismo comando con -Reintentar')) $t
   $s0 = C5b-Salida 'c5b-a-sin-atascos' ([ordered]@{ 'revision.json' = (Revision-Base $C5bHallazgos) })
   Comprueba 'sin atascadas no hay aviso de relanzar' ((Texto-Plano (Panel-De (Pagina $s0 '2-problemas.html') 'revision')) -notmatch 'Reintentar')
