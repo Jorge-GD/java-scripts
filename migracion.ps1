@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -132,6 +132,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'informe.ps1')
 . (Join-Path $PSScriptRoot 'lanzadores.ps1')
 . (Join-Path $PSScriptRoot 'practicas.ps1')
+. (Join-Path $PSScriptRoot 'propiedades.ps1')
 . (Join-Path $PSScriptRoot 'huella.ps1')
 . (Join-Path $PSScriptRoot 'arreglo-practicas.ps1')
 . (Join-Path $PSScriptRoot 'tests-reglas.ps1')
@@ -824,6 +825,7 @@ try {
   $script:Todas = @()
   $script:Quedan = 0
   Invoke-FaseDiagnostico
+  if (-not $script:Parada) { Invoke-Propiedades $LegacyRoot $RepoRoot $PlantillaRoot $Datos $Registros }   # en cada lanzamiento, aunque el diagnostico no se repita; nunca para
   # con la respuesta corregir, comparar va despues de la correccion; con parar, antes de lectura-hecha
   $fases = @('fichas-clase', 'mapa', 'lanzadores', 'fichas-job', 'resumen', 'pruebas-pre', 'casos-pre')
   if ($respuesta -ne 'corregir') { $fases += 'comparar' }

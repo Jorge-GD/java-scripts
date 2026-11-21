@@ -1715,7 +1715,7 @@ $Pruebas['63 diagnostico: un motor que falla para con motivo motor, el codigo y 
   $sis = Join-Path $Dir 'sistema-falso'
   $raiz = Split-Path -Parent $Script
   [void](New-Item -ItemType Directory -Path $sis -Force)
-  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+  foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
   Escribe $sis 'rescate.ps1' @'
 param([string]$Modo = '', [string]$Repo = '', [string]$Plantilla = '', [string]$Legacy = '', [switch]$SinIA, [switch]$Si)
 if ($Modo -eq 'pre') {
@@ -1947,7 +1947,7 @@ function Sistema-Motor {
   if (-not (Test-Path -LiteralPath $sis)) {
     [void](New-Item -ItemType Directory -Path $sis -Force)
     $raiz = Split-Path -Parent $Script
-    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
+    foreach ($f in @('migracion.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'practicas.ps1', 'propiedades.ps1', 'huella.ps1', 'arreglo-practicas.ps1', 'tests-reglas.ps1', 'informe', 'tareas')) { Copy-Item -LiteralPath (Join-Path $raiz $f) -Destination (Join-Path $sis $f) -Recurse }
     Copy-Item -LiteralPath (Join-Path $falsos 'rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
     Copy-Item -LiteralPath (Join-Path $falsos 'prueba-local.ps1') -Destination (Join-Path $sis 'prueba-local.ps1')
   }
@@ -7439,6 +7439,40 @@ $Pruebas['m49 (b) un datos/practicas-antes.json de antes de quitarlos, con sus e
   Comprueba 'b) la consola no tiene ninguna linea pmd: ni spotbugs:' ($r3.Salida -notmatch '(?im)\b(pmd|spotbugs)\s*:') (Cola $r3.Salida)
   $h3 = Pagina $e.Out '5-buenas-practicas.html'
   Comprueba 'b) la pagina 5 no nombra ni PMD ni SpotBugs' ($h3.Length -gt 0 -and $h3 -notmatch '(?i)pmd|spotbugs')
+}
+
+# ================================ C6A: PROPIEDADES ================================
+$Pruebas['c6 (j) propiedades: un lanzamiento deja datos/propiedades.json y la linea Propiedades: en la consola; el que no repite el diagnostico tambien la dice'] = {
+  $e = Nuevo-Escenario 'c6-prop' @('Clase1')
+  Escribe $e.Legacy 'src/main/resources/application.properties' "app.ruta=/datos`napp.lote=100`napp.solo.legacy=1`n"
+  [void](GitEn $e.Legacy @('add', '-A'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'propiedades'))
+  Escribe $e.Migrado 'src/main/resources/application.yml' "app:`n  ruta: /datos`n  lote: 50`n"
+  [void](GitEn $e.Migrado @('add', '-A'))
+  [void](GitEn $e.Migrado @('commit', '-q', '-m', 'propiedades'))
+  $reloj = [System.Diagnostics.Stopwatch]::StartNew()
+  $r = Migra $e (Basicos $e)
+  Write-Host ('        un lanzamiento con propiedades: ' + [Math]::Round($reloj.Elapsed.TotalSeconds, 1) + ' s')
+  Igual 'sale con 0' 0 $r.Codigo
+  $p = Lee-Json (Get-Ruta $e.Out 'datos/propiedades.json')
+  Comprueba 'deja datos/propiedades.json' ($null -ne $p) (Cola $r.Salida)
+  if ($null -eq $p) { return }
+  Igual 'sus 3 claves del original' 3 @($p.legacy).Count
+  Igual 'app.ruta: igual; app.lote: distinto; app.solo.legacy: falta' 'igual distinto falta' (@($p.legacy | ForEach-Object { $_.estado }) -join ' ')
+  Comprueba 'deja registros/propiedades.log' (Test-Path -LiteralPath (Get-Ruta $e.Out 'registros/propiedades.log'))
+  $l = @($r.Salida -split "`n" | Where-Object { $_ -match '^Propiedades: ' })
+  Igual 'la consola dice una linea Propiedades:' 1 $l.Count
+  Comprueba 'con sus cuentas' ($l.Count -eq 1 -and $l[0] -match '^Propiedades: 3 del original: 1 iguales, 0 por variable, 0 renombradas, 1 faltan, 1 distintas, 0 ya no existen; \d+ del migrado sin leer\. Detalle en ') $l[0]
+  # el segundo lanzamiento no repite el diagnostico y dice la linea igual
+  $antes = Hash-De (Get-Ruta $e.Out 'datos/hallazgos-antes.json')
+  $reloj.Restart()
+  $r2 = Migra $e (Basicos $e)
+  Write-Host ('        un segundo lanzamiento: ' + [Math]::Round($reloj.Elapsed.TotalSeconds, 1) + ' s')
+  Igual 'el segundo sale con 0' 0 $r2.Codigo
+  Comprueba 'el diagnostico no se repite' (($r2.Salida -notmatch 'Diagnostico: ') -and ($antes -ceq (Hash-De (Get-Ruta $e.Out 'datos/hallazgos-antes.json')))) (Cola $r2.Salida)
+  $l2 = @($r2.Salida -split "`n" | Where-Object { $_ -match '^Propiedades: ' })
+  Igual 'y la consola dice la linea Propiedades: otra vez' 1 $l2.Count
+  Comprueba 'con las mismas cuentas' ($l2.Count -eq 1 -and $l2[0] -match '^Propiedades: 3 del original: 1 iguales, 0 por variable, 0 renombradas, 1 faltan, 1 distintas, 0 ya no existen;') ($l2 -join ' | ')
 }
 
 # ================================ LANZADOR ================================

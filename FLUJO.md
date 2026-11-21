@@ -83,6 +83,8 @@ Usa en todos los pasos el mismo `-Modelo <id>` del preflight. Sin él, la primer
 
 La página 5 mide javac (las APIs marcadas «for removal»), las comprobaciones de Lombok, el texto que cambia en Java 21 (juego de caracteres y formatos de fecha y número) y la limpieza: lo que no debería llegar al senior (restos de herramientas que están en git, marcas pendientes TODO, FIXME y XXX, código comentado y clases que nadie nombra en `src/main`). La limpieza solo avisa: no borra nada. PMD y SpotBugs se quitaron el 20-11: en tu equipo acababan siempre en «no se pudo medir» y costaban dos Maven por medida. Lo que se guardó antes con entradas de PMD o SpotBugs no se enseña.
 
+Las propiedades: en cada lanzamiento `migracion.ps1` compara, sin IA, las claves de los `application*.properties` y `.yml` del original con las del migrado y deja el detalle en `datos\propiedades.json` y `registros\propiedades.log`. La consola dice una línea `Propiedades:` con las cuentas. De cada clave del original dice si está igual, si va por variable (lo esperado con configmap), si tiene otro valor, si Spring Boot 3 la renombró o la quitó (lo lee de los metadatos de los jars del migrado, con un `mvn dependency:build-classpath`; si Maven falla, lo dice y sigue) o si falta. Del migrado dice las claves nuevas y las que nadie lee. Los secretos salen sin su valor. Solo mide: no cambia el yml ni el código.
+
 Carpetas que verás aparecer:
 
 | Carpeta | Qué es | ¿Se puede borrar? |
