@@ -293,7 +293,7 @@ function Read-DatosInforme([string]$Salida) {
     Practicas = (Read-Practicas $datos); Arreglos = (Read-JsonSuave (Join-Path $datos 'practicas-arreglos.json'))
     Reglas = (Read-JsonSuave (Join-Path $datos 'tests-reglas.json'))
     Comparacion = (Read-Comparaciones $datos); CoberturaCasos = (Read-JsonSuave (Join-Path $datos 'prueba-local-cobertura.json')); LineasCasos = $null
-    Lanzadores = @(); LanzadoresLeidos = $false
+    Lanzadores = @(); LanzadoresLeidos = $false; Convivencia = (Read-JsonSuave (Join-Path $datos 'convivencia.json'))
     FichasSh = (Read-PorLanzador $datos 'fichas-sh' 'id'); ComparacionSh = (Read-PorLanzador $datos 'comparacion-sh' 'ficha')
   }
   if ($D.CoberturaCasos -and [string]$D.CoberturaCasos.estado -ceq 'ok') { $D.LineasCasos = Get-LineasCasos $D.CoberturaCasos }
@@ -354,10 +354,52 @@ function Get-ListaPreHtml($T, $Items, [bool]$Redactada) {
   return (Format-Trozo $T 'pre-lista' @{ ITEMS = $html })
 }
 
-# "Como probarlo en pre" de un job: lo que dejo la fase pruebas-pre.
+# El bloque "a la vez o uno detras de otro" de un job, de datos\convivencia.json (convivencia.ps1): el veredicto, los motivos (8 como mucho y 'y N mas'),
+# que reponer entre una ejecucion y la otra y el orden, y siempre el texto de las tablas BATCH_. '' sin ese JSON o sin ese job: la pagina es la de antes.
+function Get-ConvivenciaHtml($D, $T, [string]$Job) {
+  $c = $D.Convivencia
+  if (-not $c -or -not $c.fijos) { return '' }
+  $j = @($c.jobs | Where-Object { $null -ne $_ -and [string]$_.job -ceq $Job })[0]
+  if (-not $j) { return '' }
+  $veredicto = Format-Trozo $T 'conv-vez' @{ TEXTO = $c.fijos.aLaVez }
+  $motivos = ''
+  $reponer = ''
+  $orden = ''
+  if ($j.veredicto -cne 'a-la-vez') {
+    $veredicto = Format-Trozo $T 'conv-serie'
+    $todos = @($j.motivos | Where-Object { $null -ne $_ })
+    if ($todos.Count -gt 0) {
+      $items = Format-Lista $T 'conv-motivo' @($todos | Select-Object -First 8) {
+        param($m)
+        $etiqueta = Format-Trozo $T 'et-medido'
+        if ($m.ia -eq $true) { $etiqueta = Format-Trozo $T 'et-ia' }
+        $sitio = ''
+        if ($m.fichero) {
+          $donde = [string]$m.fichero
+          if ([int]$m.linea -gt 0) { $donde += ':' + [string]$m.linea }
+          $sitio = Format-Trozo $T 'conv-sitio' @{ DONDE = $donde; CITA = $m.cita }
+        }
+        @{ TEXTO = $m.texto; ETIQUETA = $etiqueta; SITIO = $sitio }
+      }
+      $mas = ''
+      if ($todos.Count -gt 8) { $mas = Format-Trozo $T 'conv-mas' @{ N = "$($todos.Count - 8)" } }
+      $motivos = Format-Trozo $T 'conv-motivos' @{ ITEMS = $items; MAS = $mas }
+    }
+    $rep = @($j.reponer | Where-Object { $null -ne $_ })
+    if ($rep.Count -gt 0) { $reponer = Format-Trozo $T 'conv-reponer' @{ ITEMS = (Format-Lista $T 'conv-item' $rep { param($x) @{ TEXTO = $x } }) } }
+    else { $reponer = Format-Trozo $T 'conv-reponer-nada' }
+    $n = 0
+    $orden = Format-Trozo $T 'conv-orden' @{ ITEMS = (@($c.fijos.serie | ForEach-Object { $n++; Format-Trozo $T 'conv-paso' @{ N = "$n"; TEXTO = $_ } }) -join "`n") }
+  }
+  return (Format-Trozo $T 'conv' @{ VEREDICTO = $veredicto; MOTIVOS = $motivos; REPONER = $reponer; ORDEN = $orden; BATCH = $c.fijos.batch })
+}
+
+# "Como probarlo en pre" de un job: lo que dejo la fase pruebas-pre, con el bloque de convivencia arriba.
 function Get-PreHtml($D, $T, $V) {
+  $conv = Get-ConvivenciaHtml $D $T $V.Job
+  if ($conv) { $conv += "`n" }
   $p = $V.Pruebas
-  if (-not $p) { return (Format-Trozo $T 'pre-sin-datos' @{ ETIQUETA = (Format-Trozo $T 'et-sin') }) }
+  if (-not $p) { return ($conv + (Format-Trozo $T 'pre-sin-datos' @{ ETIQUETA = (Format-Trozo $T 'et-sin') })) }
   $red = ($p.redaccion -eq 'hecha')
   $casos = @($p.casos | Where-Object { $null -ne $_ })
   $vars = ''
@@ -386,15 +428,17 @@ function Get-PreHtml($D, $T, $V) {
   if ($falta.Count -gt 0) {
     $sinCaso = Format-Trozo $T 'sincaso' @{ ETIQUETA = (Format-Trozo $T 'et-sin'); ITEMS = (Format-Lista $T 'duda' $falta { param($x) @{ TEXTO = $x.texto } }) }
   }
-  return (Format-Trozo $T 'pre-contenido' @{
-      PREPARAR = (Get-ListaPreHtml $T @($p.preparar | Where-Object { $null -ne $_ }) $red); VARIABLES = $vars; N = "$($casos.Count)"
-      CASOS = $casosHtml; COMPROBAR = (Get-ListaPreHtml $T @($p.comprobar | Where-Object { $null -ne $_ }) $red); SINCASO = $sinCaso
-    })
+  return ($conv + (Format-Trozo $T 'pre-contenido' @{
+        PREPARAR = (Get-ListaPreHtml $T @($p.preparar | Where-Object { $null -ne $_ }) $red); VARIABLES = $vars; N = "$($casos.Count)"
+        CASOS = $casosHtml; COMPROBAR = (Get-ListaPreHtml $T @($p.comprobar | Where-Object { $null -ne $_ }) $red); SINCASO = $sinCaso
+      }))
 }
 
 function Get-JobHtml($D, $T, $V, [int]$N) {
   if (-not $V.Ficha) {
-    return (Format-Trozo $T 'job-pendiente' @{ ID = $V.Id; N = "$N"; JOB = $V.Job; SINDATOS = (Format-Trozo $T 'sin-datos' @{ FASE = 'fichas-job'; ETIQUETA = (Format-Trozo $T 'et-sin') }); LANZA = (Get-LanzaJobHtml $D $T $V.Job) })
+    $conv = Get-ConvivenciaHtml $D $T $V.Job
+    if ($conv) { $conv = Format-Trozo $T 'conv-seccion' @{ ID = $V.Id; CONV = $conv } }
+    return (Format-Trozo $T 'job-pendiente' @{ ID = $V.Id; N = "$N"; JOB = $V.Job; SINDATOS = (Format-Trozo $T 'sin-datos' @{ FASE = 'fichas-job'; ETIQUETA = (Format-Trozo $T 'et-sin') }); LANZA = (Get-LanzaJobHtml $D $T $V.Job); CONV = $conv })
   }
   $et = Format-Trozo $T 'et-sin'
   $aviso = Format-Trozo $T 'job-aviso'

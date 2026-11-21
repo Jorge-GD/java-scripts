@@ -97,7 +97,7 @@
     </div>
   </header>
   {{{SINDATOS}}}
-  {{{LANZA}}}
+  {{{LANZA}}}{{{CONV}}}
 </article><!--FIN-->
 <!--TROZO titulo-original-->Qué hace el batch {{BATCH}}<!--FIN-->
 <!--TROZO job-aviso--><p class="aviso">No se ha podido redactar este job: la IA no pasó la comprobación. Abajo salen los datos tal como los leyó el script.</p><!--FIN-->
@@ -164,6 +164,43 @@
 </ul><!--FIN-->
 <!--TROZO pre-vacia--><p class="muted">Nada que añadir.</p><!--FIN-->
 <!--TROZO pre-item-->  <li>{{TEXTO}}{{{MARCA}}}</li><!--FIN-->
+<!--TROZO conv--><div class="conv">
+  <h5>¿A la vez o uno detrás de otro?</h5>
+  {{{VEREDICTO}}}
+  {{{MOTIVOS}}}
+  {{{REPONER}}}
+  {{{ORDEN}}}
+  <p class="muted"><b>Tablas BATCH_.</b> {{BATCH}}</p>
+</div><!--FIN-->
+<!--TROZO conv-serie--><p class="estado"><b>Uno detrás de otro.</b> <span>Mientras no se pruebe lo contrario, no los lances a la vez.</span></p><!--FIN-->
+<!--TROZO conv-vez--><p class="estado estado-ok"><b>A la vez.</b> <span>{{TEXTO}}</span></p><!--FIN-->
+<!--TROZO conv-motivos--><h5>Por qué</h5>
+  <ul class="pre-l">
+{{{ITEMS}}}
+  </ul>
+  {{{MAS}}}<!--FIN-->
+<!--TROZO conv-motivo-->    <li>{{TEXTO}} {{{ETIQUETA}}}{{{SITIO}}}</li><!--FIN-->
+<!--TROZO conv-sitio--><code class="donde">{{DONDE}}</code><span class="cita">{{CITA}}</span><!--FIN-->
+<!--TROZO conv-mas--><p class="muted">y {{N}} más</p><!--FIN-->
+<!--TROZO conv-reponer--><h5>Qué reponer entre uno y otro</h5>
+  <ul class="pre-l">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO conv-reponer-nada--><h5>Qué reponer entre uno y otro</h5>
+  <p class="muted">El script no ha visto nada que reponer, pero lee el código con expresiones regulares y no lo ve todo: mira lo que deja el primero antes de lanzar el segundo.</p><!--FIN-->
+<!--TROZO conv-item-->    <li>{{TEXTO}}</li><!--FIN-->
+<!--TROZO conv-orden--><h5>En qué orden</h5>
+  <ol class="pasos">
+{{{ITEMS}}}
+  </ol><!--FIN-->
+<!--TROZO conv-paso-->    <li class="paso">
+      <span class="paso-n" aria-hidden="true">{{N}}</span>
+      <p class="paso-t">{{TEXTO}}</p>
+    </li><!--FIN-->
+<!--TROZO conv-seccion--><section class="pre" id="pre-{{ID}}">
+    <h4>Cómo probarlo en pre</h4>
+    {{{CONV}}}
+  </section><!--FIN-->
 <!--TROZO vars--><div class="vars">
   <p>Variables de configuración del batch {{{ETIQUETA}}}</p>
   <ul>

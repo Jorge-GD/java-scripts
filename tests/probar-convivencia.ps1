@@ -628,7 +628,7 @@ $Pruebas['15 k) pagina 1 con convivencia.json: el bloque arriba de "Como probarl
   Comprueba 'el motivo lleva la cita (escapada)' ($conv.Contains((ConvertTo-TextoHtml 'private JdbcBatchItemWriter<Recibo> escritor;')))
   Comprueba 'el motivo lleva la etiqueta Medido' ($conv.Contains('et-medido'))
   Comprueba 'que reponer lleva la linea del mv' ($conv.Contains($QueReponer) -and $conv.Contains('mv entrada/*.txt hecho/'))
-  Igual 'el orden en serie lleva los cinco pasos' 5 ([regex]::Matches($conv, '<li>(Lanza|Guarda|Rep|Compara)').Count)
+  Igual 'el orden en serie lleva los cinco pasos' 5 ([regex]::Matches($conv, '<p class="paso-t">(Lanza|Guarda|Rep|Compara)').Count)
   Comprueba 'lleva el texto de BATCH_ del JSON (escapado)' ($conv.Contains((ConvertTo-TextoHtml $json.fijos.batch)))
   Comprueba 'no lleva el texto de a la vez' (-not $conv.Contains((ConvertTo-TextoHtml $json.fijos.aLaVez)))
   $resumen = Articulo $con 'resumenJob'
@@ -672,7 +672,7 @@ $Pruebas['16 k) pagina 1 con un convivencia.json hecho a mano: mas de 8 motivos 
   Comprueba 'la cita sale escapada' ($conv.Contains('cita &lt;1&gt; &amp; co') -and -not $conv.Contains('<1>'))
   Comprueba 'que reponer sale escapado' ($conv.Contains('la tabla T_X: algo &lt;raro&gt;'))
   Comprueba 'el texto fijo sale escapado' ($conv.Contains('Texto BATCH_ &lt;fijo&gt;'))
-  Comprueba 'los pasos del JSON' ($conv.Contains('<li>Paso uno</li>') -and $conv.Contains('<li>Paso dos</li>'))
+  Comprueba 'los pasos del JSON' ($conv.Contains('<p class="paso-t">Paso uno</p>') -and $conv.Contains('<p class="paso-t">Paso dos</p>'))
 }
 
 # ================================ EL CODIGO ================================
