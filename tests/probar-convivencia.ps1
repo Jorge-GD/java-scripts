@@ -249,6 +249,29 @@ $Pruebas['05 e) un lanzador con flock: motivo cerrojo, con el texto de que el se
   }
 }
 
+$Pruebas['05b e2) un lanzador con dos ordenes de la misma categoria (cp en la linea 3, touch en la 7): un solo motivo fichero del lanzador, el de la linea 3'] = {
+  $e = Nuevo-Escenario 'e2' @{ 'src/main/java/com/acme/carga/Lee.java' = (Java 'carga' 'Lee' "  private FlatFileItemReader<Recibo> r;`n") }
+  Escribe-Mapa $e ([ordered]@{ cargaJob = @('src/main/java/com/acme/carga/Lee.java') })
+  Escribe-Ficha $e 'cargaJob'
+  Escribe-Lanzadores $e @(@{ nombre = 'lanza-carga.sh'; lineas = @('#!/bin/bash', 'echo inicio', 'cp a.txt ../copia/', 'echo copiado', 'echo seguimos', 'echo casi', 'touch ../hecho.ok', 'java -jar batch-recibos.jar --job=cargaJob'); jobs = @('cargaJob') })
+  # el inventario de verdad trae las dos ordenes como entradas distintas (si no, el test no probaria nada)
+  $inv = @((Lee-Json (Join-Path $e.Datos 'lanzadores.json')).lanzadores[0].inventario | Where-Object { $_.tipo -ceq 'fichero' })
+  Igual 'el inventario tiene dos entradas fichero' 2 $inv.Count
+  Igual 'la primera, en la linea 3' 3 ([int]$inv[0].linea)
+  Igual 'la segunda, en la linea 7' 7 ([int]$inv[$inv.Count - 1].linea)
+  $r = Mide $e
+  $j = De $r.Json 'cargaJob'
+  Comprueba 'hay JSON con cargaJob' ($null -ne $j)
+  if ($null -eq $j) { return }
+  $m = @(Motivos-De $j 'fichero' 'lanzador')
+  Igual 'un solo motivo fichero del lanzador' 1 $m.Count
+  if ($m.Count -ge 1) {
+    Igual 'es el de la linea 3' 3 $m[0].linea
+    Igual 'cita: la linea 3 del script' 'cp a.txt ../copia/' $m[0].cita
+  }
+  Igual 'ningun otro motivo del lanzador' 1 @(@($j.motivos) | Where-Object { $_.lado -ceq 'lanzador' }).Count
+}
+
 $Pruebas['06 f) avisoJob sin ficha de job: motivo sin-datos y en-serie; con la ficha atascada, tambien'] = {
   $e = Nuevo-Escenario 'f' @{ 'src/main/java/com/acme/aviso/Lee.java' = (Java 'aviso' 'Lee' "  private FlatFileItemReader<Recibo> r;`n") }
   Escribe-Mapa $e ([ordered]@{ avisoJob = @('src/main/java/com/acme/aviso/Lee.java'); resumenJob = @('src/main/java/com/acme/aviso/Lee.java') })
