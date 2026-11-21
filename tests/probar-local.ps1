@@ -5639,10 +5639,11 @@ $Pruebas['m61 (e) el test del migrado atascado con el DROP, relanzado sin opcion
   $antes = Tarea-Arnes $e 'migrado'
   Igual 'la tarea queda atascada con dos intentos' 'atascada,2' "$($antes.estado),$($antes.intentos)"
   Comprueba 'su motivo lleva la pista del DROP' ($antes.motivo.Contains((Pista-M61 'T_GRUPO'))) $antes.motivo
+  $deOriginal = @(Llamadas-Arnes $e 'original').Count   # (el del original pide dos: a su base le falta T_A, que el original usa en Repo.java)
   $r = Prueba $e
   Igual 'relanzado sin opciones sale con 0' 0 $r.Codigo
   Igual 'el migrado: dos llamadas de antes y una nueva' 3 @(Llamadas-Arnes $e 'migrado').Count
-  Igual 'el original, que estaba hecho: ninguna nueva' 1 @(Llamadas-Arnes $e 'original').Count
+  Igual 'el original, que estaba hecho: ninguna nueva' $deOriginal @(Llamadas-Arnes $e 'original').Count
   $ahora = Tarea-Arnes $e 'migrado'
   Igual 'la tarea nueva queda hecha con un intento' 'hecha,1' "$($ahora.estado),$($ahora.intentos)"
   $primero = Registro-Arnes $e 'migrado' 1
