@@ -199,6 +199,13 @@ $Hoy = @()          # las fechas de la ejecucion (Get-Hoy): Get-Resultado las po
 # Windows PowerShell 5.1 no pasa de 260 letras en una ruta (MAX_PATH: 259 y el fin de cadena). La misma regla vale en todos los sistemas, para
 # que se pruebe en Linux y no cambie de una maquina a otra (ver Get-RelSalida).
 $LimiteRuta = 259
+# Un metodo de un test que prepara algo antes de lanzar el job: la anotacion (JUnit 5 o 4; \b: @BeforeTransaction no), otras anotaciones de por medio, los
+# modificadores y el tipo (grupo 1: el nombre del metodo). Lo usa Get-PreparaEjemplos.
+$PatronPrepara = '@(?:BeforeEach|BeforeAll|BeforeClass|Before)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*[\w<>\[\].,?]+\s+(\w+)\s*\('
+# Las causas de lo que fallo en el migrado de antes que lleva el prompt del test del migrado que se escribe otra vez (Get-LineasFalloMigrado): las que tienen
+# al menos CausasMinimas casos y hasta CausasMaximas, de 200 letras como mucho cada una.
+$CausasMinimas = 2
+$CausasMaximas = 3
 # Si se esta en Windows: lo lee Get-RutaLarga (es una variable para que las pruebas lo simulen en Linux).
 $SoWindows = ([System.IO.Path]::DirectorySeparatorChar -eq '\')
 # La version del formato de lo que se guarda en prueba-local\salidas (los nombres de sus ficheros, ver Get-RelSalida): va en la clave del original
@@ -743,6 +750,23 @@ function Get-Ejemplos([string]$Dir) {
   return @()
 }
 
+# Lo que preparan los tests de ejemplo $Ejemplos (rutas completas) de la copia $Dir antes de lanzar el job: un parrafo con 'fichero:linea (metodo)' de cada
+# metodo con @BeforeEach, @BeforeAll, @Before o @BeforeClass (el fichero relativo a la copia; la linea, la del nombre del metodo; 5 como mucho, en el orden
+# de los ejemplos y del fichero), o '' si no hay ninguno. Va detras de la lista de ejemplos del test del migrado (Get-TareaArnes): el test del original
+# puede ser de una version del framework que no lo necesita y el del migrado, que lo traduce, se queda sin prepararlo.
+function Get-PreparaEjemplos([string[]]$Ejemplos, [string]$Dir) {
+  $metodos = @()
+  foreach ($f in $Ejemplos) {
+    $texto = [System.IO.File]::ReadAllText($f)
+    foreach ($m in [regex]::Matches($texto, $PatronPrepara)) {
+      $nombre = $m.Groups[1]
+      $metodos += ((Get-Rel $Dir $f) + ':' + @($texto.Substring(0, $nombre.Index) -split "`n").Count + ' (' + $nombre.Value + ')')
+    }
+  }
+  if ($metodos.Count -eq 0) { return '' }
+  return 'Estos tests preparan algo antes de lanzar el job: ' + (@($metodos | Select-Object -First 5) -join ', ') + '. El test del original puede ser de otra version del framework y no hacerlo. Si este repositorio lo necesita (por ejemplo, un contexto que en produccion pone el arranque de la aplicacion), haz lo mismo en tu test antes de lanzar cada job. No lo uses para tapar un fallo del codigo de src/main.'
+}
+
 # El hash del test que dejo guardado el arnes de $Repo (prueba-local\arnes\<repo>\<ruta del test>), o '' si no esta.
 function Get-HashGuardado([string]$Repo, [string]$Test) {
   $f = Join-Ruta $Local "arnes/$Repo/$Test"
@@ -774,6 +798,10 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $ejemplos = @(Get-Ejemplos $Dir)
   $lista = '(No hay tests de ejemplo: escribe el test desde cero.)'
   if ($ejemplos.Count -gt 0) { $lista = (@($ejemplos | ForEach-Object { '- ' + $_ }) -join "`n") }
+  if ($TestOriginal) {   # el del migrado: lo que preparan los ejemplos de su copia (no los de la referencia)
+    $prepara = Get-PreparaEjemplos @($ejemplos | Where-Object { -not $PlantillaRoot -or -not $_.StartsWith($PlantillaRoot) }) $Dir
+    if ($prepara) { $lista += "`n`n" + $prepara }
+  }
   $dirs = @()
   if ($PlantillaRoot -and @($ejemplos | Where-Object { $_.StartsWith($PlantillaRoot) }).Count -gt 0) { $dirs = @($PlantillaRoot) }
   $pom = 'no'
@@ -812,12 +840,40 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
 }
 
+# Lo que fallo en el migrado de antes, para el test del migrado que se escribe otra vez: de los casos distintos del prueba-local.json de antes ($Anterior) cuyo
+# migrado acaba FAILED o EXCEPCION y el original no (su 'fallos', Get-Fallos: la causa es la que ensena la consola), las causas con $CausasMinimas casos o mas,
+# agrupadas como los grupos de la consola (Get-CausaNormal), la de mas casos primero y $CausasMaximas como mucho: 'En N casos el migrado acaba FAILED y el original
+# no: <causa>.' (la del primer caso, en 200 letras como mucho). Sin ninguna, @().
+function Get-LineasFalloMigrado {
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($c in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'distinto' })) {
+    $mig = @(@($c.fallos) | Where-Object { $_.lado -ceq 'migrado' -and ($_.estado -ceq 'FAILED' -or $_.estado -ceq 'EXCEPCION') -and $_.causa })
+    if ($mig.Count -eq 0 -or @(@($c.fallos) | Where-Object { $_.lado -ceq 'original' }).Count -gt 0) { continue }
+    $firma = $mig[0].estado + '|' + (Get-CausaNormal ([string]$mig[0].causa) $c.caso)
+    if (-not $por.ContainsKey($firma)) { $por[$firma] = [pscustomobject]@{ casos = 0; estado = $mig[0].estado; causa = [string]$mig[0].causa } }
+    $por[$firma].casos++
+  }
+  $orden = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($firma in $por.Keys) { if ($por[$firma].casos -ge $CausasMinimas) { $orden[(999999 - $por[$firma].casos).ToString('D6') + '|' + $firma] = $por[$firma] } }
+  $lineas = @()
+  foreach ($k in @(Sort-Ordinal @($orden.Keys) | Select-Object -First $CausasMaximas)) {
+    $g = $orden[$k]
+    $causa = $g.causa
+    if ($causa.Length -gt 200) { $causa = $causa.Substring(0, 200) }
+    $lineas += "- En $($g.casos) casos el migrado acaba $($g.estado) y el original no: $causa."
+  }
+  return $lineas
+}
+
 # Lo que fallo la otra vez, para el primer intento de un test que se escribe otra vez ($T no esta hecha: se rehace con -RehacerOriginal o -RehacerArnes, se
 # cambio la plantilla, o su tarea de antes quedo atascada y Restore-Tarea no la conserva). $Antes es su tarea del lanzamiento anterior (Get-TareaGuardada, antes
 # de que Get-TareaArnes la pise) o $null. Lleva, en este orden:
 #  - el ultimo motivo de la tarea de antes, si no estaba hecha (el de un test atascado ya lleva las pistas de Get-PistaArnes);
 #  - para el del original, las pistas (Get-PistaArnes sobre cada motivo, sin repetir y 3 como mucho) de los casos 'no se pudo preparar' del prueba-local.json de
 #    antes ($Anterior): casi todos esos motivos vienen del test del original.
+#  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFalloMigrado), con una
+#    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
+#    si viene de src/main, es un fallo del migrado y no se tapa.
 # Sin nada de eso es '' y el prompt no cambia. Invoke-Lote lo pone como la correccion del primer intento, por el mismo camino que el motivo de un reintento; la
 # huella (Get-HuellaArnes) no lo lleva: un test que no se rehace no se escribe otra vez por esto. Una tarea que aun no ha llamado a la IA (se dijo que no a
 # la pregunta de llamar a Copilot) conserva el de antes si ahora no hay otro.
@@ -832,6 +888,10 @@ function Get-PrevioArnes($T, $Antes) {
       if ($pistas.Count -ge 3) { break }
     }
     if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
+  }
+  if ($T.entradas.repo -eq 'migrado' -and $Anterior) {
+    $lineas = @(Get-LineasFalloMigrado)
+    if ($lineas.Count -gt 0) { $partes += 'Si viene de una clase de una libreria porque al test le falta algo que en produccion prepara el arranque, preparalo como los tests de ejemplo. Si viene del codigo de src/main, no lo tapes: es un fallo del migrado.' + "`n" + ($lineas -join "`n") }
   }
   if ($partes.Count -gt 0) { return "Lo que fallo la otra vez (de un lanzamiento anterior):`n" + ($partes -join "`n") }
   if ($Antes -and $Antes.estado -eq 'pendiente' -and $Antes.intentos -eq 0 -and $Antes.entradas.PSObject.Properties['previo']) { return [string]$Antes.entradas.previo }
