@@ -345,6 +345,7 @@ details li{padding:4px 12px;background:var(--surf);border-left:4px solid var(--e
 .bp-ar-boot3-batch5,.bp-sw-boot3-batch5{background:var(--ink)}
 .bp-ar-lombok,.bp-sw-lombok{background:var(--branch)}
 .bp-ar-arquitectura,.bp-sw-arquitectura{background:var(--ruta-h)}
+.bp-ar-limpieza,.bp-sw-limpieza{background:var(--toca)}
 .bp-anillo{position:relative;width:128px;height:128px;flex:none}
 .bp-anillo svg{display:block;width:128px;height:128px}
 .bp-anillo b{position:absolute;inset:0;display:grid;place-items:center;font-size:32px;line-height:1.4}
