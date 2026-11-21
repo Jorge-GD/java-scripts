@@ -162,6 +162,7 @@ Para encontrar el commit que rompe un caso:
   ```
 
   El test del original no se toca. Las claves que salieron «no se arregla» se vuelven a probar con el test nuevo.
+- **Si casos salen «no se pudo preparar» con «La base de prueba no tiene la tabla X»**, el test guardado del original no crea esa tabla (es de antes de que se comprobaran las tablas). Escríbelo otra vez con `-RehacerOriginal` (y con él el del migrado, que lo traduce); al acabar, la consola cuenta cuántos casos son. Si un test queda atascado, relanzar el mismo comando lo vuelve a intentar con dos intentos nuevos.
 
 ### Volver a comprobar, cuando quieras
 

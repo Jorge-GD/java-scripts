@@ -26,7 +26,8 @@ QUE HACE
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
-     se borra y se escribe otra vez (el del original no se toca). Lo mismo, sin pedirlo, si el guardado se escribio con otra
+     se borra y se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
+     de prueba no crea las tablas del codigo) y, con el, el del migrado. Lo mismo, sin pedirlo, si el guardado se escribio con otra
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes.
@@ -112,6 +113,7 @@ USO
   .\prueba-local.ps1 ... -Reparar             # y arregla el migrado (en la rama de rescate) hasta que los casos distintos salgan iguales
   .\prueba-local.ps1 ... -Regresion          # y deja los casos que salen iguales como tests de JUnit en la rama de rescate (un commit)
   .\prueba-local.ps1 ... -RehacerArnes        # escribe otra vez con la IA el test del migrado: si la IA de -Reparar dice que la diferencia es del test del migrado
+  .\prueba-local.ps1 ... -RehacerOriginal     # escribe otra vez con la IA el test del original (y, traduciendolo, el del migrado): si su base de prueba no crea las tablas del codigo
 
   Salida: 0 todo lo comparado es igual, 2 hay casos distintos, 1 no ha podido (o no ha podido comparar ninguno, o el
   test no le pasa las entradas a un job).
@@ -130,6 +132,7 @@ param(
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
   [switch]$Regresion,         # deja los casos que salen iguales como tests de JUnit (RegresionLocalTest) en la rama de rescate, en un commit
   [switch]$RehacerArnes,      # borra el test del migrado guardado y lo escribe otra vez con la IA, traduciendo el del original (que no se toca)
+  [switch]$RehacerOriginal,   # borra el test del original guardado y lo escribe otra vez con la IA, y con el el del migrado, que lo traduce
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -162,6 +165,10 @@ $MarcaNo = '<!--no-->'
 $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
 # La causa de un lado sin estado.txt cuyo Maven acabo con 0 y sin otra causa (Get-Fallos): el test no encontro la carpeta del caso (arnes\migrado, regla 1).
 $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso (mira si ve su carpeta en src\test\resources\prueba-local)'
+# Lo que dice el motivo de un caso cuyo original no corre porque la base del test no tiene una tabla del codigo (Get-MotivoBase): la cuenta del final de la
+# prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
+$PrefijoSinTabla = 'La base de prueba no tiene la tabla '
+$PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
@@ -1010,7 +1017,13 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   }
   foreach ($j in $Jobs) {
     $sal = Join-Ruta $dir "target/prueba-local/$j/vacio"
-    if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) { return ("Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j " + (Get-Porque $sal $r)) }
+    if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) {
+      $porque = Get-Porque $sal $r
+      $m = "Con un caso vacio ($Casos/$j/vacio, una carpeta sin nada), el job $j $porque"
+      $pista = Get-PistaArnes $T (@($porque -split "`n") + @($r.Salida) + @($r.Causa))
+      if ($pista) { $m += "`n$pista" }
+      return $m
+    }
     if (Test-Path -LiteralPath (Join-Ruta $dir "target/prueba-local/$j/otro")) { return "Con -Dprueba.local.caso=vacio, el test ha ejecutado tambien $Casos/$j/otro. Si la propiedad prueba.local.caso tiene valor, ejecuta solo los casos con ese nombre: cada caso se lanza en su propio Maven." }
   }
   # Con un caso vacio, el original arranca el job y el migrado no (estado=EXCEPCION): el test del migrado no simula lo que el job necesita, o le pasa
@@ -1037,8 +1050,38 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
   }
-  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original." }
+  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
   return ''
+}
+
+# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de dos maneras que el motivo solo no explica: '' o una frase por pista.
+# $Lineas son las del fallo: lo que ya trae el motivo (error.txt del caso vacio o lo que dice Maven), la salida de Maven y su causa (sale de los informes
+# de surefire): los mismos sitios de donde sale hoy el motivo.
+#  - Un bean que falla al crearse (Spring: 'Error creating bean with name' y, en la misma linea, 'Factory method ... threw exception', 'Failed to instantiate'
+#    o BeanInstantiationException): casi siempre llama fuera al arrancar. Se nombra el ultimo bean de la linea, el mas interno, con el mensaje de su excepcion.
+#    Si en lo que sea sale una tabla o una columna que no esta ($PatronTablaFalta), no hay pista: eso lo cubre Get-MotivoBase.
+#  - Un CREATE TABLE que H2 rechaza (el test saca las tablas del SQL del codigo con un parser suyo y toma una palabra de la sentencia, IF, por el nombre de
+#    la tabla): se le dan las tablas del codigo (Get-TablasBatch de la copia del arnes) para que escriba un CREATE TABLE fijo de cada una.
+function Get-PistaArnes($T, [string[]]$Lineas) {
+  $pistas = @()
+  $bean = @($Lineas | Where-Object { $_ -match "Error creating bean with name '[^']+'" -and $_ -match "Factory method '[^']*' threw exception|Failed to instantiate|BeanInstantiationException" })
+  if ($bean.Count -gt 0 -and @($Lineas | Where-Object { $_ -match $PatronTablaFalta }).Count -eq 0) {
+    $nombre = [regex]::Match($bean[0], "^.*Error creating bean with name '([^']+)'").Groups[1].Value
+    $detalle = ([regex]::Match($bean[0], '^.*threw exception with message: (.*)$').Groups[1].Value).Trim()
+    if (-not $detalle) { $detalle = ($bean[0] -replace "^.*Error creating bean with name '[^']+'", '').Trim(' :') }
+    if ($detalle.Length -gt 120) { $detalle = $detalle.Substring(0, 120) }
+    $pistas += "El contexto de Spring no arranca: el bean $nombre falla al crearse ($detalle). Si llama fuera al arrancar (base de datos, Mongo, REST, ficheros), sustituyelo en el test por un @MockBean (@MockitoBean en Spring Boot 3.4 o posterior) o por un @Bean @Primary de prueba que no llame fuera. No toques src/main."
+  }
+  $sql = [regex]::Match(($Lineas -join "`n"), '(?im)(?:Syntax error in SQL statement|Error de Sintaxis en sentencia SQL)\s+"(CREATE TABLE.*?)(?:"\s*;|$)')
+  if ($sql.Success) {
+    $sentencia = $sql.Groups[1].Value
+    if ($sentencia.Length -gt 60) { $sentencia = $sentencia.Substring(0, 60) }
+    $tablas = @(Get-TablasBatch $T.entradas.copia)
+    $cuales = 'cada tabla que use el batch, con las columnas que usa el codigo.'
+    if ($tablas.Count -gt 0) { $cuales = "cada una de estas, con las columnas que usa el codigo: $(Get-ListaTablas $tablas)." }
+    $pistas += "El test crea mal una tabla ($sentencia). No saques las tablas del SQL del codigo: escribe un CREATE TABLE fijo para $cuales"
+  }
+  return ($pistas -join ' ')
 }
 
 # Guarda lo que ha escrito el arnes (en prueba-local\arnes\<repo>) y lo da por bueno en la copia.
@@ -1211,14 +1254,14 @@ function Save-Caso($T) {
 #  - una columna: la tabla es la primera del SQL del error que tiene su tablas\<TABLA>.csv en el caso vacio del job (o la primera) y, si esta, se
 #    dicen las columnas de su primera linea.
 function Get-MotivoBase([string]$Texto, [string]$Job) {
-  $m = [regex]::Match($Texto, '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)')
+  $m = [regex]::Match($Texto, $PatronTablaFalta)
   if (-not $m.Success) { return $null }
   $nombre = ($m.Groups[2].Value -split '\.')[-1]
   if ($m.Groups[1].Value -match '(?i)^(table|tabla)$') {
     $tabla = $nombre.ToUpperInvariant()
     if ($null -eq $script:InventarioOrig) { $script:InventarioOrig = @(Get-TablasBatch $CopiaOrig) }   # una vez por lanzamiento: recorre src/main
     $sitio = @($script:InventarioOrig | Where-Object { $_.tabla -ceq $tabla })
-    if ($sitio.Count -gt 0) { return [pscustomobject]@{ Motivo = "La base de prueba no tiene la tabla $tabla (el test no la crea; la usa $($sitio[0].sitio))."; Definitivo = $true } }
+    if ($sitio.Count -gt 0) { return [pscustomobject]@{ Motivo = "$PrefijoSinTabla$tabla (el test no la crea; la usa $($sitio[0].sitio))."; Definitivo = $true } }
     return [pscustomobject]@{ Motivo = "La tabla $tabla no existe en el batch: usa solo tablas que use su codigo."; Definitivo = $false }
   }
   $tablas = @(Get-TablasSql $Texto | ForEach-Object { $_.tabla })
@@ -1502,7 +1545,7 @@ function Get-Normal([string]$Texto, $Dias = $null) {
   foreach ($d in $Dias) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
   $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
   foreach ($d in $Dias) {
-    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
+    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
   }
   return ($t -replace '(<hoy:[^>]+>)[_\-T\. ]?\d{6}(\d{3})?(?!\d)', '$1<hora>')
 }
@@ -1886,7 +1929,8 @@ function Add-Hechos($Grupos, $Res, [string]$Codigo, [string]$Hash) {
 function Show-Resultado($Res, $PorJob, $Grupos) {
   Info ''
   Info 'Prueba en local: el original frente al migrado, con las mismas entradas'
-  $fmt = '{0,-32} {1,6} {2,8} {3,10} {4,11}'
+  $ancho = [Math]::Max(32, [int](@($PorJob | ForEach-Object { $_.job.Length } | Measure-Object -Maximum).Maximum))   # el nombre mas largo, con un minimo
+  $fmt = "{0,-$ancho} {1,6} {2,8} {3,10} {4,11}"
   Info ($fmt -f 'Job', 'Casos', 'Iguales', 'Distintos', 'Sin probar')
   foreach ($p in $PorJob) { Info ($fmt -f $p.job, $p.casos, $p.iguales, $p.distintos, $p.sinProbar) }
   foreach ($g in @($Grupos)) {
@@ -2710,7 +2754,7 @@ try {
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()
-  $rehacer = @{ original = $false; migrado = [bool]$RehacerArnes }   # los que se escriben otra vez sin pasar por Use-ArnesGuardado
+  $rehacer = @{ original = [bool]$RehacerOriginal; migrado = [bool]$RehacerArnes }   # los que se escriben otra vez sin pasar por Use-ArnesGuardado
   $testOriginal = ''   # donde va el test del original: el del migrado lo traduce
   foreach ($x in @(@('original', $CopiaOrig), @('migrado', $CopiaMig))) {
     $test = Get-RutaTest $x[1]
@@ -2799,6 +2843,8 @@ try {
   # 8. Con -Regresion: los casos que salen iguales se quedan como tests en la rama de rescate (un commit); no cambia la salida
   if ($Regresion) { Invoke-Regresion $res }
   Info ''
+  $sinTablas = @($res | Where-Object { $_.resultado -eq 'no se pudo preparar' -and $_.motivo.Contains($PrefijoSinTabla) }).Count
+  if ($sinTablas -gt 0) { Aviso "$sinTablas caso(s) no se pudieron preparar porque el test del original no crea sus tablas: relanza con -RehacerOriginal." }
   Show-Tiempos
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
   Info $NoPromete
