@@ -1913,6 +1913,23 @@ $Pruebas['60 c1 i) estado: sin git la regla de restos no mide y lo dice en el mo
   Igual 'y el resto de notas.bak sale' 'notas.bak' ((Limpieza-De $m.Json 'resto-herramienta') | ForEach-Object { $_.fichero })
 }
 
+$Pruebas['61 c1 j) resto-herramienta: una carpeta dentro de otra (migracion-lote/target/) da UNA incidencia, con la carpeta mas alta (migracion-lote/) y ninguna con la de dentro'] = {
+  $x = Mide-C1 'c1j' @{ 'migracion-lote/target/A.class' = "x`n" }
+  $r = Limpieza-De $x.Json 'resto-herramienta'
+  Igual 'una sola incidencia' 1 $r.Count
+  Igual 'con la carpeta mas alta' 'migracion-lote/' (Ficheros-C1 $r)
+  Igual 'ninguna con migracion-lote/target/' 0 @($r | Where-Object { $_.fichero -ceq 'migracion-lote/target/' }).Count
+  Igual 'y es un resto de la migracion, no de Maven' 'la migracion' $(if ($r.Count -eq 1) { ($r[0].texto -replace '^.* es un resto de (.*?)\. Si no hace falta.*$', '$1') } else { '' })
+}
+
+$Pruebas['62 c1 k) codigo-comentado al final del fichero: tres lineas // ; ; } que son las ultimas, sin salto de linea final, dan una incidencia en la primera'] = {
+  $f = "package com.acme;`n`npublic class Fin {`n}`n// a();`n// b();`n// }"
+  Comprueba 'el fichero de la prueba no acaba en salto de linea' (-not $f.EndsWith("`n"))
+  $x = Mide-C1 'c1k' @{ 'src/main/java/com/acme/Fin.java' = $f }
+  $r = Limpieza-De $x.Json 'codigo-comentado'
+  Igual 'una incidencia, en la primera linea del tramo (la 5)' 'src/main/java/com/acme/Fin.java:5' (($r | ForEach-Object { $_.fichero + ':' + $_.linea }) -join '|')
+}
+
 # ================================ M45: LA MARCA DE INTENTO EN CADA RONDA ================================
 # m45-copilot.ps1 apunta, en cada llamada a Copilot, el HEAD y la marca .rescate/intento-en-curso.json que ve, y pasa la llamada a bp4-copilot.ps1.
 # Un hook pre-commit apunta lo mismo en cada commit de la fase (lo que corre entre un commit y el siguiente).
