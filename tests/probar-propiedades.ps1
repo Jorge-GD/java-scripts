@@ -721,6 +721,7 @@ $Pruebas['17 h) cache: si Maven falla dos veces seguidas, la segunda vuelve a la
 
 $Pruebas['18 h) cache: la clave lleva la huella de propiedades.ps1; con otra version del script se mide de nuevo'] = {
   $E = Nuevo-Escenario 'vs' @{ ($RR + 'application.properties') = $LegC } @{ ($RR + 'application.yml') = $YmlC; 'src/main/java/com/acme/batch/Ajustes.java' = $JavaApp }
+  Comprueba 'la huella del script se lee de su fichero (no cae en sin-script)' ((Get-HuellaScriptPropiedades) -cmatch '^[0-9a-f]{8}$') (Get-HuellaScriptPropiedades)
   # el JSON de la primera vez lo guarda "otra version" del script
   $m1 = & { function Get-HuellaScriptPropiedades { return 'huella-de-otra-version' }; Mide $E }
   Igual 'la primera vez, una llamada a Maven' 1 (Llamadas-De $E.Llamadas).Count

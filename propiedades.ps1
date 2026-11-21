@@ -619,9 +619,16 @@ function Get-TextoFicheros([string]$Lado, $Ficheros) {
   return "Ficheros leidos del $Lado ($($rels.Count)): $($rels -join ', ')"
 }
 
-# La clave de la cache: los ficheros leidos (con su huella), el codigo del migrado, la lista de exclusiones y la huella de los metadatos.
+# La huella de este mismo script: si cambia la logica, la cache de la medida deja de valer y se rehace sola.
+function Get-HuellaScriptPropiedades {
+  try { return (Get-Hash8 ([System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'propiedades.ps1')))) }
+  catch { return 'sin-script' }
+}
+
+# La clave de la cache: los ficheros leidos (con su huella), el codigo del migrado, la lista de exclusiones, la huella de los metadatos y
+# la de este script.
 function Get-ClavePropiedades($Lados, $Codigo, [string]$HuellaMetadatos) {
-  $lineas = @('exclusiones|' + (@($Cfg.PropiedadesExcluir) -join ','), "metadatos|$HuellaMetadatos")
+  $lineas = @('exclusiones|' + (@($Cfg.PropiedadesExcluir) -join ','), "metadatos|$HuellaMetadatos", ('script|' + (Get-HuellaScriptPropiedades)))
   foreach ($l in $Lados.Keys) { foreach ($f in @($Lados[$l])) { $lineas += "$l|$($f.Rel)|$(Get-Hash8 $f.Texto)" } }
   foreach ($f in @($Codigo)) { $lineas += "codigo|$($f.Rel)|$(Get-Hash8 $f.Texto)" }
   return (Get-Hash8 (($lineas | Sort-Object { $_ }) -join "`n"))
