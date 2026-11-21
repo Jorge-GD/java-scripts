@@ -3237,9 +3237,9 @@ $Pruebas['m39 (h) -Job: lo del job de ahora es lo nuevo aunque lo guardado diga 
 
 $SitioTablaM40 = 'src/main/java/com/acme/viejo/Repo.java:4'
 
-function Escenario-M40([string]$Nombre, $Casos) {
+function Escenario-M40([string]$Nombre, $Casos, [string]$Prefijo = 'm40') {
   $e = Nuevo-Escenario $Nombre $Casos
-  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm40-mvn.ps1'); SegundosPorLlamada = 60 }
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos "$Prefijo-copilot.ps1"); MvnExe = (Join-Path $falsos "$Prefijo-mvn.ps1"); SegundosPorLlamada = 60 }
   Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
   Escribe $e.Legacy 'src/main/java/com/acme/viejo/Repo.java' "package com.acme.viejo;`n`npublic class Repo {`n  static final String A = `"INSERT INTO T_A (ID, NOMBRE) VALUES (?, ?)`";`n}`n"
   [void](GitEn $e.Legacy @('add', 'src/main/java/com/acme/viejo/Repo.java'))
@@ -5049,6 +5049,192 @@ $Pruebas['m53 (l) sin estado.txt con Maven en 0 y una causa en el log (el aviso 
   $f = Fallo-M53 $e 'cargaJob' 'caso-01'
   Igual 'el fallo del migrado: sin estado.txt, con la causa del aviso de Spring' "sin estado.txt|$CausaContexto53" "$($f.estado)|$($f.causa)"
   Comprueba 'la consola dice esa causa y no lo de que no ha dejado salida' ($r.Salida.Contains("el migrado no deja estado.txt: $CausaContexto53") -and -not $r.Salida.Contains($CausaSinSalida53)) (Cola $r.Salida)
+}
+
+# ===================== M56: el test de la prueba en local no se queda atascado sin salida =====================
+# Estos escenarios usan los falsos m40 (-RehacerOriginal y los avisos de las tablas) y m56-copilot.ps1 y m56-mvn.ps1 (RESCATE_M56 = '<nombre>:<id de tarea>'):
+# el arnes cuyo id casa deja un test cuyo mvn test acaba con la salida de bean, bean-tabla, create-es, create-en o create-min (ver m56-mvn.ps1).
+# El original lleva un Repo.java con 'INSERT INTO T_A' en la linea 4 (Escenario-M40).
+
+function Prueba-M56($E, [string]$Guion, [string[]]$A = @()) {
+  $env:RESCATE_M56 = $Guion
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M56 = '' }
+}
+
+$Pruebas['m56 (a) -RehacerOriginal con los dos arneses guardados y hechos: se escriben otra vez los dos (dos llamadas); sin la opcion, ninguna'] = {
+  $e = Nuevo-Escenario 'm56-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'una llamada al arnes del original' 1 @(Llamadas-Arnes $e 'original').Count
+  Igual 'y una al del migrado' 1 @(Llamadas-Arnes $e 'migrado').Count
+  $r = Prueba $e
+  Igual 'sin la opcion sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas' 2 (@(Llamadas-Arnes $e 'original').Count + @(Llamadas-Arnes $e 'migrado').Count)
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'se escribe otra vez el del original' 2 @(Llamadas-Arnes $e 'original').Count
+  Igual 'y el del migrado, que lo traduce' 2 @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'los dos quedan hechos' ((Tarea-Arnes $e 'original').estado -eq 'hecha' -and (Tarea-Arnes $e 'migrado').estado -eq 'hecha') ''
+  Comprueba 'y no avisa de casos sin preparar por las tablas' ($r.Salida -notmatch 'no se pudieron preparar porque') (Cola $r.Salida)
+}
+
+$Pruebas['m56 (b) un arnes del original sin una tabla del inventario: el aviso, al escribirlo y al usar el guardado, dice que relance con -RehacerOriginal; con la opcion y el test con la tabla, el aviso se va'] = {
+  $e = Escenario-M40 'm56-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $aviso = "La base de prueba sigue sin estas tablas: T_A ($SitioTablaM40). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal."
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el aviso con -RehacerOriginal, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
+  Igual 'con el arnes guardado, el mismo aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal y la tabla en el test nuevo, sale con 0' 0 $r.Codigo
+  Comprueba 'el test guardado lleva la tabla' ((Test-Guardado $e 'original').Contains('BASE_TABLAS=T_A')) ''
+  Comprueba 'y ya no avisa' ($r.Salida -notmatch 'sigue sin estas tablas') (Cola $r.Salida)
+}
+
+$Pruebas['m56 (c) tres casos que no se pudieron preparar por una tabla del inventario: una sola linea de aviso con 3 caso(s)'] = {
+  $e = Escenario-M40 'm56-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original;falta-tabla=T_A:^cargaJob/caso-0[123]'
+  Igual 'sale con 1 (ningun caso se compara)' 1 $r.Codigo
+  Igual 'los tres casos: no se pudo preparar' 'no se pudo preparar,no se pudo preparar,no se pudo preparar' ((Resultados $e) -join ',')
+  $linea = '3 caso(s) no se pudieron preparar porque el test del original no crea sus tablas: relanza con -RehacerOriginal.'
+  Igual 'la linea de aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($linea))).Count
+  Igual 'y ninguna otra con esa cuenta' 1 ([regex]::Matches($r.Salida, 'caso\(s\) no se pudieron preparar porque')).Count
+}
+
+$M56Bean = "El contexto de Spring no arranca: el bean clientesFinder falla al crearse (Error getting clientes). Si llama fuera al arrancar (base de datos, Mongo, REST, ficheros), sustituyelo en el test por un @MockBean (@MockitoBean en Spring Boot 3.4 o posterior) o por un @Bean @Primary de prueba que no llame fuera. No toques src/main."
+
+$Pruebas['m56 (d) un bean que llama fuera al crearse y hace fallar el contexto: el motivo del reintento y el de Show-Atascado llevan el bean mas interno, @MockBean, @MockitoBean y No toques src/main'] = {
+  $e = Escenario-M40 'm56-d' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M56 $e 'bean:arnes-original'
+  Igual 'sale con 1 (el arnes del original queda atascado)' 1 $r.Codigo
+  Igual 'dos llamadas al arnes del original' 2 @(Llamadas-Arnes $e 'original').Count
+  Comprueba 'el prompt del reintento lleva la pista, con el bean mas interno (clientesFinder) y su mensaje' ((Registro-Arnes $e 'original' 2).Contains($M56Bean)) (Cola (Registro-Arnes $e 'original' 2))
+  Comprueba 'y el primer prompt no' (-not (Registro-Arnes $e 'original' 1).Contains('@MockBean')) ''
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda atascada con dos intentos' 'atascada,2' "$($t.estado),$($t.intentos)"
+  Comprueba 'su motivo lleva la pista, tras lo que ya decia (que no dejo estado.txt)' ($t.motivo.Contains($M56Bean) -and $t.motivo -match 'no ha dejado estado\.txt') $t.motivo
+  $pegar = @($r.Salida -split "`n" | Where-Object { $_.Contains('Estoy ejecutando prueba-local.ps1') })
+  Comprueba 'el texto para pegar en Copilot (Show-Atascado) la lleva' ($pegar.Count -eq 1 -and $pegar[0].Contains($M56Bean)) (Cola $r.Salida)
+  Comprueba 'y la consola del atasco, tambien' ($r.Salida.Contains("ha quedado atascado: ") -and $r.Salida.Contains('@MockitoBean')) (Cola $r.Salida)
+}
+
+$Pruebas['m56 (d2) la misma cadena del bean con la causa Table "T_A" not found: sin la pista del bean (de las tablas se ocupa m40)'] = {
+  $e = Escenario-M40 'm56-d2' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M56 $e 'bean-tabla:arnes-original'
+  Igual 'sale con 1' 1 $r.Codigo
+  Igual 'dos llamadas al arnes del original' 2 @(Llamadas-Arnes $e 'original').Count
+  $t = Tarea-Arnes $e 'original'
+  Comprueba 'el motivo sigue diciendo que no dejo estado.txt, con la causa de la tabla' ($t.motivo -match 'no ha dejado estado\.txt' -and $t.motivo.Contains('Table "T_A" not found')) $t.motivo
+  Comprueba 'pero no lleva la pista del bean' ($t.motivo -notmatch 'El contexto de Spring no arranca' -and $t.motivo -notmatch '@MockBean') $t.motivo
+  Comprueba 'ni el prompt del reintento' (-not (Registro-Arnes $e 'original' 2).Contains('@MockBean')) ''
+}
+
+$Pruebas['m56 (e) el test crea mal una tabla (H2 rechaza CREATE TABLE IF NOT EXISTS PUBLIC.IF[*]): el motivo lleva la sentencia y el inventario del repo, no IF como tabla; en espanol y en ingles'] = {
+  $sentencia = 'CREATE TABLE IF NOT EXISTS PUBLIC.IF[*] (IF VARCHAR(4000),NOT VARCHAR(4000),EXISTS VARCHAR(4000),T_COMIS VARCHAR(4000))'
+  $inventario = "con las columnas que usa el codigo: T_A ($SitioTablaM40)."
+  foreach ($x in @(@('create-es', $sentencia), @('create-en', $sentencia), @('create-min', $sentencia.ToLowerInvariant()))) {
+    $e = Escenario-M40 ('m56-e-' + $x[0]) ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+    $r = Prueba-M56 $e ($x[0] + ':arnes-original')
+    $pista = "El test crea mal una tabla ($($x[1].Substring(0, 60))). No saques las tablas del SQL del codigo: escribe un CREATE TABLE fijo para cada una de estas, $inventario"
+    Igual "$($x[0]): sale con 1" 1 $r.Codigo
+    $t = Tarea-Arnes $e 'original'
+    Comprueba "$($x[0]): el motivo lleva la pista, con los 60 primeros caracteres de la sentencia y el inventario" ($t.motivo.Contains($pista)) $t.motivo
+    Comprueba "$($x[0]): el reintento la lleva" ((Registro-Arnes $e 'original' 2).Contains($pista)) (Cola (Registro-Arnes $e 'original' 2))
+    Comprueba "$($x[0]): el inventario no lleva IF como tabla" ($t.motivo -notmatch '(?m)(^|[ ,:])IF \(src/') $t.motivo
+    Comprueba "$($x[0]): ni la pista del bean" ($t.motivo -notmatch 'El contexto de Spring no arranca') $t.motivo
+  }
+}
+
+$Pruebas['m56 (f) un arnes atascado: relanzar el mismo comando lo vuelve a intentar con dos intentos nuevos, como dice el texto de Show-Atascado'] = {
+  $e = Nuevo-Escenario 'm56-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e @() 'arnes-no-compila:arnes-original'
+  Igual 'sale con 1' 1 $r.Codigo
+  Igual 'dos llamadas al arnes del original' 2 @(Llamadas-Arnes $e 'original').Count
+  $pegar = @($r.Salida -split "`n" | Where-Object { $_.Contains('Estoy ejecutando prueba-local.ps1') })
+  Comprueba 'el texto para pegar acaba diciendo que se vuelve a lanzar el mismo comando' ($pegar.Count -eq 1 -and $pegar[0].EndsWith('Despues vuelvo a lanzar el mismo comando.')) (Cola $r.Salida)
+  $r = Prueba $e @() 'arnes-no-compila:arnes-original'
+  Igual 'el mismo comando, otra vez, sale con 1' 1 $r.Codigo
+  Igual 'vuelve a llamar a la IA: dos llamadas mas' 4 @(Llamadas-Arnes $e 'original').Count
+  $t = Tarea-Arnes $e 'original'
+  Igual 'con dos intentos nuevos, no con cuatro: la tarea atascada no se conserva' 'atascada,2' "$($t.estado),$($t.intentos)"
+  $r = Prueba $e
+  Igual 'arreglado lo que fallaba, el mismo comando sale con 0' 0 $r.Codigo
+  Igual 'con una llamada mas' 5 @(Llamadas-Arnes $e 'original').Count
+  Igual 'y el arnes queda hecho' 'hecha' (Tarea-Arnes $e 'original').estado
+}
+
+$Pruebas['m56 (g) un original corrido a caballo de la medianoche (R_2026_11_20.TXT y R_2026_11_21.TXT): no es no determinista, y el migrado con el nombre de hoy sale igual; con un nombre de otro dia, distinto'] = {
+  $f = Join-Path $Dir 'm56-fechas.ps1'
+  $raizCmp = Join-Path $Dir 'm56-fechas'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$caballo = @([datetime]'2026-11-20', [datetime]'2026-11-21')
+$Hoy = @([datetime]'2026-11-21')
+function Lado([string]$Id, [string]$Lado, [hashtable]$Ficheros) {
+  $d = Join-Path (Join-Path $Raiz $Id) $Lado
+  foreach ($k in $Ficheros.Keys) {
+    $p = Join-Path $d $k
+    [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+    [System.IO.File]::WriteAllText($p, $Ficheros[$k])
+  }
+  return $d
+}
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B, $DiasA, $DiasB = $null) {
+  $dirA = Lado $Id 'A' $A
+  $dirB = Lado $Id 'B' $B
+  'R ' + $Id + ' ' + (@(Compare-Caso $dirA $dirB $DiasA $DiasB | ForEach-Object { $_.fichero }) -join ',')
+}
+$a = 'ficheros/outbox/R_2026_11_20.TXT'
+$b = 'ficheros/outbox/R_2026_11_21.TXT'
+$c = 'ficheros/outbox/R_2026_11_22.TXT'
+# original y original-2 (los dos dias del original en los dos lados)
+Caso 'original-y-original-2' @{ $a = "total 3`n" } @{ $b = "total 3`n" } $caballo $caballo
+# original frente al migrado (el migrado, con los dias de hoy)
+Caso 'migrado-de-hoy' @{ $a = "total 3`n" } @{ $b = "total 3`n" } $caballo
+Caso 'migrado-con-otro-contenido' @{ $a = "total 3`n" } @{ $b = "total 4`n" } $caballo
+Caso 'migrado-de-otro-dia' @{ $a = "total 3`n" } @{ $c = "total 3`n" } $caballo
+Caso 'original-de-otro-dia' @{ $c = "total 3`n" } @{ $b = "total 3`n" } $caballo
+Caso 'sin-ventana' @{ $a = "total 3`n" } @{ $b = "total 3`n" } $null
+'N ' + (Get-Normal 'ficheros/outbox/R_2026_11_20.TXT y 2026_11_20_153045' $caballo)
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  $r = Lanzar $f @($raizCmp)
+  $v = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
+  Igual 'original y original-2, uno con cada dia en el nombre: el mismo fichero (no no determinista)' '' $v['original-y-original-2']
+  Igual 'el migrado con el nombre de hoy y el mismo contenido: igual' '' $v['migrado-de-hoy']
+  Comprueba 'con otro contenido, distinto' ($v['migrado-con-otro-contenido'] -ne '') (Cola $r.Salida)
+  Comprueba 'con una fecha de otro dia en el nombre (el 22), distinto' ($v['migrado-de-otro-dia'] -ne '') (Cola $r.Salida)
+  Comprueba 'un original con una fecha que no es de sus dias, distinto' ($v['original-de-otro-dia'] -ne '') (Cola $r.Salida)
+  Comprueba 'sin dias de ejecucion por lado, con solo los de hoy, el nombre del 20 es un dato y sale distinto' ($v['sin-ventana'] -ne '') (Cola $r.Salida)
+  Comprueba 'la fecha con guion bajo tambien se normaliza en el contenido, con su marca y la hora pegada' ($r.Salida -match '(?m)^N ficheros/outbox/R_<hoy:yyyy_MM_dd>\.TXT y <hoy:yyyy_MM_dd><hora>$') (Cola $r.Salida)
+}
+
+$Pruebas['m56 (h) un job de 38 caracteres: las columnas de la tabla del resumen quedan alineadas; con nombres cortos, el ancho de siempre'] = {
+  $f = Join-Path $Dir 'm56-tabla.ps1'
+  $cuerpo = @'
+$largo = 'procesarRecibosPendientesDeClientesJob'
+'L ' + $largo.Length
+Show-Resultado @() @([pscustomobject]@{ job = 'cargaJob'; casos = 3; iguales = 3; distintos = 0; sinProbar = 0 }) @()
+'---'
+Show-Resultado @() @([pscustomobject]@{ job = 'cargaJob'; casos = 3; iguales = 3; distintos = 0; sinProbar = 0 }, [pscustomobject]@{ job = $largo; casos = 12; iguales = 10; distintos = 1; sinProbar = 1 }) @()
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Show-Resultado')) + "`n" + (Texto-De-Funciones $comun @('Info', 'Fallo', 'Aviso')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $partes = @($r.Salida -split "`n---`n")
+  Comprueba 'el job largo mide 38' ($r.Salida -match '(?m)^L 38$') (Cola $r.Salida)
+  Comprueba 'hay dos tablas' ($partes.Count -eq 2) (Cola $r.Salida)
+  $corta = @($partes[0] -split "`n" | Where-Object { $_ -match '^(Job|cargaJob)\s' })
+  Igual 'con nombres cortos: la cabecera y su fila, con el ancho de siempre (71 letras)' '71,71' (($corta | ForEach-Object { $_.Length }) -join ',')
+  $larga = @($partes[1] -split "`n" | Where-Object { $_ -match '^(Job|cargaJob|procesarRecibosPendientesDeClientesJob)\s' })
+  Igual 'con el job largo: la cabecera y las dos filas miden lo mismo' 1 @($larga | ForEach-Object { $_.Length } | Select-Object -Unique).Count
+  Igual 'son tres lineas' 3 $larga.Count
 }
 
 # ================================ LANZADOR ================================
