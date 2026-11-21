@@ -7,13 +7,14 @@
 #   bean-conexion   la cadena de un bean que llama fuera y falla con java.lang.IllegalStateException: Connection refused, y una linea 'host is not set' (sin punto)
 #   prop-dos        dos propiedades: app.sftp.host (tres veces, de tres maneras) y app.export.dir
 #   prop-create     un CREATE TABLE que H2 rechaza (como create-es de m56-mvn.ps1) y, ademas, app.export.dir is not configured
+#   prop-cuatro     cuatro propiedades distintas sin valor: app.uno.dir, app.dos.dir, app.tres.dir y app.cuatro.dir
 $raiz = (Get-Location).Path
 $guion = ''
 if ($args -contains 'test') {
   $test = @(Get-ChildItem -LiteralPath (Join-Path $raiz 'src') -Recurse -File -Filter 'PruebaLocalTest.java')
   if ($test.Count -gt 0) { $guion = [regex]::Match([System.IO.File]::ReadAllText($test[0].FullName), '(?m)^// M56_(\S+)').Groups[1].Value }
 }
-if (@('prop-export', 'placeholder', 'bind', 'bean-conexion', 'prop-dos', 'prop-create') -notcontains $guion) {
+if (@('prop-export', 'placeholder', 'bind', 'bean-conexion', 'prop-dos', 'prop-create', 'prop-cuatro') -notcontains $guion) {
   & (Join-Path $PSScriptRoot 'm56-mvn.ps1') @args
   exit $LASTEXITCODE
 }
@@ -41,6 +42,9 @@ elseif ($guion -eq 'prop-dos') {
   'Caused by: java.lang.IllegalStateException: app.sftp.host is not configured'
   'app.sftp.host is not configured'
   'Caused by: java.lang.IllegalStateException: app.export.dir is not configured'
+}
+elseif ($guion -eq 'prop-cuatro') {
+  foreach ($k in @('app.uno.dir', 'app.dos.dir', 'app.tres.dir', 'app.cuatro.dir')) { "Caused by: java.lang.IllegalStateException: $k is not configured" }
 }
 else {
   'Caused by: org.h2.jdbc.JdbcSQLSyntaxErrorException: Error de Sintaxis en sentencia SQL "' + $sentencia + '"; se esperaba "identifier"; SQL statement:'

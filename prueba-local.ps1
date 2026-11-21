@@ -30,7 +30,8 @@ QUE HACE
      de prueba no crea las tablas del codigo) y, con el, el del migrado. Lo mismo, sin pedirlo, si el guardado se escribio con otra
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
-     tambien con -RehacerArnes.
+     tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
+     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar (Get-PrevioArnes).
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -170,6 +171,13 @@ $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no 
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
+# Lo que dice el motivo de un caso cuyo original no corre porque el test crea mal una tabla (Get-MotivoTablaMal): la cuenta del final de la prueba lo busca.
+# $PatronCreateTabla es el CREATE TABLE que H2 rechaza (grupo s, la sentencia): el error de H2 (Get-PistaArnes y Get-MotivoTablaMal) o ese motivo ya dicho
+# (Get-PistaArnes sobre el prueba-local.json de antes, donde el motivo ya no trae el error).
+$PrefijoTablaMal = 'El test del original crea mal una tabla: '
+$PatronCreateTabla = '(?im)(?:(?:Syntax error in SQL statement|Error de Sintaxis en sentencia SQL)\s+"|' + [regex]::Escape($PrefijoTablaMal) + ')(?<s>CREATE TABLE.*?)(?:"\s*;|$)'
+# Un DROP TABLE que H2 rechaza porque otra tabla depende de la que se borra (grupo 1, la tabla): 'Cannot drop "X" because' o 'Imposible eliminar "X" debido a que'.
+$PatronDrop = '(?i)(?:Cannot drop|Imposible eliminar)\s+"([^"]+)"\s+(?:because|debido a que)'
 # Una propiedad sin valor en el test (Get-PistaArnes), por su clave (grupo k): los mensajes de Spring y de Spring Boot ('Could not resolve placeholder 'x'',
 # 'Failed to bind properties under 'x''; la clave, lo que haya entre comillas) y, sin comillas, '<clave> is not configured|is not set|must be set|is required|is
 # missing' o en espanol 'no esta configurad|es obligatori', con la clave de al menos un punto (app.export.dir): una palabra suelta o una clase no cuentan.
@@ -633,6 +641,7 @@ function Invoke-Lote($Lote, [string]$Esfuerzo) {
     $esf = $Esfuerzo
     $motivo = ''
     if ($t.intentos -gt 0) { $esf = $Cfg.EsfuerzoReintento; $motivo = $t.motivo }
+    elseif ($t.entradas.PSObject.Properties['previo']) { $motivo = [string]$t.entradas.previo }   # el primer intento de un test que se escribe otra vez: lo que fallo antes (Set-PrevioArnes)
     $jdk = ''
     if ($JavaLegacy -and $t.entradas.copia -eq $CopiaOrig) { $jdk = $JavaLegacy }
     $items += , ([pscustomobject]@{ Id = $t.id; Dir = $t.entradas.copia; Prompt = ((Get-Prompt $t '' $motivo) -replace ('(?m)^' + [regex]::Escape($MarcaNo) + '.*\n(\n)?'), ''); Modelo = $ModeloElegido; Esfuerzo = $esf; Dirs = @($t.entradas.dirs); JavaHome = $jdk })
@@ -775,6 +784,32 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   }
   $t.entradas.copia = $Dir   # la de ahora, aunque la tarea venga de otro lanzamiento
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
+}
+
+# Lo que fallo la otra vez, para el primer intento de un test que se escribe otra vez ($T no esta hecha: se rehace con -RehacerOriginal o -RehacerArnes, se
+# cambio la plantilla, o su tarea de antes quedo atascada y Restore-Tarea no la conserva). $Antes es su tarea del lanzamiento anterior (Get-TareaGuardada, antes
+# de que Get-TareaArnes la pise) o $null. Lleva, en este orden:
+#  - el ultimo motivo de la tarea de antes, si no estaba hecha (el de un test atascado ya lleva las pistas de Get-PistaArnes);
+#  - para el del original, las pistas (Get-PistaArnes sobre cada motivo, sin repetir y 3 como mucho) de los casos 'no se pudo preparar' del prueba-local.json de
+#    antes ($Anterior): casi todos esos motivos vienen del test del original.
+# Sin nada de eso es '' y el prompt no cambia. Invoke-Lote lo pone como la correccion del primer intento, por el mismo camino que el motivo de un reintento; la
+# huella (Get-HuellaArnes) no lo lleva: un test que no se rehace no se escribe otra vez por esto. Una tarea que aun no ha llamado a la IA (se dijo que no a
+# la pregunta de llamar a Copilot) conserva el de antes si ahora no hay otro.
+function Get-PrevioArnes($T, $Antes) {
+  $partes = @()
+  if ($Antes -and $Antes.estado -ne 'hecha' -and $Antes.motivo) { $partes += "El ultimo motivo del test de antes: $($Antes.motivo)" }
+  if ($T.entradas.repo -eq 'original' -and $Anterior) {
+    $pistas = @()
+    foreach ($m in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'no se pudo preparar' -and $_.motivo } | ForEach-Object { [string]$_.motivo } | Select-Object -Unique)) {
+      $p = Get-PistaArnes $T @($m -split "`n")
+      if ($p -and $pistas -cnotcontains $p) { $pistas += $p }
+      if ($pistas.Count -ge 3) { break }
+    }
+    if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
+  }
+  if ($partes.Count -gt 0) { return "Lo que fallo la otra vez (de un lanzamiento anterior):`n" + ($partes -join "`n") }
+  if ($Antes -and $Antes.estado -eq 'pendiente' -and $Antes.intentos -eq 0 -and $Antes.entradas.PSObject.Properties['previo']) { return [string]$Antes.entradas.previo }
+  return ''
 }
 
 # Los ficheros que puede escribir el arnes de una copia.
@@ -1064,7 +1099,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   return ''
 }
 
-# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de tres maneras que el motivo solo no explica: '' o una frase por pista.
+# Lo que se le dice a la IA de un arnes rechazado cuando el test falla de una de cuatro maneras que el motivo solo no explica: '' o una frase por pista.
 # $Lineas son las del fallo: lo que ya trae el motivo (error.txt del caso vacio o lo que dice Maven), la salida de Maven y su causa (sale de los informes
 # de surefire): los mismos sitios de donde sale hoy el motivo.
 #  - Una propiedad sin valor ($PatronPropiedad): el job o el bean lee una propiedad que en el servidor llega por el configmap o por una variable de entorno y el
@@ -1076,6 +1111,8 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 #    Si en lo que sea sale una tabla o una columna que no esta ($PatronTablaFalta), no hay pista: eso lo cubre Get-MotivoBase.
 #  - Un CREATE TABLE que H2 rechaza (el test saca las tablas del SQL del codigo con un parser suyo y toma una palabra de la sentencia, IF, por el nombre de
 #    la tabla): se le dan las tablas del codigo (Get-TablasBatch de la copia del arnes) para que escriba un CREATE TABLE fijo de cada una.
+#  - Un DROP TABLE que H2 rechaza ($PatronDrop: el test borra las tablas una a una antes de crearlas y una depende de otra): se le dice que no borre tablas y
+#    que use una base H2 en memoria con un nombre unico en cada ejecucion o, si tiene que limpiar, DROP ALL OBJECTS al principio. Va con las demas.
 function Get-PistaArnes($T, [string[]]$Lineas) {
   $pistas = @()
   $texto = $Lineas -join "`n"
@@ -1091,16 +1128,34 @@ function Get-PistaArnes($T, [string[]]$Lineas) {
     if ($detalle.Length -gt 120) { $detalle = $detalle.Substring(0, 120) }
     $pistas += "El contexto de Spring no arranca: el bean $nombre falla al crearse ($detalle). Si llama fuera al arrancar (base de datos, Mongo, REST, ficheros), sustituyelo en el test por un @MockBean (@MockitoBean en Spring Boot 3.4 o posterior) o por un @Bean @Primary de prueba que no llame fuera. No toques src/main."
   }
-  $sql = [regex]::Match($texto, '(?im)(?:Syntax error in SQL statement|Error de Sintaxis en sentencia SQL)\s+"(CREATE TABLE.*?)(?:"\s*;|$)')
-  if ($sql.Success) {
-    $sentencia = $sql.Groups[1].Value
-    if ($sentencia.Length -gt 60) { $sentencia = $sentencia.Substring(0, 60) }
+  $sentencia = Get-SentenciaCreate $texto
+  if ($sentencia) {
     $tablas = @(Get-TablasBatch $T.entradas.copia)
     $cuales = 'cada tabla que use el batch, con las columnas que usa el codigo.'
     if ($tablas.Count -gt 0) { $cuales = "cada una de estas, con las columnas que usa el codigo: $(Get-ListaTablas $tablas)." }
     $pistas += "El test crea mal una tabla ($sentencia). No saques las tablas del SQL del codigo: escribe un CREATE TABLE fijo para $cuales"
   }
+  $drop = [regex]::Match($texto, $PatronDrop)
+  if ($drop.Success) {
+    $pistas += "El test borra las tablas una a una y una depende de otra ($($drop.Groups[1].Value)). No borres tablas: usa una base H2 en memoria con un nombre unico en cada ejecucion (jdbc:h2:mem:<nombre>;DB_CLOSE_DELAY=-1) o, si tiene que limpiar, DROP ALL OBJECTS al principio."
+  }
   return ($pistas -join ' ')
+}
+
+# Los 60 primeros caracteres del CREATE TABLE que H2 rechaza en $Texto ($PatronCreateTabla), o '' si no hay.
+function Get-SentenciaCreate([string]$Texto) {
+  $m = [regex]::Match($Texto, $PatronCreateTabla)
+  if (-not $m.Success) { return '' }
+  return $m.Groups['s'].Value.Substring(0, [Math]::Min(60, $m.Groups['s'].Length))
+}
+
+# 'El test del original crea mal una tabla: <la sentencia>' si $Texto (el error de un caso en el original) trae el CREATE TABLE que H2 rechaza, y '' si no.
+# El caso no tiene la culpa: es el test del original, y se arregla con -RehacerOriginal. Lo usan Get-MotivoBase (un caso que la IA prepara) y Get-Resultado (uno
+# hecho de antes cuyo original ya no corre); la cuenta del final de la prueba busca $PrefijoTablaMal.
+function Get-MotivoTablaMal([string]$Texto) {
+  $sentencia = Get-SentenciaCreate $Texto
+  if (-not $sentencia) { return '' }
+  return $PrefijoTablaMal + $sentencia
 }
 
 # Guarda lo que ha escrito el arnes (en prueba-local\arnes\<repo>) y lo da por bueno en la copia.
@@ -1289,15 +1344,20 @@ function Save-Caso($T) {
 
 # Lo que se le dice a la IA de un caso que no corre en el original por la base de prueba: $Texto es su motivo (con el error de Maven o de su
 # error.txt) y lleva 'Table "X" not found', 'Tabla "X" no encontrada' o lo mismo con Column o Columna (H2 acaba esa linea con 42102, 42S02,
-# 42122 o 42S22, pero sin el nombre no hay nada que decir). $null si no es eso. Si no, un objeto con el Motivo y si es Definitivo (otro intento
-# no lo arregla):
+# 42122 o 42S22, pero sin el nombre no hay nada que decir), o el CREATE TABLE que H2 rechaza. $null si no es eso. Si no, un objeto con el Motivo y si es
+# Definitivo (otro intento no lo arregla):
+#  - un CREATE TABLE rechazado (Get-MotivoTablaMal): el test del original crea mal una tabla, y la IA de los casos no lo ve ni puede arreglarlo; definitivo;
 #  - una tabla del inventario del original (Get-TablasBatch): el test no la crea y la IA no lo ve ni puede crearla; definitivo;
 #  - una tabla que el codigo no usa: inventada; la IA la corrige;
 #  - una columna: la tabla es la primera del SQL del error que tiene su tablas\<TABLA>.csv en el caso vacio del job (o la primera) y, si esta, se
 #    dicen las columnas de su primera linea.
 function Get-MotivoBase([string]$Texto, [string]$Job) {
   $m = [regex]::Match($Texto, $PatronTablaFalta)
-  if (-not $m.Success) { return $null }
+  if (-not $m.Success) {
+    $mal = Get-MotivoTablaMal $Texto
+    if ($mal) { return [pscustomobject]@{ Motivo = $mal; Definitivo = $true } }
+    return $null
+  }
   $nombre = ($m.Groups[2].Value -split '\.')[-1]
   if ($m.Groups[1].Value -match '(?i)^(table|tabla)$') {
     $tabla = $nombre.ToUpperInvariant()
@@ -1797,7 +1857,12 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if ($parado.Count -gt 0) { $o.motivo = $parado[0].Tope; return $o }
   if ($T.estado -ne 'hecha') { $o.motivo = "La IA no ha podido preparar sus entradas: $($T.motivo)"; return $o }
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
-  if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) { $o.motivo = 'En el original ' + (Get-Porque $s1 $script:Maven["original|$j|$c"]); return $o }
+  if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) {
+    $porque = Get-Porque $s1 $script:Maven["original|$j|$c"]
+    $o.motivo = Get-MotivoTablaMal $porque
+    if (-not $o.motivo) { $o.motivo = 'En el original ' + $porque }
+    return $o
+  }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
   $o.fallos = @(Get-Fallos $Nombre $j $c)
   $diasOrig = Get-DiasOriginal $j $c
@@ -2807,6 +2872,7 @@ try {
   foreach ($x in @(@('original', $CopiaOrig), @('migrado', $CopiaMig))) {
     $test = Get-RutaTest $x[1]
     if (-not $test) { Stop-Arranque "No encuentro en el $($x[0]) la clase con @SpringBootApplication (en src/main/java): el test PruebaLocalTest va en su paquete." }
+    $antes = Get-TareaGuardada ('arnes-' + $x[0])   # la de antes de este lanzamiento: Get-TareaArnes la pisa
     $t = Get-TareaArnes $x[0] $x[1] $test $todosJobs $testOriginal
     # El test guardado se escribio con otra plantilla: se escribe otra vez, como con -RehacerArnes pero sin que lo pida nadie. Una sola Info:
     # ninguna si ya se rehace el del migrado (-RehacerArnes) y, con el original viejo, la del original y no la del migrado.
@@ -2822,6 +2888,10 @@ try {
     # traduce (Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Sin migrado guardado no hay que dejar de fiarse de nada:
     # su tarea sigue por su intento y su motivo, como hoy.
     if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) { $rehacer.migrado = $true }
+    if ($t.estado -ne 'hecha') {   # el que se va a escribir sabe, en su primer intento, lo que fallo antes (Get-PrevioArnes)
+      $t.entradas | Add-Member -NotePropertyName previo -NotePropertyValue (Get-PrevioArnes $t $antes) -Force
+      Save-Tarea $t
+    }
     $arneses += , $t
     if ($x[0] -eq 'original') { $testOriginal = $test }
   }
@@ -2893,8 +2963,10 @@ try {
   # 8. Con -Regresion: los casos que salen iguales se quedan como tests en la rama de rescate (un commit); no cambia la salida
   if ($Regresion) { Invoke-Regresion $res }
   Info ''
-  $sinTablas = @($res | Where-Object { $_.resultado -eq 'no se pudo preparar' -and $_.motivo.Contains($PrefijoSinTabla) }).Count
-  if ($sinTablas -gt 0) { Aviso "$sinTablas caso(s) no se pudieron preparar porque el test del original no crea sus tablas: relanza con -RehacerOriginal." }
+  foreach ($c in @(@($PrefijoSinTabla, 'no crea'), @($PrefijoTablaMal, 'crea mal'))) {   # una linea por causa: el test del original no crea una tabla, o la crea mal
+    $n = @($res | Where-Object { $_.resultado -eq 'no se pudo preparar' -and $_.motivo.Contains($c[0]) }).Count
+    if ($n -gt 0) { Aviso "$n caso(s) no se pudieron preparar porque el test del original $($c[1]) sus tablas: relanza con -RehacerOriginal." }
+  }
   Show-Tiempos
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
   Info $NoPromete
