@@ -2197,5 +2197,19 @@ $Pruebas['m65 g) un pom con dependencyManagement, un comentario y un plugin con 
   }
 }
 
+$Pruebas['m65 h) si git rechaza el commit del pom: el pom queda como estaba y el aviso de siempre lleva lo que dijo git'] = {
+  $mig = Pom65
+  $E = Nuevo-Escenario4 'm65h' @('Alfa') $false @() $mig (Pom65 $Lombok65)
+  [void](GitEn $E.Repo @('config', 'core.hooksPath', '.git/hooks'))   # el global del usuario, si lo hay, no cuenta aqui
+  Escribe $E.Repo '.git/hooks/pre-commit' "#!/bin/sh`necho 'hook de mentira: no se commitea'`nexit 1`n"
+  if (Get-Command chmod -ErrorAction SilentlyContinue) { & chmod +x (Get-Ruta $E.Repo '.git/hooks/pre-commit') }
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'el pom queda como estaba' $mig (Lee $E.Repo 'pom.xml')
+  Igual 'ningun commit nuevo' 'inicial' ($x.Commits -join '|')
+  Comprueba 'el aviso de siempre, con lo que dijo git' (@($x.Avisos | Where-Object { $_ -match 'El migrado no usa Lombok: anadelo al pom\.xml y vuelve a lanzar' -and $_ -match 'git commit ha fallado: .*hook de mentira' }).Count -eq 1) ($x.Avisos -join ' / ')
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas 'tests/probar-practicas.ps1'
