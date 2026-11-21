@@ -1705,7 +1705,7 @@ $Pruebas['m28 (a) el arnes del original da error en el test: el motivo acaba con
   Igual 'el arnes queda atascado' 'atascada' $x.T.estado
   $m = [string]$x.T.motivo
   Comprueba 'el motivo sigue diciendo que el job no dejo estado.txt, con las lineas [ERROR] de Maven' ($m -match 'el job cargaJob no ha dejado estado\.txt\. Maven dice:' -and $m -match '\[ERROR\] Failed to execute goal') $m
-  Comprueba 'y acaba con una linea Causa: y el ULTIMO Caused by' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'y acaba con una linea Causa: y el ULTIMO Caused by (y, tras ella, la pista de M60: la causa es una propiedad sin valor)' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo + "`n" + (Pista-M60 'acme.entrada.ruta'))) $m
   Comprueba 'no el primero' ($m -notmatch 'Causa: Caused by: org\.springframework') $m
   Comprueba 'el prompt del reintento (registro del intento 2) lleva esa causa' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
   Comprueba 'la consola la ensena' ($x.R.Salida.Contains('Causa: ' + $M28Fondo)) (Cola $x.R.Salida)
@@ -1741,7 +1741,7 @@ $Pruebas['m28 (e) sin informe de surefire y con dos Caused by en la salida de Ma
   $x = Arnes-Falla-Surefire 'm28-e' 'arnes-surefire-salida'
   Igual 'sale con 1' 1 $x.R.Codigo
   $m = [string]$x.T.motivo
-  Comprueba 'el motivo acaba con Causa: y el ultimo Caused by de la salida' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo)) $m
+  Comprueba 'el motivo acaba con Causa: y el ultimo Caused by de la salida (y, tras ella, la pista de M60: la causa es una propiedad sin valor)' ($m.TrimEnd().EndsWith("`nCausa: " + $M28Fondo + "`n" + (Pista-M60 'acme.entrada.ruta'))) $m
   Comprueba 'el prompt del reintento la lleva' ($x.Reintento.Contains('Causa: ' + $M28Fondo)) (Cola $x.Reintento)
 }
 
