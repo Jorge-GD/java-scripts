@@ -5843,5 +5843,117 @@ $Pruebas['m62 (f) una columna que solo aparece dentro de otras palabras del codi
   Comprueba 'no sale la linea de aviso de la columna' (-not $r.Salida.Contains('no crea una columna que usa el codigo')) (Cola $r.Salida)
 }
 
+# ===================== M63: un fichero de salida con la ruta de origen larga =====================
+# Estas pruebas lanzan, en un .ps1 con solo las funciones de la copia de salidas, Get-RutaLarga, Copy-Fichero y Copy-Salida. Linux admite rutas de mas de 259 letras,
+# asi que lo de Windows se simula con $SoWindows (la plataforma que lee Get-RutaLarga) o con su segundo parametro; que el prefijo \\?\ funcione en Windows
+# 5.1 (.NET Framework 4.6.2 o posterior) no se puede probar aqui.
+
+# Lanza $Cuerpo con las funciones de la copia de salidas y una linea 'K valor' por cada Salida; devuelve las lineas por su clave K.
+function Lanza-M63([string]$Nombre, [string]$Cuerpo) {
+  $f = Join-Path $Dir "m63-$Nombre.ps1"
+  $pre = @'
+$ErrorActionPreference = 'Stop'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @(); $Hoy = @()
+$LimiteRuta = 259
+$Local = 'x' * 50
+$SoWindows = $false
+$script:AvisoCarpetaCorta = $false
+$hoy = [datetime]'2026-11-21'
+function Salida([string]$K, $V) { if ($null -eq $V) { $V = '(null)' }; $K + ' ' + $V }
+'@
+  $raizPs = Split-Path -Parent $Script
+  $texto = 'param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-RutaLarga', 'Copy-Fichero', 'Copy-Salida', 'Get-RelSalida', 'Get-LargoRuta', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" +
+    (Texto-De-Funciones (Join-Path $raizPs 'tareas.ps1') @('Get-Hash8')) + "`n" + (Texto-De-Funciones (Join-Path $raizPs 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Aviso')) + "`n" + $pre + "`n" + $Cuerpo
+  [System.IO.File]::WriteAllText($f, $texto)
+  $r = Lanzar $f @($Dir)
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`r?`n")) { if ($l -match '^([A-Z][0-9]?) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  return [pscustomobject]@{ R = $r; V = $v }
+}
+
+$Pruebas['m63 (a) la ruta de origen con prefijo: en Windows, una de mas de 259 letras lleva \\?\ (y \\?\UNC\ si es de red, con las / en \); una corta, la de 259 y las que ya lo llevan, no; fuera de Windows, ninguna'] = {
+  $x = Lanza-M63 'a' @'
+$largo = 'C:\Trabajo\' + ('a' * 289)
+Salida 'A' ((Get-RutaLarga $largo $true) -ceq ('\\?\' + $largo))
+Salida 'B' ((Get-RutaLarga ('C:\Trabajo\' + ('a' * 189)) $true) -ceq ('C:\Trabajo\' + ('a' * 189)))
+Salida 'C' ((Get-RutaLarga ('\\servidor\recurso\' + ('a' * 281)) $true) -ceq ('\\?\UNC\servidor\recurso\' + ('a' * 281)))
+Salida 'D' ((Get-RutaLarga $largo $false) -ceq $largo)
+Salida 'E' ((Get-RutaLarga ('C:\' + ('a' * 256)) $true) -ceq ('C:\' + ('a' * 256)))
+Salida 'F' ((Get-RutaLarga ('C:\' + ('a' * 257)) $true) -ceq ('\\?\C:\' + ('a' * 257)))
+Salida 'G' ((Get-RutaLarga ('C:/Trabajo/' + ('a' * 289)) $true) -ceq ('\\?\C:\Trabajo\' + ('a' * 289)))
+Salida 'H' ((Get-RutaLarga ('\\?\' + $largo) $true) -ceq ('\\?\' + $largo))
+$SoWindows = $true
+Salida 'I' ((Get-RutaLarga $largo) -ceq ('\\?\' + $largo))
+$SoWindows = $false
+Salida 'J' ((Get-RutaLarga $largo) -ceq $largo)
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: 300 letras en Windows: \\?\ y la ruta' 'True' $x.V['A']
+  Igual 'B: una de 200 letras, tal cual' 'True' $x.V['B']
+  Igual 'C: una de red lleva \\?\UNC\ y la ruta sin las dos barras' 'True' $x.V['C']
+  Igual 'D: en un sistema que no es Windows, tal cual' 'True' $x.V['D']
+  Igual 'E: una de 259 letras (el limite), tal cual' 'True' $x.V['E']
+  Igual 'F: una de 260 letras ya lleva el prefijo' 'True' $x.V['F']
+  Igual 'G: las / se cambian por \ (con \\?\ Windows no las normaliza)' 'True' $x.V['G']
+  Igual 'H: una que ya lleva el prefijo no lleva otro' 'True' $x.V['H']
+  Igual 'I: sin segundo parametro, lee $SoWindows: en Windows lleva el prefijo' 'True' $x.V['I']
+  Igual 'J: y fuera de Windows, no' 'True' $x.V['J']
+}
+
+$Pruebas['m63 (b) Copy-Salida con un origen de mas de 260 letras de verdad (en Linux): copia el fichero y no hay nada sin guardar; con Windows simulado lo lee con el prefijo (y un origen corto, sin el)'] = {
+  $x = Lanza-M63 'b' @'
+$de = Join-Path $Raiz ('m63-origen/' + ('o' * 100) + '/' + ('p' * 100) + '/' + ('q' * 60))
+New-Item -ItemType Directory -Path (Join-Path $de 'ficheros/logs') -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $de 'ficheros/logs/dato.txt'), 'hola')
+$f = @(Get-ChildItem -LiteralPath $de -Recurse -File)[0].FullName
+Salida 'A' ($f.Length -gt 260)
+$no = @(Copy-Salida $de (Join-Path $Raiz 'm63-destino') 'cargaJob' 'caso' @($hoy))
+Salida 'B' $no.Count
+Salida 'C' ([System.IO.File]::ReadAllText((Join-Path $Raiz 'm63-destino/ficheros/logs/dato.txt')))
+$SoWindows = $true
+$no = @(Copy-Salida $de (Join-Path $Raiz 'm63-destino2') 'cargaJob' 'caso' @($hoy))
+Salida 'D' $no.Count
+Salida 'E' ($no.Count -gt 0 -and $no[0].motivo.Contains('\\?\'))
+Salida 'F' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-destino2/ficheros/logs/dato.txt'))
+$corto = Join-Path $Raiz 'm63-corto'
+New-Item -ItemType Directory -Path $corto -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $corto 'dato.txt'), 'hola')
+$no = @(Copy-Salida $corto (Join-Path $Raiz 'm63-destino3') 'cargaJob' 'caso' @($hoy))
+Salida 'G' $no.Count
+Salida 'H' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-destino3/dato.txt'))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: la ruta del fichero de origen pasa de 260 letras' 'True' $x.V['A']
+  Igual 'B: Copy-Salida no deja nada sin guardar' 0 $x.V['B']
+  Igual 'C: y el fichero copiado tiene su contenido' 'hola' $x.V['C']
+  Igual 'D: con Windows simulado, el origen largo se lee con \\?\ (que en Linux no existe): un fichero sin guardar' 1 $x.V['D']
+  Igual 'E: y su motivo dice la ruta con el prefijo' 'True' $x.V['E']
+  Igual 'F: sin copiar' 'False' $x.V['F']
+  Igual 'G: un origen corto con Windows simulado no se toca: nada sin guardar' 0 $x.V['G']
+  Igual 'H: y se copia' 'True' $x.V['H']
+}
+
+$Pruebas['m63 (c) un origen que no existe sigue dando el motivo de siempre (el de Copy-Item), y con una ruta larga y Windows simulado tampoco se copia en silencio'] = {
+  $x = Lanza-M63 'c' @'
+$sin = Join-Path $Raiz 'm63-sin/no-existe.txt'
+$m1 = ''; $m2 = ''
+try { Copy-Fichero $sin (Join-Path $Raiz 'm63-x/no.txt') } catch { $m1 = $_.Exception.Message }
+try { Copy-Item -LiteralPath $sin -Destination (Join-Path $Raiz 'm63-x/no.txt') -Force } catch { $m2 = $_.Exception.Message }
+Salida 'A' ($m1 -ne '')
+Salida 'B' ($m1 -ceq $m2)
+$SoWindows = $true
+$m3 = ''
+try { Copy-Fichero (Join-Path $Raiz ('m63-sin/' + ('z' * 100) + '/' + ('y' * 100) + '/' + ('x' * 60) + '.txt')) (Join-Path $Raiz 'm63-x/no2.txt') } catch { $m3 = $_.Exception.Message }
+Salida 'C' ($m3 -ne '')
+Salida 'D' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-x/no2.txt'))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: con un origen corto que no existe, Copy-Fichero falla' 'True' $x.V['A']
+  Igual 'B: con el mismo mensaje que Copy-Item (el motivo de hoy)' 'True' $x.V['B']
+  Igual 'C: con un origen largo que no existe y Windows simulado, falla tambien' 'True' $x.V['C']
+  Igual 'D: y no deja ningun fichero' 'False' $x.V['D']
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
