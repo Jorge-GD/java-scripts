@@ -40,7 +40,8 @@ QUE HACE
      queda sin preparar y sin mas intentos (la IA no ve la base del test); una inventada o una columna se le dicen en el reintento.
   4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). El migrado se ejecuta
      siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
-     de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. Para obligar a
+     de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. El original se
+     ejecuta con UTF-8, como en el servidor (sus Maven llevan JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 y, con el, lo que ya hubiera). Para obligar a
      repetirlo todo, borra prueba-local\salidas. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
@@ -169,6 +170,9 @@ $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no 
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
+# Lo que se anade a JAVA_TOOL_OPTIONS en cada Maven del original (Invoke-Maven; lo leen Maven, javac y la JVM de surefire, y no pisa el argLine del pom): el original
+# es Java 8 u 11 y en Windows lee y escribe con la codificacion del sistema (Cp1252); en el servidor (Linux) y en el migrado (Java 18 o mas, JEP 400) es UTF-8.
+$OpcionJvmOriginal = '-Dfile.encoding=UTF-8'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
@@ -357,7 +361,7 @@ function Get-NoGuardados([string]$Nombre, [string]$Job, [string]$Caso) {
 }
 
 # ================================ MAVEN ================================
-# Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado), con latido, con tope (MinutosMaven) y sin
+# Maven en una copia (en la del original, con JAVA_HOME = -JavaLegacy, si se ha dado, y con UTF-8: $OpcionJvmOriginal), con latido, con tope (MinutosMaven) y sin
 # saltarse los tests aunque el pom lo pida. Lo que Maven deja fuera de target (un log, una base en fichero) se borra al acabar
 # (Remove-Ruido, de comun.ps1): no es de la IA y la siguiente ejecucion empieza igual. Deja lo que dice en registros\mvn-<n>-<que>.log y devuelve
 # Codigo, Salida, Tope (Invoke-MavenTope, de comun.ps1), Causa (Get-CausaMaven, tambien con Codigo 0: un caso cuyo job falla o no arranca acaba con
@@ -366,11 +370,13 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
   $script:Mavens++
   $previos = @(Get-Cambios $Dir)
   $antes = $env:JAVA_HOME
+  $antesJvm = $env:JAVA_TOOL_OPTIONS
   $desde = [DateTime]::UtcNow
   if ($EsOriginal -and $JavaLegacy) { $env:JAVA_HOME = $JavaLegacy }
+  if ($EsOriginal) { $env:JAVA_TOOL_OPTIONS = ("$antesJvm $OpcionJvmOriginal").Trim() }
   $registro = 'mvn-' + $script:Mavens + '-' + ($Que -replace '[^\w\-]', '-') + '.log'
   try { $r = Invoke-MavenTope $Dir (@('-B', '-DskipTests=false', '-Dmaven.test.skip=false') + $A) "Maven, $Que" (Join-Path $Registros $registro) }
-  finally { $env:JAVA_HOME = $antes }
+  finally { $env:JAVA_HOME = $antes; $env:JAVA_TOOL_OPTIONS = $antesJvm }
   Add-Member -InputObject $r -NotePropertyName Causa -NotePropertyValue (Get-CausaMaven $Dir $desde $r.Salida)
   Add-Member -InputObject $r -NotePropertyName Registro -NotePropertyValue ('registros\' + $registro)
   [void](Remove-Ruido $Dir $previos)
@@ -1209,6 +1215,8 @@ function Get-TareasCasos($Prueba, $JobMapa) {
     $t.entradas.copia = $CopiaOrig   # la de ahora, aunque la tarea venga de otro lanzamiento
     # excepcionPedida: ya se le ha dicho a la IA que el job no arrancaba en el original (Invoke-Casos); las tareas de antes no la llevan
     if ($null -eq $t.entradas.PSObject.Properties['excepcionPedida']) { Add-Member -InputObject $t.entradas -NotePropertyName excepcionPedida -NotePropertyValue $false }
+    # hashArnesOriginal: el hash del arnes del original con que se hizo un caso no-aplica ('' en los demas y en los hechos antes de M59)
+    if ($null -eq $t.entradas.PSObject.Properties['hashArnesOriginal']) { Add-Member -InputObject $t.entradas -NotePropertyName hashArnesOriginal -NotePropertyValue '' }
     $tareas += , (Test-Guardada $t (Join-Ruta $Local "casos/$($Prueba.job)/$caso"))
   }
   return $tareas
@@ -1235,6 +1243,24 @@ function Reset-CasosExcepcion($Tareas) {
   if ($n -gt 0) { Save-Originales; Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
 }
 
+# Un caso hecho como no-aplica (sin probar en local: la IA no lo vio correr en el original, por ejemplo por unas tablas que el test no creaba) se decidio con el test
+# del original de entonces. Si el que hay ahora es otro (su hash ya no es el que guardo la tarea), vuelve a pendiente con 0 intentos y se prepara otra vez. Uno de antes
+# de M59, que no guardo hash, cuenta como de otro test solo si el del original se escribe otra vez en este lanzamiento ($EscribeOriginal). Los casos con entradas no se
+# tocan: su original se ejecuta otra vez por la clave de las salidas. Dice cuantos son.
+function Reset-CasosSinProbar($Tareas, [bool]$EscribeOriginal) {
+  $actual = Get-HashArnesOriginal
+  $n = 0
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local "casos/$($_.entradas.job)/$($_.entradas.caso)/no-aplica.txt")) })) {
+    $antes = [string]$t.entradas.hashArnesOriginal
+    if ($antes -ceq $actual -or (-not $antes -and -not $EscribeOriginal)) { continue }
+    $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = ''
+    $t.entradas.hashArnesOriginal = ''
+    Save-Tarea $t
+    $n++
+  }
+  if ($n -gt 0) { Info "$n caso(s) sin probar se vuelven a preparar: el test del original ha cambiado." }
+}
+
 # Guarda un caso que ha pasado la comprobacion (en prueba-local\casos\<job>\<caso>); si es no-aplica, lo quita de la
 # copia (no se ejecuta).
 function Save-Caso($T) {
@@ -1242,7 +1268,10 @@ function Save-Caso($T) {
   $dest = Join-Ruta $Local "casos/$($T.entradas.job)/$($T.entradas.caso)"
   Remove-Carpeta $dest
   Copy-Carpeta $dirCaso $dest
-  if (Test-Path -LiteralPath (Join-Path $dirCaso 'no-aplica.txt')) { Remove-Carpeta $dirCaso }
+  if (Test-Path -LiteralPath (Join-Path $dirCaso 'no-aplica.txt')) {
+    $T.entradas.hashArnesOriginal = Get-HashArnesOriginal   # con que test del original se decidio: si cambia, se prepara otra vez (Reset-CasosSinProbar)
+    Remove-Carpeta $dirCaso
+  }
 }
 
 # Lo que se le dice a la IA de un caso que no corre en el original por la base de prueba: $Texto es su motivo (con el error de Maven o de su
@@ -1384,7 +1413,8 @@ function Invoke-Migrado([string]$Nombre, $Listas) {
 #  - el JDK del original: -JavaLegacy o, sin el, JAVA_HOME, y el fichero release de esa carpeta (otra version en la misma ruta);
 #  - lo que dice 'mvn -v' (Maven, Java y la configuracion regional: cubre el mvnw con otro Maven y el java del PATH);
 #  - el Maven que se lanza (Get-Mvn: -MvnExe, mvnw o mvn) y $Cfg.MavenCasoRapido (las propiedades de cada caso);
-#  - las variables de entorno que Maven y la JVM leen (Get-EntornoMaven);
+#  - las variables de entorno que Maven y la JVM leen (Get-EntornoMaven) y la codificacion con que se ejecuta el original ($OpcionJvmOriginal): lo guardado
+#    de antes de ponerla es de un original que leia con la codificacion del sistema;
 #  - que falte lo guardado: la carpeta del caso en salidas\original o en salidas\original-2, o su estado.txt (borrar prueba-local\salidas lo repite
 #    todo), o que el original dejara estado=EXCEPCION y el caso vuelva a pendiente (Reset-CasosExcepcion).
 # NO lleva, y no se ve: ~/.m2/settings.xml, los jar de ~/.m2 (un SNAPSHOT que cambia) ni lo que hay fuera (base de datos, SFTP, correo: simulado).
@@ -1422,6 +1452,10 @@ function Get-EntornoMaven {
   return @('MAVEN_OPTS', 'MAVEN_ARGS', 'MAVEN_CONFIG', 'JAVA_TOOL_OPTIONS', 'JDK_JAVA_OPTIONS', '_JAVA_OPTIONS', 'TZ' | ForEach-Object { $_ + '=' + [Environment]::GetEnvironmentVariable($_) })
 }
 
+# El hash de lo que hay guardado del arnes del original (su test y lo que cambia del pom.xml): lo lleva la clave del original y cada caso sin probar,
+# que se decidio con el test de entonces.
+function Get-HashArnesOriginal { return (Get-HashCarpeta (Join-Ruta $Local 'arnes/original')) }
+
 # Lo que entra en la ejecucion del original y es igual para todos sus casos (ver arriba), en un hash. Lanza un 'mvn -v' en la copia del original.
 function Get-ClaveBaseOriginal {
   $v = Invoke-Maven $CopiaOrig $true @('-v') 'la version de Maven y de Java del original'
@@ -1429,9 +1463,10 @@ function Get-ClaveBaseOriginal {
   if (-not $jdk) { $jdk = $env:JAVA_HOME }
   $release = ''
   if ($jdk -and (Test-Path -LiteralPath (Join-Path $jdk 'release'))) { $release = [System.IO.File]::ReadAllText((Join-Path $jdk 'release')) }
-  $partes = @($HeadOrig, (Get-HashCarpeta (Join-Ruta $Local 'arnes/original')), [string]$jdk, $release, (Get-Mvn $CopiaOrig), ($Cfg.MavenCasoRapido -join ' '))
+  $partes = @($HeadOrig, (Get-HashArnesOriginal), [string]$jdk, $release, (Get-Mvn $CopiaOrig), ($Cfg.MavenCasoRapido -join ' '))
   $partes += @($v.Salida | Where-Object { $_ -cmatch '^(Apache Maven|Maven home|Java version|Default locale)' })
   $partes += Get-EntornoMaven
+  $partes += "jvm-original=$OpcionJvmOriginal"
   $partes += @("salidas-v$VersionSalidas", "ruta-local=$($Local.Length)/$LimiteRuta")   # el formato de los nombres de salidas (Get-RelSalida) y lo que lo decide
   return (Get-Hash256 ($Utf8.GetBytes($partes -join "`n")))
 }
@@ -2793,8 +2828,10 @@ try {
   foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Remove-Carpeta (Join-Ruta $Local "arnes/$repo") } }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
+  $escribeOriginal = ($ArnesOrig.estado -ne 'hecha')
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
   if ($ArnesOrig.estado -ne 'hecha') { Show-Atascado $ArnesOrig; exit 1 }
+  Reset-CasosSinProbar $tareasCasos $escribeOriginal
   if ($ArnesMig.estado -ne 'hecha') { Show-Atascado $ArnesMig; Aviso 'Sigo con el original: los casos quedan hechos para el proximo lanzamiento.' }
   foreach ($t in @($tareasCasos | Where-Object { $_.estado -eq 'hecha' })) {
     $guardado = Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)"

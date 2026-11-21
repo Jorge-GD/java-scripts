@@ -5237,5 +5237,201 @@ Show-Resultado @() @([pscustomobject]@{ job = 'cargaJob'; casos = 3; iguales = 3
   Igual 'son tres lineas' 3 $larga.Count
 }
 
+$Pruebas['m56 (i) un Error creating bean que no es de un bean que llama fuera (NoSuchBeanDefinitionException, sin Factory method, Failed to instantiate ni BeanInstantiationException): sin la pista del bean'] = {
+  $e = Escenario-M40 'm56-i' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M56 $e 'bean-sin-factory:arnes-original'
+  Igual 'sale con 1' 1 $r.Codigo
+  Igual 'dos llamadas al arnes del original' 2 @(Llamadas-Arnes $e 'original').Count
+  $t = Tarea-Arnes $e 'original'
+  Comprueba 'el motivo sigue diciendo que no dejo estado.txt, con la causa (No qualifying bean)' ($t.motivo -match 'no ha dejado estado\.txt' -and $t.motivo.Contains('No qualifying bean of type')) $t.motivo
+  Comprueba 'pero no lleva la pista del bean' ($t.motivo -notmatch 'El contexto de Spring no arranca' -and $t.motivo -notmatch '@MockBean') $t.motivo
+  Comprueba 'ni el prompt del reintento' (-not (Registro-Arnes $e 'original' 2).Contains('@MockBean')) ''
+}
+
+$Pruebas['m56 (j) un bean que falla al crearse con un mensaje de 300 caracteres: la pista lleva los 120 primeros y no el resto'] = {
+  $e = Escenario-M40 'm56-j' ([ordered]@{ cargaJob = @('importe=10.00') }) 'm56'
+  $r = Prueba-M56 $e 'bean-largo:arnes-original'
+  Igual 'sale con 1' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  $m = [regex]::Match($t.motivo, 'El contexto de Spring no arranca: el bean (\S+) falla al crearse \((.*?)\)\. Si llama fuera')
+  Comprueba 'el motivo lleva la pista del bean' $m.Success $t.motivo
+  Igual 'con el bean mas interno' 'clientesFinder' $m.Groups[1].Value
+  Igual 'y el mensaje cortado a 120 caracteres: los 120 primeros' ('0123456789' * 12) $m.Groups[2].Value
+  Comprueba 'el prompt del reintento lleva ese corte y no el mensaje entero' ((Registro-Arnes $e 'original' 2).Contains('(' + ('0123456789' * 12) + ')') -and -not (Registro-Arnes $e 'original' 2).Contains('(' + ('0123456789' * 13))) ''
+}
+
+# ===================== M59: el original en UTF-8 y los casos sin probar que se vuelven a preparar =====================
+# Estos escenarios usan m59-mvn.ps1, que apunta en RESCATE_LLAMADAS/m59-mvn.log la carpeta, el JAVA_TOOL_OPTIONS que recibe, si la carpeta tiene
+# target y los argumentos de cada Maven (el resto, como mvn-local.ps1).
+
+function Escenario-M59([string]$Nombre, $Casos) { return (Escenario-M32 $Nombre $Casos @{} 'm59-mvn.ps1') }
+
+# Cada Maven que se ha lanzado, en orden: carpeta, jto, target y args.
+function Mavens-M59($E) {
+  $f = Join-Path $E.Llamadas 'm59-mvn.log'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | ForEach-Object { $p = $_ -split '\|', 4; [pscustomobject]@{ carpeta = $p[0]; jto = $p[1]; target = $p[2]; args = $p[3] } })
+}
+
+# Prueba con JAVA_TOOL_OPTIONS = $Valor ($null: sin la variable) y lo deja como estaba.
+function Prueba-M59-Jto($E, $Valor, [string[]]$A = @()) {
+  $antes = $env:JAVA_TOOL_OPTIONS
+  $env:JAVA_TOOL_OPTIONS = $Valor
+  try { return (Prueba $E $A) }
+  finally { $env:JAVA_TOOL_OPTIONS = $antes }
+}
+
+# Deja en la tarea de un caso el hash del arnes del original con que se decidio ($Valor), o quita el dato ($null: una tarea de antes de M59).
+function Pon-Hash-M59($E, [string]$Id, $Valor) {
+  $f = Get-Ruta $E.Local "tareas/$Id.json"
+  $t = Lee-Json $f
+  [void]$t.entradas.PSObject.Properties.Remove('hashArnesOriginal')
+  if ($null -ne $Valor) { Add-Member -InputObject $t.entradas -NotePropertyName hashArnesOriginal -NotePropertyValue $Valor }
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+}
+
+function Hash-M59($E, [string]$Id) { return [string](Lee-Json (Get-Ruta $E.Local "tareas/$Id.json")).entradas.hashArnesOriginal }
+
+function Llamadas-Caso-M59($E, [string]$Id) { return @(Llamadas $E | Where-Object { $_.id -eq $Id }).Count }
+
+$Pruebas['m59 (a) cada Maven del original lleva JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 (compilar, el arnes, los casos, mvn -v); con un -Xmx1g de antes lleva los dos y el entorno no acumula; el migrado, solo lo de antes'] = {
+  $e = Escenario-M59 'm59-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M59-Jto $e $null
+  Igual 'sin nada de antes: sale con 0' 0 $r.Codigo
+  $o = @(Mavens-M59 $e | Where-Object { $_.carpeta -eq $e.CopiaOrig })
+  Comprueba 'hay Mavens del original: compilar, mvn -v y casos' (@($o | Where-Object { $_.args -match 'test-compile' }).Count -ge 1 -and @($o | Where-Object { $_.args -match '(^| )-v( |$)' }).Count -eq 1 -and @($o | Where-Object { $_.args -match 'prueba\.local\.caso=caso-' }).Count -ge 2) (($o | ForEach-Object { $_.args }) -join ' / ')
+  Comprueba 'todos con -Dfile.encoding=UTF-8' (@($o | Where-Object { $_.jto -cne '-Dfile.encoding=UTF-8' }).Count -eq 0) (($o | ForEach-Object { $_.jto } | Select-Object -Unique) -join ' / ')
+  $m = @(Mavens-M59 $e | Where-Object { $_.carpeta -eq $e.CopiaMig })
+  Comprueba 'hay Mavens del migrado, sin el ajuste (su JDK ya usa UTF-8)' ($m.Count -ge 2 -and @($m | Where-Object { $_.jto -cne '' }).Count -eq 0) (($m | ForEach-Object { $_.jto } | Select-Object -Unique) -join ' / ')
+  $e2 = Escenario-M59 'm59-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M59-Jto $e2 '-Xmx1g'
+  Igual 'con -Xmx1g de antes: sale con 0' 0 $r.Codigo
+  $todos = @(Mavens-M59 $e2)
+  $o = @($todos | Where-Object { $_.carpeta -eq $e2.CopiaOrig })
+  $m = @($todos | Where-Object { $_.carpeta -eq $e2.CopiaMig })
+  Comprueba 'el original lleva lo de antes y el ajuste, cada uno una vez' (@($o | Where-Object { $_.jto -cne '-Xmx1g -Dfile.encoding=UTF-8' }).Count -eq 0 -and $o.Count -ge 5) (($o | ForEach-Object { $_.jto } | Select-Object -Unique) -join ' / ')
+  Comprueba 'el migrado, solo lo de antes' ($m.Count -ge 2 -and @($m | Where-Object { $_.jto -cne '-Xmx1g' }).Count -eq 0) (($m | ForEach-Object { $_.jto } | Select-Object -Unique) -join ' / ')
+  $iO = [array]::IndexOf(@($todos | ForEach-Object { $_.carpeta }), $e2.CopiaOrig)
+  $iM = [array]::IndexOf(@($todos | ForEach-Object { $_.carpeta }), $e2.CopiaMig)
+  Comprueba 'el primer Maven del migrado va despues del primero del original: el entorno ya estaba como antes' ($iO -ge 0 -and $iM -gt $iO) "original $iO, migrado $iM"
+}
+
+$Pruebas['m59 (b) la clave de las salidas guardadas del original lleva el ajuste de UTF-8: con otro ajuste, otra clave'] = {
+  $f = Join-Path $Dir 'm59-b.ps1'
+  $cuerpo = @'
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+$CopiaOrig = 'copia'; $JavaLegacy = ''; $HeadOrig = 'abc'; $Local = 'local'; $Cfg = @{ MavenCasoRapido = @('-Dx') }; $VersionSalidas = 1; $LimiteRuta = 100
+function Invoke-Maven($D, $O, $A, $Q) { return [pscustomobject]@{ Salida = @('Apache Maven 3.9.6', 'Java version: 1.8.0') } }
+function Get-Mvn($R) { return 'mvn' }
+function Get-HashCarpeta($D) { return 'hash' }
+function Join-Ruta($A, $B) { return "$A/$B" }
+$OpcionJvmOriginal = '-Dfile.encoding=UTF-8'
+$a = Get-ClaveBaseOriginal
+$OpcionJvmOriginal = '-Dfile.encoding=Cp1252'
+$b = Get-ClaveBaseOriginal
+"$a|$b"
+'@
+  $texto = Texto-De-Funciones $Script @('Get-ClaveBaseOriginal', 'Get-HashArnesOriginal', 'Get-EntornoMaven', 'Get-Hash256')
+  [System.IO.File]::WriteAllText($f, ($texto + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $k = @(($r.Salida.Trim()) -split '\|')
+  Comprueba 'salen dos claves de 64 letras' ($k.Count -eq 2 -and $k[0] -match '^[0-9a-f]{64}$' -and $k[1] -match '^[0-9a-f]{64}$') (Cola $r.Salida)
+  Comprueba 'distintas' ($k.Count -eq 2 -and $k[0] -cne $k[1]) (Cola $r.Salida)
+}
+
+$Pruebas['m59 (b2) las salidas del original guardadas con otra clave (las de antes) se ejecutan otra vez; con la clave de ahora ya guardada, se reutilizan'] = {
+  $e = Escenario-M59 'm59-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e
+  Comprueba 'la primera vez se ejecutan los dos' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  $r = Prueba $e
+  Comprueba 'con su clave guardada, se reutilizan los dos' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  $j = Get-Ruta $e.Local 'salidas/originales.json'
+  $o = Lee-Json $j
+  foreach ($c in @($o.casos)) { $c.clave = 'clave-de-antes' }
+  [System.IO.File]::WriteAllText($j, (ConvertTo-Json -InputObject $o -Depth 6))
+  $r = Prueba $e
+  Comprueba 'con la clave de antes, se ejecutan otra vez los dos' ($r.Salida -match 'Original: se reutilizan las salidas de 0 caso\(s\) y se ejecutan 2\.') (Cola $r.Salida)
+  $r = Prueba $e
+  Comprueba 'y con la nueva ya guardada, se reutilizan' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+}
+
+$Pruebas['m59 (c) un caso no-aplica con el hash del arnes de antes y el arnes del original rehecho: se vuelve a preparar (una llamada nueva) y la consola cuenta 1; el caso con entradas no llama'] = {
+  $e = Escenario-M59 'm59-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso 1 queda sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  Comprueba 'su tarea guarda el hash del arnes del original con que se decidio' ((Hash-M59 $e 'caso-cargaJob-01') -match '^[0-9a-f]{16,}$') (Hash-M59 $e 'caso-cargaJob-01')
+  Igual 'y el caso con entradas, ninguno' '' (Hash-M59 $e 'caso-cargaJob-02')
+  Pon-Hash-M59 $e 'caso-cargaJob-01' 'arnes-de-antes'
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'el caso no-aplica se prepara otra vez (una llamada nueva)' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Igual 'el caso con entradas, no' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-02')
+  Comprueba 'la consola cuenta 1 caso' ($r.Salida.Contains('1 caso(s) sin probar se vuelven a preparar: el test del original ha cambiado.')) (Cola $r.Salida)
+  Comprueba 'el caso ya no sale sin probar en local' ((Caso $e 'cargaJob' 'caso-01').resultado -ne 'sin probar en local') (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+$Pruebas['m59 (d) un caso no-aplica de antes (sin hash guardado): sin rehacer el arnes del original no se prepara otra vez; con -RehacerOriginal, si'] = {
+  $e = Escenario-M59 'm59-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pon-Hash-M59 $e 'caso-cargaJob-01' $null
+  $r = Prueba $e
+  Igual 'sin la opcion sale con 0' 0 $r.Codigo
+  Igual 'el caso no-aplica no llama a la IA' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Comprueba 'y la consola no dice nada de prepararlo otra vez' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+  Igual 'sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'el caso no-aplica se prepara otra vez' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Igual 'el caso con entradas, no' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-02')
+  Comprueba 'la consola cuenta 1 caso' ($r.Salida.Contains('1 caso(s) sin probar se vuelven a preparar: el test del original ha cambiado.')) (Cola $r.Salida)
+}
+
+$Pruebas['m59 (e) el original se compila de cero en cada lanzamiento: la copia se rehace y lo que habia en su target (compilado con la codificacion de antes) ya no esta'] = {
+  $e = Escenario-M59 'm59-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'la copia del original tiene target tras correr los casos' (Test-Path -LiteralPath (Join-Path $e.CopiaOrig 'target'))
+  $clase = Join-Path $e.CopiaOrig 'target/classes/Viejo.class'
+  [void](New-Item -ItemType Directory -Path (Split-Path $clase -Parent) -Force)
+  [System.IO.File]::WriteAllText($clase, 'compilado con la codificacion de antes')
+  $n = @(Mavens-M59 $e).Count
+  $r = Prueba $e
+  Igual 'la segunda vez sale con 0' 0 $r.Codigo
+  $nuevos = @(@(Mavens-M59 $e) | Select-Object -Skip $n | Where-Object { $_.carpeta -eq $e.CopiaOrig })
+  $c = @($nuevos | Where-Object { $_.args -match 'test-compile' })[0]
+  Comprueba 'el primer Maven del original (compilar) no ve un target' ($c -and $c.target -eq 'no') "$($c.args) target=$($c.target)"
+  Comprueba 'y la clase vieja ya no esta' (-not (Test-Path -LiteralPath $clase))
+}
+
+$Pruebas['m59 (k) un caso no-aplica hecho con el hash del arnes del original de ahora: un relanzamiento sin -RehacerOriginal no llama a la IA ni dice que se vuelve a preparar (ni una ni otra vez)'] = {
+  $e = Escenario-M59 'm59-k' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'su tarea guarda el hash del arnes de ahora' ((Hash-M59 $e 'caso-cargaJob-01') -match '^[0-9a-f]{16,}$') (Hash-M59 $e 'caso-cargaJob-01')
+  foreach ($vez in 2, 3) {
+    $r = Prueba $e
+    Igual "la vez $vez sale con 0" 0 $r.Codigo
+    Igual "la vez ${vez}: el caso no-aplica no llama a la IA" 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+    Comprueba "la vez ${vez}: la consola no dice que se vuelva a preparar" (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+    Igual "la vez ${vez}: sigue sin probar en local" 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  }
+}
+
+$Pruebas['m59 (l) un caso no-aplica que se vuelve a preparar empieza con 0 intentos: tras un intento nuevo que sale bien, la tarea tiene 1 intento y no la suma con los de antes'] = {
+  $e = Escenario-M59 'm59-l' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $t = Lee-Json (Get-Ruta $e.Local 'tareas/caso-cargaJob-01.json')
+  Igual 'la primera vez, hecha con 1 intento' 'hecha,1' "$($t.estado),$($t.intentos)"
+  Pon-Hash-M59 $e 'caso-cargaJob-01' 'arnes-de-antes'
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'el caso se prepara otra vez' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  $t = Lee-Json (Get-Ruta $e.Local 'tareas/caso-cargaJob-01.json')
+  Igual 'la tarea queda hecha con 1 intento (el nuevo), no con 2' 'hecha,1' "$($t.estado),$($t.intentos)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

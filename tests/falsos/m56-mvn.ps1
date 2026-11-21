@@ -6,6 +6,9 @@
 #   create-es    H2 en espanol rechaza un CREATE TABLE IF NOT EXISTS PUBLIC.IF[*] (...): el test tomo IF como nombre de tabla
 #   create-en    lo mismo con el texto en ingles
 #   create-min   lo mismo en ingles y con la sentencia en minusculas
+#   bean-sin-factory  un 'Error creating bean with name' que no es de un bean que llama fuera: un NoSuchBeanDefinitionException (sin 'Factory method',
+#                'Failed to instantiate' ni BeanInstantiationException)
+#   bean-largo   como bean, con un mensaje de la excepcion de 300 caracteres (0123456789 treinta veces)
 $raiz = (Get-Location).Path
 $guion = ''
 if ($args -contains 'test') {
@@ -23,6 +26,14 @@ $sentencia = 'CREATE TABLE IF NOT EXISTS PUBLIC.IF[*] (IF VARCHAR(4000),NOT VARC
 if ($guion -eq 'bean') {
   $bean + 'Error getting clientes'
   'Caused by: com.acme.recibos.ClientesException: Error getting clientes'
+}
+elseif ($guion -eq 'bean-sin-factory') {
+  "org.springframework.beans.factory.UnsatisfiedDependencyException: Error creating bean with name 'reciboReader' defined in file [/obra/ReciboReader.class]: Unsatisfied dependency expressed through constructor parameter 0; nested exception is org.springframework.beans.factory.NoSuchBeanDefinitionException: No qualifying bean of type 'com.acme.recibos.ports.ClientesFinder' available: expected at least 1 bean which qualifies as autowire candidate"
+  "Caused by: org.springframework.beans.factory.NoSuchBeanDefinitionException: No qualifying bean of type 'com.acme.recibos.ports.ClientesFinder' available"
+}
+elseif ($guion -eq 'bean-largo') {
+  $bean + ('0123456789' * 30)
+  'Caused by: com.acme.recibos.ClientesException: ' + ('0123456789' * 30)
 }
 elseif ($guion -eq 'bean-tabla') {
   $bean + 'bad SQL grammar [SELECT ID FROM T_A]; nested exception is org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_A" not found (this database is empty)'
