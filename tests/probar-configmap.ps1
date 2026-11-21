@@ -197,8 +197,8 @@ function Corre($E) {
 
 # Las llamadas que ha recibido el Copilot de mentira: id, reintento, flags y carpeta de trabajo.
 function Llamadas-De($E) {
-  if (-not (Test-Path -LiteralPath $E.Llamadas)) { return , @() }
-  return , @([System.IO.File]::ReadAllLines($E.Llamadas) | Where-Object { $_ } | ForEach-Object {
+  if (-not (Test-Path -LiteralPath $E.Llamadas)) { return @() }
+  return @([System.IO.File]::ReadAllLines($E.Llamadas) | Where-Object { $_ } | ForEach-Object {
       $c = $_.Split('|')
       [pscustomobject]@{ Id = $c[0]; Reintento = $c[1]; Flags = $c[2]; Carpeta = $c[3] }
     })
@@ -308,7 +308,7 @@ $Pruebas['c9 (b2) variables: todas van a la tarea de la IA (el script no emparej
 $Pruebas['c9 (b3) variables: van en tareas de 10 como mucho, con la lista cerrada de claves sin valores'] = {
   $y = (1..11 | ForEach-Object { 'v' + $_.ToString('00') + ': ${env.v' + $_.ToString('00') + '}' }) -join "`n"
   $e = Nuevo-Escenario 'b3' @{ Yml = $y }
-  Plan $e 'configmap-variables-1' $null (Salida-Variables @(1..10 | ForEach-Object { , @('env.v' + $_.ToString('00'), 'ninguna', $false) }))
+  Plan $e 'configmap-variables-1' $null (Salida-Variables @(1..10 | ForEach-Object { , @(('env.v' + $_.ToString('00')), 'ninguna', $false) }))
   Plan $e 'configmap-variables-2' $null (Salida-Variables @(, @('env.v11', 'ninguna', $false)))
   [void](Corre $e)
   $t1 = Tarea-Guardada $e 'configmap-variables-1'

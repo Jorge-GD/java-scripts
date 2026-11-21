@@ -1,7 +1,7 @@
 <#
 migracion.ps1 - Migracion desatendida de un batch Java, con un modelo pequeno.
 Compatible con Windows PowerShell 5.1 y PowerShell 7. Solo ASCII a proposito.
-Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, convivencia.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, revision.ps1, arreglo-propiedades.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
+Necesita comun.ps1, tareas.ps1, lanzadores.ps1, informe.ps1, practicas.ps1, propiedades.ps1, convivencia.ps1, huella.ps1, arreglo-practicas.ps1, tests-reglas.ps1, revision.ps1, arreglo-propiedades.ps1, configmap.ps1, rescate.ps1, prueba-local.ps1 y las carpetas tareas\ e informe\ junto a este script.
 
 QUE HACE (la lectura del original, los datos para explicarlo a negocio, la correccion del migrado, su comparacion y la prueba en local)
   Un comando. Das el batch original (-Legacy) y el migrado (-Migrado), contestas
@@ -115,6 +115,7 @@ USO
   .\migracion.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original para prueba-local.ps1, si no compila con el de Maven
   .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
   .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -Cierre   # sin IA: junta la correccion con tu rama (fast-forward) si todo esta probado
+  .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -ConfigMap -Inventario C:\ruta\inventario   # el repo de configmap del batch migrado (solo esta fase)
 
   Cierre (-Cierre, solo, sin IA): lo unico que avanza tu rama. Comprueba que la pasada esta corregida y probada (todos los jobs con casos iguales y
   ninguno distinto, sobre el codigo de ahora) y que tu carpeta no tiene cambios sin commit; si tu rama avanzo, la junta con la de rescate en la
@@ -122,6 +123,14 @@ USO
   frente a tu rama) y, si el codigo cambio, repite la prueba en local; solo entonces avanza tu rama con merge --ff-only y dice como deshacerlo.
   Si algo falla, nada se mueve (parada cierre-<motivo>). Los commits que tocan src/main/resources se listan para revisarlos. No hace push.
   estado.json lleva cierre (antes, sha, cuando, juntada, hecho, deshacer, avisos y revisar) y relanzar la pasada no lo deshace.
+
+  Repo de configmap (-ConfigMap, solo, sin lectura del original; configmap.ps1): escribe junto al migrado el repo de configmap nuevo, adaptado del repo de configmap de
+  referencia (-ConfigMapReferencia, o ConfigMapReferencia de ajustes.json, o se pregunta la primera vez y se guarda). Los valores salen del inventario del original
+  (-Inventario, que se guarda en estado.json); los secretos van solo como referencia y lo que no se sabe queda como <PENDIENTE>. Copiar, dar formato y relacionar el
+  inventario con las variables del migrado lo hacen tareas de IA que el script comprueba; no hace git init ni commit. Deja PENDIENTE.md en el repo nuevo y
+  datos\configmap.json. Un repo que ya existe y no es suyo para sin tocar nada; si es suyo, sus ficheros no cambiados se rehacen solo si cambian sus entradas y los que
+  has cambiado a mano se respetan. Tambien se hace al final de -Cierre si se dan -Inventario y la referencia (o ya estan guardados); si no, -Cierre dice como pedirlo.
+  No se mezcla con -Cierre, -SoloInforme, -Si, -Practicas, -Reglas ni -RevisarTodo; -Reintentar vale (repite las tareas atascadas).
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).
   Los ajustes de ajustes.json (y de .rescate\config.json del migrado) pisan las claves
@@ -145,7 +154,10 @@ param(
   [switch]$SinPruebaLocal,    # no ejecutar el original y el migrado al final (la fase prueba-local)
   [string]$JavaLegacy = '',   # JAVA_HOME del original para prueba-local.ps1, si no compila con el JDK de Maven
   [string]$Lanzadores = '',   # carpeta con los .sh que lanzan el batch, si no estan en el repo del original (se guarda en estado.json)
-  [switch]$Cierre             # sin IA: juntar la correccion con tu rama, por fast-forward y despues de las puertas (Invoke-Cierre); va solo
+  [switch]$Cierre,            # sin IA: juntar la correccion con tu rama, por fast-forward y despues de las puertas (Invoke-Cierre); va solo
+  [switch]$ConfigMap,         # solo el repo de configmap del batch migrado (configmap.ps1); con -Cierre se hace al final si hay inventario y referencia
+  [string]$Inventario = '',   # carpeta del inventario del original (un repo de ansible-like con una carpeta por entorno); se guarda en estado.json
+  [string]$ConfigMapReferencia = ''   # repo de configmap de referencia; si no se da, el guardado en ajustes.json o se pregunta (-ConfigMap)
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
@@ -160,6 +172,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'tests-reglas.ps1')
 . (Join-Path $PSScriptRoot 'revision.ps1')
 . (Join-Path $PSScriptRoot 'arreglo-propiedades.ps1')
+. (Join-Path $PSScriptRoot 'configmap.ps1')
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -198,12 +211,12 @@ function Get-HoraTexto($V) {
 }
 
 # ============================ AJUSTES Y ESTADO ============================
-# Guarda la referencia en ajustes.json sin tocar el resto de claves.
-function Save-Plantilla([string]$Ruta) {
+# Guarda un ajuste (la referencia, la del configmap...) en ajustes.json sin tocar el resto de claves.
+function Save-Ajuste([string]$Clave, [string]$Valor) {
   $f = Get-RutaAjustes
   $o = [ordered]@{}
   if (Test-Path -LiteralPath $f) { foreach ($pr in (Read-Json $f).PSObject.Properties) { $o[$pr.Name] = $pr.Value } }
-  $o['Plantilla'] = $Ruta
+  $o[$Clave] = $Valor
   Write-Json $f $o
 }
 
@@ -888,6 +901,26 @@ function Invoke-Cierre {
   return 0
 }
 
+# El repo de configmap del batch migrado (configmap.ps1). $Preguntar: si falta la referencia, se pregunta (-ConfigMap) o se deja (-Cierre, sin preguntar nada).
+# Devuelve el codigo de salida: 0 bien (o no se pudo pedir y se dice como), 1 si la fase no pudo arrancar.
+function Invoke-ConfigMapMigracion([bool]$Preguntar) {
+  $ref = $ConfigMapReferencia
+  $guardada = [string]$Cfg.ConfigMapReferencia
+  if (-not $ref -and $guardada -and (Test-Path -LiteralPath $guardada -PathType Container)) { $ref = $guardada }
+  if (-not $ref -and $Preguntar) { $ref = "$(Read-Host 'Carpeta del repo de configmap de referencia (el de un batch ya migrado y aprobado)')".Trim() }
+  if (-not $InventarioRoot -or -not $ref) {
+    if (-not $InventarioRoot) { Info 'Para el repo de configmap: relanza con -ConfigMap -Inventario <carpeta del inventario del original>' }
+    else { Info 'Para el repo de configmap: relanza con -ConfigMap -ConfigMapReferencia <carpeta del repo de configmap de referencia>' }
+    return 0
+  }
+  if (-not (Test-Path -LiteralPath $ref -PathType Container)) { Fallo "-ConfigMapReferencia no es una carpeta que exista: $ref"; return 1 }
+  $ref = Resolve-Dir $ref
+  if ($ref -ne $guardada) { Save-Ajuste 'ConfigMapReferencia' $ref; $Cfg.ConfigMapReferencia = $ref }
+  if ($previo -and [string]$previo.inventario -cne $InventarioRoot) { Save-Estado }   # el inventario queda guardado aunque la fase se corte
+  $r = Invoke-FaseConfigMap $PlantillaRoot $MigradoRoot $ref $InventarioRoot $conservar
+  return [int]$r.Codigo
+}
+
 # Una excepcion que nadie esperaba: se deja en estado.json para que el relanzamiento no sea a ciegas, y sale con 2.
 function Stop-ErrorInterno($Ex) {
   $donde = ''
@@ -902,6 +935,7 @@ $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original (Java 8).' }
 if ($SoloInforme -and $Si) { Stop-Arranque 'Usa -SoloInforme o -Si, no los dos.' }
 if ($Cierre -and ($SoloInforme -or $Si -or $Practicas -or $Reglas -or $RevisarTodo -or $Reintentar)) { Stop-Arranque '-Cierre va solo: no lo mezcles con -SoloInforme, -Si, -Practicas, -Reglas, -RevisarTodo ni -Reintentar.' }
+if ($ConfigMap -and ($Cierre -or $SoloInforme -or $Si -or $Practicas -or $Reglas -or $RevisarTodo)) { Stop-Arranque '-ConfigMap solo hace esta fase (el repo de configmap): no lo mezcles con -Cierre, -SoloInforme, -Si, -Practicas, -Reglas ni -RevisarTodo.' }
 $respondeSi = [bool]$Si
 
 # 1. Herramientas y repos (antes, los ajustes: pueden cambiar donde estan)
@@ -928,7 +962,7 @@ if (-not $ref -and $guardada -and (Test-Path -LiteralPath $guardada)) { $ref = $
 if (-not $ref) { $ref = "$(Read-Host 'Carpeta del batch de referencia (un batch ya migrado y aprobado)')".Trim() }
 if (-not $ref) { Stop-Arranque 'Falta la referencia: pasa -Plantilla o contesta con la carpeta del batch de referencia.' }
 $PlantillaRoot = Get-Repo $ref 'La referencia'
-if ($PlantillaRoot -ne $guardada) { Save-Plantilla $PlantillaRoot }
+if ($PlantillaRoot -ne $guardada) { Save-Ajuste 'Plantilla' $PlantillaRoot }
 
 # Carpetas de salida y estado anterior (si se relanza)
 $batch = Get-Batch $MigradoRoot
@@ -984,6 +1018,17 @@ elseif ($previo -and $previo.lanzadores) {
   $LanzadoresRoot = [string]$previo.lanzadores
   if (-not (Test-Path -LiteralPath $LanzadoresRoot -PathType Container)) { Aviso "La carpeta de -Lanzadores del lanzamiento anterior ya no existe ($LanzadoresRoot): sigo sin ella."; $LanzadoresRoot = '' }
 }
+# la carpeta del inventario del original (para el repo de configmap): la que se da, o la del lanzamiento anterior
+$InventarioRoot = ''
+if ($Inventario) {
+  if (-not (Test-Path -LiteralPath $Inventario -PathType Container)) { Stop-Arranque "-Inventario no es una carpeta que exista: $Inventario" }
+  $InventarioRoot = Resolve-Dir $Inventario
+}
+elseif ($previo -and $previo.inventario) {
+  $InventarioRoot = [string]$previo.inventario
+  if (-not (Test-Path -LiteralPath $InventarioRoot -PathType Container)) { Aviso "La carpeta de -Inventario del lanzamiento anterior ya no existe ($InventarioRoot): sigo sin ella."; $InventarioRoot = '' }
+}
+if ($ConfigMap -and -not $InventarioRoot) { Stop-Arranque 'Falta -Inventario: la carpeta con el inventario del original (una carpeta por entorno con sus .properties). Es de donde salen los valores del repo de configmap.' }
 
 # 3. Modelo: -Modelo, el del lanzamiento anterior o el menu
 if ($PSBoundParameters.ContainsKey('Modelo')) { $ModeloElegido = $Modelo }
@@ -1008,8 +1053,8 @@ $Estado = [ordered]@{
   fase = 'fichas-clase'; creado = (Get-Date).ToString('s'); actualizado = ''; fin = ''; parada = $null; pruebaLocal = $null; cierre = $cierreAnterior
 }
 if ($previo -and $previo.creado) { $Estado['creado'] = Get-HoraTexto $previo.creado }
-if ($Cierre) {
-  # -Cierre no es una pasada: lo suyo (fase, fin, parada, prueba en local y opciones) se queda como estaba; solo se quita la parada de un cierre anterior, que se vuelve a intentar
+if ($Cierre -or ($ConfigMap -and $previo)) {
+  # -Cierre y -ConfigMap no son una pasada: lo suyo (fase, fin, parada, prueba en local y opciones) se queda como estaba; solo se quita la parada de un cierre anterior, que se vuelve a intentar
   foreach ($k in @('fase', 'pruebaLocal', 'practicas', 'reglas', 'maxHoras', 'limite', 'sinPruebaLocal', 'revisarTodo')) { $Estado[$k] = $previo.$k }
   if (-not $JavaLegacy) { $JavaLegacy = [string]$previo.javaLegacy }   # la prueba en local que repite el cierre usa el JDK del original de la pasada
   $Estado['javaLegacy'] = $JavaLegacy
@@ -1020,7 +1065,8 @@ else {
   # las opciones de la pasada, con lo dado en ESTE lanzamiento (-Reintentar no: es de una sola vez): Get-ComandoPasada las repite en la portada
   $Estado['practicas'] = [bool]$Practicas; $Estado['reglas'] = [bool]$Reglas; $Estado['maxHoras'] = $MaxHoras; $Estado['limite'] = $Limite; $Estado['sinPruebaLocal'] = [bool]$SinPruebaLocal; $Estado['revisarTodo'] = [bool]$RevisarTodo
 }
-if ($hayWt) {
+if ($InventarioRoot) { $Estado['inventario'] = $InventarioRoot }
+if ($hayWt -and -not $ConfigMap) {   # -ConfigMap no usa la carpeta de rescate: no la mira ni la toca
   $RepoRoot = $dirWt
   Undo-IntentoCortado $Estado['rama']
   $sinCommit = @(Get-SinCommit $RepoRoot)
@@ -1034,11 +1080,24 @@ if ($hayWt) {
   }
 }
 
-# -Cierre (sin IA): ni prueba de aptitud (5) ni pregunta (6); la carpeta de rescate ya existe y el estado de la pasada se conserva (arriba)
+# -Cierre (sin IA): ni prueba de aptitud (5) ni pregunta (6); la carpeta de rescate ya existe y el estado de la pasada se conserva (arriba).
+# Si se junta bien, al final va el repo de configmap (sin preguntar nada: con el inventario y la referencia que haya; si no, dice como pedirlo).
 if ($Cierre) {
   Read-Config $RepoRoot $false
   [void](Set-Despierto $true)
-  try { exit (Invoke-Cierre) }
+  try {
+    $rc = Invoke-Cierre
+    if ($rc -eq 0) { $rc = Invoke-ConfigMapMigracion $false }
+    exit $rc
+  }
+  catch { Stop-ErrorInterno $_ }
+  finally { [void](Set-Despierto $false) }
+}
+
+# -ConfigMap: solo el repo de configmap, sin lectura del original, ni aptitud, ni pregunta, ni carpeta de rescate
+if ($ConfigMap) {
+  [void](Set-Despierto $true)
+  try { exit (Invoke-ConfigMapMigracion $true) }
   catch { Stop-ErrorInterno $_ }
   finally { [void](Set-Despierto $false) }
 }
