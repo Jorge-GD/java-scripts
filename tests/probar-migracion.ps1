@@ -7784,6 +7784,41 @@ $Pruebas['c4 (i) un error de hexagonal nuevo en el cierre para; el mismo error s
   Comprueba 'y sale en avisos' ((@((Estado $g).cierre.avisos) -join ' | ') -match 'paridad:') (@((Estado $g).cierre.avisos) -join ' | ')
 }
 
+$Pruebas['c4 (t) un error de una puerta que ya estaba una vez y el cierre trae dos veces (mismo area, fichero y detalle, otra linea): el repetido es nuevo, para con cierre-puertas y tu rama no se mueve; con las mismas dos veces antes y despues no para'] = {
+  $hex = 'el dominio importa infraestructura'
+  $fich = 'src/main/java/com/acme/life/Arreglo.java'
+  $b = Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'
+  $o = C4-Orden
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' $fich 7 $hex))
+  $e = C4-Pasada 'c4-t-nuevo' $o
+  $antes = C4-Head $e
+  $r = C4-Cierre $e (C4-Orden-Cierre @($b, (Hallazgo 'hexagonal' 'error' $fich 3 $hex), (Hallazgo 'hexagonal' 'error' $fich 11 $hex)))
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'cierre-puertas con UN error nuevo de hexagonal, en ese fichero' ($s.parada.motivo -eq 'cierre-puertas' -and $s.parada.detalle.Contains('error nuevo: hexagonal: ' + $fich) -and ([regex]::Matches($s.parada.detalle, 'error nuevo: ')).Count -eq 1) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+  # las mismas dos veces antes y despues: no hay nada nuevo
+  $o2 = C4-Orden
+  $o2.antes.hallazgos = @($o2.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' $fich 7 $hex), (Hallazgo 'hexagonal' 'error' $fich 8 $hex))
+  $f = C4-Pasada 'c4-t-igual' $o2
+  $r = C4-Cierre $f (C4-Orden-Cierre @($b, (Hallazgo 'hexagonal' 'error' $fich 3 $hex), (Hallazgo 'hexagonal' 'error' $fich 11 $hex)))
+  Igual 'con las mismas dos veces sale con 0' 0 $r.Codigo
+  Comprueba 'y el cierre esta hecho' ((Estado $f).cierre.hecho -eq $true) (Cola $r.Salida)
+}
+
+$Pruebas['c4 (u) correcciones.json: un hallazgo repetido (mismo area, fichero y detalle) que antes estaba dos veces y despues una cuenta una vez como resuelto'] = {
+  $e = Nuevo-Escenario 'c4-u' @('Clase1')
+  $o = Orden-Base
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 8 'clase suelta B'))
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  Comprueba 'hay correcciones.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'resueltos: A, el secreto y una de las dos B (la otra sigue, solo cambio de linea)' 'clase suelta A|secreto en claro|clase suelta B' (@($c.resueltos | ForEach-Object { $_.Detalle }) -join '|')
+}
+
 $Pruebas['c4 (j) un commit de rescate que toca src/main/resources/application.yml sale en revisar, en el estado y en la consola, y uno que no lo toca no'] = {
   $o = C4-Orden @('rescate(config): secreto en claro', 'rescate(estructura): lote 2, hallazgos 2 a 1')
   $o.ficheros['src/main/resources/application.yml'] = "batch:`n  chunk: 10`n"
