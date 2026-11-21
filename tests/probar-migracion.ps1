@@ -7968,5 +7968,146 @@ $Pruebas['c4 (p) FLUJO.md: la regla 1 dice que tu rama solo avanza con -Cierre, 
   Comprueba 'el flujo cuenta las precondiciones, las puertas y el no hacer push' ($f -match 'cierre-conflicto' -and $f -match 'cierre-puertas' -and $f -match 'No hace push') 'faltan cierre-conflicto, cierre-puertas o No hace push'
 }
 
+# ============================ W1: CONVIVENCIA (C2) EN migracion.ps1 ============================
+# Las lineas 'Convivencia: ...' de la consola.
+function W1-Lineas([string]$Salida) { return @($Salida -split "`n" | Where-Object { $_ -match '^Convivencia: ' }) }
+
+# Un datos/convivencia.json de antes, con otro contenido, para ver si se vuelve a escribir. Devuelve su ruta.
+function W1-Viejo($E) {
+  $ruta = Get-Ruta $E.Out 'datos/convivencia.json'
+  Guarda-Json $ruta ([ordered]@{ jobs = @([ordered]@{ job = 'viejo'; veredicto = 'a-la-vez'; motivos = @(); reponer = @() }); fijos = [ordered]@{ batch = 'viejo'; serie = @(); aLaVez = 'viejo' } })
+  return $ruta
+}
+
+# Un fichero con un motivo de convivencia (un escritor de tabla): el codigo de un arreglo o de un commit tuyo.
+$W1Escritor = "package com.acme.life;`n`n/** Escribe. */`npublic class Escribe {`n    private JdbcBatchItemWriter<Object> escritor;`n}`n"
+
+$Pruebas['w1 (a) una pasada completa deja datos/convivencia.json con un job por cada job de mapa.json, en su orden, y la pagina 1 lleva el bloque de convivencia de cada job'] = {
+  $c = Corrida-Dos $GuionBase
+  $e = $c.E
+  Igual 'sale con 0' 0 $c.R.Codigo
+  $jobs = @((Mapa $e).jobs | ForEach-Object { $_.job })
+  Igual 'el mapa tiene dos jobs' 2 $jobs.Count
+  $cv = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  Comprueba 'deja datos/convivencia.json' ($null -ne $cv) (Cola $c.R.Salida)
+  if ($null -eq $cv) { return }
+  Igual 'un job por cada job de mapa.json, en su orden' ($jobs -join ' ') (@($cv.jobs | ForEach-Object { $_.job }) -join ' ')
+  $h = Pagina $e.Out '1-batch-original.html'
+  foreach ($j in $jobs) { Comprueba "la pagina 1 lleva el bloque de convivencia de $j" ((Articulo $h $j).Contains('<div class="conv">')) (Articulo $h $j) }
+  $l = W1-Lineas $c.R.Salida
+  Igual 'la consola dice la linea Convivencia: dos veces (lectura-hecha y el final)' 2 $l.Count
+  Comprueba 'con las cuentas de sus 2 jobs' ($l.Count -gt 0 -and $l[0] -match '^Convivencia: 2 jobs, \d+ a la vez y \d+ uno detras de otro \(datos\\convivencia\.json\)\.') ($l -join ' | ')
+}
+
+$Pruebas['w1 (b) una pasada que para antes del mapa no escribe convivencia.json ni dice Convivencia en la consola'] = {
+  $e = Escenario-Dos 'w1-b'
+  $r = Migra $e ((Basicos $e) + @('-Limite', '1'))
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'queda tarea pendiente: la pasada paro antes del mapa' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/mapa.json'))) (Cola $r.Salida)
+  Comprueba 'no hay datos/convivencia.json' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json')))
+  Comprueba 'la consola no dice Convivencia' ($r.Salida -notmatch 'Convivencia') (Cola $r.Salida)
+}
+
+$Pruebas['w1 (c) con la respuesta parar (sin corregir), convivencia se mide en lectura-hecha, antes de decir que no se corrige, y otra vez al final'] = {
+  $c = Corrida-Dos $GuionBase
+  Igual 'la respuesta es parar' 'parar' (Estado $c.E).respuesta
+  $s = $c.R.Salida
+  $sinCorregir = $s.IndexOf('No se corrige nada')
+  $primera = $s.IndexOf('Convivencia: ')
+  $ultima = $s.LastIndexOf('Convivencia: ')
+  Comprueba 'dice que no se corrige nada' ($sinCorregir -ge 0) (Cola $s)
+  Comprueba 'la primera linea Convivencia: sale antes de eso (la de lectura-hecha)' ($primera -ge 0 -and $primera -lt $sinCorregir) (Cola $s)
+  Comprueba 'la ultima sale despues (la del final)' ($ultima -gt $sinCorregir) (Cola $s)
+  Comprueba 'y deja datos/convivencia.json' (Test-Path -LiteralPath (Get-Ruta $c.E.Out 'datos/convivencia.json'))
+}
+
+$Pruebas['w1 (d) tras un -Cierre que junta, convivencia.json se ha vuelto a escribir; un segundo -Cierre (ya juntado) no lo toca'] = {
+  $e = C4-Pasada 'w1-d'
+  $ruta = W1-Viejo $e
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'junta' ((Estado $e).cierre.hecho -eq $true) (Cola $r.Salida)
+  $cv = Lee-Json $ruta
+  Igual 'el JSON viejo se ha sustituido: ahora tiene el job de mapa.json' 'batch' (@($cv.jobs | ForEach-Object { $_.job }) -join ' ')
+  $l = W1-Lineas $r.Salida
+  Igual 'la consola dice la linea Convivencia: una vez' 1 $l.Count
+  Comprueba 'y la dice al final, despues de que no hace push' ($r.Salida.LastIndexOf('Convivencia: ') -gt $r.Salida.IndexOf('No hago push')) (Cola $r.Salida)
+  $viejo = W1-Viejo $e
+  $hash = Hash-De $viejo
+  $r2 = C4-Cierre $e
+  Igual 'el segundo sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que ya esta juntado' ($r2.Salida -match 'Ya esta juntado') (Cola $r2.Salida)
+  Igual 'no toca convivencia.json' $hash (Hash-De $viejo)
+  Comprueba 'ni dice Convivencia' ($r2.Salida -notmatch 'Convivencia') (Cola $r2.Salida)
+}
+
+$Pruebas['w1 (d2) tu commit nuevo toca src/main: tras juntar, convivencia mide el arbol ya juntado (con tu fichero)'] = {
+  $e = C4-Pasada 'w1-d2'
+  [void](C4-Commit-Usuario $e 'src/main/java/com/acme/life/Escribe.java' $W1Escritor)
+  $antes = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  Comprueba 'antes de juntar, la pasada dejo su convivencia.json' ($null -ne $antes)
+  if ($null -eq $antes) { return }
+  Igual 'y no veia tu fichero' 0 @(@($antes.jobs)[0].motivos | Where-Object { $_.fichero -eq 'src/main/java/com/acme/life/Escribe.java' }).Count
+  $r = C4-Cierre $e $null (C4-Local 3 0)
+  Igual 'sale con 0' 0 $r.Codigo
+  $cv = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  $m = @(@($cv.jobs)[0].motivos | Where-Object { $_.lado -eq 'migrado' -and $_.fichero -eq 'src/main/java/com/acme/life/Escribe.java' })
+  Igual 'despues, el job lleva un motivo del migrado en tu fichero' 1 $m.Count
+}
+
+$Pruebas['w1 (e) un -Cierre que para por una precondicion no llama a Invoke-Convivencia: ni toca convivencia.json ni dice Convivencia'] = {
+  $e = C4-Pasada 'w1-e'
+  $viejo = W1-Viejo $e
+  $hash = Hash-De $viejo
+  Escribe $e.Migrado 'src/main/java/com/acme/life/App.java' "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int mio = 1;`n}`n"
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'para por cambios sin commit' 'cierre-cambios-sin-commit' (Estado $e).parada.motivo
+  Igual 'convivencia.json no cambia' $hash (Hash-De $viejo)
+  Comprueba 'la consola no dice Convivencia' ($r.Salida -notmatch 'Convivencia') (Cola $r.Salida)
+}
+
+$Pruebas['w1 (f) si Invoke-Convivencia falla por dentro, la pasada sigue y acaba igual'] = {
+  $e = Escenario-Dos 'w1-f'
+  $r1 = Migra $e (Basicos $e)
+  Igual 'la primera pasada sale con 0' 0 $r1.Codigo
+  Comprueba 'y deja convivencia.json' (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json')) (Cola $r1.Salida)
+  # el fichero temporal de Write-Json es una carpeta: escribir convivencia.json falla dentro de Invoke-Convivencia
+  Remove-Item -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json') -Force -ErrorAction SilentlyContinue
+  [void](New-Item -ItemType Directory -Path (Get-Ruta $e.Out 'datos/convivencia.json.tmp') -Force)
+  $r2 = Migra $e (Basicos $e)
+  Igual 'la segunda sale con 0, como la primera' $r1.Codigo $r2.Codigo
+  Comprueba 'la consola dice que no se pudo medir' ($r2.Salida -match 'Convivencia: no se pudo medir') (Cola $r2.Salida)
+  $s = Estado $e
+  Comprueba 'la pasada acaba igual: fase hecha, sin parada' ($s.fase -eq 'hecha' -and $null -eq $s.parada) "$($s.fase) $($s.parada)"
+  Comprueba 'no deja convivencia.json' (-not (Test-Path -LiteralPath (Get-Ruta $e.Out 'datos/convivencia.json')))
+  Comprueba 'y las paginas se montan' ((Pagina $e.Out '1-batch-original.html').Length -gt 0 -and (Pagina $e.Out 'index.html').Length -gt 0)
+}
+
+$Pruebas['w1 (g) una pasada que corrige mide la convivencia al final, sobre el codigo ya corregido'] = {
+  $o = C4-Orden
+  $o.ficheros['src/main/java/com/acme/life/Escribe.java'] = $W1Escritor
+  $e = C4-Pasada 'w1-g' $o
+  $cv = Lee-Json (Get-Ruta $e.Out 'datos/convivencia.json')
+  Comprueba 'deja datos/convivencia.json' ($null -ne $cv)
+  if ($null -eq $cv) { return }
+  $m = @(@($cv.jobs)[0].motivos | Where-Object { $_.lado -eq 'migrado' -and $_.fichero -eq 'src/main/java/com/acme/life/Escribe.java' })
+  Igual 'el job lleva un motivo del migrado en el fichero que dejo la correccion' 1 $m.Count
+  Igual 'y su veredicto es en-serie' 'en-serie' @($cv.jobs)[0].veredicto
+}
+
+$Pruebas['w1 (h) la cabecera de migracion.ps1 nombra convivencia.ps1, se carga con los demas, y FLUJO.md (Paso 6) cuenta que dice si en pre se lanza a la vez o uno detras de otro'] = {
+  $mig = [System.IO.File]::ReadAllText($Script)
+  Comprueba 'la linea Necesita nombra convivencia.ps1' ($mig -match '(?m)^Necesita [^\r\n]*convivencia\.ps1')
+  Comprueba 'se carga justo despues de propiedades.ps1' ($mig -match "(?m)^\. \(Join-Path \`$PSScriptRoot 'propiedades\.ps1'\)\r?\n\. \(Join-Path \`$PSScriptRoot 'convivencia\.ps1'\)")
+  $f = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'FLUJO.md'))
+  $paso = [regex]::Match($f, '(?s)## Paso 6\. Pre.*?(?=\r?\n## |\z)').Value
+  Comprueba 'el Paso 6 existe' ($paso.Length -gt 0)
+  Comprueba 'dice que migracion.ps1 lo dice sin IA en cada lanzamiento y tras -Cierre' ($paso -match 'migracion\.ps1' -and $paso -match 'sin IA' -and $paso -match 'cada lanzamiento' -and $paso -match '-Cierre') $paso
+  Comprueba 'habla de lanzar el viejo y el nuevo a la vez o uno detras de otro, con los motivos y que reponer' ($paso -match 'a la vez' -and $paso -match 'detr.s de otro' -and $paso -match 'motivos' -and $paso -match 'reponer') $paso
+  Comprueba 'lo pone en C.mo probarlo en pre y dice que por defecto es uno detras de otro' ($paso -match 'C.mo probarlo en pre' -and $paso -match 'por defecto') $paso
+  Comprueba 'y que las tablas BATCH_ no se comparten' ($paso -match 'BATCH_' -and $paso -match 'no se comparten') $paso
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
