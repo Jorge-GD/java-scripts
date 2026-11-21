@@ -6056,18 +6056,18 @@ function Escenario-M64([string]$Nombre, $Casos, [switch]$SinPrepara) {
 }
 
 # Un caso del prueba-local.json de antes: distinto, con los fallos que se digan ('migrado:FAILED:causa' u 'original:FAILED:causa', separados por ;).
-function Caso-M64([string]$N, [string]$Fallos) {
+function Caso-M64([string]$N, [string]$Fallos, [string]$Resultado = 'distinto') {
   $f = @()
   foreach ($x in @($Fallos -split ';' | Where-Object { $_ })) { $l, $est, $causa = $x -split ':', 3; $f += [ordered]@{ lado = $l; estado = $est; causa = $causa; registro = '' } }
-  return [ordered]@{ job = 'cargaJob'; caso = $N; titulo = ''; resultado = 'distinto'; motivo = ''; diferencias = @(); fallos = $f }
+  return [ordered]@{ job = 'cargaJob'; caso = $N; titulo = ''; resultado = $Resultado; motivo = ''; diferencias = @(); fallos = $f }
 }
 
-# Deja en el prueba-local.json de $E los casos de $Grupos: lista de (cuantos, fallos de cada caso).
+# Deja en el prueba-local.json de $E los casos de $Grupos: lista de (cuantos, fallos de cada caso y, si no es 'distinto', su resultado).
 function Anterior-M64($E, $Grupos) {
   $o = Lee-Json $E.Json
   $casos = @()
   $n = 0
-  foreach ($g in $Grupos) { for ($i = 0; $i -lt $g[0]; $i++) { $n++; $casos += , (Caso-M64 ('caso-' + $n.ToString('D2')) $g[1]) } }
+  foreach ($g in $Grupos) { $res = 'distinto'; if ($g.Count -gt 2) { $res = $g[2] }; for ($i = 0; $i -lt $g[0]; $i++) { $n++; $casos += , (Caso-M64 ('caso-' + $n.ToString('D2')) $g[1] $res) } }
   $o.casos = $casos
   [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $o -Depth 20))
 }
@@ -6080,6 +6080,7 @@ $Pruebas['m64 (a) el migrado con tests de ejemplo que preparan algo (@BeforeEach
   $parrafo = $M64Cabecera + $lista + '. ' + $M64Fin
   $mig = Registro-Arnes $e 'migrado' 1
   Comprueba 'el prompt del migrado lleva el parrafo entero con sus dos metodos' ($mig.Contains($parrafo)) (Cola $mig)
+  Comprueba 'y el texto de la plantilla sigue despues de una linea en blanco' ($mig.Contains($parrafo + "`n`nPueden ser de otra")) (Cola $mig)
   $lineas = @($mig -split "`n")
   $iUltimo = [array]::IndexOf($lineas, ($lineas | Where-Object { $_ -like '- *OtraIT.java' } | Select-Object -First 1))
   Comprueba 'va despues de la lista de ejemplos y una linea en blanco' ($iUltimo -ge 0 -and $lineas[$iUltimo + 1] -ceq '' -and $lineas[$iUltimo + 2].StartsWith($M64Cabecera)) (Cola $mig)
@@ -6118,6 +6119,7 @@ $Pruebas['m64 (b) sin metodos de preparacion en los ejemplos de la copia (o con 
   $mig = Registro-Arnes $e 'migrado' 1
   Comprueba 'el prompt del migrado lista el ejemplo' ($mig.Contains("${M64Ruta}SinIT.java")) (Cola $mig)
   Comprueba 'y no lleva el parrafo (el @BeforeEach de UnitTest, que no arranca el batch, no cuenta)' (-not $mig.Contains('Estos tests preparan') -and -not $mig.Contains('UnitTest.java')) (Cola $mig)
+  Comprueba 'y la lista acaba como hoy: una linea en blanco y el texto de la plantilla' ($mig.Contains("${M64Ruta}SinIT.java`n`nPueden ser de otra")) (Cola $mig)
   $e = Nuevo-Escenario 'm64-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
   $ref = Join-Path $e.Raiz 'referencia'
   Escribe $ref 'src/test/java/com/ref/RefIT.java' "package com.ref;`n`n@SpringBootTest`npublic class RefIT {`n  @BeforeEach`n  void preparaRef() {`n  }`n}`n"
@@ -6160,7 +6162,8 @@ $Pruebas['m64 (d) una causa con un solo caso no sale; si los dos lados acaban FA
   $exc = 'java.lang.ClassNotFoundException: com.acme.Falta'
   $c3 = 'java.lang.RuntimeException: tercera'
   $c4 = 'java.lang.RuntimeException: cuarta'
-  Anterior-M64 $e @(@(1, "migrado:FAILED:$solo"), @(2, "migrado:FAILED:$ambos;original:FAILED:$ambos"), @(2, "migrado:sin estado.txt:$sin"), @(5, "migrado:EXCEPCION:$exc"), @(3, "migrado:FAILED:$c3"), @(2, "migrado:FAILED:$c4"), @(2, "migrado:FAILED:$M64Otra"))
+  $noDistinto = 'java.lang.IllegalStateException: de un caso que no sale distinto'
+  Anterior-M64 $e @(@(1, "migrado:FAILED:$solo"), @(2, "migrado:FAILED:$ambos;original:FAILED:$ambos"), @(2, "migrado:sin estado.txt:$sin"), @(5, "migrado:EXCEPCION:$exc"), @(3, "migrado:FAILED:$c3"), @(2, "migrado:FAILED:$c4"), @(2, "migrado:FAILED:$M64Otra"), @(4, "migrado:FAILED:$noDistinto", 'no se pudo preparar'), @(2, 'migrado:FAILED:'))
   $r = Prueba $e @('-RehacerArnes')
   Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
   $mig = Registro-Arnes $e 'migrado' 1
@@ -6171,6 +6174,8 @@ $Pruebas['m64 (d) una causa con un solo caso no sale; si los dos lados acaban FA
   Comprueba 'la de los dos lados FAILED no sale' (-not $mig.Contains($ambos)) (Cola $mig)
   Comprueba 'la de sin estado.txt no sale' (-not $mig.Contains($sin)) (Cola $mig)
   Comprueba 'la cuarta causa (2 casos, despues de la otra por orden) no sale' (-not $mig.Contains($c4)) (Cola $mig)
+  Comprueba 'la de casos que no salen distintos (no se pudo preparar) no sale' (-not $mig.Contains($noDistinto)) (Cola $mig)
+  Comprueba 'ni la de casos sin causa (la linea acabaria en dos puntos y un punto)' (-not $mig.Contains('y el original no: .')) (Cola $mig)
 }
 
 $Pruebas['m64 (d2) la causa del migrado se corta en 200 letras y las causas que solo cambian en un numero o en el nombre del caso son una'] = {
