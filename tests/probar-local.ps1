@@ -3266,7 +3266,7 @@ function Tarea-Caso-M40($E, [string]$Job, [string]$Caso) { return (Lee-Json (Get
 function Inventario-M40([string]$Raiz, [string]$Extra = '') {
   $f = Join-Path $Dir 'm40-inventario.ps1'
   $cuerpo = "foreach (`$t in @(Get-TablasBatch `$Raiz)) { 'T|' + `$t.tabla + '|' + `$t.sitio }`n" + $Extra
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Get-TablasSql', 'Get-NombreTabla')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-TablasBatch', 'Get-FicherosCodigo', 'Get-ListaTablas', 'Sort-Ordinal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Get-TablasSql', 'Get-NombreTabla')) + "`n" + $cuerpo))
   return (Lanzar $f @($Raiz))
 }
 
