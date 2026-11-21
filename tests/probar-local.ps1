@@ -6136,7 +6136,9 @@ $Pruebas['m64 (c) el prueba-local.json de antes con 13 casos del migrado FAILED 
   $e = Escenario-M64 'm64-c' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba $e
   Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
-  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"))
+  $solo = 'java.lang.ArithmeticException: / by zero'
+  $sin = 'el job no ha dejado estado.txt'
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"), @(1, "migrado:FAILED:$solo"), @(2, "migrado:sin estado.txt:$sin"))
   $r = Prueba $e @('-RehacerArnes')
   Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
   $mig = Registro-Arnes $e 'migrado' 1
@@ -6147,9 +6149,24 @@ $Pruebas['m64 (c) el prueba-local.json de antes con 13 casos del migrado FAILED 
   Comprueba 'y la de los 2 de la otra causa' ($mig.Contains($l2)) (Cola $mig)
   Comprueba 'la frase de encima de las lineas, una sola vez' ($mig.Contains($M64Frase + "`n") -and [regex]::Matches($mig, [regex]::Escape($M64Frase)).Count -eq 1 -and $mig.IndexOf($M64Frase) -lt $mig.IndexOf($l13)) (Cola $mig)
   Comprueba 'la de 13 va antes que la de 2' ($mig.IndexOf($l13) -lt $mig.IndexOf($l2)) (Cola $mig)
-  $orig = Registro-Arnes $e 'original' 1
-  Comprueba 'el primer intento del original no lleva ni la frase ni las lineas (son del migrado)' (-not $orig.Contains($M64Frase) -and -not $orig.Contains('el migrado acaba')) (Cola $orig)
+  Comprueba 'un caso solo con otra causa y dos que no dejan estado.txt no dan linea: son dos lineas' ([regex]::Matches($mig, 'En \d+ casos el migrado acaba').Count -eq 2 -and -not $mig.Contains($solo) -and -not $mig.Contains($sin)) (Cola $mig)
   Comprueba 'la tarea del migrado guarda el bloque en entradas.previo (no en la huella)' ([string](Tarea-Arnes $e 'migrado').entradas.previo -match [regex]::Escape($l13)) ''
+}
+
+$Pruebas['m64 (c2) con -RehacerOriginal (que arrastra al migrado) y ese mismo prueba-local.json: el primer intento del original no lleva ni la frase ni las lineas (son del migrado) y el del migrado si'] = {
+  $e = Escenario-M64 'm64-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"))
+  $deAntes = @(Llamadas-Arnes $e 'original').Count
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Comprueba 'el original se escribe otra vez (una llamada nueva como minimo)' (@(Llamadas-Arnes $e 'original').Count -gt $deAntes) ''
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'su primer prompt es el de ahora (lleva su ejemplo ViejoIT.java)' ($orig.Contains('ViejoIT.java')) (Cola $orig)
+  Comprueba 'y no lleva ni la frase ni las lineas del migrado' (-not $orig.Contains($M64Frase) -and -not $orig.Contains('el migrado acaba')) (Cola $orig)
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el del migrado, que se escribe otra vez traduciendo el nuevo, lleva la linea de los 13 casos' ($mig.Contains("En 13 casos el migrado acaba FAILED y el original no: $M64Npe.")) (Cola $mig)
 }
 
 $Pruebas['m64 (d) una causa con un solo caso no sale; si los dos lados acaban FAILED o el migrado no deja estado.txt el caso no cuenta; EXCEPCION cuenta con su estado; solo las tres causas de mas casos'] = {
