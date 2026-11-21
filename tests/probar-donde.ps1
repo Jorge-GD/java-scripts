@@ -262,8 +262,8 @@ $Pruebas['b) cada caso: el texto y el comando son los de la portada (Get-Siguien
   Igual 'punto de cortada: fase y fecha del fin' 'fase comparar, cortada (18-11-2026 10:00)' (Campo-De $bl['b-cortada'] 'Punto').Texto
   Igual 'punto de un batch hecho: terminado y fecha del fin' 'terminado (18-11-2026 10:00)' (Campo-De $bl['b-pre'] 'Punto').Texto
   $c = Campo-De $bl['b-corregido'] 'Siguiente'
-  Igual 'corregido: tres comandos de git, cada uno en su linea' 3 $c.Comando.Count
-  Comprueba 'corregido: el ultimo es el merge de la rama de rescate' ($c.Comando.Count -eq 3 -and $c.Comando[2] -ceq ('git -C "' + (Join-Path $E.Raiz 'b-corregido') + '" merge rescate/feat-recibos-20261118-0900')) ($c.Comando -join ' / ')
+  Igual 'corregido: tres comandos (log, diff y el cierre), cada uno en su linea' 3 $c.Comando.Count
+  Comprueba 'corregido: el ultimo es el cierre de la rama de rescate, con -Cierre' ($c.Comando.Count -eq 3 -and $c.Comando[2] -cmatch ('^\.\\migracion\.ps1 -Legacy ".*" -Migrado "' + [regex]::Escape((Join-Path $E.Raiz 'b-corregido')) + '" -Plantilla ".*" -Cierre$')) ($c.Comando -join ' / ')
   $c = Campo-De $bl['b-pre'] 'Siguiente'
   Comprueba 'pre: texto y ningun comando' ($c.Texto -cmatch 'Pru.balo en pre' -and $c.Comando.Count -eq 0) ($c.Texto + ' // ' + ($c.Comando -join ' / '))
   $c = Campo-De $bl['b-parar-con-problemas'] 'Siguiente'
