@@ -5405,5 +5405,33 @@ $Pruebas['m59 (e) el original se compila de cero en cada lanzamiento: la copia s
   Comprueba 'y la clase vieja ya no esta' (-not (Test-Path -LiteralPath $clase))
 }
 
+$Pruebas['m59 (k) un caso no-aplica hecho con el hash del arnes del original de ahora: un relanzamiento sin -RehacerOriginal no llama a la IA ni dice que se vuelve a preparar (ni una ni otra vez)'] = {
+  $e = Escenario-M59 'm59-k' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'su tarea guarda el hash del arnes de ahora' ((Hash-M59 $e 'caso-cargaJob-01') -match '^[0-9a-f]{16,}$') (Hash-M59 $e 'caso-cargaJob-01')
+  foreach ($vez in 2, 3) {
+    $r = Prueba $e
+    Igual "la vez $vez sale con 0" 0 $r.Codigo
+    Igual "la vez ${vez}: el caso no-aplica no llama a la IA" 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+    Comprueba "la vez ${vez}: la consola no dice que se vuelva a preparar" (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+    Igual "la vez ${vez}: sigue sin probar en local" 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  }
+}
+
+$Pruebas['m59 (l) un caso no-aplica que se vuelve a preparar empieza con 0 intentos: tras un intento nuevo que sale bien, la tarea tiene 1 intento y no la suma con los de antes'] = {
+  $e = Escenario-M59 'm59-l' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $t = Lee-Json (Get-Ruta $e.Local 'tareas/caso-cargaJob-01.json')
+  Igual 'la primera vez, hecha con 1 intento' 'hecha,1' "$($t.estado),$($t.intentos)"
+  Pon-Hash-M59 $e 'caso-cargaJob-01' 'arnes-de-antes'
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Igual 'el caso se prepara otra vez' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  $t = Lee-Json (Get-Ruta $e.Local 'tareas/caso-cargaJob-01.json')
+  Igual 'la tarea queda hecha con 1 intento (el nuevo), no con 2' 'hecha,1' "$($t.estado),$($t.intentos)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
