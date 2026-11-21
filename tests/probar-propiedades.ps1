@@ -625,7 +625,7 @@ $Pruebas['12 i) exclusiones: messages, ValidationMessages, META-INF y log4j/logb
   Igual 'la lista de exclusiones de Cfg' 'META-INF/* log4j* logback* messages*.properties ValidationMessages*.properties' (@($Cfg.PropiedadesExcluir) -join ' ')
 }
 
-$Pruebas['13 perfiles: application-pro se compara con application-pro y no con application; con otro perfil la clave falta (o va por variable)'] = {
+$Pruebas['13 perfiles: application-pro se compara con application-pro y no con application; una clave solo de otro perfil falta (o va por variable)'] = {
   $leg = @{
     ($RR + 'application.properties') = "app.lote=100`napp.y=5`n"
     ($RR + 'application-pro.properties') = "app.lote=50`napp.solo.pro=1`napp.x=1`napp.z=1`n"
@@ -641,14 +641,69 @@ $Pruebas['13 perfiles: application-pro se compara con application-pro y no con a
   Igual 'app.lote pro: enMigrado es el de application-pro.yml' ($RR + 'application-pro.yml') (Del-Legacy $j 'app.lote' 'pro').enMigrado.fichero
   Igual 'app.solo.pro: falta' 'falta' (Del-Legacy $j 'app.solo.pro' 'pro').estado
   $a = Del-Legacy $j 'app.x' 'pro'
-  Igual 'app.x esta en el migrado solo con el perfil default: falta' 'falta' $a.estado
-  Comprueba 'y el texto dice el otro perfil' ("$($a.texto)" -like '*otro perfil*' -and "$($a.texto)" -like '*default*') "$($a.texto)"
+  Igual 'app.x de pro esta en el migrado en default con el mismo valor: igual (lo de default vale con pro)' 'igual' $a.estado
+  Igual 'y enMigrado es el de application.yml' ($RR + 'application.yml') $a.enMigrado.fichero
   $a = Del-Legacy $j 'app.y' 'default'
   Igual 'app.y esta solo en pro: con default, falta' 'falta' $a.estado
+  Comprueba 'y el texto dice el otro perfil' ("$($a.texto)" -like '*otro perfil*' -and "$($a.texto)" -like '*pro*') "$($a.texto)"
   $a = Del-Legacy $j 'app.z' 'pro'
   Igual 'app.z va por variable en el migrado (aunque sea de otro perfil)' 'por-variable' $a.estado
   Igual 'y dice cual' 'Z' $a.variable
   Igual 'perfil del original con application-pro.properties' 'pro' (Del-Legacy $j 'app.solo.pro' 'pro').perfil
+}
+
+$Pruebas['16 perfiles: lo de application (default) vale tambien con pro, salvo que application-pro lo cambie; el reves no'] = {
+  $leg = @{
+    ($RR + 'application.properties') = "app.d1=1`napp.d2=1`napp.d3=1`napp.d4=1`napp.solodef=1`n"
+    ($RR + 'application-pro.properties') = "app.a=1`napp.b=1`napp.c=5`napp.e=5`napp.v=1`nspring.batch.initialize-schema=always`nspring.batch.table-prefix=ACME_`n"
+  }
+  $mig = @{
+    ($RR + 'application.yml') = "app:`n  a: 1`n  b: 9`n  c: 9`n  e: 5`n  v: `${V}`nspring:`n  batch:`n    jdbc:`n      initialize-schema: always`n      table-prefix: OTRO_`n"
+    ($RR + 'application-pro.yml') = "app:`n  c: 5`n  e: 7`n  d2: 1`n  d3: 7`n  d4: `${D4}`n  solodef: 1`n"
+  }
+  $E = Nuevo-Escenario 'q' $leg $mig
+  $j = (Mide $E).Json
+  # pro en el original y default en el migrado
+  $a = Del-Legacy $j 'app.a' 'pro'
+  Igual 'pro en el original, default en el migrado, mismo valor: igual' 'igual' $a.estado
+  Igual 'enMigrado apunta a application.yml' ($RR + 'application.yml') $a.enMigrado.fichero
+  Igual 'y a su linea' 2 $a.enMigrado.linea
+  Igual 'valorMigrado es el del migrado' '1' $a.valorMigrado
+  $a = Del-Legacy $j 'app.b' 'pro'
+  Igual 'lo mismo con otro valor: distinto' 'distinto' $a.estado
+  Igual 'y enMigrado sigue siendo el de default' ($RR + 'application.yml') $a.enMigrado.fichero
+  Igual 'y valorMigrado es el 9 de default' '9' $a.valorMigrado
+  # el migrado la tiene en pro y en default: gana la de pro
+  $a = Del-Legacy $j 'app.c' 'pro'
+  Igual 'en pro y en default con valores distintos, y el de pro es el del original: igual' 'igual' $a.estado
+  Igual 'gana la de pro (enMigrado es application-pro.yml)' ($RR + 'application-pro.yml') $a.enMigrado.fichero
+  $a = Del-Legacy $j 'app.e' 'pro'
+  Igual 'si la de pro es otra y la de default coincide con el original: distinto (gana la de pro)' 'distinto' $a.estado
+  Igual 'y valorMigrado es el 7 de pro' '7' $a.valorMigrado
+  # por variable
+  $a = Del-Legacy $j 'app.v' 'pro'
+  Igual 'default en el migrado va por variable: por-variable' 'por-variable' $a.estado
+  Igual 'y dice cual' 'V' $a.variable
+  # renombradas
+  $a = Del-Legacy $j 'spring.batch.initialize-schema' 'pro'
+  Igual 'renombrada con el nombre nuevo en default y el mismo valor: renombrada' 'renombrada' $a.estado
+  Igual 'y el destino es el de application.yml' ($RR + 'application.yml') $a.enMigrado.fichero
+  Igual 'con el mismo valor' $true $a.valorIgual
+  $a = Del-Legacy $j 'spring.batch.table-prefix' 'pro'
+  Igual 'renombrada con el nombre nuevo en default y otro valor: renombrada' 'renombrada' $a.estado
+  Igual 'y valorIgual es false' $false $a.valorIgual
+  # el reves: lo de default no se cumple por lo que tenga pro
+  $a = Del-Legacy $j 'app.d1' 'default'
+  Igual 'default en el original y la clave ni esta en el migrado: falta' 'falta' $a.estado
+  $a = Del-Legacy $j 'app.d2' 'default'
+  Igual 'default en el original y el migrado solo la tiene en pro con un valor literal: falta' 'falta' $a.estado
+  Comprueba 'y el texto dice solo con otro perfil (pro)' ("$($a.texto)" -like '*solo con otro perfil (pro)*') "$($a.texto)"
+  $a = Del-Legacy $j 'app.d3' 'default'
+  Igual 'lo mismo con otro valor en pro: falta' 'falta' $a.estado
+  $a = Del-Legacy $j 'app.d4' 'default'
+  Igual 'el migrado solo la tiene en pro y va por variable: por-variable (como antes)' 'por-variable' $a.estado
+  $a = Del-Legacy $j 'app.solodef' 'default'
+  Igual 'default en el original, pro en el migrado con el mismo literal: sigue falta' 'falta' $a.estado
 }
 
 $Pruebas['14 nunca para: sin pom, sin original y con un fichero ilegible, el JSON se escribe y no hay excepcion'] = {
