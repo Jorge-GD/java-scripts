@@ -2179,5 +2179,17 @@ $Pruebas['m65 f) un pom sin <dependencies>: no se inventa nada, el aviso de siem
   Igual 'ninguna llamada a Copilot ni a Maven' 0 ((Llamadas-De $E.Copilot).Count + (Llamadas-De $E.Mvn).Count)
 }
 
+$Pruebas['m65 g) un pom con dependencyManagement, un comentario y un plugin con sus dependencias: Lombok va solo a las dependencias del proyecto'] = {
+  $mig = (@('<project xmlns="http://maven.apache.org/POM/4.0.0">', '  <modelVersion>4.0.0</modelVersion>', '  <!-- <dependencies> de mentira -->', '  <dependencyManagement>', '    <dependencies>', '      <dependency>',
+      '        <groupId>com.acme</groupId>', '        <artifactId>acme-bom</artifactId>', '      </dependency>', '    </dependencies>', '  </dependencyManagement>', '  <dependencies>', '    <dependency>', '      <groupId>com.acme</groupId>',
+      '      <artifactId>acme-comun</artifactId>', '    </dependency>', '  </dependencies>', '  <build>', '    <plugins>', '      <plugin>', '        <artifactId>acme-plugin</artifactId>', '        <dependencies>', '          <dependency>',
+      '            <groupId>com.acme</groupId>', '            <artifactId>acme-extension</artifactId>', '          </dependency>', '        </dependencies>', '      </plugin>', '    </plugins>', '  </build>', '</project>') -join "`n") + "`n"
+  $E = Nuevo-Escenario4 'm65g' @('Alfa') $false @() $mig
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  $conVersion = @($Defecto65[0..2]) + @("  <version>$($Cfg.LombokVersion)</version>") + @($Defecto65[3..5])
+  Igual 'el bloque entra en <dependencies> de <project>, con version porque no hay padre de Spring Boot' (Con-Bloque65 $mig "  </dependencies>`n  <build>`n" $conVersion '    ') (Lee $E.Repo 'pom.xml')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas 'tests/probar-practicas.ps1'
