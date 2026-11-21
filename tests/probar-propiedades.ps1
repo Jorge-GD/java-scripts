@@ -706,6 +706,34 @@ $Pruebas['16 perfiles: lo de application (default) vale tambien con pro, salvo q
   Igual 'default en el original, pro en el migrado con el mismo literal: sigue falta' 'falta' $a.estado
 }
 
+$Pruebas['17 h) cache: si Maven falla dos veces seguidas, la segunda vuelve a lanzar Maven y a avisar de que los renombres no se midieron'] = {
+  $E = Nuevo-Escenario 'mm' @{ ($RR + 'application.properties') = $LegC + "spring.batch.initialize-schema=always`n" } @{ ($RR + 'application.yml') = $YmlC; 'src/main/java/com/acme/batch/Ajustes.java' = $JavaApp }
+  $m1 = Mide $E @{ C6_RC = '1'; C6_ERROR = 'no se resuelve com.acme:falsa:1.0' }
+  Igual 'la primera vez, una llamada a Maven' 1 (Llamadas-De $E.Llamadas).Count
+  Igual 'renombres no se pudo medir' 'no se pudo medir' $m1.Json.renombres.estado
+  Igual 'y avisa de los renombres sin medir' 1 @($m1.Avisos | Where-Object { $_ -like '*Renombres de Spring Boot 3 sin medir*' }).Count
+  $m2 = Mide $E @{ C6_RC = '1'; C6_ERROR = 'no se resuelve com.acme:falsa:1.0' }
+  Igual 'la segunda vez Maven se lanza otra vez' 2 (Llamadas-De $E.Llamadas).Count
+  Igual 'y vuelve a avisar de los renombres sin medir' 1 @($m2.Avisos | Where-Object { $_ -like '*Renombres de Spring Boot 3 sin medir*' }).Count
+  Comprueba 'y mide de nuevo: la consola repite los ficheros leidos' ($m2.Texto -like '*Ficheros leidos del original*') $m2.Texto
+  Igual 'renombres sigue sin poderse medir' 'no se pudo medir' $m2.Json.renombres.estado
+}
+
+$Pruebas['18 h) cache: la clave lleva la huella de propiedades.ps1; con otra version del script se mide de nuevo'] = {
+  $E = Nuevo-Escenario 'vs' @{ ($RR + 'application.properties') = $LegC } @{ ($RR + 'application.yml') = $YmlC; 'src/main/java/com/acme/batch/Ajustes.java' = $JavaApp }
+  # el JSON de la primera vez lo guarda "otra version" del script
+  $m1 = & { function Get-HuellaScriptPropiedades { return 'huella-de-otra-version' }; Mide $E }
+  Igual 'la primera vez, una llamada a Maven' 1 (Llamadas-De $E.Llamadas).Count
+  Comprueba 'deja su clave' ("$($m1.Json.clave)" -ne '')
+  $m2 = Mide $E
+  Comprueba 'con la huella de verdad, mide de nuevo: la consola repite los ficheros leidos' ($m2.Texto -like '*Ficheros leidos del original*') $m2.Texto
+  Comprueba 'y la clave es otra' ("$($m2.Json.clave)" -cne "$($m1.Json.clave)") "$($m2.Json.clave)"
+  Igual 'sin Maven otra vez (la cache de metadatos vale)' 1 (Llamadas-De $E.Llamadas).Count
+  $m3 = Mide $E
+  Igual 'con la misma version del script, la cache vale: solo la linea' 1 @($m3.Texto -split "`n" | Where-Object { $_ }).Count
+  Igual 'y la clave no cambia' "$($m2.Json.clave)" "$($m3.Json.clave)"
+}
+
 $Pruebas['14 nunca para: sin pom, sin original y con un fichero ilegible, el JSON se escribe y no hay excepcion'] = {
   $E = Nuevo-Escenario 'n' @{ ($RR + 'application.properties') = "app.a=1`n" } @{ ($RR + 'application.yml') = "app:`n  a: [`n" }
   $m = Mide $E
