@@ -1453,7 +1453,7 @@ function Get-CuerpoCorrecciones($D, $T, [string]$Cuerpo) {
 
 # ============================== LAS BUENAS PRACTICAS (PAGINA 5) ==============================
 # El orden de las areas y de los "que hago" es el de la maqueta: primero lo que tiene que hacer la persona.
-$AreasPractica = @('java21', 'boot3-batch5', 'lombok', 'arquitectura')
+$AreasPractica = @('java21', 'boot3-batch5', 'lombok', 'arquitectura', 'limpieza')
 $QueHagoPractica = @('mano', 'paso2', 'sonar', 'notoca')
 
 # Lo guardado antes del 20-11 trae los detectores pmd y spotbugs (y a veces sus incidencias): se quitaron y la pagina ya no los ensena. Su
