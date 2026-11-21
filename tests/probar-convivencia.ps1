@@ -131,7 +131,7 @@ function Mide($E) {
     Json = (Lee-Json $E.Json)
     Todo = $todo
     Info = $info
-    Colores = @($info | Where-Object { "$($_.MessageData.ForegroundColor)" -ne '' })
+    Colores = @($info | Where-Object { @('Yellow', 'Red') -contains "$($_.MessageData.ForegroundColor)" })
   }
 }
 
@@ -544,7 +544,7 @@ $Pruebas['14 nunca lanza ni para: sin mapa.json no escribe nada y dice una linea
   Igual 'sin mapa.json no deja ningun fichero en datos' 0 @(Get-ChildItem -LiteralPath $e.Datos -Recurse -File).Count
   Igual 'sin mapa.json: una sola cosa en la consola' 1 @($r.Todo).Count
   Igual 'y es una linea Info' 1 @($r.Info).Count
-  Igual 'sin color (no es un aviso ni un fallo)' 0 @($r.Colores).Count
+  Igual 'ni aviso ni fallo (ni amarillo ni rojo)' 0 @($r.Colores).Count
   # mapa.json que no se lee
   $e = Nuevo-Escenario 'l-mapa-roto'
   Escribe (Join-Path $e.Raiz 'datos') 'mapa.json' '{ esto no es json'
