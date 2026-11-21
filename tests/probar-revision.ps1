@@ -669,48 +669,8 @@ $Pruebas['22 j) revision.json: su forma, el orden de los hallazgos (unidad, fich
   Igual 'sin ninguna unidad: todo a cero y ningun hallazgo' '0|0|0|0|0' "$($v.unidades)|$($v.hechas)|$($v.atascadas)|$(@($v.hallazgos).Count)|$($v.descartados)"
 }
 
-# ---- (k) solo lee ----
-$Pruebas['23 k) Restore-ArbolRevision: lo seguido que cambio vuelve a HEAD y lo nuevo se borra, fuera de .rescate/; lo de .rescate/ se queda; avisa en una linea'] = {
-  $f = @{
-    ($P + 'A.java') = (Clase 'public class A' "  int a;`n")
-    ($P + 'B.java') = (Clase 'public class B' "  int b;`n")
-    ($P + 'C.java') = (Clase 'public class C' "  int c;`n")
-    ($P + 'D.java') = (Clase 'public class D' "  int d;`n")
-  }
-  $e = Nuevo-Escenario 'k' $f
-  $origA = Lee $e.Dir ($P + 'A.java')
-  $origC = Lee $e.Dir ($P + 'C.java')
-  Escribe $e.Dir ($P + 'A.java') ($origA + "  // la IA lo toco`n")
-  Remove-Item -LiteralPath (Get-Ruta $e.Dir ($P + 'B.java')) -Force
-  Escribe $e.Dir ($P + 'C.java') ($origC + "  // en el indice`n")
-  [void](GitEn $e.Dir @('add', '--', ($P + 'C.java')))
-  Escribe $e.Dir ($P + 'Nuevo.java') (Clase 'public class Nuevo')
-  Escribe $e.Dir 'src/main/java/com/acme/otro/Mas.java' 'class Mas {}'
-  Escribe $e.Dir ($P + 'Indice.java') (Clase 'public class Indice')
-  [void](GitEn $e.Dir @('add', '--', ($P + 'Indice.java')))
-  Escribe $e.Dir '.rescate/tareas/x.json' '{"hallazgos": []}'
-  Escribe $e.Dir '.rescate/otro.txt' 'se queda'
-  $out = @(Restore-ArbolRevision $e.Dir 6>&1)
-  $info = @($out | Where-Object { $_ -is [System.Management.Automation.InformationRecord] } | ForEach-Object { "$_" })
-  Igual 'A vuelve a HEAD' $origA (Lee $e.Dir ($P + 'A.java'))
-  Comprueba 'B, borrado, vuelve' (Test-Path -LiteralPath (Get-Ruta $e.Dir ($P + 'B.java')))
-  Igual 'C, cambiado y en el indice, vuelve a HEAD' $origC (Lee $e.Dir ($P + 'C.java'))
-  Comprueba 'Nuevo, sin seguimiento, se borra' (-not (Test-Path -LiteralPath (Get-Ruta $e.Dir ($P + 'Nuevo.java'))))
-  Comprueba 'Mas, nuevo en otra carpeta, tambien' (-not (Test-Path -LiteralPath (Get-Ruta $e.Dir 'src/main/java/com/acme/otro/Mas.java')))
-  Comprueba 'Indice, nuevo y en el indice, se borra' (-not (Test-Path -LiteralPath (Get-Ruta $e.Dir ($P + 'Indice.java'))))
-  Comprueba 'y ya no esta en el indice' (@((GitEn $e.Dir @('ls-files', '--', ($P + 'Indice.java'))) -split "`n" | Where-Object { $_ }).Count -eq 0)
-  Comprueba 'lo de .rescate/ se queda' ((Test-Path -LiteralPath (Get-Ruta $e.Dir '.rescate/tareas/x.json')) -and (Test-Path -LiteralPath (Get-Ruta $e.Dir '.rescate/otro.txt')))
-  $sucio = @((GitEn $e.Dir @('status', '--porcelain', '--untracked-files=all')) -split "`n" | Where-Object { $_ -and $_ -notmatch ' \.rescate/' })
-  Igual 'git status no ve nada fuera de .rescate/' 0 $sucio.Count
-  Igual 'una sola linea de aviso' 1 $info.Count
-  foreach ($r in @('A.java', 'B.java', 'C.java', 'Nuevo.java', 'Mas.java', 'Indice.java')) { Comprueba "el aviso nombra $r" ($info.Count -gt 0 -and $info[0].Contains($r)) ($info -join ' / ') }
-  Comprueba 'el aviso no nombra .rescate/' ($info.Count -gt 0 -and -not $info[0].Contains('.rescate'))
-  $otra = @(Restore-ArbolRevision $e.Dir 6>&1)
-  Igual 'con el arbol limpio no dice nada' 0 $otra.Count
-}
-
 # ---- (l) los ficheros nuevos ----
-$Pruebas['24 l) revision.ps1: solo funciones, cabecera, ASCII, nada de PowerShell 7 y ninguna funcion repetida; la plantilla y las tres lineas de tareas.ps1'] = {
+$Pruebas['23 l) revision.ps1: solo funciones, cabecera, ASCII, nada de PowerShell 7 y ninguna funcion repetida; la plantilla y las tres lineas de tareas.ps1'] = {
   $ruta = Join-Path $raiz 'revision.ps1'
   $codigo = [System.IO.File]::ReadAllText($ruta)
   Comprueba 'empieza con su cabecera de ayuda' ($codigo.TrimStart().StartsWith('<#'))
@@ -731,9 +691,10 @@ $Pruebas['24 l) revision.ps1: solo funciones, cabecera, ASCII, nada de PowerShel
   $repetidas = @($suyas | Where-Object { $deMas -contains $_ })
   Comprueba 'define funciones' ($suyas.Count -gt 0)
   Comprueba 'ninguna esta repetida en otro .ps1 de la raiz' ($repetidas.Count -eq 0) ($repetidas -join ', ')
-  foreach ($n in @('Get-ReglasRevision', 'Get-UnidadesRevision', 'Get-TareasRevision', 'Test-Revision', 'Save-Revision', 'Get-LineaRevision', 'Get-AvisoRevision', 'Restore-ArbolRevision')) {
+  foreach ($n in @('Get-ReglasRevision', 'Get-UnidadesRevision', 'Get-TareasRevision', 'Test-Revision', 'Save-Revision', 'Get-LineaRevision', 'Get-AvisoRevision')) {
     Comprueba "define $n" ($suyas -contains $n)
   }
+  Comprueba 'no define Restore-ArbolRevision: tras cada ronda lo deshace Invoke-Fase de migracion.ps1' ($suyas -notcontains 'Restore-ArbolRevision')
   # la plantilla
   $md = Get-Ruta $raiz 'tareas/revision-flujo.md'
   Comprueba 'existe tareas/revision-flujo.md' (Test-Path -LiteralPath $md)
@@ -752,6 +713,88 @@ $Pruebas['24 l) revision.ps1: solo funciones, cabecera, ASCII, nada de PowerShel
   Comprueba 'una en Get-VariablesPrompt' (@($lineas | Where-Object { $_ -match "^\s*'revision-flujo' \{.*Get-VariablesRevision" }).Count -eq 1)
   Comprueba 'una en Test-Salida' (@($lineas | Where-Object { $_ -match "^\s*'revision-flujo' \{ return \(Test-Revision" }).Count -eq 1)
   Comprueba 'y una en Invoke-Ronda, con el esfuerzo de lectura' (@($lineas | Where-Object { $_ -match 'EsfuerzoLectura' }).Count -eq 1)
+}
+
+# ---- (m) arreglos de la revision antes de juntarla ----
+# Un fichero con dos steps y un @Bean que revisan las dos unidades: lo que dice la IA del bean sale en las dos.
+$JavaDoble = @'
+package com.acme.recibos;
+
+public class DobleConfig {
+  @Bean
+  public Step primero(JobRepository repo, PlatformTransactionManager tm) {
+    return new StepBuilder("primero", repo).tasklet(uno(), tm).build();
+  }
+
+  @Bean
+  public Step segundo(JobRepository repo, PlatformTransactionManager tm) {
+    return new StepBuilder("segundo", repo).tasklet(dos(), tm).build();
+  }
+
+  @Bean
+  @StepScope
+  public FlatFileItemReader<Recibo> lector() {
+    return new FlatFileItemReader<>();
+  }
+}
+'@
+
+$Pruebas['24 m) hallazgos repetidos: un fichero en dos steps da el mismo hallazgo dos veces; revision.json y la consola dejan uno por regla, fichero y linea, el de la primera unidad'] = {
+  $f = $P + 'DobleConfig.java'
+  $resp = @{
+    'revision-primero.json' = (Salida @(
+        (Hallazgo @{ fichero = $f; linea = 16; cita = 'public FlatFileItemReader<Recibo> lector()'; texto = 'De primero.' }),
+        (Hallazgo @{ regla = 'SB-TRANSACCION'; fichero = $f; linea = 6; cita = '.tasklet(uno(), tm)'; texto = 'Uno.' })))
+    'revision-segundo.json' = (Salida @(
+        (Hallazgo @{ fichero = $f; linea = 16; cita = 'public FlatFileItemReader<Recibo> lector()'; texto = 'De segundo.' }),
+        (Hallazgo @{ regla = 'SB-TRANSACCION'; fichero = $f; linea = 11; cita = '.tasklet(dos(), tm)'; texto = 'Dos.' })))
+  }
+  $e = Nuevo-Escenario 'm1' @{ $f = $JavaDoble } $resp
+  $t = @(Pasada $e)
+  Igual 'las dos unidades, hechas' 'hecha,hecha' (($t | ForEach-Object { $_.estado }) -join ',')
+  Igual 'cada una conserva sus dos hallazgos en su tarea' '2,2' (($t | ForEach-Object { @($_.resultado.hallazgos).Count }) -join ',')
+  $j = Lee-Json $e.Json
+  Igual 'revision.json: tres hallazgos, el repetido una vez' 3 @($j.hallazgos).Count
+  Igual 'en orden de unidad y de linea' 'primero:6,primero:16,segundo:11' ((@($j.hallazgos) | ForEach-Object { ($_.unidad -replace '^revision-', '') + ':' + $_.linea }) -join ',')
+  Igual 'el repetido es el de la primera unidad' 'De primero.' @($j.hallazgos | Where-Object { $_.linea -eq 16 })[0].texto
+  Igual 'la consola cuenta los que quedan' 'Revision por flujos: 2 hechas, 0 atascadas, 0 pendientes; 3 hallazgos (0 descartados por no poder comprobarlos).' (Get-LineaRevision $t)
+}
+
+$JavaCadena = @'
+package com.acme.recibos;
+
+public class CadenaConfig {
+  @Bean
+  public Step paso(JobRepository repo, PlatformTransactionManager tm) {
+    return new StepBuilder("paso", repo)
+        .tasklet(tarea("x)", ')'), tm)
+        .listener(new Oido())
+        .build();
+  }
+}
+'@
+
+$Pruebas['25 m) un ) dentro de una cadena o de un caracter de un argumento no corta la cadena del step: el listener que viene despues entra en la unidad'] = {
+  $e = Nuevo-Escenario 'm2' @{ ($P + 'CadenaConfig.java') = $JavaCadena; ($P + 'Oido.java') = (Clase 'public class Oido implements StepExecutionListener') }
+  $u = Unidad-De (Get-UnidadesRevision $e.Dir 'main' $true @()) 'paso'
+  Igual 'el step lleva el fichero de Oido' 'CadenaConfig,Oido' (Cortos $u.ficheros)
+  Igual 'y tarea queda sin resolver' 'tarea' ($u.sinResolver -join ',')
+}
+
+$Pruebas['26 m) los .java de src/test no son unidad ni entran en un step, aunque tengan papel (implements Tasklet, @Configuration)'] = {
+  $paso = "  public Step paso(JobRepository repo, PlatformTransactionManager tm) {`n    return new StepBuilder(`"paso`", repo).tasklet(new AlgoTest(), tm).build();`n  }`n"
+  $e = Nuevo-Escenario 'm3' @{
+    ($P + 'PasoConPrueba.java') = (Clase 'public class PasoConPrueba' $paso)
+    'src/test/java/com/acme/recibos/AlgoTest.java' = (Clase 'public class AlgoTest implements Tasklet')
+    'src/test/java/com/acme/recibos/PruebaConfig.java' = "package com.acme.recibos;`n`n@Configuration`npublic class PruebaConfig {`n}`n"
+  }
+  foreach ($todo in @($false, $true)) {
+    $u = @(Get-UnidadesRevision $e.Dir 'main' $todo @())
+    Igual "Todo=${todo}: ninguna unidad lleva un fichero de src/test" 0 @($u | ForEach-Object { $_.ficheros } | Where-Object { $_ -match 'src/test/' }).Count
+    $s = Unidad-De $u 'paso'
+    Igual "Todo=${todo}: el step solo lleva su fichero" 'PasoConPrueba' (Cortos $s.ficheros)
+    Igual "Todo=${todo}: AlgoTest queda sin resolver" 'AlgoTest' ($s.sinResolver -join ',')
+  }
 }
 
 Invoke-Banco $Pruebas 'tests/probar-revision.ps1'
