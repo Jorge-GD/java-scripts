@@ -937,7 +937,8 @@ if ($Cierre -and -not $hayWt) {
   }
   if (-not $juntar) { Stop-Arranque "No esta la carpeta de rescate ($dirWt) ni su rama ($ramaRescate): no queda nada que juntar. Si ya lo juntaste a mano, no hace falta -Cierre. Para rehacer los arreglos, relanza la pasada sin -Cierre." }
   if ([int]((Invoke-Git $MigradoRoot @('rev-list', '--count', "$RamaMigrado..$juntar")).Salida -join '') -eq 0) {
-    Info "Ya esta todo en tu rama: la de rescate ($ramaRescate) no tiene nada que no tengas. No hace falta -Cierre."
+    if ([string]$previo.respuesta -ceq 'parar') { Info 'La pasada no corrigio nada: contestaste "parar". Para corregir, lanza la pasada con -Si; despues, -Cierre.' }
+    else { Info "Tu rama ya tiene todo lo de la de rescate ($ramaRescate): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre." }
     exit 0
   }
   if ($recrear) {
