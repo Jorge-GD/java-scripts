@@ -7475,5 +7475,498 @@ $Pruebas['c6 (j) propiedades: un lanzamiento deja datos/propiedades.json y la li
   Comprueba 'con las mismas cuentas' ($l2.Count -eq 1 -and $l2[0] -match '^Propiedades: 3 del original: 1 iguales, 0 por variable, 0 renombradas, 1 faltan, 1 distintas, 0 ya no existen;') ($l2 -join ' | ')
 }
 
+# ============================ C4: migracion.ps1 -Cierre ============================
+# El mismo sistema con el motor de mentira de c4: el de siempre y, ademas, el diagnostico del cierre que diga la orden (ver tests/falsos/c4-rescate.ps1).
+function C4-Sistema {
+  $sis = Join-Path $Dir 'sistema-motor-c4'
+  if (-not (Test-Path -LiteralPath $sis)) {
+    Copy-Item -LiteralPath (Split-Path -Parent (Sistema-Motor)) -Destination $sis -Recurse
+    Move-Item -LiteralPath (Join-Path $sis 'rescate.ps1') -Destination (Join-Path $sis 'rescate-motor.ps1')
+    Copy-Item -LiteralPath (Join-Path $falsos 'c4-rescate.ps1') -Destination (Join-Path $sis 'rescate.ps1')
+  }
+  return (Join-Path $sis 'migracion.ps1')
+}
+
+# La orden del motor falso para la pasada: un arreglo en src/main (con un TODO, que el cierre cuenta como limpieza) en uno o mas commits de rescate.
+function C4-Orden([string[]]$Commits = @('rescate(estructura): lote 1, hallazgos 3 a 1')) {
+  $o = Orden-Base
+  $o.ficheros = [ordered]@{ 'src/main/java/com/acme/life/Arreglo.java' = "package com.acme.life;`n`n/** Arreglo. */`npublic class Arreglo {`n    // TODO: revisar este arreglo`n}`n" }
+  $o.commits = $Commits
+  return $o
+}
+
+# La prueba en local de mentira: el job del batch (se llama batch, como su pom) con N iguales y M distintos. Con distintos sale con 2, como la de verdad.
+function C4-Local([int]$Iguales = 2, [int]$Distintos = 0, [string]$Job = 'batch') {
+  $casos = @()
+  for ($i = 1; $i -le ($Iguales + $Distintos); $i++) {
+    $res = 'igual'
+    if ($i -gt $Iguales) { $res = 'distinto' }
+    $casos += , (Caso-Local $Job ('caso-0' + $i) ('Caso ' + $i) $res)
+  }
+  $codigo = 0
+  if ($Distintos -gt 0) { $codigo = 2 }
+  return [ordered]@{
+    codigo = $codigo; salida = @('LOCAL-C4')
+    json = [ordered]@{
+      version = 1; modelo = 'modelo-x'; commitMigrado = 'sin-fijar'; arneses = [ordered]@{ original = 'hecha'; migrado = 'hecha' }
+      jobs = @([ordered]@{ job = $Job; casos = ($Iguales + $Distintos); iguales = $Iguales; distintos = $Distintos; sinProbar = 0 }); casos = $casos; noPromete = 'Lo que esto no promete: nada.'
+    }
+  }
+}
+
+# Una pasada corregida y probada en local: sale con 0, con la fase hecha y la prueba en local hecha. Como la de verdad, prueba-local.json lleva el
+# commit del worktree que probo (el falso no lo sabe: se lo pone el banco).
+function C4-Pasada([string]$Nombre, $Orden = $null, $Local = $null) {
+  $e = Nuevo-Escenario $Nombre @('Clase1')
+  if ($null -eq $Orden) { $Orden = C4-Orden }
+  if ($null -eq $Local) { $Local = C4-Local }
+  $r = Migra-Motor $e $Orden (Corrige $e) (C4-Sistema) $Local
+  $s = Estado $e
+  Comprueba "$Nombre : la pasada sale con 0, con la fase hecha y la prueba en local hecha" ($r.Codigo -eq 0 -and $s.fase -eq 'hecha' -and $s.pruebaLocal.resultado -eq 'hecha') (Cola $r.Salida)
+  $f = Get-Ruta $e.Out 'datos/prueba-local.json'
+  $j = Lee-Json $f
+  Add-Member -InputObject $j -NotePropertyName commitMigrado -NotePropertyValue (GitEn $e.Wt @('rev-parse', 'HEAD')) -Force
+  Guarda-Json $f $j
+  return $e
+}
+
+# El diagnostico del cierre que da el motor falso: por defecto, el B que ya estaba antes y un aviso; con $CommitEn, ademas hace un commit en esa carpeta.
+function C4-Orden-Cierre($Hallazgos = $null, [string]$Md = 'compila: SI | tests: OK', [string]$CommitEn = '', [string]$RamaEn = '', [int]$Falla = 0) {
+  if ($null -eq $Hallazgos) { $Hallazgos = @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'), (Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests')) }
+  $c = [ordered]@{ md = (Md-Diagnostico $Md); hallazgos = @($Hallazgos) }
+  if ($CommitEn) { $c.commitEn = $CommitEn }
+  if ($RamaEn) { $c.ramaEn = $RamaEn }
+  if ($Falla -ne 0) { $c.falla = $Falla }
+  return [ordered]@{ cierre = $c }
+}
+
+# migracion.ps1 -Cierre con el motor falso. Sin $Local, la prueba en local no tiene orden (y sale con 1, un fallo).
+function C4-Cierre($E, $Orden = $null, $Local = $null, [string[]]$Mas = @()) {
+  if ($null -eq $Orden) { $Orden = C4-Orden-Cierre }
+  return (Migra-Motor $E $Orden (@('-Legacy', $E.Legacy, '-Migrado', $E.Migrado, '-Plantilla', $E.Plantilla, '-Cierre') + $Mas) (C4-Sistema) $Local)
+}
+
+# Un commit en tu carpeta (el migrado): devuelve su hash.
+function C4-Commit-Usuario($E, [string]$Rel, [string]$Texto) {
+  Escribe $E.Migrado $Rel $Texto
+  [void](GitEn $E.Migrado @('add', '--', $Rel))
+  [void](GitEn $E.Migrado @('commit', '-q', '-m', 'cambio tuyo'))
+  return (GitEn $E.Migrado @('rev-parse', 'HEAD'))
+}
+
+function C4-Es-Ancestro($E, [string]$Ancestro, [string]$De) {
+  & git -C $E.Migrado merge-base --is-ancestor $Ancestro $De
+  return ($LASTEXITCODE -eq 0)
+}
+function C4-Head($E) { return (GitEn $E.Migrado @('rev-parse', 'HEAD')) }
+function C4-Head-Wt($E) { return (GitEn $E.Wt @('rev-parse', 'HEAD')) }
+$C4Clase = "package com.acme.life;`n`n/** Tuya. */`npublic class Tuya {`n}`n"
+
+$Pruebas['c4 (a) pasada corregida y probada con todo igual: tu rama avanza por fast-forward hasta el HEAD de rescate, estado.cierre lleva antes, sha, hecho y deshacer, la consola la linea de deshacer y no hay ninguna llamada a Copilot'] = {
+  $e = C4-Pasada 'c4-a'
+  $antes = C4-Head $e
+  $rescate = C4-Head-Wt $e
+  Comprueba 'el rescate tiene un commit mas que tu rama' ($antes -ne $rescate)
+  $copilot = (Llamadas $e.Wt).Count
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'tu rama esta en el HEAD de rescate' $rescate (C4-Head $e)
+  Igual 'y sigue siendo main' 'main' (GitEn $e.Migrado @('rev-parse', '--abbrev-ref', 'HEAD'))
+  Comprueba 'el arreglo esta en tu carpeta' (Test-Path -LiteralPath (Get-Ruta $e.Migrado 'src/main/java/com/acme/life/Arreglo.java'))
+  Igual 'el worktree sigue en su HEAD' $rescate (C4-Head-Wt $e)
+  Igual 'ninguna llamada nueva a Copilot' $copilot (Llamadas $e.Wt).Count
+  $s = Estado $e
+  Comprueba 'estado.cierre es un objeto' ($null -ne $s.cierre) (Cola $r.Salida)
+  if ($null -eq $s.cierre) { return }
+  Igual 'cierre.antes es tu HEAD de antes' $antes $s.cierre.antes
+  Igual 'cierre.sha es el HEAD de rescate' $rescate $s.cierre.sha
+  Igual 'cierre.hecho' 'True' "$($s.cierre.hecho)"
+  Igual 'cierre.juntada: no hubo que juntar' 'False' "$($s.cierre.juntada)"
+  Igual 'cierre.deshacer' ('git -C "' + $e.Migrado + '" reset --hard ' + $antes) $s.cierre.deshacer
+  Comprueba 'cierre.cuando es una hora' (Es-Hora $s.cierre.cuando) "$($s.cierre.cuando)"
+  Comprueba 'los avisos llevan el error que ya estaba (B) y la limpieza (el TODO)' ((@($s.cierre.avisos) -join ' | ') -match 'estructura: src/main/java/B\.java' -and (@($s.cierre.avisos) -join ' | ') -match 'limpieza: src/main/java/com/acme/life/Arreglo\.java') (@($s.cierre.avisos) -join ' | ')
+  Igual 'la pasada sigue hecha, con fin y sin parada' 'hecha||' "$($s.fase)|$($s.parada)|"
+  Comprueba 'y fin sigue siendo una hora' (Es-Hora $s.fin) "$($s.fin)"
+  Igual 'la prueba en local de la pasada se conserva' 'hecha' $s.pruebaLocal.resultado
+  Comprueba 'la consola: lo juntado, como deshacerlo y que el push es tuyo' ($r.Salida -match 'Juntado: 1 commits' -and $r.Salida.Contains('Para deshacerlo: ' + $s.cierre.deshacer) -and $r.Salida.Contains('No hago push: el push es tuyo')) (Cola $r.Salida)
+  foreach ($f in @('hallazgos-cierre.json', 'diagnostico-cierre.md', 'practicas-cierre.json', 'cobertura-cierre.json')) { Comprueba "deja datos/$f" (Test-Path -LiteralPath (Get-Ruta $e.Out "datos/$f")) }
+}
+
+$Pruebas['c4 (b) un caso distinto: para con cierre-pendiente, con el caso y el comando, y ni tu rama ni la de rescate se mueven'] = {
+  $e = C4-Pasada 'c4-b' $null (C4-Local 1 1)
+  $antes = C4-Head $e
+  $rescate = C4-Head-Wt $e
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Igual 'parada cierre-pendiente' 'cierre-pendiente' $s.parada.motivo
+  Comprueba 'el texto lleva el caso y su comando' ($s.parada.detalle -match 'distinto-corregido' -and $s.parada.detalle -match 'prueba-local\.ps1') "$($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Igual 'la de rescate no se mueve' $rescate (C4-Head-Wt $e)
+  Comprueba 'no hay estado.cierre' ($null -eq $s.cierre)
+}
+
+$Pruebas['c4 (c) un job de mapa.json sin casos en prueba-local.json: para y no mueve nada'] = {
+  $e = C4-Pasada 'c4-c' $null (C4-Local 2 0 'otroJob')
+  $antes = C4-Head $e
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-prueba-local que nombra el job sin casos' ($s.parada.motivo -eq 'cierre-prueba-local' -and $s.parada.detalle -match 'batch') "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+}
+
+$Pruebas['c4 (d) un commit en src/main del worktree despues de la prueba en local: para con "el codigo ha cambiado" y no mueve nada'] = {
+  $e = C4-Pasada 'c4-d'
+  $antes = C4-Head $e
+  Escribe $e.Wt 'src/main/java/com/acme/life/Nueva.java' $C4Clase.Replace('Tuya', 'Nueva')
+  [void](GitEn $e.Wt @('add', '--', 'src/main/java/com/acme/life/Nueva.java'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'a mano'))
+  $rescate = C4-Head-Wt $e
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-prueba-local con el texto de que el codigo ha cambiado' ($s.parada.motivo -eq 'cierre-prueba-local' -and $s.parada.detalle.Contains('el codigo ha cambiado desde la prueba en local: relanza la pasada')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Igual 'el worktree conserva su commit' $rescate (C4-Head-Wt $e)
+}
+
+$Pruebas['c4 (e) un cambio sin commit en tu carpeta: para con "haz commit o stash" y no cambia nada'] = {
+  $e = C4-Pasada 'c4-e'
+  $antes = C4-Head $e
+  $mio = "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int mio = 1;`n}`n"
+  Escribe $e.Migrado 'src/main/java/com/acme/life/App.java' $mio
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-cambios-sin-commit con el fichero y el consejo' ($s.parada.motivo -eq 'cierre-cambios-sin-commit' -and $s.parada.detalle -match 'App\.java' -and $s.parada.detalle.Contains('haz commit o stash y vuelve a lanzar')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Igual 'tu cambio sigue ahi' $mio (Lee $e.Migrado 'src/main/java/com/acme/life/App.java')
+}
+
+$Pruebas['c4 (f) tu rama tiene un commit nuevo que no choca: se junta con --no-ff en el worktree, tu rama acaba con tu commit y los de rescate como ancestros, el fast-forward funciona y, sin tocar src/main, no se repite la prueba en local'] = {
+  $e = C4-Pasada 'c4-f'
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'docs/NOTAS.md' "notas`n"
+  $pruebas = @(Llamadas-Local $e).Count
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $fin = C4-Head $e
+  Comprueba 'tu rama avanza' ($fin -ne $tuyo) (Cola $r.Salida)
+  Igual 'el worktree esta en el mismo commit' $fin (C4-Head-Wt $e)
+  Igual 'es un merge: el commit y sus dos padres' 3 @((GitEn $e.Migrado @('rev-list', '--parents', '-n', '1', 'HEAD')) -split ' ').Count
+  Comprueba 'tu commit es ancestro' (C4-Es-Ancestro $e $tuyo $fin)
+  Comprueba 'el commit de rescate es ancestro' (C4-Es-Ancestro $e $rescate $fin)
+  Comprueba 'tu fichero y el arreglo estan en tu carpeta' ((Test-Path -LiteralPath (Get-Ruta $e.Migrado 'docs/NOTAS.md')) -and (Test-Path -LiteralPath (Get-Ruta $e.Migrado 'src/main/java/com/acme/life/Arreglo.java')))
+  $s = Estado $e
+  Comprueba 'cierre: hecho, juntada y antes es tu commit' ($s.cierre.hecho -eq $true -and $s.cierre.juntada -eq $true -and $s.cierre.antes -eq $tuyo -and $s.cierre.sha -eq $fin) (ConvertTo-Json -InputObject $s.cierre -Compress)
+  Igual 'la prueba en local no se repite (solo tocaste docs)' $pruebas @(Llamadas-Local $e).Count
+}
+
+$Pruebas['c4 (f2) tu commit nuevo toca src/main: tras juntar se repite la prueba en local y, si todo sale igual, tu rama avanza'] = {
+  $e = C4-Pasada 'c4-f2'
+  [void](C4-Commit-Usuario $e 'src/main/java/com/acme/life/Tuya.java' $C4Clase)
+  $r = C4-Cierre $e $null (C4-Local 3 0)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la prueba en local se llama otra vez (2 en total)' 2 @(Llamadas-Local $e).Count
+  Comprueba 'la consola lo cuenta' ($r.Salida -match 'repito la prueba en local') (Cola $r.Salida)
+  Comprueba 'tu rama avanza hasta el worktree' ((C4-Head $e) -eq (C4-Head-Wt $e) -and (Estado $e).cierre.hecho -eq $true) (Cola $r.Salida)
+}
+
+$Pruebas['c4 (f3) la prueba en local repetida tras juntar da un caso distinto: para con cierre-puertas, el worktree vuelve a donde estaba y tu rama no se mueve'] = {
+  $e = C4-Pasada 'c4-f3'
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'src/main/java/com/acme/life/Tuya.java' $C4Clase
+  $r = C4-Cierre $e $null (C4-Local 2 1)
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-puertas que habla de lo distinto' ($s.parada.motivo -eq 'cierre-puertas' -and $s.parada.detalle -match 'distintos') "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'el worktree vuelve a su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'tu rama sigue en tu commit' $tuyo (C4-Head $e)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+# Hace que tu commit y el arreglo toquen la misma linea de App.java: el arreglo pone "int a = 1" y tu commit "int a = 2".
+function C4-Orden-Choque {
+  $o = C4-Orden
+  $o.ficheros['src/main/java/com/acme/life/App.java'] = "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int a = 1;`n}`n"
+  return $o
+}
+$C4AppTuya = "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int a = 2;`n}`n"
+
+$Pruebas['c4 (g) conflicto al juntar: el merge se aborta, el worktree vuelve a su HEAD y queda limpio, tu rama no se mueve y la parada cierre-conflicto lleva el fichero y el texto para Copilot'] = {
+  $e = C4-Pasada 'c4-g' (C4-Orden-Choque)
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'src/main/java/com/acme/life/App.java' $C4AppTuya
+  $r = C4-Cierre $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el worktree esta en su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'sin merge a medias' (-not (Test-Path -LiteralPath (Join-Path (GitEn $e.Wt @('rev-parse', '--absolute-git-dir')) 'MERGE_HEAD')))
+  Igual 'tu rama sigue en tu commit' $tuyo (C4-Head $e)
+  $s = Estado $e
+  Igual 'parada cierre-conflicto' 'cierre-conflicto' $s.parada.motivo
+  Comprueba 'el texto lleva el fichero, tu rama, la carpeta de rescate y pide respetar los dos lados' ($s.parada.detalle.Contains('src/main/java/com/acme/life/App.java') -and $s.parada.detalle.Contains('main') -and $s.parada.detalle.Contains($e.Wt) -and $s.parada.detalle -match 'cambios de los dos lados' -and $s.parada.detalle.Contains('-Cierre')) $s.parada.detalle
+  Comprueba 'la ayuda para pegar en Copilot lo lleva' ($s.parada.ayuda.Contains('App.java')) $s.parada.ayuda
+}
+
+$Pruebas['c4 (g2) tras resolver el conflicto en el worktree (con Copilot o a mano), -Cierre sigue: el cierre-conflicto de antes no estorba, se repite la prueba en local y tu rama avanza'] = {
+  $e = C4-Pasada 'c4-g2' (C4-Orden-Choque)
+  $tuyo = C4-Commit-Usuario $e 'src/main/java/com/acme/life/App.java' $C4AppTuya
+  [void](C4-Cierre $e)
+  & git -C $e.Wt merge main 2>&1 | Out-Null
+  Escribe $e.Wt 'src/main/java/com/acme/life/App.java' "package com.acme.life;`n`n/** Arranque. */`npublic class App {`n    int a = 2;`n    int b = 1;`n}`n"
+  [void](GitEn $e.Wt @('add', '--', 'src/main/java/com/acme/life/App.java'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'merge resuelto'))
+  $listo = C4-Head-Wt $e
+  $pruebas = @(Llamadas-Local $e).Count
+  $r = C4-Cierre $e $null (C4-Local 2 0)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'tu rama esta en el commit del merge resuelto' $listo (C4-Head $e)
+  Igual 'se repite la prueba en local: el codigo ya no es el que se probo' ($pruebas + 1) @(Llamadas-Local $e).Count
+  $s = Estado $e
+  Comprueba 'cierre hecho y la parada de antes ya no esta' ($s.cierre.hecho -eq $true -and $null -eq $s.parada) (Cola $r.Salida)
+}
+
+$Pruebas['c4 (h) el diagnostico del cierre dice compila: NO despues de juntar: para con cierre-puertas, el worktree vuelve a su HEAD y tu rama no se mueve'] = {
+  $e = C4-Pasada 'c4-h'
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'docs/NOTAS.md' "notas`n"
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: NO')
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-puertas que dice que no compila' ($s.parada.motivo -eq 'cierre-puertas' -and $s.parada.detalle -match 'no compila') "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'el worktree vuelve a su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Igual 'tu rama sigue en tu commit' $tuyo (C4-Head $e)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+$Pruebas['c4 (h2) los tests fallan en el cierre y antes no fallaban: para; si ya fallaban, no'] = {
+  $e = C4-Pasada 'c4-h2'
+  $antes = C4-Head $e
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: FALLAN')
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'cierre-puertas: los tests fallan' ((Estado $e).parada.motivo -eq 'cierre-puertas' -and (Estado $e).parada.detalle -match 'tests fallan') "$((Estado $e).parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  # si el de antes tambien fallaba, no es peor
+  $o = C4-Orden
+  $o.antes.md = Md-Diagnostico 'compila: SI | tests: FALLAN'
+  $f = C4-Pasada 'c4-h2-ya' $o
+  $r = C4-Cierre $f (C4-Orden-Cierre $null 'compila: SI | tests: FALLAN')
+  Igual 'con tests que ya fallaban sale con 0' 0 $r.Codigo
+  Comprueba 'y tu rama avanza' ((C4-Head $f) -eq (C4-Head-Wt $f) -and (Estado $f).cierre.hecho -eq $true) (Cola $r.Salida)
+}
+
+$Pruebas['c4 (i) un error de hexagonal nuevo en el cierre para; el mismo error si estaba en hallazgos-antes.json no para y sale en avisos'] = {
+  $hex = Hallazgo 'hexagonal' 'error' 'src/main/java/com/acme/life/Arreglo.java' 3 'el dominio importa infraestructura'
+  $e = C4-Pasada 'c4-i-nuevo'
+  $antes = C4-Head $e
+  $r = C4-Cierre $e (C4-Orden-Cierre @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'), $hex))
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'cierre-puertas que nombra el error' ($s.parada.motivo -eq 'cierre-puertas' -and $s.parada.detalle -match 'hexagonal' -and $s.parada.detalle -match 'importa infraestructura') "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  # el mismo error en hallazgos-antes.json (con otra linea: no cuenta) no para
+  $o = C4-Orden
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' 'src/main/java/com/acme/life/Arreglo.java' 7 'el dominio importa infraestructura'))
+  $f = C4-Pasada 'c4-i-antes' $o
+  $r = C4-Cierre $f (C4-Orden-Cierre @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'), $hex))
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $f
+  Comprueba 'cierre hecho' ($s.cierre.hecho -eq $true) (Cola $r.Salida)
+  Comprueba 'y el error sale en avisos, en el estado y en la consola' ((@($s.cierre.avisos) -join ' | ') -match 'hexagonal: src/main/java/com/acme/life/Arreglo\.java' -and $r.Salida -match 'hexagonal: src/main/java/com/acme/life/Arreglo\.java') (@($s.cierre.avisos) -join ' | ')
+  # un error de un area que no es de las puertas (paridad) tampoco para: es un aviso
+  $g = C4-Pasada 'c4-i-paridad'
+  $r = C4-Cierre $g (C4-Orden-Cierre @((Hallazgo 'paridad' 'error' 'src/main/java/com/acme/life/Arreglo.java' 3 'otra firma')))
+  Igual 'un error de paridad nuevo no para' 0 $r.Codigo
+  Comprueba 'y sale en avisos' ((@((Estado $g).cierre.avisos) -join ' | ') -match 'paridad:') (@((Estado $g).cierre.avisos) -join ' | ')
+}
+
+$Pruebas['c4 (t) un error de una puerta que ya estaba una vez y el cierre trae dos veces (mismo area, fichero y detalle, otra linea): el repetido es nuevo, para con cierre-puertas y tu rama no se mueve; con las mismas dos veces antes y despues no para'] = {
+  $hex = 'el dominio importa infraestructura'
+  $fich = 'src/main/java/com/acme/life/Arreglo.java'
+  $b = Hallazgo 'estructura' 'error' 'src/main/java/B.java' 9 'clase suelta B'
+  $o = C4-Orden
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' $fich 7 $hex))
+  $e = C4-Pasada 'c4-t-nuevo' $o
+  $antes = C4-Head $e
+  $r = C4-Cierre $e (C4-Orden-Cierre @($b, (Hallazgo 'hexagonal' 'error' $fich 3 $hex), (Hallazgo 'hexagonal' 'error' $fich 11 $hex)))
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'cierre-puertas con UN error nuevo de hexagonal, en ese fichero' ($s.parada.motivo -eq 'cierre-puertas' -and $s.parada.detalle.Contains('error nuevo: hexagonal: ' + $fich) -and ([regex]::Matches($s.parada.detalle, 'error nuevo: ')).Count -eq 1) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+  # las mismas dos veces antes y despues: no hay nada nuevo
+  $o2 = C4-Orden
+  $o2.antes.hallazgos = @($o2.antes.hallazgos) + @((Hallazgo 'hexagonal' 'error' $fich 7 $hex), (Hallazgo 'hexagonal' 'error' $fich 8 $hex))
+  $f = C4-Pasada 'c4-t-igual' $o2
+  $r = C4-Cierre $f (C4-Orden-Cierre @($b, (Hallazgo 'hexagonal' 'error' $fich 3 $hex), (Hallazgo 'hexagonal' 'error' $fich 11 $hex)))
+  Igual 'con las mismas dos veces sale con 0' 0 $r.Codigo
+  Comprueba 'y el cierre esta hecho' ((Estado $f).cierre.hecho -eq $true) (Cola $r.Salida)
+}
+
+$Pruebas['c4 (u) correcciones.json: un hallazgo repetido (mismo area, fichero y detalle) que antes estaba dos veces y despues una cuenta una vez como resuelto'] = {
+  $e = Nuevo-Escenario 'c4-u' @('Clase1')
+  $o = Orden-Base
+  $o.antes.hallazgos = @($o.antes.hallazgos) + @((Hallazgo 'estructura' 'error' 'src/main/java/B.java' 8 'clase suelta B'))
+  $r = Migra-Motor $e $o (Corrige $e)
+  Igual 'sale con 0' 0 $r.Codigo
+  $c = Lee-Json (Get-Ruta $e.Out 'datos/correcciones.json')
+  Comprueba 'hay correcciones.json' ($null -ne $c) (Cola $r.Salida)
+  if ($null -eq $c) { return }
+  Igual 'resueltos: A, el secreto y una de las dos B (la otra sigue, solo cambio de linea)' 'clase suelta A|secreto en claro|clase suelta B' (@($c.resueltos | ForEach-Object { $_.Detalle }) -join '|')
+}
+
+$Pruebas['c4 (j) un commit de rescate que toca src/main/resources/application.yml sale en revisar, en el estado y en la consola, y uno que no lo toca no'] = {
+  $o = C4-Orden @('rescate(config): secreto en claro', 'rescate(estructura): lote 2, hallazgos 2 a 1')
+  $o.ficheros['src/main/resources/application.yml'] = "batch:`n  chunk: 10`n"
+  $e = C4-Pasada 'c4-j' $o
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $s = Estado $e
+  $rev = @($s.cierre.revisar)
+  Igual 'revisar lleva un commit' 1 $rev.Count
+  Comprueba 'el de la configuracion, con su hash y su asunto' ($rev.Count -eq 1 -and $rev[0].asunto -eq 'rescate(config): secreto en claro' -and $rev[0].hash.Length -ge 7) (ConvertTo-Json -InputObject $s.cierre.revisar -Compress)
+  Comprueba 'la consola dice que los revises antes de hacer push' ($r.Salida -match 'tocan la configuracion: revisalos antes de hacer push' -and $r.Salida -match 'rescate\(config\): secreto en claro') (Cola $r.Salida)
+  # sin commits que toquen la configuracion, revisar esta vacio y la consola no lo dice
+  $f = C4-Pasada 'c4-j-nada'
+  $r2 = C4-Cierre $f
+  Igual 'sin configuracion revisar esta vacio' 0 @((Estado $f).cierre.revisar).Count
+  Comprueba 'y la consola no lo dice' ($r2.Salida -notmatch 'tocan la configuracion') (Cola $r2.Salida)
+}
+
+$Pruebas['c4 (k) relanzar la pasada normal despues del cierre: el commit que junto el cierre no es un cambio tuyo, no se aparta nada (ninguna carpeta anterior-*), el motor de correccion no se lanza otra vez y estado.cierre se conserva'] = {
+  $e = C4-Pasada 'c4-k'
+  $o = C4-Orden
+  $r = C4-Cierre $e
+  Igual 'el cierre sale con 0' 0 $r.Codigo
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $sha = (Estado $e).cierre.sha
+  Comprueba 'el cierre dejo estado.cierre' ($null -ne $sha -and $sha -eq (C4-Head $e)) (Cola $r.Salida)
+  $r2 = Migra-Motor $e $o (Corrige $e) (C4-Sistema)
+  Igual 'relanzar sale con 0' 0 $r2.Codigo
+  Igual 'ninguna carpeta anterior-*' 0 @(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos') -Directory -Filter 'anterior-*').Count
+  Igual 'un solo fix: la correccion no se repite' 1 (Llamadas-Motor $e 'fix').Count
+  Igual 'ningun diagnostico nuevo' $diag (Llamadas-Motor $e 'diagnostico').Count
+  $s = Estado $e
+  Comprueba 'estado.cierre sigue, hecho y con el mismo sha' ($s.cierre.hecho -eq $true -and $s.cierre.sha -eq $sha) (ConvertTo-Json -InputObject $s.cierre -Compress)
+  Igual 'tu rama sigue en el sha del cierre' $sha (C4-Head $e)
+  # un commit tuyo despues del cierre si es un cambio: la pasada lo ve y apartaria lo de antes
+  [void](C4-Commit-Usuario $e 'docs/NOTAS.md' "notas`n")
+  $r3 = Migra-Motor $e $o (Corrige $e) (C4-Sistema)
+  Comprueba 'con un commit tuyo nuevo, el diagnostico se rehace y lo de antes se aparta' (@(Get-ChildItem -LiteralPath (Get-Ruta $e.Out 'datos') -Directory -Filter 'anterior-*').Count -eq 1) (Cola $r3.Salida)
+}
+
+$Pruebas['c4 (l) -Cierre dos veces: la segunda dice "Ya esta juntado" con como deshacer, sale con 0 y no lanza Maven ni el motor'] = {
+  $e = C4-Pasada 'c4-l'
+  $r = C4-Cierre $e
+  Igual 'la primera sale con 0' 0 $r.Codigo
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $mvn = @(Llamadas-Mvn $e).Count
+  $s = Estado $e
+  $r2 = C4-Cierre $e
+  Igual 'la segunda sale con 0' 0 $r2.Codigo
+  Comprueba 'dice que ya esta juntado, con el sha y la linea de deshacer' ($r2.Salida.Contains('Ya esta juntado (' + $s.cierre.sha.Substring(0, 7) + ')') -and $r2.Salida.Contains($s.cierre.deshacer)) (Cola $r2.Salida)
+  Igual 'ningun diagnostico nuevo' $diag (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'ningun Maven nuevo' $mvn @(Llamadas-Mvn $e).Count
+  Igual 'tu rama sigue en el sha' $s.cierre.sha (C4-Head $e)
+}
+
+$Pruebas['c4 (m) -Cierre con -SoloInforme, -Si, -Practicas, -Reglas o -Reintentar: Stop-Arranque "-Cierre va solo" (exit 1)'] = {
+  $e = Nuevo-Escenario 'c4-m' @('Clase1')
+  foreach ($f in @('-SoloInforme', '-Si', '-Practicas', '-Reglas', '-Reintentar')) {
+    $r = Migra $e @('-Legacy', $e.Legacy, '-Migrado', $e.Migrado, '-Plantilla', $e.Plantilla, '-Cierre', $f)
+    Comprueba "-Cierre $f : sale con 1 y dice que va solo" ($r.Codigo -eq 1 -and $r.Salida.Contains('-Cierre va solo')) "$($r.Codigo): $(Cola $r.Salida)"
+  }
+}
+
+$Pruebas['c4 (n) la rama de rescate no tiene commits que juntar: "No hay nada que juntar" y sale con 0, sin parada; sin pasada previa, para con "lanza antes la pasada"'] = {
+  $o = Orden-Base
+  $e = C4-Pasada 'c4-n' $o
+  $antes = C4-Head $e
+  $r = C4-Cierre $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que no hay nada que juntar' ($r.Salida -match 'No hay nada que juntar') (Cola $r.Salida)
+  $s = Estado $e
+  Comprueba 'sin parada y sin estado.cierre' ($null -eq $s.parada -and $null -eq $s.cierre)
+  Igual 'tu rama no se mueve' $antes (C4-Head $e)
+  $sin = Nuevo-Escenario 'c4-n-sin' @('Clase1')
+  $r = C4-Cierre $sin
+  Comprueba 'sin pasada previa sale con 1 y dice que se lance antes' ($r.Codigo -eq 1 -and $r.Salida.Contains('No hay nada que juntar: lanza antes la pasada')) "$($r.Codigo): $(Cola $r.Salida)"
+  Comprueba 'y no crea el worktree' (-not (Test-Path -LiteralPath $sin.Wt))
+}
+
+$Pruebas['c4 (o) alguien avanza tu rama mientras se miden las puertas: el fast-forward no se puede, para con cierre-no-ff y tu carpeta no cambia'] = {
+  $e = C4-Pasada 'c4-o'
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: OK' $e.Migrado)
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Igual 'parada cierre-no-ff' 'cierre-no-ff' $s.parada.motivo
+  Comprueba 'tu rama tiene el commit de ese alguien y no el arreglo' ((GitEn $e.Migrado @('log', '-1', '--format=%s')) -eq 'alguien avanza tu rama' -and -not (Test-Path -LiteralPath (Get-Ruta $e.Migrado 'src/main/java/com/acme/life/Arreglo.java'))) (Cola $r.Salida)
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+$Pruebas['c4 (q) tu carpeta cambia de rama mientras se miden las puertas (otra rama, ancestro de la de rescate): para con cierre-no-ff, ni esa rama ni la tuya se mueven y el worktree queda donde estaba'] = {
+  $e = C4-Pasada 'c4-q'
+  $antes = C4-Head $e
+  $rescate = C4-Head-Wt $e
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: OK' '' $e.Migrado)
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'tu carpeta esta en otra rama (el cambio de rama ocurrio)' 'otra' (GitEn $e.Migrado @('rev-parse', '--abbrev-ref', 'HEAD'))
+  $s = Estado $e
+  Comprueba 'parada cierre-no-ff que dice que tu carpeta ya no esta en tu rama' ($s.parada.motivo -eq 'cierre-no-ff' -and $s.parada.detalle.Contains('Tu carpeta ya no esta en tu rama (otra; antes main): no he movido nada.')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'la rama otra no se mueve' $antes (GitEn $e.Migrado @('rev-parse', 'otra'))
+  Igual 'tu rama (main) no se mueve' $antes (GitEn $e.Migrado @('rev-parse', 'main'))
+  Igual 'el worktree sigue en su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+$Pruebas['c4 (r) un arnes de la prueba en local sin hacer (atascado, o ausente) aunque todos los jobs salgan iguales: para con cierre-prueba-local, dice que arnes no esta hecho y tu rama no se mueve'] = {
+  foreach ($caso in @(@('original', 'atascada'), @('migrado', 'ausente'))) {
+    $cual = $caso[0]
+    $e = C4-Pasada ('c4-r-' + $cual)
+    $f = Get-Ruta $e.Out 'datos/prueba-local.json'
+    $j = Lee-Json $f
+    if ($caso[1] -eq 'ausente') { $j.arneses.PSObject.Properties.Remove($cual) } else { $j.arneses.$cual = 'atascada' }
+    Guarda-Json $f $j
+    $antes = C4-Head $e
+    $rescate = C4-Head-Wt $e
+    $r = C4-Cierre $e
+    Igual "$cual $($caso[1]): sale con 2" 2 $r.Codigo
+    $s = Estado $e
+    $otro = @('original', 'migrado') | Where-Object { $_ -ne $cual }
+    Comprueba "$cual $($caso[1]): parada cierre-prueba-local que dice que el arnes del $cual no esta hecho y no el del $otro" ($s.parada.motivo -eq 'cierre-prueba-local' -and $s.parada.detalle.Contains("el arnes del $cual no esta hecho") -and -not $s.parada.detalle.Contains("el arnes del $otro")) "$($s.parada.motivo): $($s.parada.detalle)"
+    Igual "$cual $($caso[1]): tu rama no se mueve" $antes (C4-Head $e)
+    Igual "$cual $($caso[1]): el worktree no se mueve" $rescate (C4-Head-Wt $e)
+    Comprueba "$cual $($caso[1]): no hay cierre hecho" ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+  }
+}
+
+$Pruebas['c4 (s) tu rama avanzo (se junta en el worktree) y el motor del diagnostico se cae: para con cierre-motor, el worktree vuelve a su HEAD de antes sin merge a medias ni cambios y tu rama no se mueve'] = {
+  $e = C4-Pasada 'c4-s'
+  $rescate = C4-Head-Wt $e
+  $tuyo = C4-Commit-Usuario $e 'docs/NOTAS.md' "notas`n"
+  $diag = (Llamadas-Motor $e 'diagnostico').Count
+  $r = C4-Cierre $e (C4-Orden-Cierre $null 'compila: SI | tests: OK' '' '' 3)
+  Igual 'sale con 2' 2 $r.Codigo
+  $s = Estado $e
+  Comprueba 'parada cierre-motor con el codigo de salida del motor' ($s.parada.motivo -eq 'cierre-motor' -and $s.parada.detalle.Contains('ha salido con codigo 3')) "$($s.parada.motivo): $($s.parada.detalle)"
+  Igual 'el diagnostico del cierre se lanzo una vez (la junta en el worktree ya se habia hecho)' ($diag + 1) (Llamadas-Motor $e 'diagnostico').Count
+  Igual 'tu rama no se mueve' $tuyo (C4-Head $e)
+  Igual 'el worktree vuelve a su HEAD de antes' $rescate (C4-Head-Wt $e)
+  Igual 'y limpio' '' (GitEn $e.Wt @('status', '--porcelain'))
+  Comprueba 'no hay cierre hecho' ($null -eq $s.cierre -or $s.cierre.hecho -ne $true)
+}
+
+$Pruebas['c4 (p) FLUJO.md: la regla 1 dice que tu rama solo avanza con -Cierre, por fast-forward y despues de las puertas, y se puede deshacer; y hay un paso que cuenta el cierre'] = {
+  $f = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'FLUJO.md'))
+  $regla = [regex]::Match($f, '(?m)^1\. .*$').Value
+  Comprueba 'la regla 1 nombra -Cierre, el fast-forward y las puertas' ($regla -match 'migracion\.ps1 -Cierre' -and $regla -match 'fast-forward' -and $regla -match 'puertas' -and $regla -match 'deshacer') $regla
+  Comprueba 'el flujo cuenta las precondiciones, las puertas y el no hacer push' ($f -match 'cierre-conflicto' -and $f -match 'cierre-puertas' -and $f -match 'No hace push') 'faltan cierre-conflicto, cierre-puertas o No hace push'
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

@@ -13,7 +13,7 @@ En los ejemplos:
 
 ## Las dos reglas que lo hacen seguro
 
-1. **Tu carpeta y tu rama no se tocan.** Los arreglos van a una copia al lado, `C:\ruta\migrado-rescate`, con su rama `rescate/...`. Tú decides cuándo traerlos con un `git merge`. La única excepción es `prueba-local.ps1 -Deshacer` cuando no existe la carpeta `-rescate` (ver el paso 3).
+1. **Tu rama solo avanza con `migracion.ps1 -Cierre`, por fast-forward y después de las puertas.** Se puede deshacer con la línea que te da. Hasta entonces los arreglos viven en una copia al lado, `C:\ruta\migrado-rescate`, con su rama `rescate/...`, y tu carpeta no se toca. La única excepción es `prueba-local.ps1 -Deshacer` cuando no existe la carpeta `-rescate` (ver el paso 3).
 2. **Nada hace push.** Subir es siempre cosa tuya.
 
 ## El mapa
@@ -24,7 +24,7 @@ En los ejemplos:
 | 1 | `migracion.ps1 -SoloInforme` | Al empezar con un batch | Las 5 páginas del informe, sin cambiar código |
 | 2 | `migracion.ps1 -Si` | Para arreglar lo que dice el informe | Commits en la rama `rescate/...` y la página 4 |
 | 3 | Va dentro del paso 2; `prueba-local.ps1 -Desde` si sale «distinto» | Después de cada corrección | La página 3: original y migrado ejecutados con las mismas entradas |
-| 4 | `git merge` | Cuando estás conforme | Los arreglos en tu rama |
+| 4 | `migracion.ps1 -Cierre` | Cuando estás conforme y la prueba en local sale igual | Los arreglos en tu rama, y la línea para deshacerlo |
 | 5 | `rescate.ps1 -Sonar` y `rescate.ps1 -Cobertura` | Cuando tienes el xlsx de Sonar, o la cobertura no llega al 80 % | Commits en `rescate/...`, `.rescate\sonar-faltan.md` y `.rescate\cobertura-faltan.md` |
 | 6 | Tú, en pre | Antes de dar el batch por bueno | El guion de cada job, en la página 1 |
 | 7 | `git push` y Sonar en tu CI | Al final | Un xlsx nuevo: vuelves al paso 5 |
@@ -177,16 +177,44 @@ Después de cualquier cambio (tuyo, de Sonar, de la cobertura o de un merge), la
 - **Si existe `C:\ruta\migrado-rescate`, prueba esa copia y no tu rama.** Si ya trajiste sus cambios (paso 4), bórrala antes con `git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate`.
 - La respuesta sale en la consola y en `migracion-<batch>\datos\prueba-local.json`. Para ver también la página 3 al día, relanza `migracion.ps1 -SoloInforme` con las mismas opciones del paso 1.
 
-## Paso 4. Revisar y traer los cambios
+## Paso 4. Revisar y juntar los cambios con tu rama
+
+Primero mira lo que se ha hecho:
 
 ```powershell
 git -C C:\ruta\migrado log --oneline <tu-rama>..<rama-rescate>
 git -C C:\ruta\migrado diff --stat <tu-rama>...<rama-rescate>
-git -C C:\ruta\migrado merge <rama-rescate>
-git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate
 ```
 
-El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'rescate/...'`). Si lo has perdido: `git -C C:\ruta\migrado worktree list`, o `rama` en `migracion-<batch>\datos\estado.json`. Si un commit no te convence, quítalo antes del merge con `git -C C:\ruta\migrado-rescate revert <commit>`.
+El nombre de la rama de rescate sale por consola al crearla (`Rama nueva: 'rescate/...'`). Si lo has perdido: `git -C C:\ruta\migrado worktree list`, o `rama` en `migracion-<batch>\datos\estado.json`. Si un commit no te convence, quítalo con `git -C C:\ruta\migrado-rescate revert <commit>` y, si ya hiciste la prueba en local, hazla otra vez.
+
+Cuando estés conforme, lanza el cierre. Va solo (no admite `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas` ni `-Reintentar`), no usa IA y no pregunta nada:
+
+```powershell
+.\migracion.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -Cierre
+```
+
+Qué hace, en este orden. Para en la primera cosa que falla, con una parada `cierre-<motivo>` y un texto que dice qué hacer; hasta el último paso no mueve ni tu rama ni la de rescate.
+
+1. **Comprueba que está todo probado.** La pasada tiene que estar corregida y acabada. La prueba en local tiene que estar hecha, con algún caso igual y ninguno distinto en cada job, y sobre el código de ahora. Y tu carpeta no puede tener cambios sin commit (haz commit o `git stash`). Si la rama de rescate no tiene commits que no estén ya en la tuya, dice «No hay nada que juntar» y sale con 0.
+2. **Junta en la carpeta de rescate, nunca en la tuya.** Si tu rama ha avanzado desde la pasada, hace allí el `git merge`. Si choca, lo deshace todo y para con `cierre-conflicto`, con un texto para pegar en Copilot: que junte tu rama en la carpeta de rescate, respetando los cambios de los dos lados. Cuando esté hecho (con commit), lanza otra vez `-Cierre`. La IA no resuelve conflictos por su cuenta.
+3. **Pasa las puertas sobre lo juntado**, con el mismo diagnóstico de la pasada: tiene que compilar, los tests no pueden fallar si en tu rama no fallaban y no puede haber ningún error nuevo (frente a tu rama) en `build`, `estructura`, `hexagonal`, `ficheros`, `config` ni `tests`. Si lo juntado ha cambiado el código, repite la prueba en local y tiene que seguir saliendo igual. Si falla una puerta (`cierre-puertas`), la carpeta de rescate vuelve a donde estaba. Lo que no para (los errores que ya tenías, las otras áreas y la limpieza: marcas pendientes, código comentado, clases sin uso) sale como aviso en la consola y en `estado.json`, en `cierre.avisos`.
+4. **Avanza tu rama** con `git merge --ff-only`, y solo si es un fast-forward. Antes apunta en `estado.json`, en `cierre`, el commit de tu rama de antes y la línea para deshacerlo. Esa línea sale también por consola: `git -C "C:\ruta\migrado" reset --hard <commit-de-antes>`.
+5. **Te dice qué revisar antes del push**: los commits que tocan `src/main/resources` (la configuración) salen en la consola y en `cierre.revisar`. No hace push: el push es siempre tuyo.
+
+Relanzar la pasada no deshace el cierre. Y lanzar `-Cierre` otra vez con tu rama ya en el commit del cierre solo dice «Ya está juntado» y cómo deshacerlo, sin lanzar Maven.
+
+| Motivo | Qué ha pasado | Qué haces |
+|---|---|---|
+| `cierre-pendiente` | La pasada no está lista: sigue corriendo, está parada, hay casos distintos, faltan correcciones... | El texto trae el caso y el comando que toca. Hazlo y vuelve a lanzar `-Cierre` |
+| `cierre-prueba-local` | No hay prueba en local, un job no tiene ningún caso igual o tiene distintos, o el código ha cambiado desde que se probó | Relanza la pasada (sin `-SinPruebaLocal`) |
+| `cierre-cambios-sin-commit` | Tu carpeta tiene cambios sin commit | `git add` y `git commit`, o `git stash`, y vuelve a lanzar `-Cierre` |
+| `cierre-conflicto` | Tu rama y la de rescate cambian lo mismo | Pega el texto en Copilot (o resuélvelo tú en `C:\ruta\migrado-rescate` y haz commit) y vuelve a lanzar `-Cierre` |
+| `cierre-puertas` | Lo juntado no compila, hace fallar tests, trae un error nuevo, o la prueba en local repetida no sale igual | Mira el texto: dice cuál. Arregla en la carpeta de rescate (o relanza la pasada) y vuelve a lanzar `-Cierre` |
+| `cierre-no-ff` | Tu rama ha avanzado mientras se medían las puertas | Vuelve a lanzar `-Cierre` |
+| `cierre-motor` | El diagnóstico del cierre ha fallado | Pega el mensaje y las últimas líneas de `registros\diagnostico-cierre.log` en el chat |
+
+Después, si ya no la quieres, quita la carpeta de rescate: `git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate`.
 
 ## Paso 5. Sonar
 
@@ -291,6 +319,7 @@ Al acabar, el motor los lista como «lo único que te toca mirar» y sale con 2.
 | Deshacer el último lote | `.\rescate.ps1 -Modo deshacer -Repo C:\ruta\migrado`. Solo mientras exista `C:\ruta\migrado-rescate`: después del paso 4 no lo uses, porque actuaría sobre tu rama |
 | Quitar un commit concreto | `git -C C:\ruta\migrado-rescate revert <commit>` |
 | Empezar de cero los arreglos | `git -C C:\ruta\migrado worktree remove --force C:\ruta\migrado-rescate`, `git -C C:\ruta\migrado branch -D <rama-rescate>`. Al relanzar con `-Si`, la corrección se hace otra vez porque sus commits ya no están en la carpeta de rescate (y se aparta la de antes en `migracion-<batch>\datos\anterior-<commit>`). Tu rama queda como estaba |
+| Deshacer el cierre | La línea `git -C "C:\ruta\migrado" reset --hard <commit-de-antes>` que sale por consola al juntar, y que también está en `migracion-<batch>\datos\estado.json` (`cierre.deshacer`). Relanzar la pasada no lo deshace |
 | Rehacer el informe desde cero | Borra `C:\ruta\migrado\migracion-<batch>\`. Se vuelve a pagar toda la lectura |
 | Rehacer un caso de la prueba en local | Borra su carpeta en `migracion-<batch>\prueba-local\casos\` |
 
@@ -302,6 +331,6 @@ Pon en `%USERPROFILE%\.rescate\ajustes.json` la lista `CopilotArgs` sin ese par�
 
 | Script | 0 | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|---|
-| `migracion.ps1` | Bien, o tope de tiempo | No pudo arrancar | Se ha parado (ver la portada) | No pudo copiar tus cambios sin commit: haz commit y relanza | |
+| `migracion.ps1` | Bien, o tope de tiempo. Con `-Cierre`: juntado, ya estaba juntado o no había nada que juntar | No pudo arrancar (con `-Cierre`, tampoco hay pasada previa) | Se ha parado (ver la portada) | No pudo copiar tus cambios sin commit: haz commit y relanza | |
 | `rescate.ps1` | Bien | Falta algo o un parámetro está mal | Atascados, no compila o demasiados lotes deshechos | Git no pudo hacer el commit | Ha cambiado la referencia o el original |
 | `prueba-local.ps1` | Todo lo comparado es igual | No ha podido | Hay casos distintos | | |
