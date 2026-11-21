@@ -199,6 +199,8 @@ $Hoy = @()          # las fechas de la ejecucion (Get-Hoy): Get-Resultado las po
 # Windows PowerShell 5.1 no pasa de 260 letras en una ruta (MAX_PATH: 259 y el fin de cadena). La misma regla vale en todos los sistemas, para
 # que se pruebe en Linux y no cambie de una maquina a otra (ver Get-RelSalida).
 $LimiteRuta = 259
+# Si se esta en Windows: lo lee Get-RutaLarga (es una variable para que las pruebas lo simulen en Linux).
+$SoWindows = ([System.IO.Path]::DirectorySeparatorChar -eq '\')
 # La version del formato de lo que se guarda en prueba-local\salidas (los nombres de sus ficheros, ver Get-RelSalida): va en la clave del original
 # (Get-ClaveBaseOriginal). Sube cada vez que cambia ese formato: lo guardado con otro se ejecuta otra vez, una vez, y no se compara con lo de ahora.
 $VersionSalidas = 2
@@ -282,10 +284,22 @@ function Remove-Carpeta([string]$Dir) {
   }
 }
 
+# La ruta de origen $Ruta (la completa, FullName) para leer un fichero: en Windows, si pasa de $LimiteRuta letras, con el prefijo \\?\ (o \\?\UNC\ y la ruta sin
+# las dos barras, si es de red), que no tiene el limite de 259 letras de Windows PowerShell 5.1 (y .NET Framework 4.6.2 o posterior lo admite). Con \\?\ Windows no
+# normaliza la ruta: las / pasan a \. Sin cambio si es corta, si ya lleva el prefijo o si no se esta en Windows ($EsWindows, por defecto $SoWindows).
+function Get-RutaLarga([string]$Ruta, [bool]$EsWindows = $SoWindows) {
+  if (-not $EsWindows -or $Ruta.Length -le $LimiteRuta -or $Ruta.StartsWith('\\?\')) { return $Ruta }
+  $r = $Ruta -replace '/', '\'
+  if ($r.StartsWith('\\')) { return '\\?\UNC\' + $r.Substring(2) }
+  return '\\?\' + $r
+}
+
 function Copy-Fichero([string]$De, [string]$A) {
   $d = Split-Path $A -Parent
   if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
-  Copy-Item -LiteralPath $De -Destination $A -Force
+  $origen = Get-RutaLarga $De
+  if ($origen -ceq $De) { Copy-Item -LiteralPath $De -Destination $A -Force }
+  else { [System.IO.File]::Copy($origen, $A, $true) }   # un origen de mas de 259 letras: Copy-Item de Windows PowerShell 5.1 no lo lee, File.Copy con \\?\ si
 }
 
 # Copia los ficheros de la carpeta $De (con sus subcarpetas) a $A, pisando los que haya. Sin $De, nada.
