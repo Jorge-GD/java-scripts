@@ -95,7 +95,9 @@ QUE HACE
   Rutas largas: un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto (20 letras, ~ y un hash), el mismo en todos los
   lados; uno que ni asi cabe no se guarda y su caso sale distinto, con ese fichero. Cuando un lado de un caso acaba FAILED, EXCEPCION o sin
   estado.txt, el resultado (campo fallos), la consola, la pagina 3 y el prompt de -Reparar llevan la causa que dejo su Maven (nunca la de una linea
-  de aviso: TRACE, DEBUG, INFO, WARN o WARNING); sin causa, la consola dice en que registros\mvn-<n>-<que>.log mirar, y el fallo lleva 'registro'.
+  de aviso: TRACE, DEBUG, INFO, WARN o WARNING, salvo el aviso de Spring 'cancelling refresh attempt: <excepcion>' de un contexto que no arranca; sin
+  excepcion, el mensaje del '[ERROR] Failed to execute goal'; sin estado.txt y con Maven en 0, que el test no ha dejado salida); sin causa, la consola dice
+  en que registros\mvn-<n>-<que>.log mirar, y el fallo lleva 'registro'.
   Con -Job, el JSON lleva ademas lo de los demas jobs tal como estaba (casos, jobs, reparaciones y culpables) si se probo con el mismo
   commit del migrado y del original; con otro commit se descarta y lo dice. La consola solo ensena los jobs de ahora.
 
@@ -158,6 +160,8 @@ $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cad
 $MarcaNo = '<!--no-->'
 # El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
 $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
+# La causa de un lado sin estado.txt cuyo Maven acabo con 0 y sin otra causa (Get-Fallos): el test no encontro la carpeta del caso (arnes\migrado, regla 1).
+$MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso (mira si ve su carpeta en src\test\resources\prueba-local)'
 $NoPromete = 'Lo que esto no promete: las entradas son inventadas y lo de fuera (base de datos, SFTP, correo, HTTP) esta simulado. La conexion de verdad se prueba en pre, con el guion de cada job.'
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Latin = [System.Text.Encoding]::GetEncoding(28591)
@@ -370,9 +374,13 @@ function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Qu
 # copia $Dir escritos desde $Desde (los de antes pueden ser de otro caso), en el primero que tenga <<< ERROR! o <<< FAILURE!; si no hay, el
 # ultimo 'Caused by:' de $Salida (la de Maven: surefire recorta la traza del informe y Spring la escribe entera en la salida); y si
 # tampoco, la primera linea con texto tras la marca del informe; y si tampoco, la primera linea de $Salida con una excepcion
-# (<paquete>.<Clase>Exception o ...Error), desde la clase. Un informe que no se puede leer cuenta como si no estuviera.
+# (<paquete>.<Clase>Exception o ...Error), desde la clase, o con la marca 'cancelling refresh attempt: ' (lo que va despues); y si tampoco, el mensaje de la
+# primera linea '[ERROR] Failed to execute goal ... on project <p>: <mensaje> -> [Help 1]' de Maven (sin el -> [Help 1]). Un informe que no se puede leer
+# cuenta como si no estuviera.
 # Una linea de la salida solo da la causa si no es de aviso (Test-SinNivelDeAviso, sobre lo que hay antes de la causa): Spring escribe como WARN las
-# excepciones que ve al mirar las condiciones de una libreria y sigue, y la causa de verdad esta en una linea ERROR (o sin nivel) mas abajo.
+# excepciones que ve al mirar las condiciones de una libreria y sigue, y la causa de verdad esta en una linea ERROR (o sin nivel) mas abajo. La unica
+# linea WARN que si da causa es la de Spring que dice que el contexto no arranca ('Exception encountered during context initialization - cancelling
+# refresh attempt: <excepcion>'): es la causa de verdad, y a veces la unica que escribe.
 function Get-CausaMaven([string]$Dir, [DateTime]$Desde, [string[]]$Salida) {
   $causa = ''
   $primera = ''
@@ -396,9 +404,18 @@ function Get-CausaMaven([string]$Dir, [DateTime]$Desde, [string[]]$Salida) {
   }
   if (-not $causa) { $causa = $primera }
   if (-not $causa) {
+    $marcaContexto = 'cancelling refresh attempt: '
     foreach ($x in @($Salida)) {
+      $dondeMarca = ([string]$x).IndexOf($marcaContexto, [StringComparison]::Ordinal)
+      if ($dondeMarca -ge 0) { $causa = ([string]$x).Substring($dondeMarca + $marcaContexto.Length); break }
       $m = [regex]::Match([string]$x, '\b(?:[A-Za-z_$][\w$]*\.)+[A-Za-z_$][\w$]*(?:Exception|Error)\b')
       if ($m.Success -and (Test-SinNivelDeAviso ([string]$x).Substring(0, $m.Index))) { $causa = ([string]$x).Substring($m.Index); break }
+    }
+  }
+  if (-not $causa.Trim()) {
+    foreach ($x in @($Salida)) {
+      $m = [regex]::Match([string]$x, '\[ERROR\]\s+Failed to execute goal\b.*?\bon project \S+?:\s+(.+?)(?:\s+->\s+\[Help \d+\])?\s*$')
+      if ($m.Success) { $causa = $m.Groups[1].Value; break }
     }
   }
   $causa = $causa.Trim()
@@ -544,7 +561,7 @@ function Get-CausaLado([string]$Lado, [string]$Job, [string]$Caso) {
 }
 
 # Los lados de un caso que acaban mal (original y $Nombre, el migrado): estado=FAILED, estado=EXCEPCION o sin estado.txt, cada uno con su causa
-# (la del Maven de esa ejecucion, Get-CausaLado) y su registro (el mvn-*.log de esa ejecucion, relativo a prueba-local, haya causa o no; '' si el lado
+# (la del Maven de esa ejecucion, Get-CausaLado; sin estado.txt, sin causa y con Maven en 0, $MotivoMavenSinSalida) y su registro (el mvn-*.log de esa ejecucion, relativo a prueba-local, haya causa o no; '' si el lado
 # no se ha ejecutado ahora: un original reutilizado). Es lo que lleva el resultado de un caso en 'fallos', fuera de las carpetas que se comparan.
 function Get-Fallos([string]$Nombre, [string]$Job, [string]$Caso) {
   $fallos = @()
@@ -558,8 +575,11 @@ function Get-Fallos([string]$Nombre, [string]$Job, [string]$Caso) {
     $nombreLado = 'migrado'
     if ($lado -ceq 'original') { $nombreLado = 'original' }
     $registro = ''
-    if ($script:Maven["$lado|$Job|$Caso"]) { $registro = [string]$script:Maven["$lado|$Job|$Caso"].Registro }
-    $fallos += [ordered]@{ lado = $nombreLado; estado = $estado; causa = (Get-CausaLado $lado $Job $Caso); registro = $registro }
+    $mvn = $script:Maven["$lado|$Job|$Caso"]
+    if ($mvn) { $registro = [string]$mvn.Registro }
+    $causa = Get-CausaLado $lado $Job $Caso
+    if (-not $causa -and $estado -ceq 'sin estado.txt' -and $mvn -and $mvn.Codigo -eq 0) { $causa = $MotivoMavenSinSalida }
+    $fallos += [ordered]@{ lado = $nombreLado; estado = $estado; causa = $causa; registro = $registro }
   }
   return $fallos
 }
@@ -610,7 +630,11 @@ function Invoke-Lote($Lote, [string]$Esfuerzo) {
     if ($c.Codigo -ne 0 -or $c.Agotado) { $script:Racha++ } else { $script:Racha = 0 }
   }
   if ($script:Racha -ge [int]$Cfg.FallosSeguidos) {
-    Stop-Arranque ("Copilot no responde: $($script:Racha) llamadas seguidas han fallado. La ultima: " + (Get-UltimaLinea $ll[-1].Texto) + "`nMira que Copilot funciona (sesion, cuota, red) y vuelve a lanzar el mismo comando: lo hecho se conserva.")
+    # Una linea 'error: option ...' de la ultima llamada es Copilot rechazando los argumentos que le pasa el script: el fallo es nuestro, no de su sesion, cuota o red
+    $rechazo = @(@($ll[-1].Texto -split "`r?`n") | Where-Object { $_.Trim() -cmatch '^error: option' } | Select-Object -First 1)
+    $consejo = 'Mira que Copilot funciona (sesion, cuota, red) y vuelve a lanzar el mismo comando: lo hecho se conserva.'
+    if ($rechazo.Count -gt 0) { $consejo = 'Copilot rechaza los argumentos que le pasa el script (es un fallo del script, no de Copilot): ' + (Get-UltimaLinea $rechazo[0]) + "`nCuando se arregle, vuelve a lanzar el mismo comando: lo hecho se conserva." }
+    Stop-Arranque ("Copilot no responde: $($script:Racha) llamadas seguidas han fallado. La ultima: " + (Get-UltimaLinea $ll[-1].Texto) + "`n" + $consejo)
   }
   return $ll
 }
@@ -2234,22 +2258,33 @@ function Get-TareaReparar($C, $R, $S) {
 
 # Ejecuta en la copia la suite de tests unitarios, sin el arnes ni la regresion (Surefire sin **/PruebaLocalTest* ni **/RegresionLocalTest*,
 # que solo valen tras el arnes, y sin parar por los fallos), y cuenta lo
-# que dicen sus TEST-*.xml: Fallos (failures + errors), Ejecutados (tests - skipped) y Nombres (los tests que fallan). Con Motivo, Maven
-# no ha podido (no compila, se paso del tope...).
+# que dicen sus TEST-*.xml: Fallos (failures + errors), Ejecutados (tests - skipped), Nombres (los tests que fallan) y Mensaje (por que falla el primero:
+# la primera linea de su message o, si esta vacio, la primera con texto del cuerpo de su <failure> o <error>; 300 letras como mucho; '' si no dice nada).
+# Con Motivo, Maven no ha podido (no compila, se paso del tope...).
 function Measure-Tests([string]$Que) {
   $excluir = Join-Path $Local 'reparar-excluir.txt'
   [System.IO.File]::WriteAllText($excluir, "**/PruebaLocalTest*`n**/RegresionLocalTest*`n", $Utf8)
   $informes = Join-Ruta $CopiaMig 'target/surefire-reports'
   Remove-Carpeta $informes
   $r = Invoke-Maven $CopiaMig $false @('test', "-Dsurefire.excludesFile=$excluir", '-Dmaven.test.failure.ignore=true') $Que
-  $m = [pscustomobject]@{ Motivo = ''; Fallos = 0; Ejecutados = 0; Nombres = @() }
+  $m = [pscustomobject]@{ Motivo = ''; Fallos = 0; Ejecutados = 0; Nombres = @(); Mensaje = '' }
   if ($r.Codigo -ne 0 -or $r.Tope) { $m.Motivo = "Los tests unitarios no se pueden ejecutar. Maven dice:`n" + (Get-FalloMaven $r); return $m }
   if (-not (Test-Path -LiteralPath $informes)) { return $m }
   foreach ($f in @(Get-ChildItem -LiteralPath $informes -File -Filter 'TEST-*.xml')) {
     $x = ([xml][System.IO.File]::ReadAllText($f.FullName, $Utf8)).DocumentElement
     $m.Fallos += [int]$x.GetAttribute('failures') + [int]$x.GetAttribute('errors')
     $m.Ejecutados += [int]$x.GetAttribute('tests') - [int]$x.GetAttribute('skipped')
-    foreach ($t in @($x.SelectNodes('testcase[failure or error]'))) { $m.Nombres += ($t.GetAttribute('classname') + '.' + $t.GetAttribute('name')) }
+    foreach ($t in @($x.SelectNodes('testcase[failure or error]'))) {
+      $m.Nombres += ($t.GetAttribute('classname') + '.' + $t.GetAttribute('name'))
+      if ($m.Nombres.Count -eq 1) {
+        $fe = $t.SelectSingleNode('failure | error')
+        $texto = $fe.GetAttribute('message')
+        if (-not $texto.Trim()) { $texto = $fe.InnerText }
+        $primera = @(@($texto -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1)
+        if ($primera.Count -gt 0) { $m.Mensaje = $primera[0].Trim() }
+        if ($m.Mensaje.Length -gt 300) { $m.Mensaje = $m.Mensaje.Substring(0, 300) }
+      }
+    }
   }
   return $m
 }
@@ -2334,6 +2369,7 @@ function Test-Arreglo($T, $Ll, $S) {
   if ($t.Motivo) { $v.Motivo = $t.Motivo; return $v }
   if ($t.Fallos -gt $S.Base.Fallos) {
     $v.Motivo = 'Tu cambio arregla el caso, pero rompe estos tests (esperan el comportamiento de ahora?): ' + (@($t.Nombres | Select-Object -First 5) -join ', ') + ". Fallan $($t.Fallos) y antes fallaban $($S.Base.Fallos)."
+    if ($t.Mensaje) { $v.Motivo += " El primero falla con: $($t.Mensaje)." }
     return $v
   }
   if ($t.Ejecutados -lt $S.Base.Ejecutados) { $v.Motivo = "Con tu cambio se ejecutan menos tests unitarios: $($t.Ejecutados) y antes eran $($S.Base.Ejecutados)."; return $v }

@@ -250,13 +250,14 @@ function Confirmar([string]$Pregunta) {
 }
 
 # Argumentos de 'copilot -p': el texto, los flags comunes, modelo, esfuerzo y
-# las carpetas que puede leer. Vacio = lo que tenga configurado Copilot.
+# las carpetas que puede leer (solo las que existen: el Copilot de verdad sale con 1 si un --add-dir apunta a una carpeta que no esta, por ejemplo la
+# salida de un migrado que no ha dejado nada). Vacio = lo que tenga configurado Copilot.
 function Get-ArgsCopilot([string]$Texto, [string]$Mod, [string]$Esf, [string[]]$Dirs, [bool]$SinInstr) {
   $a = @('-p', $Texto) + $Cfg.CopilotArgs
   if ($Mod) { $a += "--model=$Mod" }
   if ($Esf) { $a += "--effort=$Esf" }
   if ($SinInstr) { $a += '--no-custom-instructions' }
-  foreach ($d in $Dirs) { if ($d) { $a += "--add-dir=$d" } }
+  foreach ($d in $Dirs) { if ($d -and (Test-Path -LiteralPath $d -PathType Container)) { $a += "--add-dir=$d" } }
   return $a
 }
 
