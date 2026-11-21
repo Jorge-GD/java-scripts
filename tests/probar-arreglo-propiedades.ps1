@@ -595,4 +595,72 @@ $Pruebas['21 h) arreglo-propiedades.ps1: solo funciones, cabecera, ASCII, nada d
   Comprueba 'tareas.ps1 tiene el caso propiedades en Test-Salida' (@($lineas | Where-Object { $_ -match "^\s*'propiedades' \{ return \(Test-SalidaPropiedades" }).Count -eq 1) ($lineas -join ' / ')
 }
 
+# ================================ (f) NINGUNA CLAVE EMPEORA ================================
+# El valor nuevo que la IA mete en una clave que ya estaba bien; ni el nuevo ni el viejo pueden salir en el motivo.
+$ValorNuevo = '/datos/otro-sitio'
+$Pruebas['22 f1) cambia el valor de una clave que estaba igual: invalido antes de compilar, el motivo nombra la clave y no su valor'] = {
+  $E = Nuevo-Escenario 'f1' @{ ($RR + 'application.properties') = $LegA } $MigA
+  $cambiada = $YmlA2.Replace('/datos/in', $ValorNuevo)
+  Plan $E 1 @{ ficheros = @{ ($Yml) = $cambiada }; salida = $SalidaA2 }
+  $X = Fase $E
+  Comprueba-Atascada $E $X 'app\.ruta'
+  Igual 'no llega al diagnostico' 0 $X.Diag.Count
+  Comprueba 'el motivo dice que ya estaba bien y ahora no (igual, distinto)' ([string]$X.Json.motivo -match 'igual.*distinto') $X.Json.motivo
+  Comprueba 'el motivo no lleva ningun valor' (-not ([string]$X.Json.motivo).Contains($ValorNuevo) -and -not ([string]$X.Json.motivo).Contains('/datos/in')) $X.Json.motivo
+  Comprueba 'ni el prompt del reintento' (-not (Prompt-De $E 2).Contains($ValorNuevo)) (Prompt-De $E 2)
+}
+
+$Pruebas['23 f2) borra una clave que estaba igual: invalido antes de compilar y el motivo nombra la clave'] = {
+  $E = Nuevo-Escenario 'f2b' @{ ($RR + 'application.properties') = $LegA } $MigA
+  $sinRuta = "app:`n  lote: 100`nspring:`n  batch:`n    jdbc:`n      initialize-schema: always`n"
+  Plan $E 1 @{ ficheros = @{ ($Yml) = $sinRuta }; salida = $SalidaA2 }
+  $X = Fase $E
+  Comprueba-Atascada $E $X 'app\.ruta'
+  Igual 'no llega al diagnostico' 0 $X.Diag.Count
+  Comprueba 'el motivo dice que ya estaba bien y ahora falta (igual, falta)' ([string]$X.Json.motivo -match 'igual.*falta') $X.Json.motivo
+}
+
+$Pruebas['24 f3) lo que ya estaba mal y sigue igual de mal (distinto) no para: hecha; y el reintento que deja las claves buenas vale'] = {
+  $leg = @{ ($RR + 'application.properties') = ($LegA + "app.otro=1`n") }
+  $E = Nuevo-Escenario 'f3' $leg @{ ($Yml) = ($YmlBase + "  otro: 2`n") }
+  Plan $E 1 @{ ficheros = @{ ($Yml) = ($YmlA2 + "  otro: 2`n") }; salida = $SalidaA2 }
+  $X = Fase $E
+  Igual 'hecha con una llamada' 'hecha 1' "$($X.Tarea.estado) $($X.Tarea.intentos)"
+  Igual 'con su commit' 2 $X.Commits.Count
+  Igual 'sin motivo' '' $X.Json.motivo
+  # primer intento borra una clave buena; el segundo la deja: hecha con dos intentos
+  $E2 = Nuevo-Escenario 'f3b' @{ ($RR + 'application.properties') = $LegA } $MigA
+  Plan $E2 1 @{ ficheros = @{ ($Yml) = "app:`n  lote: 100`nspring:`n  batch:`n    jdbc:`n      initialize-schema: always`n" }; salida = $SalidaA2 }
+  Plan $E2 2 $PlanA2
+  $Y = Fase $E2
+  Igual 'hecha con dos intentos' 'hecha 2' "$($Y.Tarea.estado) $($Y.Tarea.intentos)"
+  Comprueba 'el segundo prompt nombra la clave que se borro' ((Prompt-De $E2 2) -match 'app\.ruta') (Prompt-De $E2 2)
+  Igual 'el yml bueno' $YmlA2 (Lee $E2.Repo $Yml)
+}
+
+# ================================ REGLA DEL BUILD (una sola vez, en informe.ps1) ================================
+$Pruebas['25 i) Get-FallosBuild: compila SI; los tests fallan solo si antes no fallaban (la regla de Invoke-Cierre)'] = {
+  $ok = 'compila: SI | tests: OK'
+  $mal = 'compila: SI | tests: FALLAN'
+  Igual 'compila y tests OK: sin fallos' 0 @(Get-FallosBuild $ok $ok 'tu rama').Count
+  Igual 'compila y tests no ejecutados: sin fallos' 0 @(Get-FallosBuild 'compila: SI | tests: no ejecutados' $ok 'tu rama').Count
+  Igual 'tests FALLAN y ya fallaban: sin fallos' 0 @(Get-FallosBuild $mal $mal 'tu rama').Count
+  Igual 'tests FALLAN y antes OK: un fallo con el texto de Invoke-Cierre' 'los tests fallan y en tu rama no fallaban' (@(Get-FallosBuild $mal $ok 'tu rama') -join '|')
+  Igual 'el sitio de antes lo pone quien llama' 'los tests fallan y en el migrado de antes no fallaban' (@(Get-FallosBuild $mal $ok 'el migrado de antes') -join '|')
+  Igual 'tests FALLAN y sin estado de antes: un fallo' 1 @(Get-FallosBuild $mal '' 'tu rama').Count
+  Igual 'no compila: un fallo con el texto de Invoke-Cierre' "no compila o no se ha podido comprobar (el diagnostico dice 'compila: NO')" (@(Get-FallosBuild 'compila: NO' $ok 'tu rama') -join '|')
+  Igual 'sin estado (no se pudo medir): no compila' "no compila o no se ha podido comprobar (el diagnostico dice '')" (@(Get-FallosBuild '' $ok 'tu rama') -join '|')
+  Igual 'no compila y antes tampoco: sigue siendo un fallo' 1 @(Get-FallosBuild 'compila: NO' 'compila: NO' 'tu rama').Count
+}
+
+$Pruebas['26 i) la regla del build esta una sola vez fuera de migracion.ps1: en informe.ps1, y arreglo-propiedades.ps1 la usa'] = {
+  $con = @(Get-ChildItem -LiteralPath $raiz -File -Filter '*.ps1' | Where-Object { $_.Name -cne 'migracion.ps1' } | Where-Object { [System.IO.File]::ReadAllText($_.FullName).Contains("-cnotlike 'compila: SI*'") } | ForEach-Object { $_.Name })
+  Igual 'el -cnotlike de compila: SI* solo en informe.ps1' 'informe.ps1' ($con -join ',')
+  $codigo = [System.IO.File]::ReadAllText((Join-Path $raiz 'arreglo-propiedades.ps1'))
+  Comprueba 'arreglo-propiedades.ps1 llama a Get-FallosBuild' ($codigo -match 'Get-FallosBuild \$')
+  Comprueba 'y no lleva el texto de los tests fallan' (-not $codigo.Contains('tests: FALLAN'))
+  $inf = [System.IO.File]::ReadAllText((Join-Path $raiz 'informe.ps1'))
+  Igual 'informe.ps1 define Get-FallosBuild una vez' 1 ([regex]::Matches($inf, '(?m)^function Get-FallosBuild\b')).Count
+}
+
 Invoke-Banco $Pruebas 'tests/probar-arreglo-propiedades.ps1'
