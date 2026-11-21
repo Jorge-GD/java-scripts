@@ -656,8 +656,10 @@ $Pruebas['14 nunca para: sin pom, sin original y con un fichero ilegible, el JSO
   $m = Mide $E
   Comprueba 'un yml mal formado no para' ($null -ne $m.Json)
   Comprueba 'y deja su linea' ($null -ne (Linea-Propiedades $m.Texto))
-  $m = Mide $E @{ C6_RC = '3'; C6_ERROR = 'x' } @{ MvnExe = (Join-Path $E.Raiz 'no-existe.ps1') }
-  Comprueba 'con un Maven que no existe, tampoco' ($null -ne $m.Json -and $m.Json.renombres.estado -ceq 'no se pudo medir')
+  $E2 = Nuevo-Escenario 'n2' @{ ($RR + 'application.properties') = "app.a=1`n" } @{ ($RR + 'application.yml') = "app:`n  a: 1`n" }
+  $m = Mide $E2 @{} @{ MvnExe = (Join-Path $E2.Raiz 'no-existe.ps1') }
+  Comprueba 'con un Maven que no existe, tampoco' ($null -ne $m.Json -and $m.Json.renombres.estado -ceq 'no se pudo medir') "$($m.Json.renombres.estado)"
+  Comprueba 'y el motivo lo dice' ("$($m.Json.renombres.motivo)" -like '*Maven*') "$($m.Json.renombres.motivo)"
 }
 
 $Pruebas['15 k) propiedades.ps1: solo funciones, cabecera, ASCII, nada de PowerShell 7 y ninguna funcion repetida en otro script'] = {
@@ -686,7 +688,7 @@ $Pruebas['15 k) propiedades.ps1: solo funciones, cabecera, ASCII, nada de PowerS
   $mig = [System.IO.File]::ReadAllText((Join-Path $raiz 'migracion.ps1'))
   Comprueba 'migracion.ps1 la carga junto a los demas' ($mig -match "(?m)^\. \(Join-Path \`$PSScriptRoot 'propiedades\.ps1'\)")
   Comprueba 'y la nombra en su linea Necesita' ($mig -match '(?m)^Necesita [^\r\n]*propiedades\.ps1')
-  Comprueba 'y la llama justo despues del diagnostico' ($mig -match '(?s)Invoke-FaseDiagnostico\s*\r?\n\s*Invoke-Propiedades \$LegacyRoot \$RepoRoot \$PlantillaRoot \$Datos \$Registros')
+  Comprueba 'y la llama justo despues del diagnostico' ($mig -match '(?s)Invoke-FaseDiagnostico\s*\r?\n\s*if \(-not \$script:Parada\) \{ Invoke-Propiedades \$LegacyRoot \$RepoRoot \$PlantillaRoot \$Datos \$Registros \}')
 }
 
 Invoke-Banco $Pruebas 'tests/probar-propiedades.ps1'
