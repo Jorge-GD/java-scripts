@@ -182,6 +182,41 @@ $Pruebas['bp3 huella (b): Compare-Huella mira cada clase con la huella - un lite
   Comprueba 'constructor a Lombok: IGUAL' ($r.Igual -eq $true) (Resumen-De $r)
 }
 
+# ================================== M65 (f) ==================================
+$Pruebas['m65 f) la huella no mira META-INF/spring-configuration-metadata.json (solo lo lee la ayuda del IDE) y si additional-spring-configuration-metadata.json (lo escribe la persona)'] = {
+  $meta = 'META-INF/spring-configuration-metadata.json'
+  $extra = 'META-INF/additional-spring-configuration-metadata.json'
+  Igual 'HuellaIgnorar por defecto: solo esa ruta' $meta (@($Cfg.HuellaIgnorar) -join '|')
+  $k = Lee-Caso '05'
+  $json1 = "{ `"properties`": [ { `"name`": `"acme.lote.a`" }, { `"name`": `"acme.lote.b`" } ] }`n"
+  $json2 = "{ `"properties`": [ { `"name`": `"acme.lote.b`", `"description`": `"otra`" }, { `"name`": `"acme.lote.a`" } ] }`n"
+  $adicional = "{ `"properties`": [ { `"name`": `"acme.lote.c`" } ] }`n"
+  $a = Nuevo-Target 'm65f-antes' $k.Antes @{ 'application.properties' = "batch.ruta=/a`n"; $extra = $adicional; $meta = $json1 }
+  $d = Nuevo-Target 'm65f-otro-orden' $k.Antes @{ 'application.properties' = "batch.ruta=/a`n"; $extra = $adicional; $meta = $json2 }
+  $r = Compara-Con-Falso $a $d
+  Comprueba 'el metadato con otro orden y otras descripciones: IGUAL' ($r.Igual -eq $true) (Resumen-De $r)
+  $d = Nuevo-Target 'm65f-sin-metadato' $k.Antes @{ 'application.properties' = "batch.ruta=/a`n"; $extra = $adicional }
+  $r = Compara-Con-Falso $a $d
+  Comprueba 'el metadato solo en un lado: IGUAL' ($r.Igual -eq $true) (Resumen-De $r)
+  $d = Nuevo-Target 'm65f-adicional' $k.Antes @{ 'application.properties' = "batch.ruta=/a`n"; $extra = "{ `"properties`": [] }`n"; $meta = $json1 }
+  $r = Compara-Con-Falso $a $d
+  Comprueba 'solo cambia additional-spring-configuration-metadata.json: DISTINTO' ($r.Igual -eq $false) (Resumen-De $r)
+  Igual 'dice cual y que cambia el contenido' 'contenido' (Partes-De $r 'additional-spring-configuration-metadata.json')
+  Igual 'y solo ese' 1 @($r.Diferencias).Count
+  $d = Nuevo-Target 'm65f-otro-recurso' $k.Antes @{ 'application.properties' = "batch.ruta=/b`n"; $extra = $adicional; $meta = $json2 }
+  $r = Compara-Con-Falso $a $d
+  Igual 'con el metadato distinto y otro recurso que cambia: solo el recurso' 'False|application.properties=contenido' (Resumen-De $r)
+  # la lista se puede cambiar (ajustes.json): vacia, el metadato cuenta
+  $antes = $Cfg.HuellaIgnorar
+  try {
+    $Cfg.HuellaIgnorar = @()
+    $d = Nuevo-Target 'm65f-vacia' $k.Antes @{ 'application.properties' = "batch.ruta=/a`n"; $extra = $adicional; $meta = $json2 }
+    $r = Compara-Con-Falso $a $d
+    Igual 'con HuellaIgnorar vacia el metadato cuenta' 'contenido' (Partes-De $r 'spring-configuration-metadata.json')
+  }
+  finally { $Cfg.HuellaIgnorar = $antes }
+}
+
 # ================================== (c) ==================================
 $Pruebas['bp3 huella (c): sin JAVA_HOME, o sin javap, o si javap falla o se salta una clase, Compare-Huella no da IGUAL y dice que no se pudo medir'] = {
   $k = Lee-Caso '05'

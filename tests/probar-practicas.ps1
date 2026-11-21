@@ -753,7 +753,7 @@ $Pruebas['17 ficheros y ajustes: ASCII, nada de PowerShell 7 y los ajustes en $C
   Igual 'SegundosPracticas' 300 $Cfg.SegundosPracticas
   Igual 'SonarReglasAqui' 4 $Cfg.SonarReglasAqui
   Comprueba 'SegundosMinAnalisis ya no existe' (-not $Cfg.ContainsKey('SegundosMinAnalisis'))
-  foreach ($f in @('practicas.ps1', 'arreglo-practicas.ps1', 'tests/probar-practicas.ps1', 'tests/falsos/bp0-mvn.ps1', 'tests/falsos/bp0-javap.ps1', 'tests/falsos/bp4-mvn.ps1', 'tests/falsos/bp4-copilot.ps1')) {
+  foreach ($f in @('practicas.ps1', 'arreglo-practicas.ps1', 'tests/probar-practicas.ps1', 'tests/falsos/bp0-mvn.ps1', 'tests/falsos/bp0-javap.ps1', 'tests/falsos/bp4-mvn.ps1', 'tests/falsos/bp4-copilot.ps1', 'tests/falsos/m65-mvn.ps1')) {
     $t = [System.IO.File]::ReadAllText((Get-Ruta $raiz $f))
     Comprueba "$f`: solo ASCII" ($t -notmatch '[^\x09\x0A\x0D\x20-\x7E]')
   }
@@ -802,13 +802,17 @@ function Save-Estado { }
 function Save-Informes { }
 function Set-Parada([string]$Motivo, [string]$Detalle, [string]$Registro) { $script:Paradas += , @($Motivo, $Detalle, $Registro) }
 
-function Nuevo-Escenario4([string]$Nombre, [string[]]$Incidencias, [bool]$Lombok = $true, [string[]]$Rotas = @()) {
+# $Pom es el pom.xml del migrado (sin el, uno de una linea con o sin Lombok segun $Lombok); con $PomRef hay una referencia con ese pom.xml.
+function Nuevo-Escenario4([string]$Nombre, [string[]]$Incidencias, [bool]$Lombok = $true, [string[]]$Rotas = @(), [string]$Pom = '', [string]$PomRef = '') {
   $r = Join-Path $Dir $Nombre
   if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
   $mig = Join-Path $r 'migrado'
   $dep = ''
   if ($Lombok) { $dep = '<dependencies><dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>1.18.34</version></dependency></dependencies>' }
-  Escribe $mig 'pom.xml' "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme</groupId><artifactId>p4</artifactId><version>1</version>$dep</project>`n"
+  if (-not $Pom) { $Pom = "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme</groupId><artifactId>p4</artifactId><version>1</version>$dep</project>`n" }
+  Escribe $mig 'pom.xml' $Pom
+  $ref = ''
+  if ($PomRef) { $ref = Join-Path $r 'batch-ejemplo'; Escribe $ref 'pom.xml' $PomRef }
   foreach ($c in @('Alfa', 'Beta', 'Gama', 'Delta')) {
     $fuente = Fuente-P4 $c
     if ($Rotas -contains $c) { $fuente = $fuente.Replace('private long importe;', 'private long importe = NO-COMPILA;') }
@@ -820,7 +824,7 @@ function Nuevo-Escenario4([string]$Nombre, [string[]]$Incidencias, [bool]$Lombok
   $inc = @($Incidencias | ForEach-Object { New-Incidencia 'lombok' "$Ruta4$_.java" 10 'lombok' 'getter-setter-a-mano' 'referencia' '' '2 getters y 1 setters escritos a mano: con Lombok son @Getter y @Setter' })
   Write-Json (Join-Path (Join-Path $r 'datos') 'practicas-antes.json') ([ordered]@{ version = 1; cuando = ''; detectores = @(); incidencias = $inc })
   return [pscustomobject]@{
-    Raiz = $r; Repo = $mig; Datos = (Join-Path $r 'datos'); Registros = (Join-Path $r 'registros')
+    Raiz = $r; Repo = $mig; Plantilla = $ref; Datos = (Join-Path $r 'datos'); Registros = (Join-Path $r 'registros')
     Mvn = (Join-Path $r 'mvn-llamadas.txt'); Copilot = (Join-Path $r 'copilot-llamadas.txt')
   }
 }
@@ -834,6 +838,7 @@ function Fase4($E, [hashtable]$Entorno = @{}, [hashtable]$Cambios = @{}, [bool]$
   foreach ($k in $Aj4.Keys) { $ajustes4[$k] = $Aj4[$k] }
   foreach ($k in $Cambios.Keys) { $ajustes4[$k] = $Cambios[$k] }
   $RepoRoot = $E.Repo
+  $PlantillaRoot = $E.Plantilla
   $Datos = $E.Datos
   $Registros = $E.Registros
   $ModeloElegido = 'modelo-x'
@@ -978,17 +983,6 @@ $Pruebas['22b bp4 d2) el que no compila va el segundo: de uno en uno cada ficher
   Comprueba 'Beta: el motivo es que no compila, con la linea de Maven' ($t.motivo -match 'no compila' -and $t.motivo -match 'Beta\.java') $t.motivo
   # foto (1) + la ronda entera (1) + Alfa sola (1) y Beta sola (1) + el reintento de Beta, que va sola (1)
   Igual 'Maven: 5 compilaciones' 5 (Compilaciones4 $E).Count
-}
-
-$Pruebas['23 bp4 e) sin Lombok en el pom: ninguna llamada, ni Maven ni Copilot, y un aviso'] = {
-  $E = Nuevo-Escenario4 'p4e' @('Alfa', 'Beta') $false
-  $x = Fase4 $E
-  Igual 'la fase deja seguir' $true $x.Sigue
-  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
-  Igual 'ninguna llamada a Maven' 0 (Llamadas-De $E.Mvn).Count
-  Igual 'ningun commit nuevo' 'inicial' ($x.Commits -join '|')
-  Comprueba 'el aviso dice que el migrado no usa Lombok y como arreglarlo' (@($x.Avisos | Where-Object { $_ -match 'El migrado no usa Lombok: anadelo al pom\.xml y vuelve a lanzar' }).Count -eq 1) ($x.Avisos -join ' / ')
-  Igual 'ninguna parada' 0 $script:Paradas.Count
 }
 
 $Pruebas['24 bp4 f) relanzar no repite las tareas hechas ni rehace la foto'] = {
@@ -1285,8 +1279,8 @@ $Pruebas['32 bp4 m) arreglo-practicas.ps1: solo funciones, cabecera, ASCII y nad
   Comprueba 'nada de PowerShell 7 (??, ?. ni ?[)' ($codigo -notmatch '\?\?|[\w\)\]]\?\.\w|\w\?\[')
   Comprueba 'sin -AsHashtable ni ConvertFrom-Json -Depth' ($codigo -notmatch 'AsHashtable|ConvertFrom-Json[^|\r\n]*-Depth')
   $ast = [System.Management.Automation.Language.Parser]::ParseInput($codigo, [ref]$null, [ref]$null)
-  $sueltas = @($ast.EndBlock.Statements | Where-Object { $_ -isnot [System.Management.Automation.Language.FunctionDefinitionAst] })
-  Igual 'nada fuera de las funciones' 0 $sueltas.Count
+  $sueltas = @($ast.EndBlock.Statements | Where-Object { $_ -isnot [System.Management.Automation.Language.FunctionDefinitionAst] -and -not ($_ -is [System.Management.Automation.Language.AssignmentStatementAst] -and $_.Left.Extent.Text -ceq '$Cfg') })
+  Igual 'nada fuera de las funciones y de su $Cfg' 0 $sueltas.Count
   $otras = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
   $deMas = @(@('practicas.ps1', 'huella.ps1', 'comun.ps1', 'tareas.ps1', 'informe.ps1', 'lanzadores.ps1', 'migracion.ps1', 'prueba-local.ps1') | ForEach-Object {
       $f = Join-Path $raiz $_
@@ -2016,6 +2010,173 @@ $Pruebas['m45 (i) practicas: la Info de lo apartado lista como mucho 10 ficheros
   Comprueba 'dice los 10 primeros y y 2 mas' ($x.Texto.Contains("(git stash): $diez y 2 mas. Para recuperarlo:")) $x.Texto
   Comprueba 'y no nombra el undecimo' (-not $x.Texto.Contains('Extra11.java')) $x.Texto
   Igual 'los 12 ficheros estan en el stash' 12 @((GitEn $E.Repo @('show', '--name-only', '--format=', 'stash@{0}^3')) -split "`n" | Where-Object { $_ }).Count
+}
+
+# ================================ M65: LOMBOK EN EL POM.XML ================================
+# Sin Lombok en el pom, la fase lo anade (el bloque de la referencia o uno por defecto), comprueba que compila y lo commitea; si no compila,
+# deja el pom como estaba y el aviso de siempre. Maven de mentira: m65-mvn.ps1 (bp4-mvn.ps1; con M65_ROTO no compila un pom con Lombok).
+$Sub65 = 'practica(lombok): anade Lombok al pom.xml'
+$Lombok65 = @('<dependency>', '  <groupId>org.projectlombok</groupId>', '  <artifactId>lombok</artifactId>', '  <optional>true</optional>', '</dependency>')
+$Defecto65 = @('<dependency>', '  <groupId>org.projectlombok</groupId>', '  <artifactId>lombok</artifactId>', '  <scope>provided</scope>', '  <optional>true</optional>', '</dependency>')
+$Procesador65 = @('<path>', '  <groupId>org.projectlombok</groupId>', '  <artifactId>lombok</artifactId>', '  <version>1.18.30</version>', '</path>')
+
+# Un pom.xml con sangria de 2 espacios: el padre de Spring Boot (o no), $Deps (lineas de mas dentro de <dependencies>, con la sangria relativa a
+# <dependency>) y, con $Paths distinto de $null, un maven-compiler-plugin con annotationProcessorPaths: el procesador de configuracion y $Paths.
+function Pom65([string[]]$Deps = @(), [bool]$Boot = $true, [string[]]$Paths = $null) {
+  $n = @('<?xml version="1.0" encoding="UTF-8"?>', '<project>', '  <modelVersion>4.0.0</modelVersion>')
+  if ($Boot) { $n += @('  <parent>', '    <groupId>org.springframework.boot</groupId>', '    <artifactId>spring-boot-starter-parent</artifactId>', '    <version>3.3.5</version>', '  </parent>') }
+  $n += @('  <groupId>com.acme</groupId>', '  <artifactId>p4</artifactId>', '  <version>1</version>', '  <dependencies>', '    <dependency>', '      <groupId>org.springframework.boot</groupId>', '      <artifactId>spring-boot-starter-batch</artifactId>', '    </dependency>')
+  $n += @($Deps | ForEach-Object { '    ' + $_ })
+  $n += '  </dependencies>'
+  if ($null -ne $Paths) {
+    $n += @('  <build>', '    <plugins>', '      <plugin>', '        <artifactId>maven-compiler-plugin</artifactId>', '        <configuration>', '          <annotationProcessorPaths>', '            <path>', '              <groupId>org.springframework.boot</groupId>', '              <artifactId>spring-boot-configuration-processor</artifactId>', '            </path>')
+    $n += @($Paths | ForEach-Object { '            ' + $_ })
+    $n += @('          </annotationProcessorPaths>', '        </configuration>', '      </plugin>', '    </plugins>', '  </build>')
+  }
+  $n += '</project>'
+  return (($n -join "`n") + "`n")
+}
+
+# Las lineas de $Bloque con la sangria $Base delante, cada una con su salto, y lo que le sigue ($Cierre: la etiqueta de cierre con su sangria).
+function Con-Bloque65([string]$Pom, [string]$Cierre, [string[]]$Bloque, [string]$Base) {
+  return $Pom.Replace($Cierre, ((@($Bloque | ForEach-Object { $Base + $_ }) -join "`n") + "`n" + $Cierre))
+}
+
+function Fase65($E, [hashtable]$Entorno = @{}, [hashtable]$Cambios = @{}) {
+  $c = @{ MvnExe = (Join-Path $falsos 'm65-mvn.ps1') }
+  foreach ($k in $Cambios.Keys) { $c[$k] = $Cambios[$k] }
+  return (Fase4 $E $Entorno $c)
+}
+
+$Pruebas['m65 a) sin Lombok y la referencia lo tiene: su bloque entra en <dependencies> del pom, con su commit, y la fase sigue con las tareas'] = {
+  $mig = Pom65
+  $E = Nuevo-Escenario4 'm65a' @('Alfa', 'Beta') $false @() $mig (Pom65 $Lombok65)
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'ninguna parada' 0 $script:Paradas.Count
+  Igual 'el pom lleva el bloque de la referencia antes de </dependencies>' (Con-Bloque65 $mig "  </dependencies>`n" $Lombok65 '    ') (Lee $E.Repo 'pom.xml')
+  Igual 'los commits: el del pom y uno por fichero' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|$Sub65|inicial") ($x.Commits -join '|')
+  Igual 'el commit del pom solo toca pom.xml' 'pom.xml' (GitEn $E.Repo @('show', '--name-only', '--format=', 'HEAD~2'))
+  $sha = GitEn $E.Repo @('rev-parse', '--short=7', 'HEAD~2')
+  Comprueba 'la consola lo dice, con el commit' ($x.Texto -match [regex]::Escape("Lombok no estaba en el pom.xml: lo he anadido como en la referencia (commit $sha)")) $x.Texto
+  foreach ($c in @('Alfa', 'Beta')) { Igual "$c`: tarea hecha" 'hecha' (Tarea4 $x $c).estado }
+  Igual 'dos llamadas a Copilot' 2 (Llamadas-De $E.Copilot).Count
+  Igual 'Maven: la comprobacion del pom, la foto y la ronda' 3 (Compilaciones4 $E).Count
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+}
+
+$Pruebas['m65 a2) el bloque se pone con los saltos de linea del pom (CRLF) y a la sangria del migrado'] = {
+  $mig = (Pom65).Replace('  ', '    ').Replace("`n", "`r`n")
+  $ref = (Pom65 $Lombok65).Replace('  ', '    ')
+  $E = Nuevo-Escenario4 'm65a2' @('Alfa') $false @() $mig $ref
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  $b4 = @($Lombok65 | ForEach-Object { $_.Replace('  ', '    ') })
+  $esperado = (Con-Bloque65 $mig "    </dependencies>`r`n" $b4 '        ').Replace("`r`n", "`n").Replace("`n", "`r`n")
+  $pom = Lee $E.Repo 'pom.xml'
+  Igual 'el pom: el bloque a la sangria de las otras dependencias' $esperado $pom
+  Igual 'ningun salto de linea suelto' 0 ([regex]::Matches($pom, "(?<!`r)`n")).Count
+}
+
+$Pruebas['m65 a3) varios modulos: Lombok va al pom del modulo que tiene el fichero, no al de la raiz ni al de otro modulo'] = {
+  $E = Nuevo-Escenario4 'm65m' @('Alfa') $false
+  $raizPom = Pom65
+  $modPom = Pom65 @() $false
+  Escribe $E.Repo 'pom.xml' $raizPom
+  Escribe $E.Repo 'modulo-a/pom.xml' $modPom
+  Escribe $E.Repo 'modulo-b/pom.xml' $modPom
+  [void](GitEn $E.Repo @('add', '--', 'pom.xml', 'modulo-a/pom.xml', 'modulo-b/pom.xml'))
+  [void](GitEn $E.Repo @('commit', '-q', '-m', 'modulos'))
+  $RepoRoot = $E.Repo
+  $PlantillaRoot = ''
+  $Registros = $E.Registros
+  $ficheros = [ordered]@{ 'modulo-a/src/main/java/com/acme/p4/Alfa.java' = 'x' }
+  $r = Con-Falso @{ BP4_LLAMADAS = $E.Mvn } @{ MvnExe = (Join-Path $falsos 'm65-mvn.ps1') } { Add-LombokAlPom $ficheros 6>$null }
+  Igual 'sin motivo de fallo' '' (@($r) -join '')
+  Igual 'el pom del modulo con el fichero lleva el bloque (sin version: el padre de la raiz es Spring Boot)' (Con-Bloque65 $modPom "  </dependencies>`n" $Defecto65 '    ') (Lee $E.Repo 'modulo-a/pom.xml')
+  Igual 'el de otro modulo, igual' $modPom (Lee $E.Repo 'modulo-b/pom.xml')
+  Igual 'el de la raiz, igual' $raizPom (Lee $E.Repo 'pom.xml')
+  Igual 'el commit solo toca el pom del modulo' 'modulo-a/pom.xml' (GitEn $E.Repo @('show', '--name-only', '--format=', 'HEAD'))
+}
+
+$Pruebas['m65 b) con annotationProcessorPaths en el migrado, Lombok entra tambien ahi: como la referencia, y si no, con ${lombok.version}'] = {
+  $mig = Pom65 @() $true @()
+  # la referencia lo tiene en sus dos sitios
+  $E = Nuevo-Escenario4 'm65b1' @('Alfa') $false @() $mig (Pom65 $Lombok65 $true $Procesador65)
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  $esperado = Con-Bloque65 (Con-Bloque65 $mig "  </dependencies>`n" $Lombok65 '    ') "          </annotationProcessorPaths>`n" $Procesador65 '            '
+  Igual 'dependencia y procesador, el de la referencia con su version' $esperado (Lee $E.Repo 'pom.xml')
+  Igual 'un solo commit del pom' 1 @($x.Commits | Where-Object { $_ -ceq $Sub65 }).Count
+  # la referencia solo tiene la dependencia: el procesador lleva la propiedad del padre
+  $E = Nuevo-Escenario4 'm65b2' @('Alfa') $false @() $mig (Pom65 $Lombok65)
+  [void](Fase65 $E)
+  $sinVersion = @('<path>', '  <groupId>org.projectlombok</groupId>', '  <artifactId>lombok</artifactId>', '  <version>${lombok.version}</version>', '</path>')
+  $esperado = Con-Bloque65 (Con-Bloque65 $mig "  </dependencies>`n" $Lombok65 '    ') "          </annotationProcessorPaths>`n" $sinVersion '            '
+  Igual 'la referencia sin procesador: el del padre de Spring Boot' $esperado (Lee $E.Repo 'pom.xml')
+}
+
+$Pruebas['m65 c) si con Lombok el migrado no compila: el pom queda como estaba, sin commit, y sale el aviso de siempre con la salida de Maven en el registro'] = {
+  $mig = Pom65
+  $E = Nuevo-Escenario4 'm65c' @('Alfa', 'Beta') $false @() $mig (Pom65 $Lombok65)
+  $x = Fase65 $E @{ M65_ROTO = '1' }
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'el pom queda como estaba' $mig (Lee $E.Repo 'pom.xml')
+  Igual 'ningun commit nuevo' 'inicial' ($x.Commits -join '|')
+  Igual 'el worktree queda limpio' '' (Estado-Git4 $E)
+  Comprueba 'el aviso de siempre' (@($x.Avisos | Where-Object { $_ -match 'El migrado no usa Lombok: anadelo al pom\.xml y vuelve a lanzar' }).Count -eq 1) ($x.Avisos -join ' / ')
+  Comprueba 'el aviso dice por que: no compila con Lombok' (@($x.Avisos | Where-Object { $_ -match 'No compila: .*Could not resolve dependencies' }).Count -eq 1) ($x.Avisos -join ' / ')
+  $reg = Join-Path $E.Registros 'practicas-lombok-pom.log'
+  Comprueba 'y el registro de Maven lleva su salida' ((Test-Path -LiteralPath $reg) -and ((Lee $E.Registros 'practicas-lombok-pom.log') -match 'Could not resolve dependencies')) $reg
+  Comprueba 'el aviso da la ruta de ese registro' (@($x.Avisos | Where-Object { $_.Contains($reg) }).Count -eq 1) ($x.Avisos -join ' / ')
+  Comprueba 'la consola no dice que lo ha anadido' ($x.Texto -notmatch 'Lombok no estaba en el pom') $x.Texto
+  Igual 'ninguna llamada a Copilot' 0 (Llamadas-De $E.Copilot).Count
+  Igual 'Maven: solo la comprobacion del pom' 1 (Compilaciones4 $E).Count
+  Igual 'ninguna parada' 0 $script:Paradas.Count
+}
+
+$Pruebas['m65 d) referencia sin Lombok: el bloque por defecto, sin version con el padre de Spring Boot y con la de $Cfg.LombokVersion si no'] = {
+  Igual 'la version por defecto: la ultima estable de Maven Central (21-11-2026)' '1.18.48' $Cfg.LombokVersion
+  $mig = Pom65
+  $E = Nuevo-Escenario4 'm65d1' @('Alfa') $false @() $mig (Pom65)
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'provided y optional, sin version' (Con-Bloque65 $mig "  </dependencies>`n" $Defecto65 '    ') (Lee $E.Repo 'pom.xml')
+  Comprueba 'la consola dice que es el de por defecto' ($x.Texto -match 'Lombok no estaba en el pom\.xml: lo he anadido con la configuracion por defecto \(commit [0-9a-f]{7}\)') $x.Texto
+  # sin padre de Spring Boot y sin referencia: con la version de $Cfg.LombokVersion
+  $mig = Pom65 @() $false
+  $E = Nuevo-Escenario4 'm65d2' @('Alfa') $false @() $mig
+  [void](Fase65 $E @{} @{ LombokVersion = '9.9.9' })
+  $conVersion = @('<dependency>', '  <groupId>org.projectlombok</groupId>', '  <artifactId>lombok</artifactId>', '  <version>9.9.9</version>', '  <scope>provided</scope>', '  <optional>true</optional>', '</dependency>')
+  Igual 'sin Spring Boot y sin referencia: con la version de LombokVersion' (Con-Bloque65 $mig "  </dependencies>`n" $conVersion '    ') (Lee $E.Repo 'pom.xml')
+  # Lombok solo en un comentario y en dependencyManagement de la referencia: no cuenta como dependencia
+  $refTexto = (Pom65).Replace("  <dependencies>`n", "  <!-- <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>1.0</version></dependency> -->`n  <dependencyManagement>`n    <dependencies>`n      <dependency>`n        <groupId>org.projectlombok</groupId>`n        <artifactId>lombok</artifactId>`n        <version>1.0</version>`n      </dependency>`n    </dependencies>`n  </dependencyManagement>`n  <dependencies>`n")
+  $mig = Pom65
+  $E = Nuevo-Escenario4 'm65d3' @('Alfa') $false @() $mig $refTexto
+  [void](Fase65 $E)
+  Igual 'la referencia con Lombok solo en un comentario y en dependencyManagement: el de por defecto' (Con-Bloque65 $mig "  </dependencies>`n" $Defecto65 '    ') (Lee $E.Repo 'pom.xml')
+}
+
+$Pruebas['m65 e) un pom que ya tiene Lombok no se toca: ningun commit del pom y ni una compilacion de mas'] = {
+  $mig = Pom65 $Lombok65
+  $E = Nuevo-Escenario4 'm65e' @('Alfa', 'Beta') $false @() $mig (Pom65)
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'el pom, igual' $mig (Lee $E.Repo 'pom.xml')
+  Igual 'los commits: uno por fichero y ninguno del pom' ("$Commit4${Ruta4}Beta.java|$Commit4${Ruta4}Alfa.java|inicial") ($x.Commits -join '|')
+  Comprueba 'la consola no dice nada de Lombok en el pom' ($x.Texto -notmatch 'Lombok no estaba') $x.Texto
+  Igual 'Maven: la foto y la ronda' 2 (Compilaciones4 $E).Count
+}
+
+$Pruebas['m65 f) un pom sin <dependencies>: no se inventa nada, el aviso de siempre y el pom como estaba'] = {
+  $mig = "<project><modelVersion>4.0.0</modelVersion><groupId>com.acme</groupId><artifactId>p4</artifactId><version>1</version></project>`n"
+  $E = Nuevo-Escenario4 'm65f' @('Alfa') $false @() $mig
+  $x = Fase65 $E
+  Igual 'la fase deja seguir' $true $x.Sigue
+  Igual 'el pom, igual' $mig (Lee $E.Repo 'pom.xml')
+  Igual 'ningun commit nuevo' 'inicial' ($x.Commits -join '|')
+  Comprueba 'el aviso de siempre, con el motivo' (@($x.Avisos | Where-Object { $_ -match 'El migrado no usa Lombok: anadelo al pom\.xml y vuelve a lanzar' -and $_ -match '<dependencies>' }).Count -eq 1) ($x.Avisos -join ' / ')
+  Igual 'ninguna llamada a Copilot ni a Maven' 0 ((Llamadas-De $E.Copilot).Count + (Llamadas-De $E.Mvn).Count)
 }
 
 # ================================ LANZADOR ================================
