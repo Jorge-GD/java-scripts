@@ -8201,6 +8201,12 @@ $Pruebas['m77 (f2) FileNotFoundException y AccessDeniedException con una ruta ab
   $e = Escenario-M77f 'm77-f2d'
   $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.lang.IllegalStateException: sin correo en C:\datos\salida'))
   Comprueba 'una causa con una ruta pero de otra clase: sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2e'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.nio.file.NoSuchFileException: D:\trabajo\otra-copia\target\prueba-local\cargaJob\caso-01\ficheros\outbox'))
+  Comprueba 'una carpeta de caso con otro prefijo (otra ruta de la copia, un nombre corto de Windows): sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2f'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.nio.file.NoSuchFileException: ' + (Join-Path $e.CopiaOrig 'src/main/resources/lista.txt')))
+  Comprueba 'una ruta de la copia (no de un caso): tampoco' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
 }
 
 # --- (g) no se vuelve al test de antes del original si ese dejaba un job que el original no arrancaba ---
