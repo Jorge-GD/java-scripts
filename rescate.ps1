@@ -228,10 +228,10 @@ $Cfg += @{
   # envolver una clase o un metodo final y el job no arranca.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch', 'parametros-v4')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch', 'parametros-v4', 'nashorn', 'comando-sin-partir')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
-    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido', 'parametros-v4')
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido', 'parametros-v4', 'nashorn', 'comando-sin-partir')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -585,6 +585,8 @@ $RxCampo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<
 $RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?Bean\b(?:\s*\((?<args>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\))?(?:\s*@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*(?:<[^;{()]*>\s*)?(?<tipo>[\w.]+)(?:\s*<[^;{()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
 # Un parametro de job con la notacion de Spring Batch 4, nombre(tipo)=valor, con o sin barras de shell delante de los parentesis
 $RxParametroV4 = New-Object System.Text.RegularExpressions.Regex '(?<![\w.])(?<n>[A-Za-z_][\w.-]*)\\?\((?<t>long|date|double|string)\\?\)=(?<v>[^\s"'',;|&)\\]*)'
+$RxNashorn = New-Object System.Text.RegularExpressions.Regex ('\.getEngineByName\s*\(\s*"(?<n>nashorn|javascript|js|ecmascript)"\s*\)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+$RxComandoJunto = New-Object System.Text.RegularExpressions.Regex '\.setCommand\s*\(\s*"(?<c>[^"\\]*\s[^"\\]*)"\s*\)'
 $RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
@@ -995,6 +997,33 @@ function Add-CalVariosJobs($Out, $Beans, $Props, $Otros) {
   Add-Cal $Out $jobs[0].RelRaiz $jobs[0].Linea 'varios-jobs-sin-nombre' ("Hay $($jobs.Count) jobs ($((@($jobs | ForEach-Object { $_.Metodo }) -join ', '))) y ninguna spring.batch.job.name en la configuracion: Spring Boot 3 ya no admite arrancar varios jobs y exige decir cual con spring.batch.job.name. Ponla en application.yml o en el lanzador (-Dspring.batch.job.name=...); si el nombre viene de fuera del repo (un configmap), deja este aviso.")
 }
 
+# Lo que compila y falla al ejecutarse en Java 21 y Spring Batch 5. Motor Nashorn (fila JDK-06, fuentes-guias/jdk15-nashorn-jep372.html: "Remove the
+# Nashorn JavaScript script engine and APIs"): getEngineByName("nashorn", "javascript", "js" o "ecmascript") da null desde Java 15, salvo que el pom
+# traiga un motor aparte: org.openjdk.nashorn:nashorn-core (fuentes-m76/nashorn-README.md: "a standalone version of Nashorn suitable for use with
+# Java 11 and later") o GraalJS con js-scriptengine (fuentes-m76/graaljs-ScriptEngine.md: getEngineByName("js")). Comando junto (fila SBT5-18,
+# fuentes-m76/sbatch-SystemCommandTasklet.java: setCommand(String... command), ejemplo setCommand("myCommand", "myArg1", "myArg2")): en un fichero con
+# SystemCommandTasklet, setCommand("ls -l") con un solo literal con espacios; un literal que acaba en .exe, .bat, .cmd o .sh es una ruta de programa y vale.
+function Add-CalNashornYComando($Out, $Hechos, $Deps) {
+  $hayMotor = @($Deps | Where-Object { $_ -ceq 'nashorn-core' -or $_ -ceq 'js-scriptengine' }).Count -gt 0
+  foreach ($f in $Hechos.Ficheros) {
+    if (-not $hayMotor -and $f.Texto.Contains('getEngineByName')) {
+      $sin = Get-SinComentarios $f.Texto
+      foreach ($m in $script:RxNashorn.Matches($sin)) {
+        Add-Cal $Out $f.RelRaiz (Get-LineaDe $sin $m.Index) 'nashorn' ('getEngineByName("' + $m.Groups['n'].Value + '") devuelve null desde Java 15 (JEP 372 quito Nashorn del JDK) y el job falla con un NullPointerException al usar el motor. Anade org.openjdk.nashorn:nashorn-core al pom (Nashorn como libreria aparte) o GraalJS (js-scriptengine), o pasa el script a Java.')
+      }
+    }
+    if ($f.Texto.Contains('SystemCommandTasklet')) {
+      $sin = Get-SinComentarios $f.Texto
+      foreach ($m in $script:RxComandoJunto.Matches($sin)) {
+        $c = $m.Groups['c'].Value.Trim()
+        if ($c -notmatch '\s' -or $c -match '(?i)\.(?:exe|bat|cmd|sh)$') { continue }
+        $partes = (@($c -split '\s+') | ForEach-Object { '"' + $_ + '"' }) -join ', '
+        Add-Cal $Out $f.RelRaiz (Get-LineaDe $sin $m.Index) 'comando-sin-partir' ('SystemCommandTasklet.setCommand("' + $c + '") con el comando entero en un solo argumento: desde Spring Batch 5 setCommand recibe un array y ya no parte el comando por los espacios, asi que busca un programa que se llama "' + $c + '" y falla. Separa los argumentos: setCommand(' + $partes + ').')
+      }
+    }
+  }
+}
+
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
 function Get-SinComentarios([string]$Texto) {
   return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
@@ -1224,6 +1253,10 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   Add-CalBeansRepetidos $out $beans.ToArray() $clasesBean.ToArray() $props
   Add-CalParametrosV4 $out $Hechos
   Add-CalVariosJobs $out $beans.ToArray() $props $Hechos.Otros
+  $pom = Get-Pom $Hechos.Raiz
+  $deps = @()
+  if ($pom) { $deps = @($pom.Deps) }
+  Add-CalNashornYComando $out $Hechos $deps
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }

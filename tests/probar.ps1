@@ -6932,5 +6932,54 @@ $Pruebas['m76 (e1) varios-jobs-sin-nombre (SB30-09): dos jobs y ningun spring.ba
   Igual 'con el otro job en un @Profile, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
 }
 
+# El pom del repo del escenario con estas dependencias mas (solo el artifactId; el grupo es inventado).
+function Pom-M76($E, [string[]]$Deps) {
+  $x = ''
+  foreach ($d in $Deps) { $x += "  <dependency><groupId>com.acme.dep</groupId><artifactId>$d</artifactId></dependency>`n" }
+  Escribe $E.Repo 'pom.xml' ($Pom -replace '</dependencies>', ($x + '  </dependencies>'))
+}
+
+# Una clase de componente con un solo metodo cuyo cuerpo es esto.
+function Metodo-M76([string]$Nombre, [string]$Cuerpo) {
+  return (Clase-M70 $Nombre '@Component' "    public void corre() {`n        $Cuerpo`n    }`n")
+}
+
+$Pruebas['m76 (f1) nashorn (JDK-06): getEngineByName con nashorn, javascript, js o ecmascript sale como error; otro motor, un comentario o nashorn-core en el pom, no'] = {
+  $e = Escenario-M70 'm76-f1' @{
+    Nashorn = (Metodo-M76 'Nashorn' 'Object m = new ScriptEngineManager().getEngineByName("nashorn");')
+    Js      = (Metodo-M76 'Js' 'Object m = manager.getEngineByName("JavaScript");')
+    Corto   = (Metodo-M76 'Corto' 'Object m = manager.getEngineByName( "js" );')
+    Ecma    = (Metodo-M76 'Ecma' 'Object m = manager.getEngineByName("ECMAScript");')
+    Groovy  = (Metodo-M76 'Groovy' 'Object m = manager.getEngineByName("groovy");')
+    Coment  = (Metodo-M76 'Coment' '// getEngineByName("nashorn")')
+  }
+  $h = Cal-M76 $e 'nashorn'
+  Igual 'sale con los cuatro nombres, y no con groovy ni en un comentario' 'Corto Ecma Js Nashorn' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*Nashorn.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea de la llamada' (Linea-De (Fuente-M72 $e 'Nashorn') 'getEngineByName') $a[0].Linea
+  Comprueba 'el texto dice que devuelve null desde Java 15, que el job falla con NullPointerException y que hacer' ($a[0].Detalle -like '*getEngineByName("nashorn") devuelve null desde Java 15 (JEP 372 quito Nashorn del JDK) y el job falla con un NullPointerException al usar el motor. Anade org.openjdk.nashorn:nashorn-core al pom (Nashorn como libreria aparte) o GraalJS (js-scriptengine), o pasa el script a Java.*') $a[0].Detalle
+  Pom-M76 $e @('nashorn-core')
+  Igual 'con nashorn-core en el pom, no sale' 0 @(Cal-M76 $e 'nashorn').Count
+  Pom-M76 $e @('js-scriptengine')
+  Igual 'con js-scriptengine (GraalJS) en el pom, no sale' 0 @(Cal-M76 $e 'nashorn').Count
+}
+
+$Pruebas['m76 (f2) comando-sin-partir (SBT5-18): SystemCommandTasklet con setCommand("ls -l") en un solo argumento sale como error; con varios argumentos, un programa sin espacios o una ruta con espacios, no'] = {
+  $e = Escenario-M70 'm76-f2' @{
+    Junto   = (Metodo-M76 'Junto' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("ls -l");')
+    Partido = (Metodo-M76 'Partido' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("ls", "-l");')
+    Solo    = (Metodo-M76 'Solo' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("ls");')
+    Ruta    = (Metodo-M76 'Ruta' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("C:/Program Files/app/run.exe");')
+    Variable = (Metodo-M76 'Variable' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand(texto);')
+    Otra    = (Metodo-M76 'Otra' 'MiClase t = new MiClase(); t.setCommand("ls -l");')
+  }
+  $h = Cal-M76 $e 'comando-sin-partir'
+  Igual 'sale solo en el comando junto' 'Junto' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Igual 'en la linea de la llamada' (Linea-De (Fuente-M72 $e 'Junto') 'setCommand') $h[0].Linea
+  Comprueba 'el texto dice que Spring Batch 5 ya no parte el comando, que busca un programa con ese nombre y como separarlo' ($h[0].Detalle -like '*SystemCommandTasklet.setCommand("ls -l") con el comando entero en un solo argumento: desde Spring Batch 5 setCommand recibe un array y ya no parte el comando por los espacios, asi que busca un programa que se llama "ls -l" y falla. Separa los argumentos: setCommand("ls", "-l").*') $h[0].Detalle
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
