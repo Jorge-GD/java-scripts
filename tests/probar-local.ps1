@@ -4451,7 +4451,7 @@ $res = @(
 )
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'cinco grupos' 5 $g.Count
@@ -4474,7 +4474,7 @@ function Caso-M([string]$Caso, [string]$Causa) {
 $res = @((Caso-M 'caso-01' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'), (Caso-M 'caso-02' 'java.lang.NoClassDefFoundError: org/x/a/ClaseB'), (Caso-M 'caso-03' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'))
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'dos grupos' 2 $g.Count
@@ -6922,6 +6922,296 @@ $Pruebas['m69 (d5) sin registro de Maven del caso vacio, o con uno sin causa: la
     $p = Registro-Arnes $e 'original' 1
     Comprueba "$n : la linea sale como hoy, sin causa" ($p.Contains('Con el test de antes, el caso vacio de cargaJob acababa FAILED.')) (Cola $p)
   }
+}
+
+# ===================== M67: el mismo fichero en otra carpeta es una sola diferencia, y una sola causa =====================
+# Escenarios con el Maven de m67 (tests/falsos/m67-mvn.ps1, sobre el de m25): el original deja CIERRE_2024_06_<n>.txt en trabajo/enviados y en ficheros/enviados y el
+# migrado, que lleva minimo=5.01 en src/main/resources/regla.txt, en ficheros/salida; el 'arreglo' de m25-copilot.ps1 (reparar-arregla) lo deja como el original.
+# Las banderas de RESCATE_M67 (misma, contenido, log, suelto) cambian lo que deja cada lado.
+
+$OrigM67 = 'en ficheros/enviados y trabajo/enviados'
+$MigM67 = 'en ficheros/salida'
+$ClaveM67 = 'ficheros/enviados,trabajo/enviados -> ficheros/salida'
+$AyudaM67 = 'Suele ser el test del migrado, que da a su propiedad de carpeta otro valor: relanza con -RehacerArnes. Si no, mira la propiedad en el application.yml del migrado o un cambio del codigo.'
+
+function Escenario-M67([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm67-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes $aj)
+}
+
+# Lanza con las banderas $Banderas del Maven falso (RESCATE_M67) y el guion $Guion del Copilot falso.
+function Prueba-M67($E, [string]$Banderas = '', [string[]]$A = @(), [string]$Guion = '') {
+  $env:RESCATE_M67 = $Banderas
+  try { return (Prueba $E $A $Guion) }
+  finally { $env:RESCATE_M67 = '' }
+}
+
+function Difs-M67($E, [string]$Caso) { return @((Caso $E 'cargaJob' $Caso).diferencias | Where-Object { $_ }) }
+
+# Un script con lo de Compare-Caso y Join-OtraCarpeta que, por cada 'Caso <id> @{ carpeta/fichero = contenido } @{ ... }' de $Cuerpo (el original y el migrado), escribe una linea
+# 'R <id> <tipo>|<fichero>|<original>|<migrado>|<lineas>|<linea>|<nota>|<clave>' por diferencia. Devuelve id -> sus lineas.
+function Compara-M67([string]$Nombre, [string]$Cuerpo) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Raiz)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @()
+$Cfg = @{ CompararIgnorar = @('*.log') }
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
+  $dirs = @{}
+  foreach ($x in @(@('A', $A), @('B', $B))) {
+    $d = Join-Path (Join-Path $Raiz $Id) $x[0]
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    foreach ($k in $x[1].Keys) {
+      $p = Join-Path $d $k
+      [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      [System.IO.File]::WriteAllText($p, $x[1][$k])
+    }
+    $dirs[$x[0]] = $d
+  }
+  $dif = @(Compare-Caso $dirs.A $dirs.B)
+  $dif = @(Join-OtraCarpeta $dif $dirs.A $dirs.B)
+  foreach ($d in $dif) { 'R ' + $Id + ' ' + (Get-TipoDif $d) + '|' + $d.fichero + '|' + $d.original + '|' + $d.migrado + '|' + $d.lineas + '|' + $d.linea + '|' + $d.nota + '|' + $d.clave }
+  if ($dif.Count -eq 0) { 'R ' + $Id + ' (ninguna)' }
+}
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  $funciones = @('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado')
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $funciones) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
+  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')))
+  $v = [ordered]@{}
+  foreach ($l in @($r.Salida -split "`n")) {
+    if ($l -cmatch '^R (\S+) (.*)$') { $id = $Matches[1]; if (-not $v.Contains($id)) { $v[$id] = @() }; $v[$id] += $Matches[2].TrimEnd() }
+  }
+  return $v
+}
+
+$Pruebas['m67 (a1) tres casos con otra fecha en el nombre, el original con el fichero en dos carpetas y el migrado en otra: una sola diferencia por caso, con las carpetas de los dos lados, y la consola lo dice'] = {
+  $e = Escenario-M67 'm67-a1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M67 $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'los tres casos salen distintos' 'distinto,distinto,distinto' ((Resultados $e) -join ',')
+  foreach ($n in 1..3) {
+    $d = @(Difs-M67 $e "caso-0$n")
+    Igual "caso-0${n}: una sola diferencia" 1 $d.Count
+    Igual "caso-0${n}: el nombre del caso, el tipo nuevo y lo que dice cada lado" "CIERRE_2024_06_0$n.txt|True|$OrigM67|$MigM67" ($d[0].fichero + '|' + $d[0].otraCarpeta + '|' + $d[0].original + '|' + $d[0].migrado)
+    Igual "caso-0${n}: las carpetas de cada lado, en una lista" 'ficheros/enviados,trabajo/enviados|ficheros/salida' ((@($d[0].carpetasOriginal) -join ',') + '|' + (@($d[0].carpetasMigrado) -join ','))
+    Igual "caso-0${n}: la clave es la pareja de carpetas" $ClaveM67 $d[0].clave
+  }
+  Comprueba 'la consola dice las carpetas de cada lado del primer caso' ($r.Salida.Contains("CIERRE_2024_06_01.txt: el original lo deja $OrigM67; el migrado, $MigM67")) (Cola $r.Salida)
+  Comprueba 'y no dice (no esta)' ($r.Salida -notmatch '\(no esta\)') (Cola $r.Salida)
+}
+
+$Pruebas['m67 (a2) el contenido: igual al de alguno del original, se dice (y a cual); distinto, sale la primera linea distinta, con sus lineas'] = {
+  $cuerpo = @'
+Caso 'igual' @{ 'ficheros/enviados/X_01.txt' = "a`nb`n"; 'trabajo/enviados/X_01.txt' = "a`nb`n" } @{ 'ficheros/salida/X_01.txt' = "a`nb`n" }
+Caso 'distinto' @{ 'ficheros/enviados/X_01.txt' = "a`nb`nc`n" } @{ 'ficheros/salida/X_01.txt' = "a`nz`nz`n" }
+Caso 'solo-el-segundo' @{ 'ficheros/enviados/X_01.txt' = "a`nb`n"; 'trabajo/enviados/X_01.txt' = "a`nc`n" } @{ 'ficheros/salida/X_01.txt' = "a`nc`n" }
+Caso 'fechas' @{ 'ficheros/enviados/X_01.txt' = "a`n"; 'ficheros/enviados/X_02.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n"; 'ficheros/salida/X_02.txt' = "b`n" }
+Caso 'raiz' @{ 'X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n" }
+'@
+  $v = Compara-M67 'm67-a2' $cuerpo
+  $igual = 'el contenido es igual al de'
+  Igual 'igual: una linea, con las dos carpetas del original y la primera con el mismo contenido' @("otraCarpeta|X_01.txt|en ficheros/enviados y trabajo/enviados|en ficheros/salida|1|1|$igual ficheros/enviados/X_01.txt, del original|ficheros/enviados,trabajo/enviados -> ficheros/salida") @($v['igual'])
+  Igual 'distinto: la primera linea distinta, la 2, y cuantas son (2)' @('otraCarpeta|X_01.txt|en ficheros/enviados|en ficheros/salida|2|2|el contenido es distinto: la primera linea distinta, la 2: original [b]; migrado [z]|ficheros/enviados -> ficheros/salida') @($v['distinto'])
+  Igual 'igual al del original de la otra carpeta: dice cual' @("otraCarpeta|X_01.txt|en ficheros/enviados y trabajo/enviados|en ficheros/salida|1|1|$igual trabajo/enviados/X_01.txt, del original|ficheros/enviados,trabajo/enviados -> ficheros/salida") @($v['solo-el-segundo'])
+  Igual 'fechas: un nombre por diferencia, la misma clave, y cada uno con su contenido' @("otraCarpeta|X_01.txt|en ficheros/enviados|en ficheros/salida|1|1|$igual ficheros/enviados/X_01.txt, del original|ficheros/enviados -> ficheros/salida", 'otraCarpeta|X_02.txt|en ficheros/enviados|en ficheros/salida|1|1|el contenido es distinto: la primera linea distinta, la 1: original [a]; migrado [b]|ficheros/enviados -> ficheros/salida') @($v['fechas'])
+  Igual 'un fichero en la raiz del caso: (raiz)' @("otraCarpeta|X_01.txt|en (raiz)|en ficheros/salida|1|1|$igual X_01.txt, del original|(raiz) -> ficheros/salida") @($v['raiz'])
+}
+
+$Pruebas['m67 (a3) el mismo nombre en la misma carpeta se compara como hoy: contenido distinto es una diferencia de contenido, y solo la copia de otra carpeta sin pareja sigue siendo (no esta)'] = {
+  $cuerpo = @'
+Caso 'misma' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "b`n" }
+Caso 'iguales' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n" }
+Caso 'misma-y-otra' @{ 'ficheros/salida/X_01.txt' = "a`n"; 'trabajo/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "b`n" }
+Caso 'misma-y-otra-en-el-migrado' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n"; 'trabajo/X_01.txt' = "a`n" }
+'@
+  $v = Compara-M67 'm67-a3' $cuerpo
+  Igual 'la misma carpeta, otro contenido: contenido, con la linea de cada lado y la clave del fichero' @('contenido|ficheros/salida/X_01.txt|a|b|1|1||ficheros/salida/X_01.txt') @($v['misma'])
+  Igual 'la misma carpeta, igual: ninguna' @('(ninguna)') @($v['iguales'])
+  Igual 'la misma y otra solo en el original: la de la misma carpeta, de contenido; la otra, falta, como hoy' @('contenido|ficheros/salida/X_01.txt|a|b|1|1||ficheros/salida/X_01.txt', 'falta|trabajo/X_01.txt|a|(no esta)|1|1||trabajo/X_01.txt') @($v['misma-y-otra'])
+  Igual 'la misma y otra solo en el migrado: sobra, como hoy' @('sobra|trabajo/X_01.txt|(no esta)|a|1|1||trabajo/X_01.txt') @($v['misma-y-otra-en-el-migrado'])
+}
+
+$Pruebas['m67 (a4) un fichero que solo esta en un lado, sin otro con el mismo nombre en el otro, sigue saliendo (no esta); las tablas no se emparejan; con un .log tampoco'] = {
+  $cuerpo = @'
+Caso 'solo-original' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{}
+Caso 'solo-migrado' @{} @{ 'ficheros/salida/X_01.txt' = "a`n" }
+Caso 'otros-nombres' @{ 'ficheros/enviados/X_01.txt' = "a`n" } @{ 'ficheros/salida/Y_01.txt' = "a`n" }
+Caso 'dos-copias-solo-original' @{ 'ficheros/enviados/X_01.txt' = "a`n"; 'trabajo/enviados/X_01.txt' = "a`n" } @{}
+Caso 'tablas' @{ 'tablas/T.csv' = "ID;NOMBRE`n1;ana`n" } @{ 'otra/T.csv' = "ID;NOMBRE`n1;ana`n" }
+Caso 'logs' @{ 'trabajo/enviados/X_01.log' = "a`n" } @{ 'ficheros/salida/X_01.log' = "a`n" }
+'@
+  $v = Compara-M67 'm67-a4' $cuerpo
+  Igual 'solo en el original: falta' @('falta|ficheros/salida/X_01.txt|a|(no esta)|1|1||ficheros/salida/X_01.txt') @($v['solo-original'])
+  Igual 'solo en el migrado: sobra' @('sobra|ficheros/salida/X_01.txt|(no esta)|a|1|1||ficheros/salida/X_01.txt') @($v['solo-migrado'])
+  Igual 'otro nombre en cada lado: una falta y una sobra, sueltas' @('falta|ficheros/enviados/X_01.txt|a|(no esta)|1|1||ficheros/enviados/X_01.txt', 'sobra|ficheros/salida/Y_01.txt|(no esta)|a|1|1||ficheros/salida/Y_01.txt') @($v['otros-nombres'])
+  Igual 'dos copias solo en el original: dos faltas' @('falta|ficheros/enviados/X_01.txt|a|(no esta)|1|1||ficheros/enviados/X_01.txt', 'falta|trabajo/enviados/X_01.txt|a|(no esta)|1|1||trabajo/enviados/X_01.txt') @($v['dos-copias-solo-original'])
+  Igual 'una tabla en otra carpeta no se empareja' @('sobra|otra/T.csv|(no esta)|ID;NOMBRE|2|1||otra/T.csv', 'falta|tablas/T.csv|ID;NOMBRE|(no esta)|2|1||tablas/T.csv') @($v['tablas'])
+  Igual 'un .log (CompararIgnorar) no entra en la comparacion: ninguna' @('(ninguna)') @($v['logs'])
+}
+
+$Pruebas['m67 (a5) un .log que cada lado deja en otra carpeta, con CompararIgnorar por defecto: los casos salen iguales; con la lista vacia, salen distintos (una sola diferencia por caso)'] = {
+  $e = Escenario-M67 'm67-a5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M67 $e 'log'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Igual 'sin ninguna diferencia' 0 (Difs-M67 $e 'caso-01').Count
+  $e = Escenario-M67 'm67-a5b' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CompararIgnorar = @() }
+  $r = Prueba-M67 $e 'log'
+  Igual 'con CompararIgnorar vacio, sale con 2' 2 $r.Codigo
+  $d = @(Difs-M67 $e 'caso-01')
+  Igual 'con una sola diferencia, la del .log movido' 'CIERRE_2024_06_01.log|True' ($d[0].fichero + '|' + $d[0].otraCarpeta)
+  Igual 'y es la unica' 1 $d.Count
+}
+
+$Pruebas['m67 (b1) los tres casos de (a1): un solo grupo de 3 casos con la pareja de carpetas en su firma, la cabecera con las carpetas de los dos lados y la linea de ayuda, una vez; un grupo de contenido no lleva la ayuda'] = {
+  $e = Escenario-M67 'm67-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M67 $e
+  $j = Lee-Json $e.Json
+  $g = @($j.grupos)
+  Igual 'un grupo' 1 $g.Count
+  Igual 'de fichero, con la pareja de carpetas y no el nombre en la firma' "fichero|${ClaveM67}:otraCarpeta" $g[0].firma
+  Igual 'de los tres casos' 'cargaJob/caso-01,cargaJob/caso-02,cargaJob/caso-03' (@($g[0].casos) -join ',')
+  Igual 'con la cabecera de las carpetas de cada lado' '3 casos distintos, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y trabajo/enviados' $g[0].descripcion
+  Igual 'cada caso apunta a su grupo' '1,1,1' (@($j.casos | ForEach-Object { $_.grupo }) -join ',')
+  Comprueba 'la consola dice el grupo' ($r.Salida.Contains("Grupo 1: $($g[0].descripcion)")) (Cola $r.Salida)
+  Igual 'y la linea de ayuda, una sola vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($AyudaM67))).Count
+  $e = Escenario-M67 'm67-b1b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M67 $e 'misma;contenido'
+  Igual 'con el mismo fichero en la misma carpeta y otro contenido, sale con 2' 2 $r.Codigo
+  Igual 'un grupo, de contenido' 'fichero|ficheros/salida/CIERRE_2024_06_01.txt:contenido' @((Lee-Json $e.Json).grupos)[0].firma
+  Comprueba 'sin la linea de ayuda de carpetas' (-not $r.Salida.Contains('Suele ser el test del migrado')) (Cola $r.Salida)
+}
+
+$Pruebas['m67 (b2) prueba-local.json guarda el tipo nuevo; -Reparar con un caso asi: una clave (la pareja de carpetas) para los tres casos, una llamada, un commit y los tres iguales; con reparar-no, no se arregla y sin commit'] = {
+  $e = Escenario-M67 'm67-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba-M67 $e '' @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Igual 'una sola llamada para arreglar' 1 (Llamadas-Reparar $e).Count
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  $rep = @(Reparaciones $e)
+  Igual 'una reparacion, arreglada, con la pareja de carpetas por clave y los tres casos' "1|arreglado|$ClaveM67|3" "$($rep.Count)|$($rep[0].resultado)|$($rep[0].clave)|$($rep[0].casos)"
+  $p = @(Registros-Reparar $e 1)[0]
+  Comprueba 'el prompt dice el fichero y las carpetas de cada lado' ($p.Contains('CIERRE_2024_06_01.txt') -and $p.Contains($OrigM67) -and $p.Contains($MigM67)) $p
+  $e = Escenario-M67 'm67-b2b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba-M67 $e '' @('-Reparar') 'reparar-no'
+  Igual 'con reparar-no, sale con 2' 2 $r.Codigo
+  Igual 'sin commit nuevo' $antes (Estado-Git $e.Wt)
+  $rep = @(Reparaciones $e)
+  Igual 'la clave queda no se arregla, y es la pareja de carpetas' "no se arregla|$ClaveM67" "$($rep[0].resultado)|$($rep[0].clave)"
+  $json = [System.IO.File]::ReadAllText($e.Json)
+  Comprueba 'el json lleva el tipo nuevo' ($json -match '"otraCarpeta":\s*true') ''
+}
+
+$Pruebas['m67 (b3) Get-Grupos con otraCarpeta: la misma pareja de carpetas con nombres distintos es un grupo; otra pareja, otro; la cabecera dice las carpetas y, con mas ficheros, cuantos mas'] = {
+  $f = Join-Path $Dir 'm67-grupos.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @()
+function Dif([string]$Fichero, [string]$Clave, [string]$Orig, [string]$Mig, [string[]]$CarpetasOrig = $null, [string[]]$CarpetasMig = $null) {
+  $d = [ordered]@{ fichero = $Fichero; clave = $Clave; lineas = 1; linea = 1; original = $Orig; migrado = $Mig; nota = '' }
+  if ($CarpetasOrig) { $d.otraCarpeta = $true; $d.carpetasOriginal = $CarpetasOrig; $d.carpetasMigrado = $CarpetasMig }
+  return $d
+}
+function Caso-M([string]$Caso, $Dif) { [ordered]@{ job = 'cargaJob'; caso = $Caso; titulo = 't'; resultado = 'distinto'; motivo = ''; diferencias = @($Dif); fallos = @() } }
+$par = 'ficheros/enviados -> ficheros/salida'
+$res = @(
+  (Caso-M 'caso-01' @((Dif 'CIERRE_2024_06_01.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')))),
+  (Caso-M 'caso-02' @((Dif 'CIERRE_2024_06_02.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')))),
+  (Caso-M 'caso-03' @((Dif 'CIERRE_2024_06_03.txt' 'ficheros/enviados,trabajo/enviados -> ficheros/salida' 'en ficheros/enviados y trabajo/enviados' 'en ficheros/salida' @('ficheros/enviados', 'trabajo/enviados') @('ficheros/salida')))),
+  (Caso-M 'caso-04' @((Dif 'CIERRE_2024_06_04.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')), (Dif 'otro.txt' 'ficheros/salida/otro.txt' 'x' 'y'))),
+  (Caso-M 'caso-05' @((Dif 'CIERRE_2024_06_05.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')), (Dif 'CIERRE_X.txt' 'a -> b' 'en a' 'en b' @('a') @('b'))))
+)
+foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  Igual 'cuatro grupos' 4 $g.Count
+  Igual '1: la misma pareja con nombres de otra fecha: 2 casos' "1 ## fichero|ficheros/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-01,cargaJob/caso-02 ## 2 casos distintos, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados" $g[0]
+  Igual '2: una pareja a -> b (la primera en orden ordinal) y otra: la cabecera es de la primera y cuenta el fichero mas' '2 ## fichero|a -> b:otraCarpeta|ficheros/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-05 ## 1 caso distinto, el migrado deja sus ficheros en b y el original en a y 1 fichero mas' $g[1]
+  Igual '3: la misma pareja que el 1 y ademas un fichero de contenido: otro grupo, con la cabecera de la pareja y el fichero mas' '3 ## fichero|ficheros/enviados -> ficheros/salida:otraCarpeta|ficheros/salida/otro.txt:contenido ## cargaJob/caso-04 ## 1 caso distinto, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y 1 fichero mas' $g[2]
+  Igual '4: otra pareja de carpetas, con dos del original' '4 ## fichero|ficheros/enviados,trabajo/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-03 ## 1 caso distinto, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y trabajo/enviados' $g[3]
+}
+
+# Una linea de lo que el prueba-local.json de antes decia de las carpetas: 'En N casos el original deja sus ficheros en A y el migrado en B: ...'
+function Linea-M67([int]$N, [string]$Original, [string]$Migrado) {
+  return "- En $N casos el original deja sus ficheros en $Original y el migrado en ${Migrado}: da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original."
+}
+
+# Deja en el prueba-local.json de $E los casos de $Parejas: lista de (cuantos casos, carpetas del original, carpetas del migrado y, si se pone, 'dos': el primer
+# caso lleva ademas otro fichero de la misma pareja). Cada caso sale distinto, con su diferencia otraCarpeta.
+function Anterior-M67($E, $Parejas) {
+  $o = Lee-Json $E.Json
+  $casos = @()
+  $n = 0
+  foreach ($p in $Parejas) {
+    for ($i = 0; $i -lt $p[0]; $i++) {
+      $n++
+      $dif = @()
+      foreach ($nombre in @("CIERRE_2024_06_$n.txt") + @(if ($i -eq 0 -and $p.Count -gt 3) { "OTRO_2024_06_$n.txt" })) {
+        $dif += , [ordered]@{ fichero = $nombre; clave = (@($p[1]) -join ',') + ' -> ' + (@($p[2]) -join ','); lineas = 1; linea = 1; original = 'en ' + (@($p[1]) -join ' y '); migrado = 'en ' + (@($p[2]) -join ' y '); nota = ''; otraCarpeta = $true; carpetasOriginal = @($p[1]); carpetasMigrado = @($p[2]) }
+      }
+      $casos += , [ordered]@{ job = 'cargaJob'; caso = ('caso-' + $n.ToString('D2')); titulo = ''; resultado = 'distinto'; motivo = ''; diferencias = $dif; fallos = @() }
+    }
+  }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+}
+
+$Pruebas['m67 (c1) el prueba-local.json de antes con 3 casos de la misma pareja de carpetas (uno con dos ficheros de ella): sin -RehacerArnes, ni llamadas ni prompt nuevo; con -RehacerArnes, el primer intento del migrado lleva la linea, una vez, con 3 casos, y la huella no cambia'] = {
+  $e = Escenario-M64 'm67-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $huella = (Tarea-Arnes $e 'migrado').entradas.huella
+  Anterior-M67 $e @(, @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida'), 'dos'))
+  $llamadas = @(Llamadas-Arnes $e 'migrado').Count
+  $r = Prueba $e
+  Igual 'sin -RehacerArnes sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas del migrado' $llamadas @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'y el prompt de antes no lleva la linea' (-not (Registro-Arnes $e 'migrado' 1).Contains('el original deja sus ficheros')) ''
+  Anterior-M67 $e @(, @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida'), 'dos'))   # el lanzamiento de arriba lo ha pisado
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $linea = Linea-M67 3 'ficheros/enviados y trabajo/enviados' 'ficheros/salida'
+  Comprueba 'el primer intento del migrado lleva la linea de los 3 casos (el caso con dos ficheros de la pareja cuenta una vez)' ($mig.Contains($linea)) (Cola $mig)
+  Comprueba 'dentro del bloque de lo que fallo la otra vez, una sola vez' ($mig.Contains($M61Bloque) -and [regex]::Matches($mig, 'el original deja sus ficheros').Count -eq 1) (Cola $mig)
+  Comprueba 'sin la frase de las causas de fallo (no hay ninguna)' (-not $mig.Contains($M64Frase)) (Cola $mig)
+  Comprueba 'el del original no la lleva' (-not (Registro-Arnes $e 'original' 1).Contains('el original deja sus ficheros')) ''
+  Comprueba 'la tarea del migrado guarda la linea en entradas.previo' ([string](Tarea-Arnes $e 'migrado').entradas.previo -match [regex]::Escape($linea)) ''
+  Igual 'la huella del migrado no cambia' $huella (Tarea-Arnes $e 'migrado').entradas.huella
+}
+
+$Pruebas['m67 (c2) una pareja con un solo caso no sale; de las de 2 casos, las primeras por orden de firma, 3 lineas como mucho y la de mas casos primero; las carpetas se dicen con y; sin ninguna pareja repetida, el prompt no cambia'] = {
+  $e = Escenario-M64 'm67-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M67 $e @(@(1, @('g'), @('h')), @(2, @('e'), @('f')), @(2, @('c'), @('d')), @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida')), @(2, @('a'), @('b')))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $l3 = Linea-M67 3 'ficheros/enviados y trabajo/enviados' 'ficheros/salida'
+  $lab = Linea-M67 2 'a' 'b'
+  $lcd = Linea-M67 2 'c' 'd'
+  Comprueba 'la de 3 casos' ($mig.Contains($l3)) (Cola $mig)
+  Comprueba 'las de 2 casos, a -> b y c -> d, por orden de firma' ($mig.Contains($lab) -and $mig.Contains($lcd) -and $mig.IndexOf($lab) -lt $mig.IndexOf($lcd)) (Cola $mig)
+  Comprueba 'la de mas casos va antes' ($mig.IndexOf($l3) -lt $mig.IndexOf($lab)) (Cola $mig)
+  Comprueba 'tres lineas en total: la tercera pareja de 2 casos (e -> f) y la de un caso (g -> h) no salen' ([regex]::Matches($mig, 'el original deja sus ficheros').Count -eq 3 -and -not $mig.Contains('en e y el migrado') -and -not $mig.Contains('en g y el migrado')) (Cola $mig)
+  $e = Escenario-M64 'm67-c2b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Anterior-M67 $e @(@(1, @('a'), @('b')), @(1, @('c'), @('d')))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con dos parejas de un solo caso sale con 0' 0 $r.Codigo
+  Comprueba 'el prompt del migrado no lleva ni el bloque de lo que fallo la otra vez' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
 }
 
 # ================================ LANZADOR ================================
