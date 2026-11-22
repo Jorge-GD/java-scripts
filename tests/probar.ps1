@@ -6191,6 +6191,35 @@ $Pruebas['m70 (a6) las cuatro reglas de Spring se exigen aunque la plantilla tam
   }
 }
 
+$Pruebas['m70 (a7) value-sin-expresion: un comentario de varias lineas encima no descuadra la linea del @Value'] = {
+  $miembros = @'
+    /**
+     * Texto del saludo.
+     * Va en una constante, no en una propiedad.
+     * Tres lineas de comentario encima.
+     */
+    @Value("hola")
+    private String x;
+
+    private int relleno;
+
+    /*
+     * Otro comentario de varias lineas.
+     * Y despues, una propiedad de verdad.
+     * Sin nada que contar.
+     */
+    @Value("${y}")
+    private String y;
+
+    private int mas;
+'@ + "`n"
+  $e = Escenario-M70 'm70-a7' @{ Comentarios = (Clase-M70 'Comentarios' '@Component' $miembros) }
+  $h = @(Cal-M70 $e 'value-sin-expresion' | Where-Object { $_.Fichero -like '*Comentarios.java' })
+  $t = Lee $e.Repo 'src/main/java/com/acme/life/application/usecases/Comentarios.java'
+  Igual 'sale solo el campo x, en la linea de su @Value' (Linea-De $t '@Value("hola")') (@($h | ForEach-Object { $_.Linea }) -join ' ')
+  Comprueba 'y el de la propiedad (y) no sale' (@($h | Where-Object { $_.Linea -eq (Linea-De $t '@Value("${y}")') }).Count -eq 0) ($h | ForEach-Object { $_.Linea })
+}
+
 $PkgPlantilla = 'com.acme.plantilla.application.usecases'
 
 $Pruebas['m70 (b1) estilo-constructor: la plantilla usa Lombok y una clase lo escribe a mano'] = {
