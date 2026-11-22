@@ -34,7 +34,8 @@ $Cfg += @{
 # ============================== CATALOGO ==============================
 # Cada regla: id, titulo, lo que busca (una sola linea: va tal cual al prompt) y los textos de los que la cita lleva al menos uno. Los textos con
 # tilde llevan \uXXXX y salen por [regex]::Unescape (sin barras inversas que no sean esas). Fuentes: referencia de Spring Batch (late binding),
-# guia de migracion de Spring Batch 5.0, guia de Spring Boot 3.0, JEP 403.
+# guia de migracion de Spring Batch 5.0, guia de Spring Boot 3.0, JEP 403; SB-ESTADO: Sonar S3749 (miembros de un singleton de Spring), Step Scope e
+# ItemStream de Spring Batch; ERR-TRAGADA: Configuring Skip Logic de Spring Batch. Un catch vacio no es de ERR-TRAGADA: ya lo mide rescate.ps1 (catch-vacio).
 function Get-ReglasRevision {
   $r = @(
     @('SB-LISTENER', 'Listener que nadie registra',
@@ -57,7 +58,13 @@ function Get-ReglasRevision {
       @('setAccessible', 'sun.')),
     @('CAND-MUERTA', 'Clase candidata a c\u00f3digo muerto',
       'Solo en las candidatas de la unidad (las que se te dan arriba): una clase que nadie usa, ni por su nombre en la configuraci\u00f3n (.xml, .yml, .properties) ni por reflexi\u00f3n. Antes de dar el hallazgo, busca su nombre en todo el repositorio; si lo encuentras, no es hallazgo.',
-      @('class ', 'interface ', 'enum ', 'record '))
+      @('class ', 'interface ', 'enum ', 'record ')),
+    @('SB-ESTADO', 'Estado en un bean de un paso sin @StepScope',
+      'Un lector, procesador, escritor, tasklet o listener que es un bean singleton (ni la clase ni el @Bean que lo crea llevan @StepScope o @JobScope) y guarda en un campo un valor que cambia durante la ejecuci\u00f3n: un contador, una lista o un mapa al que se a\u00f1ade, el fichero o el writer abierto, una fecha del proceso. Ese valor pasa a la siguiente ejecuci\u00f3n del job en la misma JVM y a otros hilos, y la prueba en local no lo ve porque cada caso arranca una JVM nueva. El campo puede ser final si lo que guarda se modifica (una lista final a la que se a\u00f1ade). No cuentan los campos que solo se asignan en el constructor o con @Value, ni los loggers, ni las constantes. Antes de dar el hallazgo, busca d\u00f3nde se crea el bean: si su @Bean o su clase llevan @StepScope o @JobScope, aunque sea en otro fichero, no es hallazgo. Arreglo: @StepScope en el bean, o el valor en el ExecutionContext. La cita es la declaraci\u00f3n del campo o la l\u00ednea que lo cambia.',
+      @('private ', '++', '+=', '.add(', '.put(', 'this.')),
+    @('ERR-TRAGADA', 'Error tragado en un paso',
+      'Un catch en un lector, procesador, escritor, tasklet o listener que registra el error, o lo ignora con un cuerpo que no lo trata (un return null, un continue, un contador), y sigue: no relanza, no usa el skip de Spring Batch (faultTolerant(), skip, SkipPolicy) y no marca el paso como fallido (ExitStatus.FAILED, setStatus, setExitStatus). El job acaba COMPLETED aunque se pierdan registros o no se escriba un fichero. No cuenta un catch vac\u00edo (ya lo mide el diagn\u00f3stico), ni uno que guarda el error donde el job lo mira despu\u00e9s (un fichero de KO o el ExecutionContext, si el c\u00f3digo lo comprueba). Arreglo: relanzar, o declarar el skip si el negocio lo permite. La cita es la l\u00ednea del catch.',
+      @('catch'))
   )
   return @($r | ForEach-Object { [pscustomobject]@{ id = $_[0]; titulo = [regex]::Unescape($_[1]); que = [regex]::Unescape($_[2]); tokens = @($_[3]) } })
 }
