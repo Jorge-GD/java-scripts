@@ -27,12 +27,20 @@ QUE HACE
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
-     se borra y se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
+     se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
      de prueba no crea las tablas del codigo) y, con el, el del migrado. Lo mismo, sin pedirlo, si el guardado se escribio con otra
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
-     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar (Get-PrevioArnes).
+     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar y una linea por cada job (3 como
+     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes): la de salidas\vacio\causas.json o, en uno guardado antes de M69, la del
+     registro de Maven mas reciente del caso vacio del original (registros\mvn-<n>-arnes-original--caso-vacio.log), que se apunta al empezar (Save-Anterior).
+     El test que se escribe otra vez no se borra: pasa a prueba-local\arnes-anterior\<lado> (y el caso vacio del original, a
+     salidas\vacio-anterior), pisando el de la vez anterior (Save-Anterior).
+     El test del original que se escribe otra vez no puede quedar peor que el de antes con un caso vacio (el estado del job, las tablas y las columnas de
+     su base): se rechaza con lo que falta y, en el ultimo intento, se vuelve al de antes (con su caso vacio) y el del migrado, si solo se escribia otra vez
+     porque cambiaba el original, tambien; los casos hechos no se ejecutan otra vez. Tampoco puede dejar sin crear las columnas que el prueba-local.json de
+     antes decia que no creaba (en el ultimo intento se acepta con un aviso).
      Si con un caso vacio el original arranca un job y el migrado no, el test del migrado se rechaza y, en el ultimo intento, se acepta con un aviso:
      de ese job se ejecuta solo el primer caso y, si acaba EXCEPCION con la misma clase, los demas salen sin probar (no se ejecutan); la linea
      final dice que puede ser el codigo del migrado y que se lo preguntes a Copilot en el repo del migrado, sin aconsejar -RehacerArnes.
@@ -140,8 +148,8 @@ param(
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
   [switch]$Regresion,         # deja los casos que salen iguales como tests de JUnit (RegresionLocalTest) en la rama de rescate, en un commit
-  [switch]$RehacerArnes,      # borra el test del migrado guardado y lo escribe otra vez con la IA, traduciendo el del original (que no se toca)
-  [switch]$RehacerOriginal,   # borra el test del original guardado y lo escribe otra vez con la IA, y con el el del migrado, que lo traduce
+  [switch]$RehacerArnes,      # escribe otra vez con la IA el test del migrado (el de antes pasa a arnes-anterior), traduciendo el del original (que no se toca)
+  [switch]$RehacerOriginal,   # escribe otra vez con la IA el test del original (el de antes pasa a arnes-anterior), y con el el del migrado, que lo traduce
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -912,6 +920,8 @@ function Get-LineasFalloMigrado {
 #  - el ultimo motivo de la tarea de antes, si no estaba hecha (el de un test atascado ya lleva las pistas de Get-PistaArnes);
 #  - para el del original, las pistas (Get-PistaArnes sobre cada motivo, sin repetir y 3 como mucho) de los casos 'no se pudo preparar' del prueba-local.json de
 #    antes ($Anterior): casi todos esos motivos vienen del test del original.
+#  - para el del original, una linea por cada job (3 como mucho) cuyo caso vacio guardado (salidas\vacio) no acabo COMPLETED, con su estado, la clase de la excepcion
+#    y la primera linea de su causa (Get-LineasVacio): el test nuevo no debe dejarlo peor (Test-ArnesEscrito);
 #  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFalloMigrado), con una
 #    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
 #    si viene de src/main, es un fallo del migrado y no se tapa.
@@ -929,6 +939,10 @@ function Get-PrevioArnes($T, $Antes) {
       if ($pistas.Count -ge 3) { break }
     }
     if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
+  }
+  if ($T.entradas.repo -eq 'original') {
+    $vacio = @(Get-LineasVacio)
+    if ($vacio.Count -gt 0) { $partes += (@($vacio) -join "`n") }
   }
   if ($T.entradas.repo -eq 'migrado' -and $Anterior) {
     $lineas = @(Get-LineasFalloMigrado)
@@ -1166,14 +1180,166 @@ function Get-TablasFaltan([string]$Dir, [string[]]$Jobs) {
   return @(Get-TablasBatch $Dir | Where-Object { -not $hay.ContainsKey($_.tabla) })
 }
 
-# Los nombres, en mayusculas, de los <TABLA>.csv de las carpetas $Carpetas (las que existan), como las claves de una tabla hash.
+# Los nombres, en mayusculas, de los <TABLA>.csv de las carpetas $Carpetas (las que existan), como las claves de una tabla hash; el valor es la ruta del .csv.
 function Get-NombresTablas([string[]]$Carpetas) {
   $n = @{}
   foreach ($d in $Carpetas) {
-    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $n[$f.BaseName.ToUpperInvariant()] = $true } }
+    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $n[$f.BaseName.ToUpperInvariant()] = $f.FullName } }
   }
   return $n
 }
+
+# Las columnas de la primera linea (separadas por ';') de un tablas\<TABLA>.csv, sin espacios alrededor ni vacias; @() si no esta.
+function Get-Columnas([string]$Csv) {
+  if (-not (Test-Path -LiteralPath $Csv)) { return @() }
+  $l = @([System.IO.File]::ReadAllLines($Csv))
+  if ($l.Count -eq 0) { return @() }
+  return @($l[0] -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+# Que tan bien acaba el caso vacio de la carpeta de salida $Sal: 0 COMPLETED, 1 otro estado del job (FAILED, STOPPED...), 2 EXCEPCION (el job ni arranca), 3 sin estado.
+function Get-RangoEstado([string]$Sal) {
+  $estado = Get-Estado $Sal
+  if (-not $estado) { return 3 }
+  if ($estado -ceq 'COMPLETED') { return 0 }
+  if ($estado -ceq 'EXCEPCION') { return 2 }
+  return 1
+}
+
+# Como acaba el caso vacio de $Sal: su estado y, si no es COMPLETED, entre parentesis la clase de la excepcion (Get-Excepcion) y la primera linea de la causa
+# ($Causa): 'FAILED (java.nio.file.NoSuchFileException: /datos/salida/RESUMEN.txt)' o 'EXCEPCION (BeanCreationException)'. Sin estado, 'sin estado'.
+function Get-ComoAcaba([string]$Sal, [string]$Causa) {
+  $estado = Get-Estado $Sal
+  if (-not $estado) { return 'sin estado' }
+  $detalle = Get-DetalleVacio $Sal $Causa
+  if ($estado -ceq 'COMPLETED' -or -not $detalle) { return $estado }
+  return "$estado ($detalle)"
+}
+
+# El detalle de un caso vacio que no acabo COMPLETED: la clase de la excepcion si el job ni arranco (Get-Excepcion) y la primera linea de la causa ($Causa), unidas con ': '; '' si no hay ninguna.
+function Get-DetalleVacio([string]$Sal, [string]$Causa) {
+  $partes = @()
+  $clase = Get-Excepcion $Sal
+  if ($clase) { $partes += $clase }
+  $linea = (($Causa -split "`n")[0]).Trim()
+  if ($linea) { $partes += $linea }
+  return ($partes -join ': ')
+}
+
+# Las lineas del previo del original (Get-PrevioArnes) sobre su caso vacio guardado (salidas\vacio): por cada job cuyo caso no acabo COMPLETED (con estado), por orden de
+# nombre y 3 como mucho, 'Con el test de antes, el caso vacio de <job> acababa <estado>: <clase y causa>.' La causa es la de salidas\vacio\causas.json (Save-CausasVacio).
+function Get-LineasVacio {
+  $base = Join-Ruta $Local 'salidas/vacio'
+  $lineas = @()
+  if (-not (Test-Path -LiteralPath $base)) { return $lineas }
+  foreach ($d in @(Sort-Ordinal @(Get-ChildItem -LiteralPath $base -Directory | ForEach-Object { $_.Name }))) {
+    $sal = Join-Path $base $d
+    if ((Get-RangoEstado $sal) -in 0, 3) { continue }
+    $detalle = Get-DetalleVacio $sal (Get-CausaVacio $base $d)
+    $linea = "Con el test de antes, el caso vacio de $d acababa $(Get-Estado $sal)"
+    if ($detalle) { $linea += ": $detalle" }
+    $lineas += "$linea."
+    if ($lineas.Count -ge 3) { break }
+  }
+  return $lineas
+}
+
+# La causa con que acabo un job el caso vacio guardado en la carpeta $Carpeta (salidas\vacio o salidas\vacio-anterior), de su causas.json (Save-CausasVacio); si la carpeta
+# no tiene causas.json (se guardo antes de M69), la del registro de Maven mas reciente del caso vacio del original (Get-CausaRegistroVacio). '' si no la hay. Con causas.json manda
+# el, aunque no diga nada del job.
+function Get-CausaVacio([string]$Carpeta, [string]$Job) {
+  $f = Join-Path $Carpeta 'causas.json'
+  if (-not (Test-Path -LiteralPath $f)) { return (Get-CausaRegistroVacio) }
+  try { $causas = Read-Json $f } catch { return '' }
+  $p = $causas.PSObject.Properties[$Job]
+  if ($p) { return [string]$p.Value }
+  return ''
+}
+
+# La causa (primera linea) del registro de Maven mas reciente por fecha de escritura del caso vacio del arnes del original (registros\mvn-<n>-arnes-original--caso-vacio.log: el nombre
+# de Invoke-Maven con 'arnes original, caso vacio'; el contador <n> vuelve a 1 en cada lanzamiento, por eso no vale para ordenarlos), sacada de sus lineas con Get-CausaMaven y sin
+# informes de surefire (un $Desde que ninguno cumple). '' si no hay registro o no dice la causa.
+function Get-CausaRegistroVacio {
+  $carpeta = Join-Ruta $Local 'registros'
+  if (-not (Test-Path -LiteralPath $carpeta)) { return '' }
+  $registro = @(Get-ChildItem -LiteralPath $carpeta -File -Filter 'mvn-*-arnes-original--caso-vacio.log' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+  if ($registro.Count -eq 0) { return '' }
+  $causa = Get-CausaCorta (Get-CausaMaven $carpeta ([DateTime]::MaxValue) @([System.IO.File]::ReadAllLines($registro[0].FullName)))
+  return (($causa -split "`n")[0]).Trim()
+}
+
+# Apunta en $Carpeta\causas.json (salidas\vacio) la primera linea de la causa de Maven ($Causa) de cada job de $Jobs cuyo caso vacio guardado no acabo COMPLETED: estado.txt dice como
+# acabo y no por que, y el test nuevo se compara con esto (Get-PeorQueAntes) y el primer intento de uno que se escribe otra vez lo sabe (Get-PrevioArnes). Lo escribe siempre, aunque
+# vaya vacio: su presencia dice que ya se miro y Get-CausaVacio no busca en los registros, que el test nuevo pisa.
+function Save-CausasVacio([string]$Carpeta, [string[]]$Jobs, [string]$Causa) {
+  $causas = [ordered]@{}
+  $linea = (($Causa -split "`n")[0]).Trim()
+  if ($linea) { foreach ($j in $Jobs) { if ((Get-RangoEstado (Join-Path $Carpeta $j)) -ne 0) { $causas[$j] = $linea } } }
+  Write-Json (Join-Path $Carpeta 'causas.json') $causas
+}
+
+# Las frases de lo que es peor en el caso vacio que ha dejado el test nuevo de la copia $Dir ($Causa: la de su Maven) que en el del test de antes (salidas\vacio-anterior),
+# job a job: el estado (Get-RangoEstado: no puede bajar), las tablas que ya no estan (sin BATCH_ ni TASK_, como Get-TablasOriginal) y las columnas de la cabecera
+# de antes que ya no estan en las tablas que siguen (sin distinguir mayusculas). Un job sin caso vacio de antes no cuenta. @() si no es peor en nada.
+function Get-PeorQueAntes([string]$Dir, [string[]]$Jobs, [string]$Causa) {
+  $frases = @()
+  $carpetaAntes = Join-Ruta $Local 'salidas/vacio-anterior'
+  foreach ($j in $Jobs) {
+    $antes = Join-Ruta $carpetaAntes $j
+    if (-not (Test-Path -LiteralPath $antes)) { continue }
+    $ahora = Join-Ruta $Dir "target/prueba-local/$j/vacio"
+    if ((Get-RangoEstado $ahora) -gt (Get-RangoEstado $antes)) {
+      $frases += "Con tu test, el caso vacio de $j acaba $(Get-ComoAcaba $ahora $Causa) y con el test de antes acababa $(Get-ComoAcaba $antes (Get-CausaVacio $carpetaAntes $j))."
+    }
+    $tablasAntes = Get-NombresTablas @(Join-Ruta $antes 'tablas')
+    $tablasAhora = Get-NombresTablas @(Join-Ruta $ahora 'tablas')
+    $habia = @(Sort-Ordinal @($tablasAntes.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' }))
+    $faltan = @($habia | Where-Object { -not $tablasAhora.ContainsKey($_) })
+    if ($faltan.Count -gt 0) { $frases += "En el caso vacio de $j, tu base no tiene estas tablas que si tenia la del test de antes: $($faltan -join ', ')." }
+    foreach ($t in @($habia | Where-Object { $tablasAhora.ContainsKey($_) })) {
+      $siguen = @(Get-Columnas $tablasAhora[$t] | ForEach-Object { $_.ToUpperInvariant() })
+      $sin = @(Get-Columnas $tablasAntes[$t] | Where-Object { $siguen -cnotcontains $_.ToUpperInvariant() })
+      if ($sin.Count -gt 0) { $frases += "En el caso vacio de $j, la tabla $t de tu base ya no tiene estas columnas que si tenia la del test de antes: $($sin -join ', ')." }
+    }
+  }
+  return $frases
+}
+
+# Las columnas que el prueba-local.json de antes ($Anterior) daba como no creadas por el test del original ($PatronColumnaSinCrear en el motivo de sus casos), sin
+# repetir: objetos con nombre ('TABLA.COLUMNA', o solo la columna si el motivo no trae la tabla), tabla ('' si no), columna y sitio (donde la usa el codigo).
+function Get-ColumnasPedidas {
+  $pedidas = @()
+  if (-not $Anterior) { return $pedidas }
+  foreach ($motivo in @(@($Anterior.casos) | ForEach-Object { [string]$_.motivo } | Where-Object { $_ })) {
+    foreach ($m in [regex]::Matches($motivo, $PatronColumnaSinCrear)) {
+      $t = $m.Groups['t'].Value
+      $c = $m.Groups['c'].Value
+      if (@($pedidas | Where-Object { $_.tabla -ieq $t -and $_.columna -ieq $c }).Count -gt 0) { continue }
+      $nombre = $c
+      if ($t) { $nombre = "$t.$c" }
+      $pedidas += [pscustomobject]@{ nombre = $nombre; tabla = $t; columna = $c; sitio = $m.Groups['s'].Value }
+    }
+  }
+  return $pedidas
+}
+
+# De las columnas $Pedidas (Get-ColumnasPedidas), las que no estan en la cabecera de ningun tablas\<TABLA>.csv de las carpetas $Carpetas: el de su tabla si el motivo la dice y,
+# si no, el de cualquiera.
+function Get-ColumnasFaltan([string[]]$Carpetas, $Pedidas) {
+  $tablas = Get-NombresTablas $Carpetas
+  $faltan = @()
+  foreach ($p in @($Pedidas)) {
+    $esta = $false
+    foreach ($k in @($tablas.Keys | Where-Object { -not $p.tabla -or $_ -ceq $p.tabla.ToUpperInvariant() })) {
+      if (@(Get-Columnas $tablas[$k] | Where-Object { $_ -ieq $p.columna }).Count -gt 0) { $esta = $true }
+    }
+    if (-not $esta) { $faltan += $p }
+  }
+  return $faltan
+}
+
+# Las columnas de Get-ColumnasPedidas para un motivo: 'T.C (fichero:linea), U.D (fichero:linea)'.
+function Get-ListaColumnas($Columnas) { return (@($Columnas | ForEach-Object { "$($_.nombre) ($($_.sitio))" }) -join ', ') }
 
 # Las tablas de la base del test del original: las de tablas\ de su caso vacio de cada uno de los $Jobs (salidas\vacio\<job>, las que dejo Test-ArnesEscrito del
 # original), por orden de nombre y sin las de Spring Batch (BATCH_) ni las de Spring Cloud Task (TASK_), que cada lado trae a su manera (Compare-Caso las salta).
@@ -1210,6 +1376,9 @@ function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 # tablas que usa el codigo (Get-TablasFaltan) y, en el del migrado, las que tiene la base del test del original (Get-TablasOriginal): la que el codigo arma en
 # tiempo de ejecucion no sale del inventario, pero el original ya la crea. Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
 # ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
+# Un test del original que se escribe otra vez (hay uno de antes en salidas\vacio-anterior: Save-Anterior) tampoco puede dejar el caso vacio peor que el de antes
+# (estado, tablas y columnas: Get-PeorQueAntes) ni sin las columnas que el prueba-local.json de antes decia que no creaba (Get-ColumnasPedidas); en el ultimo intento, si
+# queda peor, no se guarda y se vuelve al de antes ($script:VueltaAlDeAntes; lo hace Invoke-Arneses).
 function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $dir = $T.entradas.copia
   $esOrig = ($T.entradas.repo -eq 'original')
@@ -1266,12 +1435,34 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   if ($faltan.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
     return "La base de prueba no tiene estas tablas que usa el batch: $(Get-ListaTablas $faltan). Crealas en el paso de la base limpia con las columnas que usa el codigo."
   }
+  # El test del original que se escribe otra vez no puede quedar peor que el de antes (salidas\vacio-anterior: Get-PeorQueAntes) y tiene que crear las columnas que el
+  # prueba-local.json de antes decia que le faltaban (Get-ColumnasPedidas). Se rechaza mientras quedan intentos. En el ultimo, si queda peor se vuelve al de antes
+  # ($script:VueltaAlDeAntes: no se guarda nada y Invoke-Arneses lo restaura) y, si solo faltan columnas, se acepta con un aviso. Uno guardado ($SoloAviso) no pasa por
+  # aqui. El del migrado tampoco: su caso vacio no se guarda (nada con que compararlo) y las columnas pedidas son las del test del original (las tablas del original
+  # ya las pide la puerta de arriba).
+  $sinCrear = @()
+  if ($esOrig -and -not $SoloAviso) {
+    $peor = @()
+    if ($script:Anteriores['original']) { $peor = @(Get-PeorQueAntes $dir $Jobs (Get-CausaCorta $r.Causa)) }
+    $sinCrear = @(Get-ColumnasFaltan @($Jobs | ForEach-Object { Join-Ruta $dir "target/prueba-local/$_/vacio/tablas" }) @(Get-ColumnasPedidas))
+    if ($peor.Count -gt 0 -or $sinCrear.Count -gt 0) {
+      $frases = @($peor)
+      if ($sinCrear.Count -gt 0) { $frases += "Tu base no crea estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear)." }
+      if (($T.intentos + 1) -lt [int]$Cfg.Intentos) { return ($frases -join ' ') }
+      if ($peor.Count -gt 0) {
+        $script:VueltaAlDeAntes = "El test nuevo del original quedaba peor que el de antes ($((@($peor) -join ' ').TrimEnd('.'))): sigo con el de antes."
+        return ''
+      }
+    }
+  }
   if ($esOrig) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
+    Save-CausasVacio (Join-Ruta $Local 'salidas/vacio') $Jobs (Get-CausaCorta $r.Causa)
   }
   if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Para que lo escriba otra vez con ellas, relanza con -RehacerArnes." }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
+  if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
   return ''
 }
 
@@ -1382,6 +1573,48 @@ function Save-Arnes($T) {
   Save-Copia $dir
 }
 
+# El test de $Lado ('original' o 'migrado') que se va a escribir otra vez no se borra: pasa de prueba-local\arnes\<lado> a prueba-local\arnes-anterior\<lado>,
+# pisando el de la vez anterior, y el del original lleva con el su caso vacio (salidas\vacio pasa a salidas\vacio-anterior: el nuevo lo pisa). Sin un test
+# guardado (un lanzamiento anterior se corto con el de antes ya movido), no se toca nada: sigue el que hubiera. Apunta en $script:Anteriores si hay un test de
+# antes con el que comparar el nuevo (Test-ArnesEscrito) o al que volver (Restore-Anterior).
+function Save-Anterior([string]$Lado) {
+  $actual = Join-Ruta $Local "arnes/$Lado"
+  $anterior = Join-Ruta $Local "arnes-anterior/$Lado"
+  if (Test-Path -LiteralPath $actual) {
+    Remove-Carpeta $anterior
+    Copy-Carpeta $actual $anterior
+    if ($Lado -eq 'original') {
+      # Un caso vacio guardado antes de M69 no tiene causas.json: se apunta ahora, con el registro de Maven que lo dejo (el mas reciente, mientras el test nuevo no ha corrido)
+      $vacio = Join-Ruta $Local 'salidas/vacio'
+      if ((Test-Path -LiteralPath $vacio) -and -not (Test-Path -LiteralPath (Join-Path $vacio 'causas.json'))) {
+        Save-CausasVacio $vacio @(Get-ChildItem -LiteralPath $vacio -Directory | ForEach-Object { $_.Name }) (Get-CausaRegistroVacio)
+      }
+      Remove-Carpeta (Join-Ruta $Local 'salidas/vacio-anterior')
+      Copy-Carpeta $vacio (Join-Ruta $Local 'salidas/vacio-anterior')
+    }
+    Remove-Carpeta $actual
+  }
+  $script:Anteriores[$Lado] = (Test-Path -LiteralPath $anterior)
+}
+
+# Vuelve al test de antes del arnes $T (el del original, cuando el nuevo ha quedado peor: Test-ArnesEscrito): arnes-anterior\<lado> vuelve a arnes\<lado> y a la copia de $T,
+# y salidas\vacio-anterior a salidas\vacio. Se fia del test de antes sin volver a comprobarlo: el nuevo es el que no valia. Lo compilado del nuevo se borra (target\test-classes):
+# el de antes llega con la fecha de cuando se escribio y Maven no veria que hay que compilarlo otra vez.
+function Restore-Anterior($T) {
+  $lado = $T.entradas.repo
+  $dir = $T.entradas.copia
+  Remove-Carpeta (Join-Ruta $Local "arnes/$lado")
+  Copy-Carpeta (Join-Ruta $Local "arnes-anterior/$lado") (Join-Ruta $Local "arnes/$lado")
+  if ($lado -eq 'original') {
+    Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
+    Copy-Carpeta (Join-Ruta $Local 'salidas/vacio-anterior') (Join-Ruta $Local 'salidas/vacio')
+  }
+  Undo-Copia $dir
+  Remove-Carpeta (Join-Ruta $dir 'target/test-classes')
+  Copy-Carpeta (Join-Ruta $Local "arnes/$lado") $dir
+  Save-Copia $dir
+}
+
 # Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
 # otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
 # atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
@@ -1432,6 +1665,13 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
     foreach ($t in @($Tareas | Where-Object { $_.entradas.repo -eq $repo })) {
       if ($repo -eq 'migrado') {
         if ($ArnesOrig.estado -ne 'hecha') { return }
+        # El del original ha vuelto al de antes y el del migrado solo se escribia otra vez porque cambiaba el del original: vuelve tambien al suyo (Use-ArnesGuardado lo
+        # comprueba; si ya no vale, se escribe otra vez como siempre)
+        if ($script:VueltaAlDeAntes -and $script:MigradoPorOriginal -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes-anterior/migrado'))) {
+          Copy-Carpeta (Join-Ruta $Local 'arnes-anterior/migrado') (Join-Ruta $Local 'arnes/migrado')
+          Use-ArnesGuardado $t $Jobs
+          if ($t.estado -eq 'hecha') { continue }
+        }
         $t.entradas.hashOriginal = Get-HashGuardado 'original' $t.entradas.testOriginal
         $t.entradas.huella = Get-HuellaArnes $t.entradas.test $Jobs $t.entradas.hashOriginal
         # Su primer intento sabe ya que tablas tiene la base del test del original (Test-ArnesEscrito pide las mismas): no se supo hasta que se escribio el del original
@@ -1450,13 +1690,18 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
         $m = Get-MotivoArnes $t $ll[0] $Jobs
         # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
         $sigue = [bool]($m -and $ll[0].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
-        if (-not $m) { Save-Arnes $t; $t.entradas.plantilla = Get-HashPlantillaArnes }
+        if (-not $m) {
+          if ($repo -eq 'original' -and $script:VueltaAlDeAntes) { Restore-Anterior $t } else { Save-Arnes $t }
+          $t.entradas.plantilla = Get-HashPlantillaArnes   # tambien al volver al de antes: no se escribe otra vez en cada lanzamiento por la plantilla
+        }
         elseif (-not $sigue) { Undo-Copia $t.entradas.copia }   # con $sigue, lo escrito se queda: Test-Arnes ya ha deshecho lo de fuera
         $t.entradas.prompt.SI_CORTADO = $MarcaNo
         $t.entradas.prompt.SI_DESHECHO = ''
         if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
         Set-Intento $t $m
-        if ($m) { Aviso "Arnes del $repo rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del ${repo}: bien." }
+        if ($m) { Aviso "Arnes del $repo rechazado: $(($m -split "`n")[0])" }
+        elseif ($repo -eq 'original' -and $script:VueltaAlDeAntes) { $t.motivo = $script:VueltaAlDeAntes; Save-Tarea $t; Aviso $script:VueltaAlDeAntes }
+        else { Bien "Arnes del ${repo}: bien." }
       }
     }
   }
@@ -1633,10 +1878,8 @@ function Get-MotivoBase([string]$Texto, [string]$Job) {
   if (-not $tabla) { return [pscustomobject]@{ Motivo = "La columna $nombre no existe en la base de prueba."; Definitivo = $false } }
   $frase = "La tabla $tabla no tiene la columna $nombre."
   $csv = Join-Ruta $Local "salidas/vacio/$Job/tablas/$tabla.csv"
-  if (Test-Path -LiteralPath $csv) {
-    $cabecera = @([System.IO.File]::ReadAllLines($csv))
-    if ($cabecera.Count -gt 0) { $frase += ' Sus columnas en la base de prueba son: ' + ((@($cabecera[0] -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) -join ', ') + '.' }
-  }
+  $columnas = @(Get-Columnas $csv)
+  if ($columnas.Count -gt 0) { $frase += ' Sus columnas en la base de prueba son: ' + ($columnas -join ', ') + '.' }
   return [pscustomobject]@{ Motivo = $frase; Definitivo = $false }
 }
 
@@ -3115,6 +3358,9 @@ $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repeti
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 $script:Arbol = $null   # el arbol de dependencias del migrado (Get-ArbolDependencias), la primera vez que un grupo lo pide
 $script:Anterior = Get-JsonPrueba   # el prueba-local.json de antes de este lanzamiento: Save-Resultado lo pisa y Add-Hechos lo compara
+$script:VueltaAlDeAntes = ''   # el aviso de que el test nuevo del original quedaba peor y se vuelve al de antes (Test-ArnesEscrito); '' si no
+$script:MigradoPorOriginal = $false   # el test del migrado se escribe otra vez solo porque cambia el del original, no porque se pida (-RehacerArnes): si el del original vuelve al de antes, vuelve tambien el suyo
+$script:Anteriores = @{}   # por lado (original, migrado): hay un test de antes en arnes-anterior con el que comparar el que se escribe otra vez en este lanzamiento (Save-Anterior)
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -3164,13 +3410,16 @@ try {
       if (-not $rehacer.migrado -and $x[0] -eq 'migrado') { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.' }
       $rehacer[$x[0]] = $true
     }
-    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
+    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado pasa a arnes-anterior tras la pregunta
     if ($rehacer[$x[0]]) { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
     elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     # Si el del original no queda hecho (la plantilla, o ya no vale en este commit), se escribe otra vez y el del migrado guardado tambien: lo
     # traduce (Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Sin migrado guardado no hay que dejar de fiarse de nada:
     # su tarea sigue por su intento y su motivo, como hoy.
-    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) { $rehacer.migrado = $true }
+    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) {
+      $script:MigradoPorOriginal = -not $rehacer.migrado
+      $rehacer.migrado = $true
+    }
     if ($t.estado -ne 'hecha') {   # el que se va a escribir sabe, en su primer intento, lo que fallo antes (Get-PrevioArnes)
       $t.entradas | Add-Member -NotePropertyName previo -NotePropertyValue (Get-PrevioArnes $t $antes) -Force
       Save-Tarea $t
@@ -3192,13 +3441,13 @@ try {
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
-  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Remove-Carpeta (Join-Ruta $Local "arnes/$repo") } }
+  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Save-Anterior $repo } }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   $escribeOriginal = ($ArnesOrig.estado -ne 'hecha')
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
   if ($ArnesOrig.estado -ne 'hecha') { Show-Atascado $ArnesOrig; exit 1 }
-  Reset-CasosSinProbar $tareasCasos $escribeOriginal
+  Reset-CasosSinProbar $tareasCasos ($escribeOriginal -and -not $script:VueltaAlDeAntes)
   if ($ArnesMig.estado -ne 'hecha') { Show-Atascado $ArnesMig; Aviso 'Sigo con el original: los casos quedan hechos para el proximo lanzamiento.' }
   foreach ($t in @($tareasCasos | Where-Object { $_.estado -eq 'hecha' })) {
     $guardado = Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)"

@@ -6518,5 +6518,411 @@ $Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo cortad
   Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
 }
 
+# ===================== M69: un test que se escribe otra vez no puede quedar peor que el de antes =====================
+# Escenarios con el Copilot de m69 (tests/falsos/m69-copilot.ps1) y el Maven de m69 (m69-mvn.ps1), que hacen lo de m40 y, con RESCATE_M69 (guiones separados por ';'
+# '<regex sobre el id de la tarea>@<n>@<marca>~<marca>'), dejan en el test del arnes que casa, en su llamada n (contando las de todos los lanzamientos), una linea
+# '// <marca>' por marca: M69_VERSION=<x> (solo hace distinto el test), M69_VACIO=<estado>[:<regex sobre el job>] (el estado del caso vacio: COMPLETED, FAILED,
+# EXCEPCION...), M69_CAUSA=<texto> (la causa que dice Maven), M69_TABLAS=T_A:ID|NOMBRE,T_B:ID (las tablas, con sus columnas, que deja el caso vacio).
+
+function Escenario-M69([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm69-copilot.ps1'); MvnExe = (Join-Path $falsos 'm69-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza con los guiones $Guiones de m69-copilot.ps1 (RESCATE_M69) y la base de los tests $Tablas ('tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1).
+function Prueba-M69($E, [string]$Guiones = '', [string[]]$A = @(), [string]$Tablas = '', [string]$Guion = '') {
+  $env:RESCATE_M69 = $Guiones
+  $env:RESCATE_M40 = $Tablas
+  try { return (Prueba $E $A $Guion) }
+  finally { $env:RESCATE_M69 = ''; $env:RESCATE_M40 = '' }
+}
+
+# El test que dejo guardado, en arnes-anterior, el arnes del $Repo ('original' o 'migrado'), o '' si no hay.
+function Test-Anterior($E, [string]$Repo) {
+  $paquete = 'viejo'
+  if ($Repo -eq 'migrado') { $paquete = 'nuevo' }
+  $f = Get-Ruta $E.Local "arnes-anterior/$Repo/src/test/java/com/acme/$paquete/PruebaLocalTest.java"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return [System.IO.File]::ReadAllText($f)
+}
+
+# Los ficheros de una carpeta de prueba-local, con su contenido, para comparar dos carpetas: 'ruta relativa=contenido' en orden y separados por '|'.
+function Foto-Carpeta($E, [string]$Rel) {
+  $d = Get-Ruta $E.Local $Rel
+  if (-not (Test-Path -LiteralPath $d)) { return '(no existe)' }
+  $base = (Resolve-Path -LiteralPath $d).Path
+  return ((@(Get-ChildItem -LiteralPath $d -Recurse -File | ForEach-Object { $_.FullName.Substring($base.Length).Replace('\', '/') + '=' + ([System.IO.File]::ReadAllText($_.FullName) -replace "\s+", ' ') }) | Sort-Object { $_ }) -join '|')
+}
+
+$V2 = 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2'
+
+$Pruebas['m69 (a1) con -RehacerOriginal, el test del original y el del migrado de antes acaban en arnes-anterior y salidas/vacio en salidas/vacio-anterior; sin -Rehacer..., nada se mueve'] = {
+  $e = Escenario-M69 'm69-a1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e $V2
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  Comprueba 'el caso vacio guardado lleva algo' ($v1 -match 'cargaJob/estado.txt=estado=COMPLETED') $v1
+  Comprueba 'aun no hay arnes-anterior ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  $r = Prueba-M69 $e $V2
+  Igual 'sin -Rehacer, sale con 0' 0 $r.Codigo
+  Comprueba 'sin -Rehacer no se mueve nada: ni arnes-anterior ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  Igual 'y los tests guardados son los mismos' "$o1|$m1" ((Test-Guardado $e 'original') + '|' + (Test-Guardado $e 'migrado'))
+  $r = Prueba-M69 $e $V2 @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/original es el test de antes' $o1 (Test-Anterior $e 'original')
+  Igual 'arnes-anterior/migrado es el de antes del migrado (se escribe otra vez por el original)' $m1 (Test-Anterior $e 'migrado')
+  Comprueba 'el del original guardado ahora es el nuevo (con su marca)' ((Test-Guardado $e 'original').Contains('M69_VERSION=v2') -and (Test-Guardado $e 'original') -ne $o1) ''
+  Comprueba 'y el del migrado' ((Test-Guardado $e 'migrado').Contains('M69_VERSION=v2') -and (Test-Guardado $e 'migrado') -ne $m1) ''
+  Igual 'salidas/vacio-anterior es el caso vacio de antes, entero' $v1 (Foto-Carpeta $e 'salidas/vacio-anterior')
+}
+
+$Pruebas['m69 (a2) con -RehacerArnes solo el del migrado va a arnes-anterior: el del original y salidas/vacio no se tocan'] = {
+  $e = Escenario-M69 'm69-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e $V2
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  $r = Prueba-M69 $e $V2 @('-RehacerArnes')
+  Igual 'con -RehacerArnes, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/migrado es el de antes' $m1 (Test-Anterior $e 'migrado')
+  Comprueba 'el del migrado guardado es el nuevo' ((Test-Guardado $e 'migrado').Contains('M69_VERSION=v2')) ''
+  Igual 'arnes-anterior/original no existe' '' (Test-Anterior $e 'original')
+  Comprueba 'ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  Igual 'el del original guardado no cambia' $o1 (Test-Guardado $e 'original')
+  Igual 'ni salidas/vacio' $v1 (Foto-Carpeta $e 'salidas/vacio')
+}
+
+$Pruebas['m69 (a3) un test guardado con la plantilla de otro lanzamiento (se escribe otra vez sin que nadie lo pida) tambien pasa a arnes-anterior; un tercer -RehacerOriginal pisa el de antes'] = {
+  $e = Escenario-M69 'm69-a3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'
+  Deja-Tarea-M37 $e 'original' $null 'aaaaaaaa'
+  Deja-Tarea-M37 $e 'migrado' $null 'bbbbbbbb'
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3'
+  Igual 'con la plantilla vieja, sale con 0' 0 $r.Codigo
+  Comprueba 'dice que escribe otra vez los dos' ($r.Salida.Contains($AvisoM37b)) (Cola $r.Salida)
+  Igual 'arnes-anterior/original es el de la primera vez' $o1 (Test-Anterior $e 'original')
+  $o2 = Test-Guardado $e 'original'
+  Comprueba 'y el guardado es el nuevo' ($o2.Contains('M69_VERSION=v2')) ''
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/original es ahora el de la segunda vez: pisa el de antes' $o2 (Test-Anterior $e 'original')
+  Comprueba 'y el guardado es el de la tercera' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+}
+
+# --- (b) el test nuevo del original no puede quedar peor que el de antes, y tiene que crear las columnas pedidas ---
+
+$CausaM69 = 'java.nio.file.NoSuchFileException: /datos/salida/RESUMEN.txt'
+$PeorM69 = "Con tu test, el caso vacio de cargaJob acaba FAILED ($CausaM69) y con el test de antes acababa COMPLETED."
+$TablasM69 = 'M69_TABLAS=T_A:ID|NOMBRE,T_B:ID'
+$SitioM69 = 'src/main/java/com/acme/viejo/Recibos.java:42'
+$MotivoColumnaM69 = "El test del original no crea la columna RECIBOS.IMPORTE_NETO (la usa $SitioM69)."
+
+# Deja en el prueba-local.json de antes (el $Anterior del siguiente lanzamiento) un caso que no se pudo preparar con este motivo.
+function Pone-Motivo-M69($E, [string]$Motivo) {
+  $j = Lee-Json $E.Json
+  $j.casos[0].resultado = 'no se pudo preparar'
+  $j.casos[0].motivo = $Motivo
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $j -Depth 10))
+}
+
+# El estado del caso vacio guardado (salidas/vacio) del job $Job: la linea estado= de su estado.txt.
+function Vacio-Estado-M69($E, [string]$Carpeta = 'salidas/vacio', [string]$Job = 'cargaJob') {
+  $f = Get-Ruta $E.Local "$Carpeta/$Job/estado.txt"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return ([regex]::Match([System.IO.File]::ReadAllText($f), '(?m)^estado=(\S+)').Groups[1].Value)
+}
+
+$Pruebas['m69 (b1) el caso vacio de antes es COMPLETED y el nuevo FAILED con una NoSuchFileException: el primer intento se rechaza con el motivo, el estado y la causa; el segundo, COMPLETED, se acepta'] = {
+  $e = Escenario-M69 'm69-b1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=FAILED~M69_CAUSA=$CausaM69;arnes-original@3@M69_VERSION=v3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'el original lleva tres llamadas en total: la primera vez y dos ahora' 3 (Llamadas-Arnes $e 'original').Count
+  Comprueba 'la consola rechaza el primer intento con el motivo, el estado y la causa' ($r.Salida.Contains("Arnes del original rechazado: $PeorM69")) (Cola $r.Salida)
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'original' 2).Contains($PeorM69)) (Cola (Registro-Arnes $e 'original' 2))
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el test guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+  Igual 'el caso vacio guardado es COMPLETED' 'COMPLETED' (Vacio-Estado-M69 $e)
+  Igual 'arnes-anterior es el de la primera vez' $o1 (Test-Anterior $e 'original')
+  Comprueba 'no se vuelve al de antes' ($r.Salida -notmatch 'sigo con el de antes') (Cola $r.Salida)
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m69 (b2) al nuevo le falta una tabla que antes estaba, o una columna de una tabla que antes estaba: se rechaza con lo que falta y el segundo intento, completo, se acepta'] = {
+  $e = Escenario-M69 'm69-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@$TablasM69;arnes-migrado@1@$TablasM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'el caso vacio guardado lleva las dos tablas' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/T_B.csv'))) ''
+  # el intento 1 pierde T_B; el 2 completo (con una columna de mas, que no cuenta)
+  $g = "arnes-original@2@M69_TABLAS=T_A:ID|NOMBRE;arnes-original@3@M69_TABLAS=T_A:ID|NOMBRE|EXTRA,T_B:ID;arnes-migrado@2@$TablasM69;arnes-migrado@3@$TablasM69"
+  $r = Prueba-M69 $e $g @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero por la tabla que falta' ($r.Salida.Contains('Arnes del original rechazado: En el caso vacio de cargaJob, tu base no tiene estas tablas que si tenia la del test de antes: T_B.')) (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el segundo' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv').Contains('EXTRA')) ''
+  # otra vez: el intento 1 pierde una columna de T_A (NOMBRE); el 2 la trae
+  $g = "arnes-original@4@M69_TABLAS=T_A:ID,T_B:ID;arnes-original@5@$TablasM69;arnes-migrado@3@$TablasM69;arnes-migrado@4@$TablasM69"
+  $r = Prueba-M69 $e $g @('-RehacerOriginal')
+  Igual 'la segunda vez, sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero por la columna que falta' ($r.Salida.Contains('Arnes del original rechazado: En el caso vacio de cargaJob, la tabla T_A de tu base ya no tiene estas columnas que si tenia la del test de antes: NOMBRE, EXTRA.')) (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m69 (b3) el prueba-local.json de antes dice que el test no crea RECIBOS.IMPORTE_NETO: sin ella en tablas/RECIBOS.csv se rechaza el primer intento, con ella se acepta; sin la tabla en el motivo vale en cualquier tabla'] = {
+  $e = Escenario-M69 'm69-b3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-migrado@1@M69_TABLAS=RECIBOS:ID|NOMBRE'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e $MotivoColumnaM69
+  $conColumna = 'M69_TABLAS=RECIBOS:ID|NOMBRE|IMPORTE_NETO'
+  $g = "arnes-original@2@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-original@3@$conColumna;arnes-migrado@2@$conColumna;arnes-migrado@3@$conColumna"
+  $r = Prueba-M69 $e $g @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero sin la columna, con su sitio' ($r.Salida.Contains("Arnes del original rechazado: Tu base no crea estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69).")) (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado lleva la columna' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/RECIBOS.csv').Contains('IMPORTE_NETO')) ''
+  Comprueba 'no hay aviso de columnas sin crear' ($r.Salida -notmatch 'sigue sin crear') (Cola $r.Salida)
+  # la columna esta en otra tabla: el motivo sin tabla la acepta; el motivo con la tabla RECIBOS, no
+  $e = Escenario-M69 'm69-b3b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e
+  Igual 'sin tabla: la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e "El test del original no crea la columna IMPORTE_NETO (la usa $SitioM69)."
+  $r = Prueba-M69 $e 'arnes-original@2@M69_TABLAS=OTRA:ID|IMPORTE_NETO' @('-RehacerOriginal')
+  Igual 'sin tabla: sale con 0' 0 $r.Codigo
+  Igual 'sin tabla: la tarea del original queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'sin tabla: ni rechazo ni aviso' ($r.Salida -notmatch 'sigue sin crear|Tu base no crea') (Cola $r.Salida)
+}
+
+$Pruebas['m69 (b4) en el ultimo intento sigue FAILED y antes era COMPLETED: se vuelve al de antes (la copia, arnes/original y salidas/vacio), sale el aviso y ningun caso hecho se ejecuta otra vez; el del migrado tambien vuelve'] = {
+  $e = Escenario-M69 'm69-b4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  $antes = @(1..2 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'cada caso se ejecuto 3 veces en el original' '3,3' $antes
+  $llamadas = (Llamadas $e).Count
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $r = Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'dos llamadas nuevas: las dos del original, ninguna del migrado' ($llamadas + 2) (Llamadas $e).Count
+  Comprueba 'el primer intento se rechaza' ($r.Salida.Contains("Arnes del original rechazado: $PeorM69")) (Cola $r.Salida)
+  $aviso = "El test nuevo del original quedaba peor que el de antes ($($PeorM69.TrimEnd('.'))): sigo con el de antes."
+  Comprueba 'el ultimo intento no se acepta: sale el aviso de que se sigue con el de antes' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Igual 'arnes/original es el de antes, byte a byte' $o1 (Test-Guardado $e 'original')
+  Igual 'la copia del original tiene el de antes' $o1 (Lee $e.CopiaOrig 'src/test/java/com/acme/viejo/PruebaLocalTest.java')
+  Igual 'salidas/vacio es el de antes, entero' $v1 (Foto-Carpeta $e 'salidas/vacio')
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'y guarda el motivo' ([string](Tarea-Arnes $e 'original').motivo -match 'quedaba peor que el de antes') ''
+  Igual 'el del migrado guardado es el de antes (no se rehizo: solo cambiaba el original)' $m1 (Test-Guardado $e 'migrado')
+  Comprueba 'la consola dice que el del migrado sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+  $despues = @(1..2 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'ningun caso se ejecuta otra vez en el original' $antes $despues
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m69 (b5) en el ultimo intento no queda peor pero le falta la columna pedida: se acepta con un aviso, y el test nuevo se queda'] = {
+  $e = Escenario-M69 'm69-b5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-migrado@1@M69_TABLAS=RECIBOS:ID|NOMBRE'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e $MotivoColumnaM69
+  $sin = 'M69_TABLAS=RECIBOS:ID|NOMBRE'
+  $r = Prueba-M69 $e "arnes-original@2@$sin~M69_VERSION=v2;arnes-original@3@$sin~M69_VERSION=v3;arnes-migrado@2@$sin;arnes-migrado@3@$sin" @('-RehacerOriginal')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero' ($r.Salida.Contains("Arnes del original rechazado: Tu base no crea estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69).")) (Cola $r.Salida)
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del original: bien\.') (Cola $r.Salida)
+  $aviso = "La base de tu test sigue sin crear estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal."
+  Comprueba 'con el aviso' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Comprueba 'no se vuelve al de antes' ($r.Salida -notmatch 'sigo con el de antes') (Cola $r.Salida)
+  Comprueba 'el test guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m69 (b6) antes era FAILED y el nuevo es FAILED: no se rechaza por el estado; pasar de FAILED a EXCEPCION si es peor, a STOPPED no'] = {
+  $e = Escenario-M69 'm69-b6' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso vacio guardado es FAILED' 'FAILED' (Vacio-Estado-M69 $e)
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v2" @('-RehacerOriginal')
+  Igual 'FAILED a FAILED: sale con 0' 0 $r.Codigo
+  Igual 'se acepta a la primera' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'sin rechazo ni vuelta atras' ($r.Salida -notmatch 'rechazado: Con tu test|sigo con el de antes') (Cola $r.Salida)
+  Comprueba 'el guardado es el nuevo' ((Test-Guardado $e 'original').Contains('M69_VERSION=v2')) ''
+  $r = Prueba-M69 $e 'arnes-original@3@M69_VACIO=EXCEPCION;arnes-original@4@M69_VACIO=STOPPED~M69_VERSION=v4' @('-RehacerOriginal')
+  Igual 'de FAILED a EXCEPCION y a STOPPED: sale con 0' 0 $r.Codigo
+  Comprueba 'EXCEPCION es peor que FAILED: se rechaza, con la clase y lo que acababa antes (y su causa)' ($r.Salida.Contains("Arnes del original rechazado: Con tu test, el caso vacio de cargaJob acaba EXCEPCION (BeanCreationException) y con el test de antes acababa FAILED ($CausaM69).")) (Cola $r.Salida)
+  Igual 'STOPPED no es peor que FAILED: hecha tras dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v4')) ''
+}
+
+$Pruebas['m69 (b7) un test guardado de otro lanzamiento que no se rehace no pasa por estas puertas: aunque le falte la columna pedida, se usa sin rechazo ni aviso'] = {
+  $e = Escenario-M69 'm69-b7' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-migrado@1@M69_TABLAS=RECIBOS:ID|NOMBRE'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e $MotivoColumnaM69
+  Cambia-Huella $e 'original'
+  $n = @(Llamadas $e).Count
+  $r = Prueba-M69 $e ''
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del original: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'sin aviso ni rechazo de columnas' ($r.Salida -notmatch 'sigue sin crear|Tu base no crea') (Cola $r.Salida)
+}
+
+$Pruebas['m69 (b8) las columnas se comparan sin distinguir mayusculas: el test nuevo con id y nombre en minusculas, donde antes estaba ID y NOMBRE, se acepta en el primer intento'] = {
+  $e = Escenario-M69 'm69-b8' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@$TablasM69;arnes-migrado@1@$TablasM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $minus = 'M69_TABLAS=T_A:id|nombre,T_B:id'
+  $r = Prueba-M69 $e "arnes-original@2@$minus;arnes-migrado@2@$TablasM69" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'no se rechaza nada' ($r.Salida -notmatch 'Arnes del original rechazado') (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con un intento' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el nuevo, en minusculas' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv') -cmatch 'nombre') ''
+}
+
+$Pruebas['m69 (b9) tras volver al de antes, un caso no-aplica de antes de M59 (sin hash del arnes) no se prepara otra vez: el test del original no ha cambiado'] = {
+  $e = Escenario-M69 'm69-b9' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e '' @() '' 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso 1 queda sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  Pon-Hash-M59 $e 'caso-cargaJob-01' $null
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $r = Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se vuelve al de antes' ($r.Salida.Contains('sigo con el de antes')) (Cola $r.Salida)
+  Igual 'el caso no-aplica no llama a la IA otra vez' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Comprueba 'y la consola no dice nada de prepararlo otra vez' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+  Igual 'sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+# --- (c) el primer intento del original ya sabe lo que fallo en el caso vacio de antes ---
+
+$Pruebas['m69 (c1) el previo del primer intento del original lleva una linea del caso vacio de antes que no acabo COMPLETED, con su causa; el job que si acabo no lleva ninguna; la huella no cambia'] = {
+  $e = Escenario-M69 'm69-c1' ([ordered]@{ cargaJob = @('importe=10.00'); otroJob = @('importe=20.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED:cargaJob~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'el primer intento de la primera vez no lleva nada del caso vacio de antes' (-not (Registro-Arnes $e 'original' 1).Contains('Con el test de antes')) ''
+  Igual 'el caso vacio guardado es FAILED en cargaJob y COMPLETED en otroJob' 'FAILED,COMPLETED' ((Vacio-Estado-M69 $e) + ',' + (Vacio-Estado-M69 $e 'salidas/vacio' 'otroJob'))
+  $huella = (Tarea-Arnes $e 'original').entradas.huella
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  $linea = "Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69."
+  Comprueba 'el primer intento lleva la linea de cargaJob, con su causa' ($p.Contains($linea)) (Cola $p)
+  Comprueba 'y ninguna de otroJob, que acabo COMPLETED' (-not $p.Contains('el caso vacio de otroJob')) (Cola $p)
+  Comprueba 'dentro del bloque de lo que fallo la otra vez' ($p.Contains('Lo que fallo la otra vez (de un lanzamiento anterior):')) (Cola $p)
+  Igual 'la huella de la tarea no cambia' $huella (Tarea-Arnes $e 'original').entradas.huella
+  Comprueba 'el primer intento del migrado no lleva la linea' (-not (Registro-Arnes $e 'migrado' 1).Contains('Con el test de antes')) ''
+}
+
+$Pruebas['m69 (c2) cuatro jobs cuyo caso vacio de antes acabo EXCEPCION: el previo lleva tres lineas, las de los tres primeros jobs, con la clase y la causa'] = {
+  $e = Escenario-M69 'm69-c2' ([ordered]@{ aJob = @('importe=10.00'); bJob = @('importe=20.00'); cJob = @('importe=30.00'); dJob = @('importe=40.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=EXCEPCION~M69_CAUSA=java.lang.IllegalStateException: sin correo"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Igual 'tres lineas, no cuatro' 3 ([regex]::Matches($p, 'Con el test de antes, el caso vacio de')).Count
+  foreach ($j in @('aJob', 'bJob', 'cJob')) {
+    Comprueba "la de $j, con la clase y la causa" ($p.Contains("Con el test de antes, el caso vacio de $j acababa EXCEPCION: BeanCreationException: java.lang.IllegalStateException: sin correo.")) (Cola $p)
+  }
+  Comprueba 'y la del cuarto no' (-not $p.Contains('el caso vacio de dJob')) (Cola $p)
+}
+
+# --- (d) la causa del caso vacio de antes cuando no hay causas.json (un caso vacio guardado antes de M69) ---
+
+# Deja en registros un registro de Maven del caso vacio del arnes del original (el nombre de Invoke-Maven: mvn-<n>-arnes-original--caso-vacio.log) con las
+# lineas $Lineas, escrito hace $Minutos minutos.
+function Pon-Registro-Vacio-M69($E, [int]$N, [string[]]$Lineas, [int]$Minutos = 0) {
+  $f = Get-Ruta $E.Local "registros/mvn-$N-arnes-original--caso-vacio.log"
+  [System.IO.File]::WriteAllText($f, (($Lineas -join "`n") + "`n"))
+  [System.IO.File]::SetLastWriteTimeUtc($f, [DateTime]::UtcNow.AddMinutes(-$Minutos))
+}
+
+# Deja el caso vacio guardado como lo dejaba M68: sin causas.json y sin ningun registro de Maven del caso vacio del original.
+function Deja-Vacio-De-Antes-M69($E) {
+  $c = Get-Ruta $E.Local 'salidas/vacio/causas.json'
+  if (Test-Path -LiteralPath $c) { Remove-Item -LiteralPath $c }
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local 'registros') -File -Filter 'mvn-*-arnes-original--caso-vacio.log')) { Remove-Item -LiteralPath $f.FullName }
+}
+
+$Pruebas['m69 (d1) un caso vacio FAILED guardado sin causas.json y un registro de Maven con la NoSuchFileException: el primer intento lleva la linea con la causa, y la causa se apunta en causas.json de lo guardado y de lo de antes'] = {
+  $e = Escenario-M69 'm69-d1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso vacio guardado es FAILED' 'FAILED' (Vacio-Estado-M69 $e)
+  Deja-Vacio-De-Antes-M69 $e
+  Pon-Registro-Vacio-M69 $e 7 @('[INFO] Running com.acme.viejo.PruebaLocalTest', "Caused by: $CausaM69", '[INFO] BUILD SUCCESS')
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  $linea = "Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69."
+  Comprueba 'el primer intento lleva la linea de cargaJob, con la causa del registro' ($p.Contains($linea)) (Cola $p)
+  Igual 'lo guardado de antes lleva la causa en su causas.json' $CausaM69 ([string](Lee-Json (Get-Ruta $e.Local 'salidas/vacio-anterior/causas.json')).cargaJob)
+}
+
+$Pruebas['m69 (d2) dos registros del caso vacio: la causa es la del mas reciente por fecha de escritura, no por el numero del nombre'] = {
+  $e = Escenario-M69 'm69-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Deja-Vacio-De-Antes-M69 $e
+  Pon-Registro-Vacio-M69 $e 9 @('Caused by: java.lang.IllegalStateException: de un lanzamiento viejo') 90
+  Pon-Registro-Vacio-M69 $e 2 @("Caused by: $CausaM69") 1
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento lleva la causa del registro mas reciente (el de numero 2)' ($p.Contains("Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69.")) (Cola $p)
+  Comprueba 'y no la del de numero 9' (-not $p.Contains('de un lanzamiento viejo')) (Cola $p)
+}
+
+$Pruebas['m69 (d3) con causas.json manda causas.json aunque haya un registro mas reciente con otra causa'] = {
+  $e = Escenario-M69 'm69-d3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'causas.json lleva la causa' $CausaM69 ([string](Lee-Json (Get-Ruta $e.Local 'salidas/vacio/causas.json')).cargaJob)
+  Pon-Registro-Vacio-M69 $e 50 @('Caused by: java.lang.IllegalStateException: la del registro') 0
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento lleva la causa de causas.json' ($p.Contains("Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69.")) (Cola $p)
+  Comprueba 'y no la del registro' (-not $p.Contains('la del registro')) (Cola $p)
+}
+
+$Pruebas['m69 (d4) la causa de lo guardado antes de M69 se apunta al empezar: el motivo del primer intento rechazado dice la de antes y no la del registro del intento nuevo'] = {
+  $e = Escenario-M69 'm69-d4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $c = Get-Ruta $e.Local 'salidas/vacio/causas.json'
+  Remove-Item -LiteralPath $c
+  $nueva = 'java.lang.IllegalStateException: sin correo'
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=EXCEPCION~M69_CAUSA=$nueva" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $dice = "Arnes del original rechazado: Con tu test, el caso vacio de cargaJob acaba EXCEPCION (BeanCreationException: $nueva) y con el test de antes acababa FAILED ($CausaM69)."
+  Comprueba 'el primer intento se rechaza por pasar de FAILED a EXCEPCION, con la causa de antes (la del registro de antes de empezar)' ($r.Salida.Contains($dice)) (Cola $r.Salida)
+}
+
+$Pruebas['m69 (d5) sin registro de Maven del caso vacio, o con uno sin causa: la linea sale sin causa'] = {
+  foreach ($n in @('sin-registro', 'sin-causa')) {
+    $e = Escenario-M69 "m69-d5-$n" ([ordered]@{ cargaJob = @('importe=10.00') })
+    $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+    Igual "$n : la primera vez sale con 0" 0 $r.Codigo
+    Deja-Vacio-De-Antes-M69 $e
+    if ($n -eq 'sin-causa') { Pon-Registro-Vacio-M69 $e 3 @('[INFO] Running com.acme.viejo.PruebaLocalTest', '[INFO] BUILD SUCCESS') }
+    $r = Prueba-M69 $e '' @('-RehacerOriginal')
+    Igual "$n : con -RehacerOriginal, sale con 0" 0 $r.Codigo
+    $p = Registro-Arnes $e 'original' 1
+    Comprueba "$n : la linea sale como hoy, sin causa" ($p.Contains('Con el test de antes, el caso vacio de cargaJob acababa FAILED.')) (Cola $p)
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
