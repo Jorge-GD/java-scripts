@@ -1065,8 +1065,8 @@ $Hoy = @(Get-Hoy $inicio ($inicio.AddHours(1)))
   Comprueba 'los dias de la ejecucion llevan el local y el UTC' ($v['HOY'] -and $v['HOY'].Contains($v['LOC']) -and $v['HOY'].Contains($v['UTC'])) (Cola $r.Salida)
   if ($v['OFFSET'] -and [double]$v['OFFSET'] -ne 0) { Comprueba 'con otra hora que UTC son dos dias distintos' ($v['LOC'] -ne $v['UTC'] -and @($v['HOY'] -split ',').Count -eq 2) "$($v['LOC']) $($v['UTC']) $($v['HOY'])" }
   else { Write-Host '  (esta maquina va en UTC: no se ve la diferencia entre el dia local y el UTC)' }
-  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hora>' $v['N1']
-  Igual 'con T y fraccion, tambien' 'x <hora>' $v['N2']
+  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hoy:yyyy-MM-dd><hora>' $v['N1']
+  Igual 'con T y fraccion, tambien' 'x <hoy:yyyy-MM-dd><hora>' $v['N2']
   Igual 'una fecha de negocio con hora no se toca' 'x 1980-05-12 00:00:00' $v['N3']
   Igual 'ni otra de hace dias' 'x 2026-11-16 23:45:00' $v['N4']
   Igual 'las horas sueltas se siguen tapando' 'a <hora> b' $v['N5']
@@ -4414,7 +4414,7 @@ Prueba 'vacia' ''
   Igual 'es ruta C:\... y C:/... (unidad), /a/b, y file:' 'En <ruta> y <ruta> y <ruta> y <ruta>' $v['ruta-ejemplos']
   Igual 'la ruta de la copia (<copia>) con lo que sigue, una sola ruta' 'No existe <ruta>' $v['copia']
   Igual '@ y hexadecimal, a @<id>; un correo no' 'Bean@<id> no es Bean@<id> ni ana@acme.com' $v['hex']
-  Igual 'fechas y horas como Get-Normal: la de hoy con hora y la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
+  Igual 'fechas y horas como Get-Normal: la de hoy con hora, a <hoy:formato><hora>; la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hoy:yyyy-MM-dd><hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
   Igual 'sin nada que cambiar, igual' 'java.lang.IllegalStateException: sin correo' $v['sin-nada']
   Igual 'la causa de un TypeNotPresentException no cambia' 'java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present' $v['clase']
   Igual 'recortada a 200 letras' (('x' * 200)) $v['larga']
@@ -7412,6 +7412,182 @@ $Pruebas['m73 (a4) un datos.sql que crea una secuencia, un indice, un esquema y 
   $e = Escenario-M73 'm73-a4b' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
   $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A;en' 'tablas=1/CALENDARIO_02'
   Igual 'con los mensajes de H2 en ingles tambien sale con 0' 0 $r.Codigo
+}
+
+# Un script con Get-Normal y lo de comparar que, con el dia 2026-11-22 como el de la ejecucion ($Hoy), por cada 'Caso <id> @{ carpeta/fichero = contenido } @{ ... }' de $Cuerpo (el original
+# y el migrado) escribe una linea 'R <id> <tipo>|<fichero>|<original>|<migrado>|<lineas>|<linea>|<nota>|<clave>' por diferencia (Get-TipoDif), o 'R <id> (ninguna)'. Un contenido que es un
+# [byte[]] se escribe tal cual. Devuelve id -> sus lineas. $Extra son mas funciones del script (las de leer un Excel o un zip, desde M73 (c)).
+function Compara-M73([string]$Nombre, [string]$Cuerpo) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Raiz)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Cfg = @{ CompararIgnorar = @('*.log') }
+Add-Type -AssemblyName System.IO.Compression
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
+  $dirs = @{}
+  foreach ($x in @(@('A', $A), @('B', $B))) {
+    $d = Join-Path (Join-Path $Raiz $Id) $x[0]
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    foreach ($k in $x[1].Keys) {
+      $p = Join-Path $d $k
+      [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      if ($x[1][$k] -is [byte[]]) { [System.IO.File]::WriteAllBytes($p, $x[1][$k]) } else { [System.IO.File]::WriteAllText($p, $x[1][$k]) }
+    }
+    $dirs[$x[0]] = $d
+  }
+  $dif = @(Compare-Caso $dirs.A $dirs.B)
+  $dif = @(Join-OtraCarpeta $dif $dirs.A $dirs.B)
+  foreach ($d in $dif) { 'R ' + $Id + ' ' + (Get-TipoDif $d) + '|' + $d.fichero + '|' + $d.original + '|' + $d.migrado + '|' + $d.lineas + '|' + $d.linea + '|' + $d.nota + '|' + $d.clave }
+  if ($dif.Count -eq 0) { 'R ' + $Id + ' (ninguna)' }
+}
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $FnComparaM73) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
+  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')))
+  $v = [ordered]@{}
+  foreach ($l in @($r.Salida -split "`n")) {
+    if ($l -cmatch '^R (\S+) (.*)$') { $id = $Matches[1]; if (-not $v.Contains($id)) { $v[$id] = @() }; $v[$id] += $Matches[2].TrimEnd() }
+  }
+  if ($v.Count -eq 0) { Comprueba "${Nombre}: el script da alguna linea R" $false (Cola $r.Salida) }
+  return $v
+}
+# Las funciones del script que necesita Compara-M73; M73 (c) anade las de leer por dentro.
+$FnComparaM73 = @('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado')
+
+# Get-Normal del dia 2026-11-22 sobre cada texto de $Textos (uno por linea, sin saltos): devuelve lo que sale, en el mismo orden.
+function Normaliza-M73([string]$Nombre, [string[]]$Textos) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Entrada)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+'@
+  $cuerpo = @'
+foreach ($l in [System.IO.File]::ReadAllLines($Entrada)) { 'N ' + (Get-Normal $l) }
+'@
+  $en = Join-Path $Dir "$Nombre.txt"
+  [System.IO.File]::WriteAllLines($en, $Textos)
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Get-Normal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($en)
+  return @(@($r.Salida -split "`n") | Where-Object { $_ -cmatch '^N ' } | ForEach-Object { $_.Substring(2).TrimEnd("`r") })
+}
+
+$Pruebas['m73 (b1) la misma fecha de hoy con hora en una carpeta del original y del migrado, con otra hora cada uno (informes/<hoy>-10-26-58/ y informes/<hoy>-10-31-07/): se emparejan por su clave y, con el mismo contenido, salen iguales; con otro, distintos'] = {
+  $cuerpo = @'
+Caso 'igual' @{ 'informes/2026-11-22-10-26-58/resumen.txt' = "importe;10`n" } @{ 'informes/2026-11-22-10-31-07/resumen.txt' = "importe;10`n" }
+Caso 'distinto' @{ 'informes/2026-11-22-10-26-58/resumen.txt' = "importe;10`n" } @{ 'informes/2026-11-22-10-31-07/resumen.txt' = "importe;11`n" }
+Caso 'dos-ejecuciones' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "b`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n"; 'informes/2026-11-22-10-31-09/r.txt' = "b`n" }
+Caso 'dos-una-distinta' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "b`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n"; 'informes/2026-11-22-10-31-09/r.txt' = "c`n" }
+Caso 'dos-y-una' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "a`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n" }
+'@
+  $v = Compara-M73 'm73-b1' $cuerpo
+  Igual 'el mismo contenido en las dos carpetas con hora: ninguna diferencia' @('(ninguna)') @($v['igual'])
+  Igual 'otro contenido: una de contenido, con la ruta del original y la clave normalizada' @('contenido|informes/2026-11-22-10-26-58/resumen.txt|importe;10|importe;11|1|1||informes/<hoy:yyyy-MM-dd><hora>/resumen.txt') @($v['distinto'])
+  Igual 'dos carpetas con hora en cada lado: se emparejan por orden y salen iguales' @('(ninguna)') @($v['dos-ejecuciones'])
+  Igual 'dos carpetas con hora en cada lado y la segunda distinta: una sola diferencia, la de la segunda' @('contenido|informes/2026-11-22-10-27-00/r.txt|b|c|1|1||informes/<hoy:yyyy-MM-dd><hora>/r.txt') @($v['dos-una-distinta'])
+  Igual 'dos en el original y una en el migrado: la que sobra en el original, falta' @('falta|informes/2026-11-22-10-27-00/r.txt|a|(no esta)|1|1||informes/<hoy:yyyy-MM-dd><hora>/r.txt') @($v['dos-y-una'])
+}
+
+$Pruebas['m73 (b2) la hora de hoy con cualquier separador (-, _, ., :, T, espacio, coma o nada), con o sin milisegundos y en cualquier formato de fecha de hoy, pasa a la marca del formato y <hora>'] = {
+  $esperado = [ordered]@{
+    '2026-11-22 10:26:58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T10:26:58.123'     = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T10:26:58,123456'  = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22-10-26-58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22_10-26-58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22_10_26_58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22.10.26.58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22-10-26-58-123'     = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T102658'           = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22 102658123'        = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22 10:26'            = '<hoy:yyyy-MM-dd><hora>'
+    '20261122_102658'             = '<hoy:yyyyMMdd><hora>'
+    '20261122102658'              = '<hoy:yyyyMMdd><hora>'
+    '20261122102658123'           = '<hoy:yyyyMMdd><hora>'
+    '20261122T10:26:58'           = '<hoy:yyyyMMdd><hora>'
+    '22/11/2026 10:26:58'         = '<hoy:dd/MM/yyyy><hora>'
+    '22/11/2026, 10:26:58'        = '<hoy:dd/MM/yyyy><hora>'
+    '22/11/2026-10-26-58'         = '<hoy:dd/MM/yyyy><hora>'
+    '22112026_102658'             = '<hoy:ddMMyyyy><hora>'
+    '2026_11_22-10_26_58'         = '<hoy:yyyy_MM_dd><hora>'
+    '2026/11/22 10:26:58'         = '<hoy:yyyy/MM/dd><hora>'
+    '22-11-2026 10:26:58'         = '<hoy:dd-MM-yyyy><hora>'
+    '22-11-2026_10-26-58'         = '<hoy:dd-MM-yyyy><hora>'
+    '22.11.2026 10.26.58'         = '<hoy:dd.MM.yyyy><hora>'
+    '22.11.2026 10:26:58'         = '<hoy:dd.MM.yyyy><hora>'
+    '2026.11.22 10:26:58'         = '<hoy:yyyy.MM.dd><hora>'
+    '22_11_2026-10_26_58'         = '<hoy:dd_MM_yyyy><hora>'
+    '11/22/2026 10:26:58'         = '<hoy:MM/dd/yyyy><hora>'
+    '11-22-2026 10:26:58'         = '<hoy:MM-dd-yyyy><hora>'
+    'informes/2026-11-22-10-26-58/resumen.xlsx' = 'informes/<hoy:yyyy-MM-dd><hora>/resumen.xlsx'
+    'informes_20261122_102658.csv' = 'informes_<hoy:yyyyMMdd><hora>.csv'
+    'en 2026-11-22 y en 22/11/2026' = 'en <hoy:yyyy-MM-dd> y en <hoy:dd/MM/yyyy>'
+    'a las 10:26:58 y a las 10:26:58.123' = 'a las <hora> y a las <hora>'
+    'dos: 2026-11-22 10:26:58 y 2026-11-22 10:31:07' = 'dos: <hoy:yyyy-MM-dd><hora> y <hoy:yyyy-MM-dd><hora>'
+  }
+  $v = Normaliza-M73 'm73-b2' @($esperado.Keys)
+  $i = 0
+  foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
+  # Dos horas distintas del mismo dia dan el mismo texto: es lo que hace que el original y el migrado salgan iguales.
+  $dos = Normaliza-M73 'm73-b2b' @('informes/2026-11-22-10-26-58/resumen.xlsx', 'informes/2026-11-22-10-31-07/resumen.xlsx', 'r_20261122_102658.txt', 'r_20261122_103107.txt')
+  Igual 'dos horas, la misma ruta normalizada' $dos[0] $dos[1]
+  Igual 'dos horas sin separador, el mismo nombre normalizado' $dos[2] $dos[3]
+}
+
+$Pruebas['m73 (b3) lo que no es de la ejecucion sigue como esta: una fecha de otro dia con hora (en cualquier formato), una hora sin fecha ni dos puntos, un numero de 6 cifras y una fecha de hoy que no es fecha'] = {
+  $quedan = @(
+    '1980-05-12 00:00:00',
+    '2026-11-21 10:26:58',
+    '2026-11-21T10:26:58.123',
+    '12/05/1980 10:00:00',
+    '21/11/2026 10:26:58',
+    '12-05-1980 10:00:00',
+    '2026-11-21-10-26-58',
+    '20261121_102658',
+    'a las 10-26-58 y las 10.26.58',
+    'importe 102658 y 10:26',
+    'id=220000 y 2026-13-22 y 2026-11-2',
+    'Nov 22, 2026 y 22-nov-2026 y 22/11/26'
+  )
+  $v = Normaliza-M73 'm73-b3' $quedan
+  for ($i = 0; $i -lt $quedan.Count; $i++) { Igual $quedan[$i] $quedan[$i] $v[$i] }
+  $cuerpo = @'
+Caso 'negocio' @{ 'a.txt' = "vence 1980-05-12 00:00:00`n" } @{ 'a.txt' = "vence 1980-05-11 23:00:00`n" }
+Caso 'negocio-igual' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" }
+Caso 'negocio-otro-formato' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 11:00:00`n" }
+Caso 'hoy' @{ 'a.txt' = "hecho 2026-11-22 10:26:58`n" } @{ 'a.txt' = "hecho 2026-11-22 10:31:07`n" }
+'@
+  $c = Compara-M73 'm73-b3c' $cuerpo
+  Igual 'una fecha de negocio con hora que cambia: contenido' @('contenido|a.txt|vence 1980-05-12 00:00:00|vence 1980-05-11 23:00:00|1|1||a.txt') @($c['negocio'])
+  Igual 'la misma, igual' @('(ninguna)') @($c['negocio-igual'])
+  Igual 'una fecha de negocio dd/MM/yyyy con hora que cambia: contenido' @('contenido|a.txt|vence 12/05/1980 10:00:00|vence 12/05/1980 11:00:00|1|1||a.txt') @($c['negocio-otro-formato'])
+  Igual 'la de hoy con otra hora: igual' @('(ninguna)') @($c['hoy'])
+}
+
+$Pruebas['m73 (b4) una marca de tiempo Unix de hoy en segundos (10 cifras) o en milisegundos (13) pasa a <hora>; un numero de 10 o 13 cifras fuera de los dias de la ejecucion, no'] = {
+  $esperado = [ordered]@{
+    'ts=1795348800'                = 'ts=<hora>'
+    'ts=1795348800123'             = 'ts=<hora>'
+    'a 1795348800 y 1795348800999 b' = 'a <hora> y <hora> b'
+    '{"t":1795348800,"u":1795348800123}' = '{"t":<hora>,"u":<hora>}'
+    'ayer 1795262400'              = 'ayer 1795262400'
+    'ayer 1795262400123'           = 'ayer 1795262400123'
+    'manana 1795435200'            = 'manana 1795435200'
+    'de hace anos 1700000000'      = 'de hace anos 1700000000'
+    'una cuenta 1234567890'        = 'una cuenta 1234567890'
+    'un numero 1795348800123456'   = 'un numero 1795348800123456'
+    'once 17953488001'             = 'once 17953488001'
+    'decimal 1.1795348800'         = 'decimal 1.1795348800'
+    'de 9 cifras 179534880'        = 'de 9 cifras 179534880'
+  }
+  $v = Normaliza-M73 'm73-b4' @($esperado.Keys)
+  $i = 0
+  foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
 }
 
 # ================================ LANZADOR ================================

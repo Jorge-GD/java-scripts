@@ -2227,22 +2227,39 @@ function Get-Hoy([datetime]$Desde, [datetime]$Hasta) {
   return @($dias | Select-Object -Unique)
 }
 
-# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las fechas con hora de la
-# ejecucion ($Hoy: la fecha y la hora juntas pasan a <hora>), las horas sueltas (HH:mm:ss y sus fracciones, sin fecha delante: tambien
-# pasan a <hora>) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato se sigue viendo), con la
-# hora pegada detras (aaaammdd_hhmmss). Una fecha con hora que no es de $Hoy es un dato del negocio y se queda como esta, hora incluida:
-# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. $Dias son los dias de la ejecucion que dejo ese texto (por defecto,
-# $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
+# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra, en el contenido de un fichero y en su ruta (la clave con la que se emparejan los
+# ficheros de los dos lados es la ruta normalizada, Compare-Caso): la ruta de cada copia (<copia>); una marca de tiempo Unix de un dia de la ejecucion (10 cifras en segundos o
+# 13 en milisegundos, en UTC o en hora local: <hora>; un numero de 10 o 13 cifras de otro dia, no); la fecha de hoy en cada formato (<hoy:formato>: cada formato con su marca,
+# un cambio de formato se sigue viendo) y, si lleva detras una hora HH?mm?ss (el separador de las horas, de los minutos y de los segundos, el mismo: - _ . : o ninguno; entre la
+# fecha y la hora, - _ . : T, una coma o un espacio, o nada; con fraccion .123 ,123 -123 o 123 pegada), <hoy:formato><hora> (HH:mm sin segundos tambien, solo con dos puntos);
+# las horas sueltas (HH:mm:ss y sus fracciones, sin una fecha de otro dia delante) pasan a <hora>. Una fecha con hora que no es de $Dias es un dato del negocio y se queda
+# como esta, hora incluida: si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. Los formatos de fecha no son los de texto (Nov 22, 2026) ni los de dos
+# cifras de anio. $Dias son los dias de la ejecucion que dejo ese texto (por defecto, $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
 function Get-Normal([string]$Texto, $Dias = $null) {
   if ($null -eq $Dias) { $Dias = $Hoy }
   $t = $Texto
   foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
-  foreach ($d in $Dias) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
-  $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
-  foreach ($d in $Dias) {
-    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
+  $ticks = @($Dias | ForEach-Object { $_.Date.Ticks })
+  $epoca = New-Object System.DateTime 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc)
+  $marcas = [regex]::Matches($t, '(?<![\d.])\d{10}(?:\d{3})?(?!\d)')
+  for ($i = $marcas.Count - 1; $i -ge 0; $i--) {
+    $segundos = [double]$marcas[$i].Value
+    if ($marcas[$i].Length -eq 13) { $segundos = [Math]::Floor($segundos / 1000) }
+    $utc = $epoca.AddSeconds($segundos)
+    if ($ticks -contains $utc.Date.Ticks -or $ticks -contains $utc.ToLocalTime().Date.Ticks) { $t = $t.Remove($marcas[$i].Index, $marcas[$i].Length).Insert($marcas[$i].Index, '<hora>') }
   }
-  return ($t -replace '(<hoy:[^>]+>)[_\-T\. ]?\d{6}(\d{3})?(?!\d)', '$1<hora>')
+  $h = '(?:[01]\d|2[0-3])'
+  $m = '[0-5]\d'
+  $hora = '(?:' + $h + '(?<s>[-_.:])' + $m + '\k<s>' + $m + '(?:[.,]\d+|[-_]\d{3}(?!\d))?|' + $h + $m + $m + '(?:\d{3})?(?!\d)|' + $h + ':' + $m + '(?![\d:]))'
+  foreach ($d in $Dias) {
+    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd', 'yyyy/MM/dd', 'dd-MM-yyyy', 'dd.MM.yyyy', 'yyyy.MM.dd', 'dd_MM_yyyy', 'MM/dd/yyyy', 'MM-dd-yyyy')) {
+      $fecha = $d.ToString($f, $Inv)
+      if (-not $t.Contains($fecha)) { continue }
+      $t = [regex]::Replace($t, [regex]::Escape($fecha) + '(?:[Tt_\-.:]|,?[ ]+)?' + $hora, "<hoy:$f><hora>")
+      $t = $t.Replace($fecha, "<hoy:$f>")
+    }
+  }
+  return ($t -replace '(?<!\d{4}[-/._]\d{2}[-/._]\d{2}[ Tt]|\d{2}[-/._]\d{2}[-/._]\d{4}[ Tt])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>')
 }
 
 # Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
@@ -2390,13 +2407,27 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
       $rel = Get-Rel $lado[1] $f.FullName
       if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$' -or (Test-Ignorado $rel)) { continue }
       $k = Get-Normal $rel $lado[2]
-      if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = ''; B = ''; Rel = $rel } }
-      $pares[$k][$lado[0]] = $f.FullName
+      if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = (New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)); B = (New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)) } }
+      $pares[$k][$lado[0]][$rel] = $f.FullName
+    }
+  }
+  # Dos ficheros de un lado con la misma clave y otra ruta (la carpeta con la hora de dos ejecuciones del job) se emparejan, por orden de ruta, con los del otro lado.
+  $emparejados = @()
+  foreach ($k in @($pares.Keys | Sort-Object)) {
+    $ra = [string[]]@($pares[$k].A.Keys)
+    $rb = [string[]]@($pares[$k].B.Keys)
+    [System.Array]::Sort($ra, [System.StringComparer]::Ordinal)
+    [System.Array]::Sort($rb, [System.StringComparer]::Ordinal)
+    for ($i = 0; $i -lt [Math]::Max($ra.Count, $rb.Count); $i++) {
+      $p = @{ Clave = $k; A = ''; B = ''; Rel = '' }
+      if ($i -lt $ra.Count) { $p.A = $pares[$k].A[$ra[$i]]; $p.Rel = $ra[$i] }
+      if ($i -lt $rb.Count) { $p.B = $pares[$k].B[$rb[$i]]; if (-not $p.Rel) { $p.Rel = $rb[$i] } }
+      $emparejados += , $p
     }
   }
   $dif = @()
-  foreach ($k in @($pares.Keys | Sort-Object)) {
-    $p = $pares[$k]
+  foreach ($p in $emparejados) {
+    $k = $p.Clave
     $tabla = ($p.Rel -cmatch '^tablas/.+\.csv$')
     # Una tabla en un solo lado sin ninguna fila de datos (vacia, solo la cabecera o lineas en blanco) es como una tabla que no esta.
     if ($tabla -and -not ($p.A -and $p.B) -and @(Get-LineasNormales ($p.A + $p.B) | Where-Object { $_.Trim() }).Count -le 1) { continue }
