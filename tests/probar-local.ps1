@@ -1214,7 +1214,7 @@ $Pruebas['62 m20b (i): la huella del arnes cambia (la plantilla) y el test guard
   Comprueba 'no dice que lo vuelve a escribir' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
 }
 
-$Pruebas['63 m20b (j): la huella cambia y el test guardado del original ya no compila: se llama a la IA para el original y, como el del migrado lo traduce, tambien para el migrado; sin el aviso de volver a escribir'] = {
+$Pruebas['63 m20b (j): la huella cambia y el test guardado del original ya no compila: se llama a la IA para el original y, como el del migrado lo traduce, tambien para el migrado; con el aviso de que el del original se vuelve a escribir'] = {
   $e = Nuevo-Escenario 'm20b-huella-rota' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
   $r = Prueba $e
   Igual 'la primera vez sale con 0' 0 $r.Codigo
@@ -1226,7 +1226,7 @@ $Pruebas['63 m20b (j): la huella cambia y el test guardado del original ya no co
   Igual 'dos llamadas: el arnes del original y el del migrado (que traduce el nuevo, aunque el suyo siga valiendo)' ($n + 2) @(Llamadas $e).Count
   Comprueba 'el del migrado no se usa sin llamar' ($r.Salida -notmatch 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
   Comprueba 'el del original no dice que se use el de antes' ($r.Salida -notmatch 'Arnes del original: bien \(el test de otro lanzamiento') (Cola $r.Salida)
-  Comprueba 'ni lo de volver a escribir (la tarea ya era nueva)' ($r.Salida -notmatch 'se vuelve a escribir') (Cola $r.Salida)
+  Comprueba 'avisa de que el test guardado del original ya no vale y se vuelve a escribir (M78: tambien cuando la tarea no estaba hecha)' ($r.Salida -match 'PruebaLocalTest del original de otro lanzamiento ya no vale en este commit \(.*\): se vuelve a escribir\.') (Cola $r.Salida)
   Igual 'la tarea del original queda hecha, con la IA' 'hecha' (Tarea-Arnes $e 'original').estado
   Comprueba 'y lo guardado ahora es lo que escribio la IA, que compila' (-not ((Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'arnes/original') -Recurse -File | ForEach-Object { [System.IO.File]::ReadAllText($_.FullName) }) -join '' ).Contains('NO_COMPILA'))
 }
@@ -8367,6 +8367,40 @@ $Pruebas['m78 (a3) una copia vieja en arnes-invalidado\ se sustituye, no se mezc
     Igual "arnes-invalidado\$lado es lo guardado ahora, sin nada de la copia vieja" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes-invalidado/$lado")
     Comprueba "y no queda el fichero de antes ($lado)" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes-invalidado/$lado/restos-de-antes.txt")))
   }
+}
+
+# --- (b) Use-ArnesGuardado avisa siempre que descarta un test guardado ---
+
+# El job sale bien una vez; el usuario cambia el PruebaLocalTest guardado del original (un comentario: cambia su hash y con el la huella del arnes del migrado, que lo traduce, de modo
+# que su tarea ya no esta hecha) y, si $RompeMigrado, deja un test del migrado que no compila. Se relanza.
+function Relanza-M78([string]$Nombre, [bool]$RompeMigrado) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Retoca-M78 $e 'original' '// retocado a mano'
+  if ($RompeMigrado) { Rompe-Arnes-Guardado $e 'migrado' }
+  $n = @(Llamadas-Arnes $e 'migrado').Count
+  $r = Prueba $e
+  return [pscustomobject]@{ e = $e; r = $r; n = $n }
+}
+
+$Pruebas['m78 (b1) la tarea del migrado no estaba hecha (cambio el test del original) y su test guardado no compila: avisa de que ya no vale y se vuelve a escribir'] = {
+  $v = Relanza-M78 'm78-b1' $true
+  $e = $v.e; $r = $v.r
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el aviso dice que el test del migrado ya no vale en este commit y que se vuelve a escribir' ($r.Salida -match "PruebaLocalTest del migrado de otro lanzamiento $AvisoM78 \(.*\): se vuelve a escribir\.") (Cola $r.Salida)
+  Comprueba 'el del original, que sigue valiendo, no lleva aviso' ($r.Salida -notmatch 'PruebaLocalTest del original de otro lanzamiento') (Cola $r.Salida)
+  Igual 'el del migrado se escribe otra vez: una llamada mas' ($v.n + 1) @(Llamadas-Arnes $e 'migrado').Count
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+}
+
+$Pruebas['m78 (b2) con el mismo cambio y un test del migrado que si vale: bien, sin aviso y sin llamar a Copilot para el migrado'] = {
+  $v = Relanza-M78 'm78-b2' $false
+  $e = $v.e; $r = $v.r
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que el test del migrado de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'sin aviso de que ya no vale' (-not $r.Salida.Contains($AvisoM78)) (Cola $r.Salida)
+  Igual 'sin llamadas a Copilot para el migrado' $v.n @(Llamadas-Arnes $e 'migrado').Count
 }
 
 # ================================ LANZADOR ================================

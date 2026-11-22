@@ -1858,8 +1858,9 @@ function Restore-Anterior($T) {
 
 # Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
 # otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
-# atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
-# hecha vuelve a empezar (y se avisa), una que ya estaba por hacer sigue como estaba. Que le falten tablas a su base de prueba no lo
+# atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace y se avisa siempre
+# (aunque la tarea no estuviera hecha: el usuario puede haberlo arreglado a mano); una tarea hecha vuelve a empezar, una que ya
+# estaba por hacer sigue como estaba. Que le falten tablas a su base de prueba no lo
 # invalida (un arnes que ya sale todo igual no se rehace por eso): solo se avisa.
 function Use-ArnesGuardado($T, [string[]]$Jobs) {
   $estabaHecha = ($T.estado -eq 'hecha')
@@ -1875,8 +1876,8 @@ function Use-ArnesGuardado($T, [string[]]$Jobs) {
     return
   }
   Undo-Copia $T.entradas.copia
-  if (-not $estabaHecha) { return }
   Aviso "El test PruebaLocalTest del $($T.entradas.repo) de otro lanzamiento ya no vale en este commit ($(($m -split "`n")[0])): se vuelve a escribir."
+  if (-not $estabaHecha) { return }
   $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
   Save-Tarea $T
 }
