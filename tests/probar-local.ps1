@@ -7910,5 +7910,78 @@ $Pruebas['m73 (c7) cada tipo, por su lado: una extension de binario sin ningun b
   Comprueba 'tres zips dentro: el tercero ya es un binario' ($l.Count -eq 1 -and $l[0] -cmatch ('^l1\.zip: l2\.zip: l3\.zip: ' + $bin.TrimStart('^'))) ($l -join '|')
 }
 
+# ===================== M77: la prueba en local dice quien no arranca (original o migrado, test o codigo) y no ejecuta casos que no valen =====================
+# m77-mvn.ps1 (sobre m48-mvn.ps1) deja, segun el guion de RESCATE_M77 ('guion:regex sobre job/caso', separados por ';'), un job que no arranca o que falla igual: el
+# original con NoSuchBeanDefinitionException (orig-bean), BeanCreationException (orig-creacion), JobParametersInvalidException (orig-parametros) o FAILED con una
+# NoSuchFileException de una carpeta fija (orig-failed, orig-failed-caso); el migrado con una clase final (mig-proxy), una referencia circular (mig-circular) o un
+# bean repetido (mig-override); o los dos lados (ambos-bean). RESCATE_M48 sigue valiendo.
+
+$M77Bean = "org.springframework.beans.factory.NoSuchBeanDefinitionException: No bean named 'contableConfig' available"
+$M77Fichero = 'java.nio.file.NoSuchFileException: C:\datos\salida\outbox'
+$M77Motivo = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
+
+function Escenario-M77([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm77-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes $aj)
+}
+
+# Lanza con los guiones $Guion de m77-mvn.ps1 y, con $M48, los de m48-mvn.ps1.
+function Prueba-M77($E, [string]$Guion, [string[]]$A = @(), [string]$M48 = '') {
+  $env:RESCATE_M77 = $Guion
+  $env:RESCATE_M48 = $M48
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M77 = ''; $env:RESCATE_M48 = '' }
+}
+
+# Los casos de un job que han tenido un Maven de $Lado (original, original-2 o migrado) en este lanzamiento, por su registro en prueba-local\registros: 'caso-01,caso-02'.
+function Casos-M77($E, [string]$Lado, [string]$Job = 'cargaJob') {
+  $d = Get-Ruta $E.Local 'registros'
+  if (-not (Test-Path -LiteralPath $d)) { return '' }
+  return ((@(Get-ChildItem -LiteralPath $d -File -Filter "mvn-*-$Lado-$Job-caso-*.log" | ForEach-Object { [regex]::Match($_.Name, '(caso-\d+)\.log$').Groups[1].Value } | Sort-Object)) -join ',')
+}
+
+$Pruebas['m77 (a1) cargaJob con 5 casos y el original con NoSuchBeanDefinitionException en todos: del original (y del original-2) se ejecutan los 3 primeros, del migrado los mismos 3, y los otros 2 salen sin probar con el motivo nuevo'] = {
+  $e = Escenario-M77 'm77-a1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-'
+  Igual 'sale con 2 (los 3 primeros salen distintos)' 2 $r.Codigo
+  Igual 'el original ejecuta solo los 3 primeros casos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original')
+  Igual 'el original-2, los mismos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original-2')
+  Igual 'el migrado, los mismos: ninguno mas de ese job en ningun lado' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado')
+  Igual 'los tres primeros distintos y los otros 2 sin probar' 'distinto,distinto,distinto,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  foreach ($c in @('caso-04', 'caso-05')) { Igual "el motivo de $c" $M77Motivo "$((Caso $e 'cargaJob' $c).motivo)" }
+  Comprueba 'la consola dice que para tras los 3 primeros' ($r.Salida -match 'El original no arranca el job cargaJob con este test \(NoSuchBeanDefinitionException\): no ejecuto sus demas casos') (Cola $r.Salida)
+  Comprueba 'y no guarda salida del original del cuarto caso' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-04'))) ''
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-'
+  Igual 'otro lanzamiento (los 3 primeros se reutilizan): los 2 siguen sin probar' 'distinto,distinto,distinto,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  Comprueba 'y tampoco ejecuta ahora el cuarto en el original' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-04'))) ''
+}
+
+$Pruebas['m77 (a2) no se para con causas distintas en los 3 primeros casos, con solo 2 iguales, ni con un job de menos de 3 casos'] = {
+  $e = Escenario-M77 'm77-a2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); tarifaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-0[13]$;orig-creacion:^cargaJob/caso-02$;orig-bean:^remesaJob/caso-0[12]$;orig-bean:^tarifaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'cargaJob (3 causas distintas en los 3 primeros): sus 4 casos en el original' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'original' 'cargaJob')
+  Igual 'y en el migrado' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'migrado' 'cargaJob')
+  Igual 'remesaJob (2 iguales y el tercero bien): sus 4 casos en el original' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'original' 'remesaJob')
+  Igual 'y en el migrado' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'migrado' 'remesaJob')
+  Igual 'tarifaJob (2 casos): los dos en el original' 'caso-01,caso-02' (Casos-M77 $e 'original' 'tarifaJob')
+  Igual 'y en el migrado' 'caso-01,caso-02' (Casos-M77 $e 'migrado' 'tarifaJob')
+  Comprueba 'ningun caso sale sin probar' (@(Resultados $e | Where-Object { $_ -ceq 'sin probar en local' }).Count -eq 0) ((Resultados $e) -join ',')
+  Comprueba 'y la consola no dice que deja de ejecutar casos' ($r.Salida -notmatch 'no ejecuto sus demas casos') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (a3) con 3 FAILED iguales en el original (la ruta de la causa lleva el nombre del caso, Get-CausaNormal la deja igual) tambien se para; con 3 casos no queda nada que parar'] = {
+  $e = Escenario-M77 'm77-a3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-failed-caso:^cargaJob/caso-;orig-failed:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'cargaJob: el original ejecuta los 3 primeros casos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original' 'cargaJob')
+  Igual 'y el migrado, los mismos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado' 'cargaJob')
+  foreach ($c in @('caso-04', 'caso-05')) { Igual "cargaJob/$c sale sin probar, con el motivo" "sin probar en local|$M77Motivo" "$((Caso $e 'cargaJob' $c).resultado)|$((Caso $e 'cargaJob' $c).motivo)" }
+  Comprueba 'la consola dice que falla igual en los 3 primeros' ($r.Salida -match 'El original falla igual en los 3 primeros casos del job cargaJob con este test \(FAILED\): no ejecuto sus demas casos') (Cola $r.Salida)
+  Igual 'remesaJob (3 casos): los 3 en el original' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original' 'remesaJob')
+  Igual 'y los 3 en el migrado' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado' 'remesaJob')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

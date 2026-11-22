@@ -190,6 +190,25 @@ $MarcaNo = '<!--no-->'
 # El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
 $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
 $MotivoNoArranca = 'el migrado no arranca el job con este test'
+# Lo que dice un caso que no se ejecuta porque el original de su job falla igual en los primeros $CasosParaParar casos (Invoke-Originales); Get-Resultado lo pone como motivo.
+$MotivoNoArrancaOriginal = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
+# Cuantos casos seguidos de un job (los primeros) tienen que acabar en el original FAILED o EXCEPCION con la misma causa (Get-FirmaFallo) para que sus demas casos no se ejecuten
+# ni en el original ni en el migrado (Invoke-Originales): el original funciona en produccion, asi que si falla igual en todos es su test, no su codigo.
+$CasosParaParar = 3
+# Las clases de excepcion con las que un contexto de Spring no se puede montar (Test-ExcepcionArranque): la jerarquia de BeansException de spring-framework (spring-beans/src/main/java/
+# org/springframework/beans/BeansException.java:23 y las que la heredan, una a una; ConflictingBeanDefinitionException e ImplicitlyAppearedSingletonException heredan de
+# IllegalStateException y NoSuchMessageException de RuntimeException: no entran), ApplicationContextException (spring-context/.../context/ApplicationContextException.java:16, hereda
+# de FatalBeanException) y ConfigurationPropertiesBindException de spring-boot (core/spring-boot/.../context/properties/ConfigurationPropertiesBindException.java:18, hereda de
+# BeanCreationException). Una JobParametersInvalidException, una IllegalArgumentException del negocio o un FAILED no estan: un caso puede buscar justo eso.
+$ExcepcionesArranque = @(
+  'ApplicationContextException', 'BeanCreationException', 'BeanCreationNotAllowedException', 'BeanCurrentlyInCreationException', 'BeanDefinitionOverrideException',
+  'BeanDefinitionParsingException', 'BeanDefinitionStoreException', 'BeanDefinitionValidationException', 'BeanExpressionException', 'BeanInitializationException',
+  'BeanInstantiationException', 'BeanIsAbstractException', 'BeanIsNotAFactoryException', 'BeanNotOfRequiredTypeException', 'BeansException', 'CannotLoadBeanClassException',
+  'ConfigurationPropertiesBindException', 'ConversionNotSupportedException', 'FactoryBeanNotInitializedException', 'FatalBeanException', 'InvalidPropertyException',
+  'InvalidPropertyPathException', 'MethodInvocationException', 'NoSuchBeanDefinitionException', 'NoUniqueBeanDefinitionException', 'NotReadablePropertyException',
+  'NotWritablePropertyException', 'NullValueInNestedPathException', 'PropertyAccessException', 'PropertyBatchUpdateException', 'ScopeNotActiveException',
+  'TypeMismatchException', 'UnsatisfiedDependencyException', 'XmlBeanDefinitionStoreException'
+)
 # La causa de un lado sin estado.txt cuyo Maven acabo con 0 y sin otra causa (Get-Fallos): el test no encontro la carpeta del caso (arnes\migrado, regla 1).
 $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso (mira si ve su carpeta en src\test\resources\prueba-local)'
 # Lo que dice el motivo de un caso cuyo original no corre porque la base del test no tiene una tabla del codigo (Get-MotivoBase): la cuenta del final de la
@@ -693,6 +712,11 @@ function Get-Excepcion([string]$Sal) {
   return 'una excepcion'
 }
 
+# $true si $Clase (la de Get-Excepcion, o una con su paquete) es una de $ExcepcionesArranque: lanzar el job no pudo ni montar el contexto de Spring.
+function Test-ExcepcionArranque([string]$Clase) {
+  return ($ExcepcionesArranque -ccontains (($Clase -split '\.')[-1]))
+}
+
 # El estado (la linea estado=) del estado.txt de $Sal, o '' si no hay fichero o no lo dice.
 function Get-Estado([string]$Sal) {
   $ruta = Join-Path $Sal 'estado.txt'
@@ -713,28 +737,62 @@ function Get-CausaLado([string]$Lado, [string]$Job, [string]$Caso) {
   return ''
 }
 
-# Los lados de un caso que acaban mal (original y $Nombre, el migrado): estado=FAILED, estado=EXCEPCION o sin estado.txt, cada uno con su causa
-# (la del Maven de esa ejecucion, Get-CausaLado; sin estado.txt, sin causa y con Maven en 0, $MotivoMavenSinSalida) y su registro (el mvn-*.log de esa ejecucion, relativo a prueba-local, haya causa o no; '' si el lado
-# no se ha ejecutado ahora: un original reutilizado). Es lo que lleva el resultado de un caso en 'fallos', fuera de las carpetas que se comparan.
+# Los lados de un caso que acaban mal (original y $Nombre, el migrado): uno por cada Get-FalloLado. Es lo que lleva el resultado de un caso en 'fallos', fuera de las
+# carpetas que se comparan.
 function Get-Fallos([string]$Nombre, [string]$Job, [string]$Caso) {
   $fallos = @()
   foreach ($lado in @('original', $Nombre)) {
-    $sal = Join-Ruta $Local "salidas/$lado/$Job/$Caso"
-    $estado = 'sin estado.txt'
-    if (Test-Path -LiteralPath (Join-Path $sal 'estado.txt')) {
-      $estado = Get-Estado $sal
-      if ($estado -cne 'FAILED' -and $estado -cne 'EXCEPCION') { continue }
-    }
-    $nombreLado = 'migrado'
-    if ($lado -ceq 'original') { $nombreLado = 'original' }
-    $registro = ''
-    $mvn = $script:Maven["$lado|$Job|$Caso"]
-    if ($mvn) { $registro = [string]$mvn.Registro }
-    $causa = Get-CausaLado $lado $Job $Caso
-    if (-not $causa -and $estado -ceq 'sin estado.txt' -and $mvn -and $mvn.Codigo -eq 0) { $causa = $MotivoMavenSinSalida }
-    $fallos += [ordered]@{ lado = $nombreLado; estado = $estado; causa = $causa; registro = $registro }
+    $f = Get-FalloLado $lado $Job $Caso
+    if ($f) { $fallos += $f }
   }
   return $fallos
+}
+
+# Como acaba mal el lado $Lado (original o el nombre de salidas del migrado) de un caso, o $null si acaba bien: estado=FAILED, estado=EXCEPCION o sin estado.txt, con su
+# causa (la del Maven de esa ejecucion, Get-CausaLado; sin estado.txt, sin causa y con Maven en 0, $MotivoMavenSinSalida), su registro (el mvn-*.log de esa ejecucion,
+# relativo a prueba-local, haya causa o no; '' si el lado no se ha ejecutado ahora: un original reutilizado) y, con EXCEPCION, su clase (Get-Excepcion).
+function Get-FalloLado([string]$Lado, [string]$Job, [string]$Caso) {
+  $sal = Join-Ruta $Local "salidas/$Lado/$Job/$Caso"
+  $estado = 'sin estado.txt'
+  if (Test-Path -LiteralPath (Join-Path $sal 'estado.txt')) {
+    $estado = Get-Estado $sal
+    if ($estado -cne 'FAILED' -and $estado -cne 'EXCEPCION') { return $null }
+  }
+  $nombreLado = 'migrado'
+  if ($Lado -ceq 'original') { $nombreLado = 'original' }
+  $registro = ''
+  $mvn = $script:Maven["$Lado|$Job|$Caso"]
+  if ($mvn) { $registro = [string]$mvn.Registro }
+  $causa = Get-CausaLado $Lado $Job $Caso
+  if (-not $causa -and $estado -ceq 'sin estado.txt' -and $mvn -and $mvn.Codigo -eq 0) { $causa = $MotivoMavenSinSalida }
+  $f = [ordered]@{ lado = $nombreLado; estado = $estado; causa = $causa; registro = $registro }
+  if ($estado -ceq 'EXCEPCION') { $f.clase = Get-Excepcion $sal }
+  return $f
+}
+
+# La clase de excepcion de un fallo $F de Get-FalloLado: la suya (clase) o, en un prueba-local.json de antes, la que abre su causa ('org.x.NoSuchBeanDefinitionException: ...'
+# da NoSuchBeanDefinitionException); '' si no la hay.
+function Get-ClaseFallo($F) {
+  if ($F.clase) { return [string]$F.clase }   # (un fallo de este lanzamiento es un diccionario y uno leido del json, un objeto: los dos dan $null si no la tienen)
+  $m = [regex]::Match([string]$F.causa, '^(?:[\w$]+\.)*([\w$]+(?:Exception|Error))\b')
+  return $m.Groups[1].Value
+}
+
+# $true si el fallo $F es el de un job que no arranca: EXCEPCION con una de las clases de $ExcepcionesArranque (Test-ExcepcionArranque).
+function Test-FalloArranque($F) { return ($F.estado -ceq 'EXCEPCION' -and (Test-ExcepcionArranque (Get-ClaseFallo $F))) }
+
+# Lo que tienen en comun los casos de un job que fallan igual: el estado y la causa del fallo $F sin lo que cambia de un caso a otro (Get-CausaNormal, con el nombre del
+# caso $Caso). '' si el fallo no es FAILED ni EXCEPCION o no dice su causa: sin causa no se sabe si dos fallos son el mismo.
+function Get-FirmaFallo($F, [string]$Caso) {
+  if (-not $F -or ($F.estado -cne 'FAILED' -and $F.estado -cne 'EXCEPCION') -or -not $F.causa) { return '' }
+  return $F.estado + '|' + (Get-CausaNormal ([string]$F.causa) $Caso)
+}
+
+# El fallo del original de un caso que ya se ha ejecutado (o se reutiliza) si acaba FAILED o EXCEPCION con causa, o $null.
+function Get-FalloOriginal([string]$Job, [string]$Caso) {
+  $f = Get-FalloLado 'original' $Job $Caso
+  if ($f -and (Get-FirmaFallo $f $Caso)) { return $f }
+  return $null
 }
 
 # 'el migrado acaba FAILED: <causa>' (lo que ensenan la consola y el prompt de -Reparar de un fallo de Get-Fallos). Sin causa, con $ConRegistro (la
@@ -2034,6 +2092,7 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
     $noArranca = $false
     foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
       $c = $t.entradas.caso
+      if ($script:SinProbar.ContainsKey("original|$j|$c")) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoNoArrancaOriginal; continue }
       if ($noArranca) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoNoArranca; continue }
       Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $c
       if ($primero -and $Nombre -ceq 'migrado' -and $script:NoArranca.ContainsKey($j)) {
@@ -2159,7 +2218,12 @@ function Get-DiasOriginal([string]$Job, [string]$Caso) {
 
 # Ejecuta el original y el original-2 de los casos de $Listas que no tienen guardado lo mismo (clave y carpetas, ver arriba), uno detras de otro:
 # cada caso queda guardado en cuanto acaba, y un corte no pierde lo que ya estaba hecho. Dice cuantos casos se reutilizan y cuantos se ejecutan.
-function Invoke-Originales($Listas) {
+# Con $Parar, si los primeros $CasosParaParar casos de un job (se hayan ejecutado ahora o se reutilicen) acaban en el original FAILED o EXCEPCION con la misma causa
+# (Get-FirmaFallo), los demas casos del job no se ejecutan: el original funciona en produccion, asi que si falla igual en todos es su test, no su codigo. Salen sin
+# probar ($script:SinProbar con el lado 'original', que Invoke-Salidas respeta tambien en el migrado y Get-Resultado cuenta, con $MotivoNoArrancaOriginal) y el job
+# queda en $script:ParadaOriginal (el fallo del primero de los casos). Un job de menos de $CasosParaParar casos no se para. Confirm-OriginalesDeOtroDia repite
+# unos pocos casos de varios jobs: ahi no se para ($Parar en $false).
+function Invoke-Originales($Listas, [bool]$Parar = $true) {
   $o = Get-Originales
   $base = Get-ClaveBaseOriginal
   $claves = @{}
@@ -2180,21 +2244,47 @@ function Invoke-Originales($Listas) {
   Save-Originales
   foreach ($j in @($ejecutar | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
     Info "Ejecutando los casos de $j (original y original-2)..."
-    foreach ($t in @($ejecutar | Where-Object { $_.entradas.job -eq $j })) {
+    $firmas = @()
+    $primero = $null
+    $parada = $false
+    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
       $c = $t.entradas.caso
-      $desde = Get-Date
-      foreach ($n in @('original', 'original-2')) { Invoke-SalidaCaso $CopiaOrig $true $n $j $c }
-      $completo = @('original', 'original-2' | Where-Object { -not $script:Maven["$_|$j|$c"].Tope -and (Test-Path -LiteralPath (Join-Ruta $Local "salidas/$_/$j/$c/estado.txt")) }).Count -eq 2
-      # Un caso con un fichero que no se pudo guardar no queda reutilizable: se ejecuta otra vez en el siguiente lanzamiento
-      if (@('original', 'original-2' | Where-Object { @(Get-NoGuardados $_ $j $c).Count -gt 0 }).Count -gt 0) { $completo = $false }
-      if ($completo) {
-        $causa = Get-CausaCorta $script:Maven["original|$j|$c"].Causa
-        if (-not $causa) { $causa = Get-CausaCorta $script:Maven["original-2|$j|$c"].Causa }
-        $o["$j|$c"] = [pscustomobject][ordered]@{ job = $j; caso = $c; clave = $claves["$j|$c"]; dias = @(Get-Hoy $desde (Get-Date) | ForEach-Object { $_.ToString('yyyy-MM-dd', $Inv) }); causa = $causa }
-        Save-Originales
+      $nuevo = ($ejecutar -contains $t)
+      if ($parada) {
+        if ($nuevo) { $script:SinProbar["original|$j|$c"] = $MotivoNoArrancaOriginal }
+        continue
+      }
+      if ($nuevo) {
+        $desde = Get-Date
+        foreach ($n in @('original', 'original-2')) { Invoke-SalidaCaso $CopiaOrig $true $n $j $c }
+        $completo = @('original', 'original-2' | Where-Object { -not $script:Maven["$_|$j|$c"].Tope -and (Test-Path -LiteralPath (Join-Ruta $Local "salidas/$_/$j/$c/estado.txt")) }).Count -eq 2
+        # Un caso con un fichero que no se pudo guardar no queda reutilizable: se ejecuta otra vez en el siguiente lanzamiento
+        if (@('original', 'original-2' | Where-Object { @(Get-NoGuardados $_ $j $c).Count -gt 0 }).Count -gt 0) { $completo = $false }
+        if ($completo) {
+          $causa = Get-CausaCorta $script:Maven["original|$j|$c"].Causa
+          if (-not $causa) { $causa = Get-CausaCorta $script:Maven["original-2|$j|$c"].Causa }
+          $o["$j|$c"] = [pscustomobject][ordered]@{ job = $j; caso = $c; clave = $claves["$j|$c"]; dias = @(Get-Hoy $desde (Get-Date) | ForEach-Object { $_.ToString('yyyy-MM-dd', $Inv) }); causa = $causa }
+          Save-Originales
+        }
+      }
+      if ($Parar -and $firmas.Count -lt $CasosParaParar) {
+        $f = Get-FalloOriginal $j $c
+        if ($firmas.Count -eq 0) { $primero = $f }
+        $firmas += (Get-FirmaFallo $f $c)
+        if ($firmas.Count -eq $CasosParaParar -and $firmas[0] -and @($firmas | Where-Object { $_ -cne $firmas[0] }).Count -eq 0) {
+          $parada = $true
+          $script:ParadaOriginal[$j] = $primero
+          Info (Format-ParadaOriginal $j $primero)
+        }
       }
     }
   }
+}
+
+# Lo que dice la consola cuando el original del job $Job falla igual en los primeros casos (el fallo $F del primero) y deja de ejecutar los demas.
+function Format-ParadaOriginal([string]$Job, $F) {
+  if (Test-FalloArranque $F) { return "El original no arranca el job $Job con este test ($(Get-ClaseFallo $F)): no ejecuto sus demas casos." }
+  return "El original falla igual en los $CasosParaParar primeros casos del job $Job con este test ($($F.estado)): no ejecuto sus demas casos."
 }
 
 # Los casos de $Tareas que salen distintos ($Res, uno por tarea, en el mismo orden) con un original de otro dia (alguno de sus dias no es de hoy): su
@@ -2211,7 +2301,7 @@ function Confirm-OriginalesDeOtroDia($Tareas, $Res) {
   Info "Original de otro dia: $($dudosos.Count) caso(s) sale(n) distinto(s); los ejecuto otra vez para confirmarlo."
   $o = Get-Originales
   foreach ($i in $dudosos) { $o.Remove("$($Tareas[$i].entradas.job)|$($Tareas[$i].entradas.caso)") }
-  Invoke-Originales @($dudosos | ForEach-Object { $Tareas[$_] })
+  Invoke-Originales @($dudosos | ForEach-Object { $Tareas[$_] }) $false
   foreach ($i in $dudosos) { $Res[$i] = Get-Resultado $Tareas[$i] }
   return $Res
 }
@@ -2736,6 +2826,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   if ($parado.Count -gt 0) { $o.motivo = $parado[0].Tope; return $o }
   if ($T.estado -ne 'hecha') { $o.motivo = "La IA no ha podido preparar sus entradas: $($T.motivo)"; return $o }
   if (Test-Path -LiteralPath $noAplica) { $o.resultado = 'sin probar en local'; $o.motivo = ([System.IO.File]::ReadAllText($noAplica, $Utf8) -replace '\s+', ' ').Trim(); return $o }
+  if ($script:SinProbar.ContainsKey("original|$j|$c")) { $o.resultado = 'sin probar en local'; $o.motivo = $script:SinProbar["original|$j|$c"]; return $o }
   if (-not (Test-Path -LiteralPath (Join-Path $s1 'estado.txt'))) {
     $porque = Get-Porque $s1 $script:Maven["original|$j|$c"]
     $o.motivo = Get-MotivoTablaMal $porque
@@ -3713,6 +3804,7 @@ $script:Mavens = 0
 $script:Maven = @{}
 $script:NoGuardados = @{}   # por (lado|job|caso): los ficheros que no se pudieron guardar en salidas (Copy-Salida)
 $script:NoArranca = @{}   # por job: su test del migrado se rechazo porque con el caso vacio el migrado no arranca y el original si, y se acepto en el ultimo intento (clase, veces escrito)
+$script:ParadaOriginal = @{}   # por job: el fallo del primero de los casos (Get-FalloLado) de un job cuyos primeros casos fallan igual en el original y que por eso no ejecuta los demas (Invoke-Originales)
 $script:SinProbar = @{}   # por (lado|job|caso): el motivo de un caso que no se ha ejecutado porque su job no arranca con ese test (Invoke-Salidas)
 $script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sale una sola vez
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
