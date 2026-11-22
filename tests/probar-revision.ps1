@@ -874,7 +874,7 @@ $Pruebas['28 m71 a) catalogo: nueve reglas; SB-ESTADO y ERR-TRAGADA al final, co
   Igual 'titulo de ERR-TRAGADA' 'Error tragado en un paso' $x.titulo
   Igual 'los tokens de SB-ESTADO: la declaracion del campo o la linea que lo cambia' 'private |++|+=|.add(|.put(|this.' ($s.tokens -join '|')
   Igual 'los de ERR-TRAGADA' 'catch' ($x.tokens -join '|')
-  Comprueba 'SB-ESTADO: singleton sin @StepScope ni @JobScope (en la clase o en el @Bean que lo crea)' ($s.que -match '@StepScope' -and $s.que -match '@JobScope' -and $s.que -match 'singleton')
+  Comprueba 'SB-ESTADO: singleton sin @StepScope ni @JobScope (en la clase o en el @Bean que lo crea)' ($s.que -match 'singleton' -and $s.que.Contains('ni la clase ni el @Bean que lo crea llevan @StepScope o @JobScope'))
   Comprueba 'SB-ESTADO: la misma JVM y otros hilos, y el arreglo (@StepScope o ExecutionContext)' ($s.que -match 'misma JVM' -and $s.que -match 'hilos' -and $s.que -match 'ExecutionContext')
   Comprueba 'SB-ESTADO: no cuentan el constructor, @Value, los loggers ni las constantes' ($s.que -match 'constructor' -and $s.que -match '@Value' -and $s.que -match 'logger' -and $s.que -match 'constantes')
   Comprueba 'SB-ESTADO: manda buscar donde se crea el bean, aunque sea en otro fichero' ($s.que -match 'otro fichero')
