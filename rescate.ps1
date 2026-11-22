@@ -220,10 +220,13 @@ $Cfg += @{
   # el codigo nuevo). El resto de reglas se queda en aviso. Para apagar una,
   # quitala de aqui. Reglas: javadoc-tipo, javadoc-metodo, inyeccion-campo,
   # salida-consola, catch-vacio, envoltorio-new, instanceof-cast,
-  # fecha-antigua, coleccion-antigua.
-  CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new')
+  # fecha-antigua, coleccion-antigua. Las de Spring salen de Sonar way:
+  # constructores-sin-autowired (S6829), autowired-varios (S6818),
+  # inyeccion-estatica (S7178), value-sin-expresion (S6804).
+  CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
+    'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla
-  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo')
+  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -496,7 +499,7 @@ function Get-JobsPorRegex([string]$Raiz) {
     if (($ext -ne '.java' -and $ext -ne '.xml') -or $f.Length -gt 1MB) { continue }
     $t = [System.IO.File]::ReadAllText($f.FullName)
     if ($ext -eq '.xml') { $t = [regex]::Replace($t, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline) }
-    else { $t = $script:RxLexico.Replace($t, [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('/')) { return '' } else { return $m.Value } }) }
+    else { $t = Get-SinComentarios $t }
     foreach ($rx in $Cfg.JobRegex) {
       foreach ($m in [regex]::Matches($t, $rx)) {
         $n = $m.Groups[1].Value
@@ -542,7 +545,17 @@ $RxLexico = New-Object System.Text.RegularExpressions.Regex ('/\*.*?\*/|//[^\n]*
 $RxTipo = '^\s*((?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*)(class|interface|enum|record|@interface)\s+(\w+)'
 $RxMetodoPublico = '^\s*public(?>\s+)(?>(?:(?:static|final|abstract|synchronized|default|native|strictfp)\s+)*)(?!(?:class|interface|enum|record)\b)(?:<[^>]+>\s*)?(?:[\w\.\[\]<>,\?&\s]+?\s+)?(\w+)\s*\('
 $RxMetodoInterfaz = '^(?>\s*)(?>(?:(?:public|abstract|default|static)\s+)*)(?!(?:private|protected|class|interface|enum|record|return|throw|new|if|for|while|switch|else|case)\b)(?:<[^>]+>\s*)?[\w\.\[\]<>,\?&\s]+?\s+(\w+)\s*\('
-$RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inject)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s+(?:(?:private|protected|public|transient|volatile)\s+)*[\w\.\[\]<>,\?\s]+?\s+(\w+)\s*;'
+# Un campo con @Autowired, @Inject o @Value. Grupos: 1 la anotacion, 2 los modificadores y el tipo, 3 el nombre (con su valor inicial, si lo tiene)
+$RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inject|Value)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s+((?:(?:private|protected|public|transient|volatile)\s+)*[\w\.\[\]<>,\?\s]+?)\s+(\w+)\s*(?:=[^;]*)?;'
+$RxValorValue = '@Value\s*\(\s*(?:value\s*=\s*)?"((?:\\.|[^"\\])*)"\s*\)'
+# Clases (class) con sus anotaciones y su cuerpo. Una anotacion pegada: @Nombre o @Nombre(...), con parentesis dentro hasta tres niveles
+$RxAnot = '@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?\s+'
+$RxClaseDecl = New-Object System.Text.RegularExpressions.Regex ('(?<anot>(?:' + $RxAnot + ')*)(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*(?<![.\w])class\s+(?<nombre>\w+)(?=[^{;]*(?<cuerpo>\{(?:[^{}]|(?<o>\{)|(?<-o>\}))*(?(o)(?!))\}))')
+$RxHoja = New-Object System.Text.RegularExpressions.Regex '\{[^{}]*\}'
+$RxLombokCtor = New-Object System.Text.RegularExpressions.Regex '@(?:[\w.]+\.)?(?:NoArgsConstructor|RequiredArgsConstructor|AllArgsConstructor)\b(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?'
+$RxComponente = '@(?:[\w.]+\.)?(?:Component|Service|Repository|Controller|RestController|Configuration)\b'
+$RxAutowiredOInject = '@(?:[\w.]+\.)?(?:Autowired|Inject)\b'
+$RxAutowiredObligatorio = '@(?:[\w.]+\.)?Autowired\b(?!\s*\(\s*required\s*=\s*false\s*\))'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
 $RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
@@ -594,6 +607,44 @@ function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Det
 
 function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, $Indice).Split("`n").Count }
 
+# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones y lo que
+# tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01.
+function Get-Clases([string]$Limpio) {
+  $res = New-Object System.Collections.Generic.List[object]
+  $hoja = [string][char]1
+  foreach ($m in $script:RxClaseDecl.Matches($Limpio)) {
+    $top = $m.Groups['cuerpo'].Value
+    $top = $top.Substring(1, $top.Length - 2)
+    do { $antes = $top; $top = $script:RxHoja.Replace($top, $hoja) } while ($top -ne $antes)
+    [void]$res.Add([pscustomobject]@{ Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); Anot = $m.Groups['anot'].Value; Top = $top })
+  }
+  return $res.ToArray()
+}
+
+# Los constructores de una clase: los escritos (con su anotacion y si llevan parametros) y los que genera Lombok (@NoArgsConstructor,
+# @RequiredArgsConstructor, @AllArgsConstructor; su Anot es la propia anotacion, que puede llevar onConstructor_ = @__(@Autowired)).
+# Quedan fuera los que implica @Data, @Value o @Builder de Lombok y los de un record o un enum.
+function Get-Constructores($Clase) {
+  $res = New-Object System.Collections.Generic.List[object]
+  $rx = '(?<![^;\x01])\s*(?<anot>(?:' + $script:RxAnot + ')*)(?:(?:public|protected|private)\s+)?' + [regex]::Escape($Clase.Nombre) + '\s*\((?<params>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*(?:throws\s+[^;\x01(]+)?\x01'
+  foreach ($m in [regex]::Matches($Clase.Top, $rx)) {
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Groups['anot'].Value; Escrito = $true; Params = ($m.Groups['params'].Value.Trim() -ne '') })
+  }
+  foreach ($m in $script:RxLombokCtor.Matches($Clase.Anot)) {
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor') })
+  }
+  return $res.ToArray()
+}
+
+# Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
+function Get-SinComentarios([string]$Texto) {
+  return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
+      param($m)
+      if ($m.Value.StartsWith('/')) { return "`n" * ($m.Value.Split("`n").Count - 1) }
+      return $m.Value
+    })
+}
+
 # Faltas de calidad del codigo de src/main (sin decidir aun si son error o aviso).
 function Get-Calidad($Hechos) {
   $out = New-Object System.Collections.Generic.List[object]
@@ -628,8 +679,37 @@ function Get-Calidad($Hechos) {
       $prof += ($l.Split('{').Count - $l.Split('}').Count)
     }
     # Practicas que se ven en el texto
+    # Campos con @Autowired, @Inject o @Value. Uno static no se inyecta (S7178) y no cuenta ademas como inyeccion por campo; un @Value se
+    # lee con sus cadenas (un @Value("...") sin ${...} ni #{...} es una constante, S6804) y solo cuando es de un campo, no de un metodo o parametro.
+    $conCadenas = $null
     foreach ($m in $script:RxInyeccion.Matches($limpio)) {
-      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final; sin estado mutable en el componente: si un campo guarda estado entre llamadas, no lo conviertas en final ni lo inicialices en el constructor; dilo")
+      $anot = $m.Groups[1].Value
+      $campo = $m.Groups[3].Value
+      $linea = Get-LineaDe $limpio $m.Index
+      if ($m.Groups[2].Value -cmatch '\bstatic\b') {
+        Add-Cal $out $f.RelRaiz $linea 'inyeccion-estatica' ('@' + $anot + " en el campo '" + $campo + "': Spring no inyecta campos static: queda a null (Sonar S7178). Quita static o la anotacion.")
+      }
+      elseif ($anot -cne 'Value') {
+        Add-Cal $out $f.RelRaiz $linea 'inyeccion-campo' ('@' + $anot + " en el campo '" + $campo + "': usa inyeccion por constructor con campos private final; sin estado mutable en el componente: si un campo guarda estado entre llamadas, no lo conviertas en final ni lo inicialices en el constructor; dilo")
+      }
+      else {
+        if ($null -eq $conCadenas) { $conCadenas = (Get-SinComentarios $f.Texto).Split("`n") }
+        if ($conCadenas[$linea - 1] -cmatch $script:RxValorValue -and $Matches[1] -notmatch '[$#]\{') {
+          Add-Cal $out $f.RelRaiz $linea 'value-sin-expresion' ("@Value sin `${...} ni #{...}: es una constante (Sonar S6804). Si es una propiedad, falta el `${...}.")
+        }
+      }
+    }
+    # Constructores de cada clase (las anidadas cuentan aparte)
+    foreach ($c in @(Get-Clases $limpio)) {
+      $ctores = @(Get-Constructores $c)
+      $componente = ($c.Anot -cmatch $script:RxComponente)
+      # S6829: con varios constructores, Spring necesita que uno lleve @Autowired o @Inject
+      if ($componente -and $ctores.Count -ge 2 -and @($ctores | Where-Object { $_.Anot -cmatch $script:RxAutowiredOInject }).Count -eq 0) {
+        Add-Cal $out $f.RelRaiz $c.Linea 'constructores-sin-autowired' ("$($ctores.Count) constructores y ninguno con @Autowired: Spring no sabe cual usar y el bean puede no crearse (Sonar S6829). Deja un solo constructor (sin @Autowired, sobra) o marca con @Autowired el que debe usar Spring.")
+      }
+      # S6818: solo uno puede llevar @Autowired sin required = false
+      $marcados = @($ctores | Where-Object { $_.Anot -cmatch $script:RxAutowiredObligatorio }).Count
+      if ($marcados -ge 2) { Add-Cal $out $f.RelRaiz $c.Linea 'autowired-varios' "@Autowired en $marcados constructores: solo uno puede llevarlo (Sonar S6818)." }
     }
     foreach ($m in $script:RxConsola.Matches($limpio)) {
       Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'salida-consola' 'System.out, System.err o printStackTrace: usa el logger'
@@ -2146,10 +2226,9 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   if ($ymlSinSftp) {
     # la configuracion tambien cuenta si entra por una clase de src/main/java: un @ConfigurationProperties con prefijo sftp
     # o un @Value con una clave sftp (Spring une SFTP_HOST con sftp.host sin tocar el yml). Sin comentarios, con las cadenas.
-    $sinComent = [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('/')) { return '' } else { return $m.Value } }
     $rxSftpJava = '(?i)@ConfigurationProperties\s*\([^)]*"[^"]*sftp|@Value\s*\(\s*"[^"]*\$\{[^}"]*sftp'
     foreach ($f in @($h.Ficheros | Where-Object { $_.Texto -match '(?i)sftp' })) {
-      if ($script:RxLexico.Replace($f.Texto, $sinComent) -match $rxSftpJava) { $ymlSinSftp = $false; break }
+      if ((Get-SinComentarios $f.Texto) -match $rxSftpJava) { $ymlSinSftp = $false; break }
     }
   }
   if ($ymlSinSftp) {

@@ -5980,5 +5980,216 @@ $Pruebas['m45 (h) una carpeta que ya existe y no es un worktree de rescate: el t
   Igual 'el fichero de la carpeta sigue como estaba' 'a medias' (Lee $e.Wt 'notas-del-usuario.txt')
 }
 
+# ============== M70: REGLAS DE SPRING DE SONAR WAY Y ESTILO COHERENTE, EN LA CALIDAD (sin IA) ==============
+# Clase de un escenario M70. $Cabeza lleva las anotaciones de la clase y $Miembros lo que hay dentro (4 espacios de sangria).
+function Clase-M70([string]$Nombre, [string]$Cabeza, [string]$Miembros, [string]$Pkg = 'com.acme.life.application.usecases') {
+  return "package $Pkg;`n`n/** Clase $Nombre. */`n$Cabeza`npublic class $Nombre {`n$Miembros}`n"
+}
+
+# Un constructor escrito: con su anotacion encima (vacia = ninguna) y sus parametros.
+function Ctor-M70([string]$Nombre, [string]$Anot, [string]$Params) {
+  $a = ''
+  if ($Anot) { $a = "    $Anot`n" }
+  return "$a    public $Nombre($Params) {`n    }`n`n"
+}
+
+# Una clase con dependencias, con Lombok (@RequiredArgsConstructor) o con el constructor escrito a mano.
+function Dependencias-M70([string]$Nombre, [bool]$Lombok, [string]$Pkg = 'com.acme.life.application.usecases') {
+  if ($Lombok) { return (Clase-M70 $Nombre "@Service`n@RequiredArgsConstructor" "    private final String dep;`n" $Pkg) }
+  return (Clase-M70 $Nombre '@Service' ("    private final String dep;`n`n" + (Ctor-M70 $Nombre '' 'String dep')) $Pkg)
+}
+
+# Una clase con un logger: 'slf4j' (@Slf4j), 'factory' (LoggerFactory), 'otro' (LogManager) o 'local' (LoggerFactory solo dentro de un metodo: no declara ninguno).
+function Logger-M70([string]$Nombre, [string]$Estilo, [string]$Pkg = 'com.acme.life.application.usecases') {
+  if ($Estilo -eq 'slf4j') { return (Clase-M70 $Nombre '@Slf4j' "    public void hace() {`n        log.info(`"hola`");`n    }`n" $Pkg) }
+  if ($Estilo -eq 'factory') { return (Clase-M70 $Nombre '' "    private static final Logger LOG = LoggerFactory.getLogger($Nombre.class);`n" $Pkg) }
+  if ($Estilo -eq 'otro') { return (Clase-M70 $Nombre '' "    private static final Logger LOG = LogManager.getLogger($Nombre.class);`n" $Pkg) }
+  return (Clase-M70 $Nombre '' "    public void hace() {`n        Logger l = LoggerFactory.getLogger($Nombre.class);`n    }`n" $Pkg)
+}
+
+# Escenario con estos ficheros en el repo y en la plantilla (nombre -> texto). Con $Lombok el pom del repo lleva la dependencia de Lombok.
+function Escenario-M70([string]$Nombre, $Repo, $Plantilla = @{}, [bool]$Lombok = $false) {
+  $e = Nuevo-Escenario $Nombre
+  foreach ($k in $Repo.Keys) { Escribe $e.Repo ('src/main/java/com/acme/life/application/usecases/' + $k + '.java') $Repo[$k] }
+  foreach ($k in $Plantilla.Keys) { Escribe $e.Plantilla ('src/main/java/com/acme/plantilla/application/usecases/' + $k + '.java') $Plantilla[$k] }
+  if ($Lombok) { Escribe $e.Repo 'pom.xml' ($Pom -replace '</dependencies>', "  <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId></dependency>`n  </dependencies>") }
+  return $e
+}
+
+# Diagnostico del escenario (sin Maven) y sus hallazgos de calidad de esa regla.
+function Cal-M70($E, [string]$Regla) {
+  [void](Rescate @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-SinBuild'))
+  return @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'calidad' -and $_.Detalle.StartsWith('[' + $Regla + ']') })
+}
+
+# Los ficheros de unos hallazgos, sin la extension, ordenados y unidos con espacios.
+function Ficheros-M70($H) { return ((@($H | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.Fichero) }) | Sort-Object) -join ' ') }
+
+$Pruebas['m70 (a1) constructores-sin-autowired (S6829): dos constructores o mas y ninguno con @Autowired ni @Inject'] = {
+  $externa = @'
+package com.acme.life.application.usecases;
+
+/** Una clase con otra dentro. */
+@Component
+public class Externa {
+
+    public Externa(String a) {
+    }
+
+    /** Anidada que tambien es un bean. */
+    @Configuration
+    static class Anidada {
+
+        Anidada() {
+        }
+
+        Anidada(String a) {
+        }
+    }
+}
+'@
+  $dos = (Ctor-M70 'DosSin' '' '') + (Ctor-M70 'DosSin' '' 'String a')
+  $e = Escenario-M70 'm70-a1' @{
+    DosSin  = (Clase-M70 'DosSin' '@Component' $dos)
+    DosAut  = (Clase-M70 'DosAut' '@Component' ((Ctor-M70 'DosAut' '' '') + (Ctor-M70 'DosAut' '@Autowired' 'String a')))
+    DosInj  = (Clase-M70 'DosInj' '@Service' ((Ctor-M70 'DosInj' '@jakarta.inject.Inject' 'String a') + (Ctor-M70 'DosInj' '' '')))
+    Uno     = (Clase-M70 'Uno' '@Component' (Ctor-M70 'Uno' '' 'String a'))
+    Fuera   = (Clase-M70 'Fuera' '' ((Ctor-M70 'Fuera' '' '') + (Ctor-M70 'Fuera' '' 'String a')))
+    Tres    = (Clase-M70 'Tres' '@RestController' ((Ctor-M70 'Tres' '' '') + (Ctor-M70 'Tres' '' 'String a') + (Ctor-M70 'Tres' '' 'String a, int b')))
+    Externa = $externa
+  }
+  $h = Cal-M70 $e 'constructores-sin-autowired'
+  Igual 'sale en la que tiene dos sin marcar, en la de tres y en la anidada (que cuenta aparte), y en ninguna mas' 'DosSin Externa Tres' (Ficheros-M70 $h)
+  $d = @($h | Where-Object { $_.Fichero -like '*DosSin.java' })
+  Igual 'es un error' 'error' $d[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Lee $e.Repo 'src/main/java/com/acme/life/application/usecases/DosSin.java') 'public class DosSin') $d[0].Linea
+  Comprueba 'dice cuantos constructores, cita a Sonar y da las dos salidas' ($d[0].Detalle -like '*2 constructores y ninguno con @Autowired*Sonar S6829*un solo constructor*marca con @Autowired*') $d[0].Detalle
+  Comprueba 'el de tres dice 3' (@($h | Where-Object { $_.Fichero -like '*Tres.java' -and $_.Detalle -like '*3 constructores y ninguno*' }).Count -eq 1)
+  $a = @($h | Where-Object { $_.Fichero -like '*Externa.java' })
+  Igual 'la anidada sale en su propia linea, no en la de la externa' (Linea-De (Lee $e.Repo 'src/main/java/com/acme/life/application/usecases/Externa.java') 'static class Anidada') $a[0].Linea
+  Comprueba 'y cuenta los suyos (2), no los de la externa' ($a[0].Detalle -like '*2 constructores*') $a[0].Detalle
+  Igual 'ninguna sale como autowired-varios' 0 @(Hallazgos $e.Repo | Where-Object { $_.Detalle -like '`[autowired-varios`]*' }).Count
+}
+
+$Pruebas['m70 (a2) constructores-sin-autowired: cuentan los constructores de Lombok; una clase que no es un componente no cuenta'] = {
+  $e = Escenario-M70 'm70-a2' @{
+    Mixto      = (Clase-M70 'Mixto' "@Service`n@NoArgsConstructor" (Ctor-M70 'Mixto' '' 'String a'))
+    SoloLombok = (Clase-M70 'SoloLombok' "@Service`n@RequiredArgsConstructor" "    private final String dep;`n")
+    LombokAut  = (Clase-M70 'LombokAut' "@Service`n@NoArgsConstructor`n@RequiredArgsConstructor(onConstructor_ = @__(@Autowired))" "    private final String dep;`n")
+    LombokDos  = (Clase-M70 'LombokDos' "@Component`n@NoArgsConstructor`n@AllArgsConstructor" "    private String dep;`n")
+    Plana      = (Clase-M70 'Plana' "@NoArgsConstructor" (Ctor-M70 'Plana' '' 'String a'))
+  }
+  $h = Cal-M70 $e 'constructores-sin-autowired'
+  Igual 'sale en el servicio con @NoArgsConstructor y un constructor escrito y en el que junta dos de Lombok' 'LombokDos Mixto' (Ficheros-M70 $h)
+  Comprueba 'los cuenta: 2 constructores' (@($h | Where-Object { $_.Detalle -like '*2 constructores y ninguno*' }).Count -eq 2)
+  Igual 'el @RequiredArgsConstructor con onConstructor_ @Autowired cuenta como marcado, y uno solo, un constructor, no sale; la clase sin anotacion de componente tampoco' 0 @($h | Where-Object { $_.Fichero -match 'SoloLombok|LombokAut|Plana' }).Count
+}
+
+$Pruebas['m70 (a3) autowired-varios (S6818): dos constructores o mas con @Autowired sin required = false'] = {
+  $e = Escenario-M70 'm70-a3' @{
+    DosAut  = (Clase-M70 'DosAut' '@Component' ((Ctor-M70 'DosAut' '@Autowired' 'String a') + (Ctor-M70 'DosAut' '@Autowired' 'String a, int b')))
+    DosOpt  = (Clase-M70 'DosOpt' '@Component' ((Ctor-M70 'DosOpt' '@Autowired(required = false)' 'String a') + (Ctor-M70 'DosOpt' '@Autowired(required = false)' 'String a, int b')))
+    UnoOpt  = (Clase-M70 'UnoOpt' '@Component' ((Ctor-M70 'UnoOpt' '@Autowired' 'String a') + (Ctor-M70 'UnoOpt' '@Autowired(required = false)' 'String a, int b')))
+    SinTipo = (Clase-M70 'SinTipo' '' ((Ctor-M70 'SinTipo' '@Autowired' 'String a') + (Ctor-M70 'SinTipo' '@Autowired' 'String a, int b')))
+  }
+  $h = Cal-M70 $e 'autowired-varios'
+  Igual 'sale con dos @Autowired y no con required = false (en los dos, o en uno de los dos); una clase que no es un componente tambien: Sonar mira cualquier clase' 'DosAut SinTipo' (Ficheros-M70 $h)
+  $d = @($h | Where-Object { $_.Fichero -like '*DosAut.java' })
+  Igual 'es un error' 'error' $d[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Lee $e.Repo 'src/main/java/com/acme/life/application/usecases/DosAut.java') 'public class DosAut') $d[0].Linea
+  Comprueba 'dice cuantos y cita a Sonar' ($d[0].Detalle -like '*@Autowired en 2 constructores: solo uno puede llevarlo (Sonar S6818)*') $d[0].Detalle
+  Igual 'con @Autowired en los constructores, constructores-sin-autowired no sale' 0 @(Hallazgos $e.Repo | Where-Object { $_.Detalle -like '`[constructores-sin-autowired`]*' }).Count
+}
+
+$Pruebas['m70 (a4) inyeccion-estatica (S7178): @Value, @Autowired o @Inject en un campo static, y no sale ademas como inyeccion-campo'] = {
+  $miembros = @'
+    @Value("${x}")
+    private static String x;
+
+    @Autowired
+    private static Servicio servicio;
+
+    @Inject
+    public static final Servicio otro = null;
+
+    @Value("${p}") private static String q = null;
+
+    @Autowired
+    private Servicio normal;
+'@ + "`n"
+  $e = Escenario-M70 'm70-a4' @{ Estatica = (Clase-M70 'Estatica' '@Component' $miembros) }
+  $h = Cal-M70 $e 'inyeccion-estatica'
+  $h = @($h | Where-Object { $_.Fichero -like '*Estatica.java' })
+  Igual 'salen los cuatro campos static' 4 $h.Count
+  $t = Lee $e.Repo 'src/main/java/com/acme/life/application/usecases/Estatica.java'
+  Igual 'el primero, en la linea de su @Value' (Linea-De $t '@Value("${x}")') $h[0].Linea
+  Comprueba 'dice que Spring no los inyecta, cita a Sonar y da la salida' ($h[0].Detalle -like '*Spring no inyecta campos static: queda a null (Sonar S7178). Quita static o la anotacion.*') $h[0].Detalle
+  Igual 'es un error' 'error' $h[0].Sev
+  $campo = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'calidad' -and $_.Fichero -like '*Estatica.java' -and $_.Detalle -like '`[inyeccion-campo`]*' })
+  Igual 'inyeccion-campo solo sale en el campo que no es static' 1 $campo.Count
+  Comprueba 'y es el campo normal' ($campo[0].Detalle -like "*en el campo 'normal'*") $campo[0].Detalle
+}
+
+$Pruebas['m70 (a5) value-sin-expresion (S6804): @Value en un campo sin ${...} ni #{...}'] = {
+  $miembros = @'
+    @Value("hola")
+    private String saludo;
+
+    @Value("${hola}")
+    private String propiedad;
+
+    @Value("#{1+1}")
+    private int suma;
+
+    @Value("${a:b}") private String conDefecto;
+
+    @Value("a.b") private String conInicial = "x";
+
+    @Value(value = "texto")
+    private String conNombre;
+
+    // @Value("comentado") private String comentado;
+
+    @Value("hola")
+    public void setMetodo(String metodo) {
+    }
+
+    public Valores(@Value("hola") String parametro) {
+    }
+'@ + "`n"
+  $e = Escenario-M70 'm70-a5' @{ Valores = (Clase-M70 'Valores' '@Component' $miembros) }
+  $h = @(Cal-M70 $e 'value-sin-expresion' | Where-Object { $_.Fichero -like '*Valores.java' })
+  $t = Lee $e.Repo 'src/main/java/com/acme/life/application/usecases/Valores.java'
+  Igual 'salen el campo con un texto, el que tiene un valor inicial y el de value = ; no los de ${...} y #{...}, ni el metodo, ni el parametro, ni el comentario' (@((Linea-De $t '@Value("hola")'), (Linea-De $t '@Value("a.b")'), (Linea-De $t '@Value(value = "texto")')) -join ' ') (@($h | ForEach-Object { $_.Linea }) -join ' ')
+  Comprueba 'dice que es una constante, cita a Sonar y da la salida' ($h[0].Detalle -like '*@Value sin ${...} ni #{...}: es una constante (Sonar S6804). Si es una propiedad, falta el ${...}.*') $h[0].Detalle
+  Igual 'es un error' 'error' $h[0].Sev
+}
+
+$Pruebas['m70 (a6) las cuatro reglas de Spring se exigen aunque la plantilla tambien las tenga'] = {
+  $campos = @'
+    @Value("${x}")
+    private static String x;
+
+    @Value("hola")
+    private String y;
+'@ + "`n"
+  $miembros = (Ctor-M70 'Fallos' '' '') + (Ctor-M70 'Fallos' '' 'String a') + $campos
+  $fallos = { param($pkg) @{
+      Fallos = (Clase-M70 'Fallos' '@Component' $miembros $pkg)
+      Dos    = (Clase-M70 'Dos' '@Component' ((Ctor-M70 'Dos' '@Autowired' 'String a') + (Ctor-M70 'Dos' '@Autowired' 'String a, int b')) $pkg)
+    } }
+  $e = Escenario-M70 'm70-a6' (& $fallos 'com.acme.life.application.usecases') (& $fallos 'com.acme.plantilla.application.usecases')
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  $cal = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'calidad' })
+  foreach ($regla in @('constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion')) {
+    $h = @($cal | Where-Object { $_.Detalle.StartsWith("[$regla]") })
+    Igual "$regla : sale una vez" 1 $h.Count
+    if ($h.Count -eq 1) {
+      Igual "$regla : sigue siendo error" 'error' $h[0].Sev
+      Comprueba "$regla : y no dice que se queda en aviso" ($h[0].Detalle -notlike '*se queda en aviso*') $h[0].Detalle
+    }
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
