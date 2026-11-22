@@ -2315,6 +2315,79 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   return $dif
 }
 
+# El tipo de una diferencia de Compare-Caso (o de las que cambian Get-Resultado y Join-OtraCarpeta): noGuardado, otraCarpeta, falta (no esta en el migrado), sobra
+# (solo esta en el migrado) o contenido.
+function Get-TipoDif($D) {
+  if ($D.noGuardado) { return 'noGuardado' }
+  if ($D.otraCarpeta) { return 'otraCarpeta' }
+  if ($D.migrado -ceq '(no esta)') { return 'falta' }
+  if ($D.original -ceq '(no esta)') { return 'sobra' }
+  return 'contenido'
+}
+
+# Una lista de carpetas en una frase: 'A', 'A y B' o 'A, B y C'.
+function Format-Carpetas($Carpetas) {
+  $l = @($Carpetas)
+  if ($l.Count -le 1) { return ($l -join '') }
+  return ((@($l | Select-Object -First ($l.Count - 1)) -join ', ') + ' y ' + $l[$l.Count - 1])
+}
+
+# Las diferencias $Dif de un caso (Compare-Caso) con un fichero que cada lado deja en otra carpeta como una sola. Si el original deja un fichero en una carpeta y el
+# migrado, con el mismo nombre (normalizado, como su clave), en otra, Compare-Caso da una diferencia suelta por cada copia (falta en el migrado, sobra en el original) y
+# la causa es una: la carpeta. Las faltas y las sobras de ese nombre pasan a una sola, de tipo otraCarpeta (New-DifOtraCarpeta), en el sitio de la primera. Un nombre que solo
+# esta en un lado, un fichero de tablas\ y un fichero con el mismo nombre en la misma carpeta (se compara como siempre) quedan como estaban. $A es la salida del caso en el
+# original y $B en el migrado, con sus dias ($DiasA y $DiasB, como en Compare-Caso).
+function Join-OtraCarpeta($Dif, [string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
+  # El nombre normalizado de una falta o una sobra que puede estar en otra carpeta (no las de tablas\); '' si no
+  $nombreDe = {
+    param($d)
+    if (@('falta', 'sobra') -cnotcontains (Get-TipoDif $d) -or $d.fichero -cmatch '^tablas/') { return '' }
+    return $d.clave.Substring($d.clave.LastIndexOf('/') + 1)
+  }
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($d in @($Dif)) {
+    $n = & $nombreDe $d
+    if (-not $n) { continue }
+    if (-not $por.ContainsKey($n)) { $por[$n] = @{ falta = @(); sobra = @() } }
+    $por[$n][(Get-TipoDif $d)] += $d
+  }
+  $res = @()
+  $hechos = @{}
+  foreach ($d in @($Dif)) {
+    $n = & $nombreDe $d
+    if (-not $n -or @($por[$n].falta).Count -eq 0 -or @($por[$n].sobra).Count -eq 0) { $res += $d; continue }
+    if ($hechos.ContainsKey($n)) { continue }
+    $hechos[$n] = $true
+    $res += New-DifOtraCarpeta $por[$n].falta $por[$n].sobra $A $B $DiasA $DiasB
+  }
+  return $res
+}
+
+# La diferencia de un fichero que el original deja en las carpetas de $Faltas (sus diferencias de falta en el migrado) y el migrado en las de $Sobras (de sobra): fichero (el
+# nombre), carpetasOriginal y carpetasMigrado (las de la clave de cada una, en orden ordinal; (raiz) si es la de la salida del caso), original y migrado ('en <carpetas>'), y por
+# clave la pareja de carpetas, que comparten los casos con la misma pareja aunque su nombre lleve otra fecha. Su nota dice si el contenido es igual al de alguna copia del
+# original (la primera) o, si no, la primera linea distinta del primer par (Compare-Fichero); lineas y linea, las de esa comparacion o 1.
+function New-DifOtraCarpeta($Faltas, $Sobras, [string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
+  $carpeta = { param($d) $i = $d.clave.LastIndexOf('/'); if ($i -lt 0) { '(raiz)' } else { $d.clave.Substring(0, $i) } }
+  $deOrig = @(Sort-Ordinal @(@($Faltas) | ForEach-Object { & $carpeta $_ } | Select-Object -Unique))
+  $deMig = @(Sort-Ordinal @(@($Sobras) | ForEach-Object { & $carpeta $_ } | Select-Object -Unique))
+  $cmp = @(foreach ($f in @($Faltas)) { foreach ($s in @($Sobras)) { [pscustomobject]@{ De = $f.fichero; C = (Compare-Fichero (Join-Ruta $A $f.fichero) (Join-Ruta $B $s.fichero) $false $DiasA $DiasB) } } })
+  $lineas = 1; $linea = 1
+  $igual = @($cmp | Where-Object { $null -eq $_.C })[0]
+  if ($igual) { $nota = "el contenido es igual al de $($igual.De), del original" }
+  else {
+    $c = $cmp[0].C
+    $lineas = $c.Lineas; $linea = $c.Linea
+    $nota = "el contenido es distinto: la primera linea distinta, la $($c.Linea): original [$($c.Original)]; migrado [$($c.Migrado)]"
+    if ($c.Nota) { $nota += " ($($c.Nota))" }
+  }
+  $nombre = $Faltas[0].fichero.Substring($Faltas[0].fichero.LastIndexOf('/') + 1)
+  return [ordered]@{
+    fichero = $nombre; clave = ($deOrig -join ',') + ' -> ' + ($deMig -join ','); lineas = $lineas; linea = $linea; original = 'en ' + (Format-Carpetas $deOrig); migrado = 'en ' + (Format-Carpetas $deMig)
+    nota = $nota; otraCarpeta = $true; carpetasOriginal = $deOrig; carpetasMigrado = $deMig
+  }
+}
+
 # Lo que no se pudo guardar de un caso en sus lados (original, original-2 y $Nombre, el migrado; Copy-Salida): uno por fichero (por su ruta
 # normalizada, que es la misma en todos los lados), con fichero, clave, destino (la clave de donde habria ido, para quitar la diferencia que
 # Compare-Caso ve por faltar en un lado) y, en original y migrado, el motivo del lado que fallo o '(guardado)'.
@@ -2377,6 +2450,8 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
     $d = @($sg | ForEach-Object { [ordered]@{ fichero = $_.fichero; clave = $_.clave; lineas = 1; linea = 1; original = $_.original; migrado = $_.migrado; nota = ''; noGuardado = $true } }) + @($d | Where-Object { $destinos -notcontains $_.clave })
     $o.motivo = ($o.motivo + " No se han podido guardar $($sg.Count) fichero(s) de salidas: el caso no se da por igual.").Trim()
   }
+  # Un fichero que el original deja en una carpeta y el migrado en otra es una sola diferencia (despues de lo que no se pudo guardar: esas faltas no son de verdad)
+  $d = @(Join-OtraCarpeta $d $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") $diasOrig)
   if ($d.Count -gt 0) {
     $o.resultado = 'distinto'; $o.diferencias = $d
     # Un migrado que no ha dejado ni estado.txt no ha corrido el caso: la consola lo dice antes de las diferencias, que son todas (no esta)
@@ -2427,9 +2502,7 @@ function Get-Grupos($Res) {
     else {
       $tipo = 'fichero'
       foreach ($d in @($r.diferencias)) {
-        $t = 'contenido'
-        if ($d.noGuardado) { $t = 'noGuardado' } elseif ($d.migrado -ceq '(no esta)') { $t = 'falta' } elseif ($d.original -ceq '(no esta)') { $t = 'sobra' }
-        $ent[$d.clave + ':' + $t] = $d.fichero
+        $ent[$d.clave + ':' + (Get-TipoDif $d)] = $d
       }
       $firma = 'fichero|' + ((Sort-Ordinal @($ent.Keys)) -join '|')
     }
@@ -2446,7 +2519,7 @@ function Get-Grupos($Res) {
     if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0] -ConRegistro) }
     else {
       $lista = @(Sort-Ordinal @($m[0].ent.Keys))
-      $desc = "$cuantos, en $($m[0].ent[$lista[0]]): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1)
+      $desc = "$cuantos, en $($m[0].ent[$lista[0]].fichero): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1)
       if ($lista.Count -eq 2) { $desc += ' y 1 fichero mas' }
       if ($lista.Count -gt 2) { $desc += " y $($lista.Count - 1) ficheros mas" }
     }
@@ -2573,6 +2646,7 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
       foreach ($f in @($r.fallos)) { Aviso "      $(Format-Fallo $f -ConRegistro)" }
       foreach ($d in @($r.diferencias | Select-Object -First 3)) {
         if ($d.noGuardado) { Info "      $($d.fichero): original: $($d.original); migrado: $($d.migrado)"; continue }
+        if ($d.otraCarpeta) { Info "      $($d.fichero): el original lo deja $($d.original); el migrado, $($d.migrado)"; if ($d.nota) { Aviso "        ($($d.nota))" }; continue }
         Info "      $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"
         Info "        original: $($d.original)"
         Info "        migrado:  $($d.migrado)"
