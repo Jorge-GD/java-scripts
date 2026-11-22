@@ -66,8 +66,8 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
     practicas   solo con -Practicas, despues de la correccion (y de comparar) y antes de prueba-local: pasa a Lombok los getters y setters
                 escritos a mano (los de datos\practicas-despues.json, o de practicas-antes.json), una tarea por fichero, y solo se
                 queda con el cambio de un fichero si lo compilado queda igual que antes (arreglo-practicas.ps1): un commit por
-                fichero; datos\practicas-arreglos.json. Sin -Practicas la fase no existe. Si el pom no usa Lombok, avisa y no
-                llama a nadie
+                fichero; datos\practicas-arreglos.json. Sin -Practicas la fase no existe. Si el pom no usa Lombok, lo anade (el
+                bloque de la referencia o uno por defecto), comprueba que compila y lo commitea; si no compila, avisa y no llama a nadie
     reglas      solo con -Reglas, despues de practicas y antes de prueba-local: un test unitario por clase con un caso por cada regla de
                 negocio que la comparacion da por igual (tests-reglas.ps1). El script cambia la linea de cada regla (un operador) y solo
                 se queda con el test si falla con el cambio: un commit por test; datos\tests-reglas.json. Sin -Reglas la fase no existe
@@ -86,8 +86,7 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 fallo o saltada, codigo, minutos, detalle, jdkOriginal -true si el original no compila con el JDK de Maven- y registro); hasta llegar
                 a la fase vale null. estado.json lleva tambien ramaOrigen (la rama del migrado de la que sale la de rescate) y javaLegacy (el
                 valor de -JavaLegacy, o vacio): con ellos la portada monta el comando del siguiente paso. Y las opciones de ese lanzamiento: practicas, reglas,
-                revisarTodo, maxHoras, limite y sinPruebaLocal (-Reintentar no se guarda: es de una sola vez); relanzar sin una de ellas la quita del comando
-                (revisarTodo se guarda, pero la portada aun no lo pone en el comando).
+                revisarTodo, maxHoras, limite y sinPruebaLocal (-Reintentar no se guarda: es de una sola vez); relanzar sin una de ellas la quita del comando.
   Informe: tras cada fase y al parar, el script monta en <Salida>\ index.html (la portada: como ha ido y
   que te toca), 1-batch-original.html (que hace el batch, job a job), 2-problemas.html (los problemas del
   migrado), 3-original-vs-migrado.html (el original frente al migrado, dato a dato), 4-correcciones.html (que se ha
@@ -903,13 +902,15 @@ function Invoke-Cierre {
 
 # El repo de configmap del batch migrado (configmap.ps1). $Preguntar: si falta la referencia, se pregunta (-ConfigMap) o se deja (-Cierre, sin preguntar nada).
 # Devuelve el codigo de salida: 0 bien (o no se pudo pedir y se dice como), 1 si la fase no pudo arrancar.
+function Show-AyudaConfigMap { Info 'Para el repo de configmap: relanza con -ConfigMap -Inventario <carpeta del inventario del original>' }
+
 function Invoke-ConfigMapMigracion([bool]$Preguntar) {
   $ref = $ConfigMapReferencia
   $guardada = [string]$Cfg.ConfigMapReferencia
   if (-not $ref -and $guardada -and (Test-Path -LiteralPath $guardada -PathType Container)) { $ref = $guardada }
   if (-not $ref -and $Preguntar) { $ref = "$(Read-Host 'Carpeta del repo de configmap de referencia (el de un batch ya migrado y aprobado)')".Trim() }
   if (-not $InventarioRoot -or -not $ref) {
-    if (-not $InventarioRoot) { Info 'Para el repo de configmap: relanza con -ConfigMap -Inventario <carpeta del inventario del original>' }
+    if (-not $InventarioRoot) { Show-AyudaConfigMap }
     else { Info 'Para el repo de configmap: relanza con -ConfigMap -ConfigMapReferencia <carpeta del repo de configmap de referencia>' }
     return 0
   }
@@ -972,6 +973,9 @@ $Registros = Join-Path $Salida 'registros'
 foreach ($d in @($Datos, $Registros)) { if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) } }
 $previo = $null
 if (Test-Path -LiteralPath (Join-Path $Datos 'estado.json')) { try { $previo = Read-Json (Join-Path $Datos 'estado.json') } catch { $previo = $null } }
+# lo que dejo la fase de configmap (el inventario y el modelo): vale para relanzar -ConfigMap cuando no hay una pasada (sin estado.json)
+$cmPrevio = $null
+if (Test-Path -LiteralPath (Join-Path $Datos 'configmap.json')) { try { $cmPrevio = Read-Json (Join-Path $Datos 'configmap.json') } catch { $cmPrevio = $null } }
 # la carpeta de rescate, si ya existe (la de este repo y su rama rescate/)
 $OrigenRoot = $MigradoRoot
 $Worktree = ''
@@ -997,6 +1001,7 @@ if ($Cierre -and -not $hayWt) {
   if ([int]((Invoke-Git $MigradoRoot @('rev-list', '--count', "$RamaMigrado..$juntar")).Salida -join '') -eq 0) {
     if ([string]$previo.respuesta -ceq 'parar') { Info 'La pasada no corrigio nada: contestaste "parar". Para corregir, lanza la pasada con -Si; despues, -Cierre.' }
     else { Info "Tu rama ya tiene todo lo de la de rescate ($ramaRescate): no hay nada que juntar. Si la pasada no llego a corregir, lanzala con -Si; despues, -Cierre." }
+    if (-not ($cmPrevio -and $cmPrevio.actualizado)) { Show-AyudaConfigMap }   # el repo de configmap esta hecho si su pasada llego a escribir el final de configmap.json
     exit 0
   }
   if ($recrear) {
@@ -1024,8 +1029,8 @@ if ($Inventario) {
   if (-not (Test-Path -LiteralPath $Inventario -PathType Container)) { Stop-Arranque "-Inventario no es una carpeta que exista: $Inventario" }
   $InventarioRoot = Resolve-Dir $Inventario
 }
-elseif ($previo -and $previo.inventario) {
-  $InventarioRoot = [string]$previo.inventario
+elseif (($previo -and $previo.inventario) -or ($ConfigMap -and -not $previo -and $cmPrevio -and $cmPrevio.inventario)) {
+  if ($previo -and $previo.inventario) { $InventarioRoot = [string]$previo.inventario } else { $InventarioRoot = [string]$cmPrevio.inventario }
   if (-not (Test-Path -LiteralPath $InventarioRoot -PathType Container)) { Aviso "La carpeta de -Inventario del lanzamiento anterior ya no existe ($InventarioRoot): sigo sin ella."; $InventarioRoot = '' }
 }
 if ($ConfigMap -and -not $InventarioRoot) { Stop-Arranque 'Falta -Inventario: la carpeta con el inventario del original (una carpeta por entorno con sus .properties). Es de donde salen los valores del repo de configmap.' }
@@ -1033,10 +1038,11 @@ if ($ConfigMap -and -not $InventarioRoot) { Stop-Arranque 'Falta -Inventario: la
 # 3. Modelo: -Modelo, el del lanzamiento anterior o el menu
 if ($PSBoundParameters.ContainsKey('Modelo')) { $ModeloElegido = $Modelo }
 elseif ($previo -and ($null -ne $previo.modelo)) { $ModeloElegido = [string]$previo.modelo }
+elseif ($ConfigMap -and -not $previo -and $cmPrevio -and ($null -ne $cmPrevio.modelo)) { $ModeloElegido = [string]$cmPrevio.modelo }
 else { $ModeloElegido = Select-Modelo }
 if ($ModeloElegido) { Info "Modelo: $ModeloElegido" } else { Info 'Modelo: el que tenga Copilot' }
 # las tareas atascadas de antes se conservan si el modelo es el mismo y no se pide -Reintentar
-$conservar = [bool]((-not $Reintentar) -and $previo -and ([string]$previo.modelo -ceq $ModeloElegido))
+$conservar = [bool]((-not $Reintentar) -and (($previo -and ([string]$previo.modelo -ceq $ModeloElegido)) -or ($ConfigMap -and -not $previo -and $cmPrevio -and ([string]$cmPrevio.modelo -ceq $ModeloElegido))))
 $H0 = [pscustomobject]@{ Legacy = (Get-Huella $LegacyRoot); Plantilla = (Get-Huella $PlantillaRoot) }
 
 # 4. La carpeta de rescate, si ya existe. Lo que haya sin commit en ella no se borra nunca: lo de un intento cortado va a un git stash (como en
@@ -1059,6 +1065,7 @@ if ($Cierre -or ($ConfigMap -and $previo)) {
   if (-not $JavaLegacy) { $JavaLegacy = [string]$previo.javaLegacy }   # la prueba en local que repite el cierre usa el JDK del original de la pasada
   $Estado['javaLegacy'] = $JavaLegacy
   $Estado['fin'] = Get-HoraTexto $previo.fin
+  if (-not $Estado['rama']) { $Estado['rama'] = $previo.rama }   # sin carpeta de rescate, la rama sigue siendo la de la pasada (un -Cierre la necesita)
   if ([string]$previo.parada.motivo -notlike 'cierre-*') { $Estado['parada'] = $previo.parada }
 }
 else {
@@ -1087,7 +1094,16 @@ if ($Cierre) {
   [void](Set-Despierto $true)
   try {
     $rc = Invoke-Cierre
-    if ($rc -eq 0) { $rc = Invoke-ConfigMapMigracion $false }
+    if ($rc -eq 0) {
+      # el repo de configmap es un extra del cierre: si falla, avisa y el codigo de salida sigue siendo el de juntar la rama
+      try { [void](Invoke-ConfigMapMigracion $false) }
+      catch {
+        $log = Join-Path $Registros 'configmap-error.log'
+        $msg = Hide-SecretosConfigMap (($_ | Out-String))
+        try { [System.IO.File]::WriteAllText($log, $msg, $Utf8) } catch { $log = '(no he podido escribirlo)' }
+        Aviso ('El repo de configmap no se ha hecho: ' + (Hide-SecretosConfigMap $_.Exception.Message) + " Detalle en $log. El cierre ha ido bien: relanza con -ConfigMap.")
+      }
+    }
     exit $rc
   }
   catch { Stop-ErrorInterno $_ }
