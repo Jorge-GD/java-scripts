@@ -6503,7 +6503,7 @@ $Pruebas['m72 (a5) metodo-final-proxy: un metodo final con @Transactional, @Asyn
   Igual 'en la clase final, el metodo no sale aparte: sale la clase (clase-final-proxy)' 'Cerrada' (Ficheros-M70 (Cal-M70 $e 'clase-final-proxy'))
 }
 
-$Pruebas['m72 (a6) una clase final sin nada de eso, un record y lo que esta en comentarios o cadenas: no sale nada'] = {
+$Pruebas['m72 (a6) una clase final sin nada de eso, un record, un @Validated de @ConfigurationProperties, metodos private o static y lo que esta en comentarios o cadenas: no sale nada'] = {
   $record = @'
 package com.acme.life.application.usecases;
 
@@ -6518,6 +6518,8 @@ public record Par(String a, int b) {
     Componente = (Clase-M72 'Componente' '@Component' ((Metodo-M72 'cada' '@Scheduled(fixedRate = 1000)') + (Metodo-M72 'oye' '@EventListener')))
     Comentado = $comentado
     Config    = (Clase-M72 'Config' '@Configuration(proxyBeanMethods = false)' '')
+    Props     = (Clase-M72 'Props' "@ConfigurationProperties(`"acme`")`n@Validated" '')
+    Privado   = (Clase-M72 'Privado' '@Component' ((Metodo-M72 'a' '@Transactional' 'private') + (Metodo-M72 'b' '@Async' 'static')))
   }
   Igual 'ni clase-final-proxy' 0 (Cal-M70 $e 'clase-final-proxy').Count
   Igual 'ni metodo-final-proxy' 0 (Cal-M70 $e 'metodo-final-proxy').Count

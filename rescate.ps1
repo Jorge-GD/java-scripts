@@ -659,20 +659,21 @@ function Get-Anotaciones([string]$Anot) {
   return @($script:RxAnotUna.Matches($Anot) | ForEach-Object { [pscustomobject]@{ Nombre = $_.Groups['n'].Value.Split('.')[-1]; Arg = $_.Groups['arg'].Value } })
 }
 
-# Los metodos de una clase que llevan alguna anotacion: sus anotaciones (Get-Anotaciones), si son final, su tipo de retorno (sin paquete), su
-# nombre y la linea de su declaracion.
+# Los metodos de una clase que llevan alguna anotacion: sus anotaciones (Get-Anotaciones), si son final, si un proxy los puede interceptar (no
+# lo son los private ni los static: Spring los ignora), su tipo de retorno (sin paquete), su nombre y la linea de su declaracion.
 function Get-Metodos($Clase) {
   $res = New-Object System.Collections.Generic.List[object]
   foreach ($m in $script:RxMetodo.Matches($Clase.Top)) {
     $linea = $Clase.LineaCuerpo + $Clase.Top.Substring(0, $m.Groups['mods'].Index).Split("`n").Count - 1
-    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Linea = $linea })
+    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Interceptable = ($m.Groups['mods'].Value -cnotmatch '\b(?:private|static)\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Linea = $linea })
   }
   return $res.ToArray()
 }
 
 # De unas anotaciones (Get-Anotaciones), las que hacen que Spring envuelva el bean con un proxy de clase (CGLIB: una subclase, y una clase final no
 # se puede heredar), con su @. $Donde: 'metodo' (las de $ProxyMetodo), 'bean' (los scopes de proxy, que valen en el @Bean que devuelve la clase) o
-# 'clase' (todas, mas @Configuration salvo con proxyBeanMethods = false).
+# 'clase' (todas, mas @Configuration salvo con proxyBeanMethods = false; @Validated no cuenta en una clase con @ConfigurationProperties: Spring
+# Boot la excluye de la validacion de metodos, EnableConfigurationPropertiesRegistrar.java).
 # Fuentes (fuentes-m72, 22-11): Spring Framework, core/aop/proxying.adoc: "final classes cannot be proxied, because they cannot be extended" y "final
 # methods cannot be advised, because they cannot be overridden"; Configuration.java: "Configuration classes must be non-final (allowing for subclasses
 # at runtime), unless the proxyBeanMethods flag is set to false"; PersistenceExceptionTranslationPostProcessor.java: proxy para los beans con
@@ -682,12 +683,13 @@ function Get-Metodos($Clase) {
 # EnableResilientMethods). Sonar way no tiene una regla que lo mida.
 function Get-AnotacionesProxy($Anots, [string]$Donde) {
   $res = @()
+  $conPropiedades = (@($Anots | Where-Object { $_.Nombre -ceq 'ConfigurationProperties' }).Count -gt 0)
   foreach ($a in $Anots) {
     $scope = ($a.Nombre -ceq 'StepScope' -or $a.Nombre -ceq 'JobScope' -or ($a.Nombre -ceq 'Scope' -and $a.Arg -cmatch '\bTARGET_CLASS\b'))
     $vale = $false
     if ($Donde -eq 'metodo') { $vale = ($script:ProxyMetodo -ccontains $a.Nombre) }
     elseif ($Donde -eq 'bean') { $vale = $scope }
-    else { $vale = ($scope -or ($script:ProxyClase -ccontains $a.Nombre) -or ($a.Nombre -ceq 'Configuration' -and $a.Arg -cnotmatch '\bproxyBeanMethods\s*=\s*false')) }
+    else { $vale = ($scope -or ($script:ProxyClase -ccontains $a.Nombre -and -not ($a.Nombre -ceq 'Validated' -and $conPropiedades)) -or ($a.Nombre -ceq 'Configuration' -and $a.Arg -cnotmatch '\bproxyBeanMethods\s*=\s*false')) }
     if ($vale) { $res += '@' + $a.Nombre }
   }
   return $res
@@ -841,7 +843,8 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       # Una clase final sale cuando acabe el recorrido (un @Bean con scope de proxy de otro fichero puede devolverla); un metodo final, aqui.
       $motivos = @(Get-AnotacionesProxy @(Get-Anotaciones $c.Anot) 'clase')
       foreach ($mt in @(Get-Metodos $c)) {
-        $enMetodo = @(Get-AnotacionesProxy $mt.Anots 'metodo')
+        $enMetodo = @()
+        if ($mt.Interceptable) { $enMetodo = @(Get-AnotacionesProxy $mt.Anots 'metodo') }
         if ($enMetodo.Count -gt 0 -and $c.Final) { $motivos += @($enMetodo | ForEach-Object { "$_ en un metodo" }) }
         elseif ($enMetodo.Count -gt 0 -and $mt.Final) { Add-Cal $out $f.RelRaiz $mt.Linea 'metodo-final-proxy' ('Metodo final con ' + ($enMetodo -join ', ') + ': Spring no lo puede interceptar y la anotacion no hace nada. Quita final.') }
         $enBean = @(Get-AnotacionesProxy $mt.Anots 'bean')
