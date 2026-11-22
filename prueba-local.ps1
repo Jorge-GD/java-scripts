@@ -251,6 +251,9 @@ $PatronDrop = '(?i)(?:Cannot drop|Imposible eliminar)\s+"([^"]+)"\s+(?:because|d
 # 'Failed to bind properties under 'x''; la clave, lo que haya entre comillas) y, sin comillas, '<clave> is not configured|is not set|must be set|is required|is
 # missing' o en espanol 'no esta configurad|es obligatori', con la clave de al menos un punto (app.export.dir): una palabra suelta o una clase no cuentan.
 $PatronPropiedad = '(?i)(?:Could not resolve placeholder|Failed to bind properties under) ''(?<k>[^'']+)''|(?<k>[A-Za-z][\w-]*(?:\.[\w-]+)+)[ \t]+(?:is not configured|is not set|must be set|is required|is missing|no est\S+ configurad|es obligatori)'
+# Una ruta fija que el original no encuentra o no puede abrir (Get-PistaCarpeta), por su clase (grupo c) y su ruta absoluta (grupo r: 'C:\x\y' o '/x/y', hasta el
+# primer espacio, parentesis o comilla): NoSuchFileException, FileNotFoundException y AccessDeniedException de java.nio.file y java.io.
+$PatronRutaFija = '(?<c>NoSuchFileException|FileNotFoundException|AccessDeniedException):\s*(?<r>(?:[A-Za-z]:[\\/]|/)[^\s()''"]+)'
 # Lo que se anade a JAVA_TOOL_OPTIONS en cada Maven del original (Invoke-Maven; lo leen Maven, javac y la JVM de surefire, y no pisa el argLine del pom): el original
 # es Java 8 u 11 y en Windows lee y escribe con la codificacion del sistema (Cp1252); en el servidor (Linux) y en el migrado (Java 18 o mas, JEP 400) es UTF-8.
 $OpcionJvmOriginal = '-Dfile.encoding=UTF-8'
@@ -1093,6 +1096,8 @@ function Get-PrevioArnes($T, $Antes) {
     if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
     $lineas = @(Get-LineasFallo 'original')
     if ($lineas.Count -gt 0) { $partes += 'Con el test de antes, estos casos acababan mal en el original, que en produccion funciona: al test le falta lo que en produccion prepara el arranque (un bean, una propiedad, una carpeta). Preparalo como los tests de ejemplo, sin tocar src/main.' + "`n" + ($lineas -join "`n") }
+    $carpeta = Get-PistaCarpeta $T $lineas
+    if ($carpeta) { $partes += $carpeta }
   }
   if ($T.entradas.repo -eq 'original') {
     $vacio = @(Get-LineasVacio)
@@ -1673,7 +1678,62 @@ function Get-PistaArnes($T, [string[]]$Lineas) {
   }
   $columnas = Get-PistaColumnas $T $texto
   if ($columnas) { $pistas += $columnas }
+  $carpeta = Get-PistaCarpeta $T $Lineas
+  if ($carpeta) { $pistas += $carpeta }
   return ($pistas -join ' ')
+}
+
+# La pista de una ruta fija, de $Lineas (las de un fallo del test del ORIGINAL: otro lado no tiene pista), hasta 2 rutas distintas: el original acaba con una
+# NoSuchFileException, FileNotFoundException o AccessDeniedException ($PatronRutaFija) sobre una ruta absoluta que no es de la copia ni de la carpeta de un caso
+# (target\prueba-local): el original funciona en produccion y usa esa carpeta, asi que el test tiene que dar a la propiedad que la define una carpeta del caso, como hace
+# el test del migrado. Si un grep sencillo la encuentra (la ruta, su carpeta o la de arriba, en cualquiera de sus formas: como esta, con / o con \\, en
+# src/main/resources/application*.properties, .yml o .yaml de la copia del arnes), dice donde: fichero:linea y la clave. '' si no hay ninguna.
+function Get-PistaCarpeta($T, [string[]]$Lineas) {
+  if ($T.entradas.repo -ne 'original') { return '' }
+  $copia = ([string]$T.entradas.copia).Replace('\', '/').TrimEnd('/')
+  $frases = @()
+  $vistas = @{}
+  foreach ($m in [regex]::Matches(($Lineas -join "`n"), $PatronRutaFija)) {
+    $ruta = $m.Groups['r'].Value.TrimEnd('.', ',', ';', ':')
+    $normal = $ruta.Replace('\', '/')
+    if ($vistas.ContainsKey($ruta) -or $normal.Contains('prueba-local') -or $normal.StartsWith($copia + '/')) { continue }
+    $vistas[$ruta] = $true
+    $sitio = Get-SitioRuta $T.entradas.copia $ruta
+    $donde = ''
+    if ($sitio) { $donde = " Ese valor esta en $sitio." }
+    $frases += "El original usa la ruta fija $ruta ($($m.Groups['c'].Value)), que no es una carpeta del caso. Da a la propiedad que la define una carpeta del caso, como hace el test del migrado (la misma que le da el test del migrado, o un @TempDir), y no dejes esa ruta.$donde"
+    if ($frases.Count -ge 2) { break }
+  }
+  return ($frases -join ' ')
+}
+
+# 'fichero:linea (clave)' del primer sitio de los application*.properties, .yml y .yaml de src/main/resources de $Dir (Get-FicherosConSql, por su ruta en orden
+# ordinal) donde sale $Ruta o, si no, su carpeta o la de arriba (esas dos solo si les quedan dos tramos o mas, para no dar con una raiz), en cualquiera de sus formas:
+# como esta, con / o con \\ (un .properties de Windows). Sin clave, 'fichero:linea'. '' si ninguno la tiene.
+function Get-SitioRuta([string]$Dir, [string]$Ruta) {
+  $ficheros = Get-FicherosConSql $Dir
+  $candidatas = @($Ruta)
+  foreach ($i in 1, 2) {
+    $corte = [Math]::Max($candidatas[-1].LastIndexOf('/'), $candidatas[-1].LastIndexOf('\'))
+    if ($corte -le 0) { break }
+    $arriba = $candidatas[-1].Substring(0, $corte)
+    if (@($arriba -split '[\\/]' | Where-Object { $_ -and $_ -notmatch '^[A-Za-z]:$' }).Count -lt 2) { break }
+    $candidatas += $arriba
+  }
+  foreach ($c in $candidatas) {
+    foreach ($forma in @($c, $c.Replace('\', '/'), $c.Replace('/', '\').Replace('\', '\\'))) {
+      foreach ($rel in (Sort-Ordinal @($ficheros.Keys | Where-Object { $_ -match '^src/main/resources/(?:.*/)?application[^/]*\.(?:properties|ya?ml)$' }))) {
+        $lineas = [System.IO.File]::ReadAllLines($ficheros[$rel])
+        for ($n = 0; $n -lt $lineas.Count; $n++) {
+          if ($lineas[$n].IndexOf($forma, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+          $clave = [regex]::Match($lineas[$n], '^\s*([^=:#\s]+)\s*[=:]').Groups[1].Value
+          if ($clave) { return "${rel}:$($n + 1) ($clave)" }
+          return "${rel}:$($n + 1)"
+        }
+      }
+    }
+  }
+  return ''
 }
 
 # La pista de las columnas que le faltan a la base limpia del test y que usa el codigo, de $Texto (las lineas de un fallo): una frase por columna, hasta 3

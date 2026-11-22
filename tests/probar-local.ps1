@@ -8155,5 +8155,53 @@ $Pruebas['m77 (e1) prueba-local.json lleva, por cada job que no arranca o que fa
   Comprueba 'pagoJob (arranca) no lleva falloIgual' ($null -eq $p.PSObject.Properties['falloIgual']) ''
 }
 
+# --- (f) la pista de una ruta fija que el test del original no lleva a la carpeta del caso ---
+
+# Deja en el original un application.properties con la carpeta fija de produccion (la barra doble de un .properties de Windows) y un .yml con otra cosa.
+function Escenario-M77f([string]$Nombre) {
+  $e = Escenario-M77 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  [void](Commit-En $e.Legacy 'src/main/resources/application.properties' "app.salida.dir=C:\\datos\\salida\\outbox`napp.otro=1`n" 'propiedades')
+  return $e
+}
+
+# Hace el primer lanzamiento, deja en el json de antes $Fallos (ver Anterior-M64) y rehace el test del original: devuelve el prompt de su primer intento.
+function Previo-M77($E, $Grupos) {
+  $r = Prueba-M77 $E ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $E $Grupos
+  $r = Prueba-M77 $E '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  return (Registro-Arnes $E 'original' 1)
+}
+
+$Pruebas['m77 (f1) FAILED con una NoSuchFileException de una carpeta fija: el prompt del test del original dice que el original usa esa ruta, que el test tiene que darle una carpeta del caso como el del migrado y en que propiedad esta'] = {
+  $e = Escenario-M77f 'm77-f1'
+  $orig = Previo-M77 $e @(, @(2, "original:FAILED:$M77Fichero"))
+  Comprueba 'dice la ruta fija y la clase' ($orig.Contains('El original usa la ruta fija C:\datos\salida\outbox (NoSuchFileException), que no es una carpeta del caso')) (Cola $orig)
+  Comprueba 'dice que el test del original tiene que dar a la propiedad una carpeta del caso, como hace el del migrado' ($orig.Contains('Da a la propiedad que la define una carpeta del caso, como hace el test del migrado')) (Cola $orig)
+  Comprueba 'y dice donde esta ese valor' ($orig.Contains('Ese valor esta en src/main/resources/application.properties:1 (app.salida.dir).')) (Cola $orig)
+  Igual 'una sola vez la pista' 1 (Veces-M50 $orig 'El original usa la ruta fija')
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado no la lleva' (-not $mig.Contains('El original usa la ruta fija')) (Cola $mig)
+}
+
+$Pruebas['m77 (f2) FileNotFoundException y AccessDeniedException con una ruta absoluta: tambien; una ruta dentro de la carpeta del caso, una causa sin ruta o sin esas clases: no; sin fichero de propiedades que la tenga, la pista no dice donde esta'] = {
+  $e = Escenario-M77f 'm77-f2'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.io.FileNotFoundException: /var/batch/salida/resumen.txt (No such file or directory)'))
+  Comprueba 'FileNotFoundException: la ruta, sin lo que va entre parentesis' ($orig.Contains('El original usa la ruta fija /var/batch/salida/resumen.txt (FileNotFoundException), que no es una carpeta del caso')) (Cola $orig)
+  Comprueba 'y como no esta en las propiedades, no dice donde' (-not $orig.Contains('Ese valor esta en')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2b'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.nio.file.AccessDeniedException: C:\datos\salida\outbox\resumen.txt'))
+  Comprueba 'AccessDeniedException: la ruta y, con la carpeta de arriba, donde esta' ($orig.Contains('El original usa la ruta fija C:\datos\salida\outbox\resumen.txt (AccessDeniedException)') -and $orig.Contains('Ese valor esta en src/main/resources/application.properties:1 (app.salida.dir).')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2c'
+  $dentro = 'java.nio.file.NoSuchFileException: ' + (Join-Path $e.CopiaOrig 'target/prueba-local/cargaJob/caso-01/ficheros/outbox')
+  $orig = Previo-M77 $e @(, @(2, "original:FAILED:$dentro"))
+  Comprueba 'una ruta dentro de la carpeta del caso (prueba-local): sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+  Comprueba 'pero con su linea de causa' ($orig.Contains('- En 2 casos el original acaba FAILED: java.nio.file.NoSuchFileException')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2d'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.lang.IllegalStateException: sin correo en C:\datos\salida'))
+  Comprueba 'una causa con una ruta pero de otra clase: sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
