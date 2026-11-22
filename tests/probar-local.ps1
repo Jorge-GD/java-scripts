@@ -7983,5 +7983,45 @@ $Pruebas['m77 (a3) con 3 FAILED iguales en el original (la ruta de la causa llev
   Igual 'y los 3 en el migrado' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado' 'remesaJob')
 }
 
+$M77Orig = "El original no arranca el job cargaJob (NoSuchBeanDefinitionException: $M77Bean). Es el test del original, no el codigo: relanza con -RehacerOriginal."
+$M77Igual = "El original falla igual en todos los casos de cargaJob (FAILED: $M77Fichero). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal."
+
+$Pruebas['m77 (b1) la linea final sale una vez por job, con la clase y la causa, y sin -RehacerArnes para ese job; un job cuyo migrado no arranca sigue con la suya'] = {
+  $e = Escenario-M77 'm77-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-' @() 'excepcion-mig:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'la linea de cargaJob (parado), con la clase y la causa' ($r.Salida.Contains($M77Orig)) (Cola $r.Salida)
+  Igual 'una sola linea de esas (la otra, la de la consola, dice "con este test")' 1 (Veces-M50 $r.Salida 'El original no arranca el job cargaJob (')
+  Comprueba 'cargaJob no lleva la linea de -RehacerArnes del migrado' ($r.Salida -notmatch 'El migrado no arranca el job cargaJob') (Cola $r.Salida)
+  Comprueba 'remesaJob (el migrado no arranca en ningun caso y el original si) conserva la suya' ($r.Salida.Contains('El migrado no arranca el job remesaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Comprueba 'y el original de remesaJob no se da por no arrancado ni por fallo igual' ($r.Salida -notmatch 'El original no arranca el job remesaJob' -and $r.Salida -notmatch 'El original falla igual en todos los casos de remesaJob') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (b2) los dos lados con la misma excepcion de arranque (casos igual): la linea sale; con causas distintas en los 3 casos no sale ninguna'] = {
+  $e = Escenario-M77 'm77-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'ambos-bean:^cargaJob/caso-'
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la linea de cargaJob sale' ($r.Salida.Contains($M77Orig)) (Cola $r.Salida)
+  Igual 'una sola vez' 1 (Veces-M50 $r.Salida 'El original no arranca el job')
+  $e = Escenario-M77 'm77-b2b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-01$;orig-creacion:^cargaJob/caso-0[23]$'
+  Igual 'sin parar: sus 3 casos en el original' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original')
+  Igual 'los 3 salen distintos' 'distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Comprueba 'y no sale ninguna linea del original' ($r.Salida -notmatch 'El original no arranca el job' -and $r.Salida -notmatch 'El original falla igual en todos') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (b3) el original FAILED con la misma causa en todos los casos comparados (2 o mas): la linea de que falla igual, una vez, tambien en un job que se paro; con un caso distinto en medio, ninguna'] = {
+  $e = Escenario-M77 'm77-b3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); tarifaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-failed:^cargaJob/caso-;orig-failed-caso:^remesaJob/caso-;orig-failed:^tarifaJob/caso-0[12]$'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'cargaJob (2 casos, sin parar): la linea de que falla igual' ($r.Salida.Contains($M77Igual)) (Cola $r.Salida)
+  Comprueba 'remesaJob (se para tras 3): su linea, con la causa del primer caso' ($r.Salida.Contains('El original falla igual en todos los casos de remesaJob (FAILED: java.nio.file.NoSuchFileException: C:\datos\salida\caso-01\outbox). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal.')) (Cola $r.Salida)
+  Comprueba 'tarifaJob (2 FAILED y un caso bien) no la lleva' ($r.Salida -notmatch 'El original falla igual en todos los casos de tarifaJob') (Cola $r.Salida)
+  Igual 'dos lineas de esas, una por job' 2 (Veces-M50 $r.Salida 'El original falla igual en todos los casos de')
+  Comprueba 'y ninguna es de no arranca (un FAILED no es una excepcion de arranque)' ($r.Salida -notmatch 'El original no arranca el job') (Cola $r.Salida)
+  Comprueba 'ni lleva la linea de -RehacerArnes del migrado' ($r.Salida -notmatch 'El migrado no arranca el job') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

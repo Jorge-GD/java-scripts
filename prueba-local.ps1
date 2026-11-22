@@ -3011,6 +3011,32 @@ function Add-Hechos($Grupos, $Res, [string]$Codigo, [string]$Hash) {
   }
 }
 
+# Los jobs de $Casos (los de un resultado, Get-Resultado, o los del prueba-local.json de antes) cuyo original acaba FAILED o EXCEPCION con la misma causa
+# (Get-FirmaFallo) en todos sus casos comparados (Test-Ejecutable: igual, distinto o no determinista; si los dos lados fallan igual el caso sale igual y tambien cuenta),
+# 2 como minimo: el original funciona en produccion, asi que es su test. Uno por job: job y fallo (el del primer caso).
+function Get-JobsFalloOriginal($Casos) {
+  $jobs = @()
+  foreach ($j in @($Casos | ForEach-Object { $_.job } | Select-Object -Unique)) {
+    $comparados = @($Casos | Where-Object { $_.job -ceq $j -and (Test-Ejecutable $_) })
+    if ($comparados.Count -lt 2) { continue }
+    $firmas = @()
+    $primero = $null
+    foreach ($c in $comparados) {
+      $f = @(@($c.fallos) | Where-Object { $_.lado -ceq 'original' })[0]
+      if ($firmas.Count -eq 0) { $primero = $f }
+      $firmas += (Get-FirmaFallo $f $c.caso)
+    }
+    if ($firmas[0] -and @($firmas | Where-Object { $_ -cne $firmas[0] }).Count -eq 0) { $jobs += [pscustomobject]@{ job = $j; fallo = $primero } }
+  }
+  return $jobs
+}
+
+# La linea de la consola de un job de Get-JobsFalloOriginal: si el original no arranca (Test-FalloArranque), dice la clase y la causa; si no, el estado y la causa.
+function Format-LineaOriginal([string]$Job, $F) {
+  if (Test-FalloArranque $F) { return "El original no arranca el job $Job ($(Get-ClaseFallo $F): $($F.causa)). Es el test del original, no el codigo: relanza con -RehacerOriginal." }
+  return "El original falla igual en todos los casos de $Job ($($F.estado): $($F.causa)). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal."
+}
+
 # La tabla por consola, los casos distintos por grupo (Get-Grupos: la cabecera, los casos, lo medido y el detalle de los dos primeros) y, despues, lo que
 # no es igual de los demas, caso a caso. Si un grupo de fallo EXCEPCION cubre todos los casos que se han comparado de un job, lo normal es que sea el
 # test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso. Si el test se
@@ -3957,6 +3983,7 @@ try {
     $n = @($res | Where-Object { $_.resultado -eq 'no se pudo preparar' -and $_.motivo.Contains($c[0]) }).Count
     if ($n -gt 0) { Aviso "$n caso(s) no se pudieron preparar porque el test del original $($c[1]): relanza con -RehacerOriginal." }
   }
+  foreach ($f in @(Get-JobsFalloOriginal $res)) { Aviso (Format-LineaOriginal $f.job $f.fallo) }   # una linea por job donde el original falla igual en todos los casos
   Show-Tiempos
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
   Info $NoPromete
