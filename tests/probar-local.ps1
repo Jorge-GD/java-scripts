@@ -6533,10 +6533,10 @@ function Escenario-M69([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
 }
 
 # Lanza con los guiones $Guiones de m69-copilot.ps1 (RESCATE_M69) y la base de los tests $Tablas ('tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1).
-function Prueba-M69($E, [string]$Guiones = '', [string[]]$A = @(), [string]$Tablas = '') {
+function Prueba-M69($E, [string]$Guiones = '', [string[]]$A = @(), [string]$Tablas = '', [string]$Guion = '') {
   $env:RESCATE_M69 = $Guiones
   $env:RESCATE_M40 = $Tablas
-  try { return (Prueba $E $A) }
+  try { return (Prueba $E $A $Guion) }
   finally { $env:RESCATE_M69 = ''; $env:RESCATE_M40 = '' }
 }
 
@@ -6775,6 +6775,33 @@ $Pruebas['m69 (b7) un test guardado de otro lanzamiento que no se rehace no pasa
   Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
   Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del original: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
   Comprueba 'sin aviso ni rechazo de columnas' ($r.Salida -notmatch 'sigue sin crear|Tu base no crea') (Cola $r.Salida)
+}
+
+$Pruebas['m69 (b8) las columnas se comparan sin distinguir mayusculas: el test nuevo con id y nombre en minusculas, donde antes estaba ID y NOMBRE, se acepta en el primer intento'] = {
+  $e = Escenario-M69 'm69-b8' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@$TablasM69;arnes-migrado@1@$TablasM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $minus = 'M69_TABLAS=T_A:id|nombre,T_B:id'
+  $r = Prueba-M69 $e "arnes-original@2@$minus;arnes-migrado@2@$TablasM69" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'no se rechaza nada' ($r.Salida -notmatch 'Arnes del original rechazado') (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con un intento' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el nuevo, en minusculas' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv') -cmatch 'nombre') ''
+}
+
+$Pruebas['m69 (b9) tras volver al de antes, un caso no-aplica de antes de M59 (sin hash del arnes) no se prepara otra vez: el test del original no ha cambiado'] = {
+  $e = Escenario-M69 'm69-b9' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e '' @() '' 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso 1 queda sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  Pon-Hash-M59 $e 'caso-cargaJob-01' $null
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $r = Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se vuelve al de antes' ($r.Salida.Contains('sigo con el de antes')) (Cola $r.Salida)
+  Igual 'el caso no-aplica no llama a la IA otra vez' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Comprueba 'y la consola no dice nada de prepararlo otra vez' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+  Igual 'sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
 }
 
 # --- (c) el primer intento del original ya sabe lo que fallo en el caso vacio de antes ---
