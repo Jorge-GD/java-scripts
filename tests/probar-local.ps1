@@ -1017,6 +1017,9 @@ function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
   return (($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
 }
 
+# Las funciones del script que leen un fichero para compararlo (Get-LineasNormales y lo que decide por su tipo, M73 (c)): las que necesita cualquier prueba que extraiga Compare-Fichero.
+$FnLeer = @('Get-LineasNormales', 'Get-LineasContenido', 'Get-TipoContenido', 'Get-LineasExcel', 'Get-LineasZip', 'Get-LineaBinaria', 'Get-Hash256')
+
 $Pruebas['55 m20b (a, b): una fecha de negocio que no es de hoy y cambia entre el original y el migrado sale distinta; la fecha y hora de hoy con otra hora sale igual'] = {
   $hoy = (Get-Date).ToString('yyyy-MM-dd')
   $e = Nuevo-Escenario 'm20b-fechas' ([ordered]@{ cargaJob = @('importe=10.00 vence=1980-05-12 00:00:00', "importe=10.00 hecho=$hoy 10:00:00") }) 'minimo=5.00' "minimo=5.00`nreescribe=1980-05-12 00:00:00=>1980-05-11 23:00:00`nreescribe=$hoy 10:00:00=>$hoy 11:30:00"
@@ -1065,8 +1068,8 @@ $Hoy = @(Get-Hoy $inicio ($inicio.AddHours(1)))
   Comprueba 'los dias de la ejecucion llevan el local y el UTC' ($v['HOY'] -and $v['HOY'].Contains($v['LOC']) -and $v['HOY'].Contains($v['UTC'])) (Cola $r.Salida)
   if ($v['OFFSET'] -and [double]$v['OFFSET'] -ne 0) { Comprueba 'con otra hora que UTC son dos dias distintos' ($v['LOC'] -ne $v['UTC'] -and @($v['HOY'] -split ',').Count -eq 2) "$($v['LOC']) $($v['UTC']) $($v['HOY'])" }
   else { Write-Host '  (esta maquina va en UTC: no se ve la diferencia entre el dia local y el UTC)' }
-  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hora>' $v['N1']
-  Igual 'con T y fraccion, tambien' 'x <hora>' $v['N2']
+  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hoy:yyyy-MM-dd><hora>' $v['N1']
+  Igual 'con T y fraccion, tambien' 'x <hoy:yyyy-MM-dd><hora>' $v['N2']
   Igual 'una fecha de negocio con hora no se toca' 'x 1980-05-12 00:00:00' $v['N3']
   Igual 'ni otra de hace dias' 'x 2026-11-16 23:45:00' $v['N4']
   Igual 'las horas sueltas se siguen tapando' 'a <hora> b' $v['N5']
@@ -2558,7 +2561,7 @@ Caso 'fuera-de-tablas' @{ 'ficheros/salida/x.csv' = "ID;NOMBRE`n" } @{}
 Caso 'tablas-no-csv' @{ 'tablas/nota.txt' = "ID;NOMBRE`n" } @{}
 Caso 'vacia-y-otra' @{ $t = "ID;NOMBRE`n"; 'tablas/U.csv' = "ID;NOMBRE`n1;ana`n" } @{}
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -3719,7 +3722,7 @@ $o = Join-Path $Raiz 'cambiante'
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
   $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) {
@@ -4270,7 +4273,7 @@ function Caso([string]$Id, [string]$A, [string]$B) {
 }
 
 '@ + "`n" + $Casos
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
   $r = Lanzar $f @((Join-Path $Dir $Nombre))
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -4414,7 +4417,7 @@ Prueba 'vacia' ''
   Igual 'es ruta C:\... y C:/... (unidad), /a/b, y file:' 'En <ruta> y <ruta> y <ruta> y <ruta>' $v['ruta-ejemplos']
   Igual 'la ruta de la copia (<copia>) con lo que sigue, una sola ruta' 'No existe <ruta>' $v['copia']
   Igual '@ y hexadecimal, a @<id>; un correo no' 'Bean@<id> no es Bean@<id> ni ana@acme.com' $v['hex']
-  Igual 'fechas y horas como Get-Normal: la de hoy con hora y la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
+  Igual 'fechas y horas como Get-Normal: la de hoy con hora, a <hoy:formato><hora>; la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hoy:yyyy-MM-dd><hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
   Igual 'sin nada que cambiar, igual' 'java.lang.IllegalStateException: sin correo' $v['sin-nada']
   Igual 'la causa de un TypeNotPresentException no cambia' 'java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present' $v['clase']
   Igual 'recortada a 200 letras' (('x' * 200)) $v['larga']
@@ -5202,7 +5205,7 @@ Caso 'sin-ventana' @{ $a = "total 3`n" } @{ $b = "total 3`n" } $null
 'N ' + (Get-Normal 'ficheros/outbox/R_2026_11_20.TXT y 2026_11_20_153045' $caballo)
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -6979,7 +6982,7 @@ function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
 }
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
-  $funciones = @('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado')
+  $funciones = (@('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado'))
   [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $funciones) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
   $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')))
   $v = [ordered]@{}
@@ -7212,6 +7215,699 @@ $Pruebas['m67 (c2) una pareja con un solo caso no sale; de las de 2 casos, las p
   $r = Prueba $e @('-RehacerArnes')
   Igual 'con dos parejas de un solo caso sale con 0' 0 $r.Codigo
   Comprueba 'el prompt del migrado no lleva ni el bloque de lo que fallo la otra vez' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
+}
+
+# ===================== M73: lo que hoy da 'distinto' sin serlo (SQL que ya existe, horas en rutas, Excel y binarios) =====================
+# Escenarios con el Copilot de m40 y el Maven de m73 (tests/falsos/m73-mvn.ps1, sobre el de m68; sus banderas, en RESCATE_M73). Los datos son inventados.
+
+function Escenario-M73([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm73-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M68 $Nombre $Casos $aj)
+}
+
+# Lanza con las banderas $Banderas del Maven falso de m73 (RESCATE_M73) y la base de los tests $Tablas (RESCATE_M40, como Prueba-M68).
+function Prueba-M73($E, [string]$Banderas = '', [string]$Tablas = '', [string[]]$A = @()) {
+  $env:RESCATE_M73 = $Banderas
+  try { return (Prueba-M68 $E '' $Tablas $A) }
+  finally { $env:RESCATE_M73 = '' }
+}
+
+# Edit-DatosSql sobre un fichero por cada texto de $Textos (en Latin-1, byte a byte): devuelve, por cada uno, @(el texto que queda en el fichero, 'si' si devuelve los bytes de antes).
+function EditaSql-M73([string]$Nombre, [string[]]$Textos) {
+  $latin = [System.Text.Encoding]::GetEncoding(28591)
+  $d = Join-Path $Dir $Nombre
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  for ($i = 0; $i -lt $Textos.Count; $i++) { [System.IO.File]::WriteAllBytes((Join-Path $d "c$i.sql"), $latin.GetBytes($Textos[$i])) }
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Carpeta)
+$Latin = [System.Text.Encoding]::GetEncoding(28591)
+'@
+  $cuerpo = @'
+foreach ($f in @(Get-ChildItem -LiteralPath $Carpeta -Filter 'c*.sql')) {
+  $antes = Edit-DatosSql $f.FullName
+  $d = ''
+  if ($null -ne $antes) { $d = 'si:' + $Latin.GetString($antes) }
+  [System.IO.File]::WriteAllText($f.FullName + '.antes', $d, $Latin)
+}
+'@
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Edit-DatosSql', 'Get-MascaraSql')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($d)
+  $v = @()
+  for ($i = 0; $i -lt $Textos.Count; $i++) {
+    $ruta = Join-Path $d "c$i.sql"
+    $v += , @($latin.GetString([System.IO.File]::ReadAllBytes($ruta)), [System.IO.File]::ReadAllText($ruta + '.antes', $latin))
+  }
+  return $v
+}
+
+# Comprueba que cada par @(entrada, esperada) de $Pares sale de Edit-DatosSql como se espera y que los bytes de antes se devuelven solo si algo cambio y son los de la entrada.
+function Comprueba-Sql-M73([string]$Nombre, $Pares) {
+  $v = EditaSql-M73 $Nombre @($Pares | ForEach-Object { $_[0] })
+  for ($i = 0; $i -lt $Pares.Count; $i++) {
+    $q = ($Pares[$i][0] -replace "`r", '\r' -replace "`n", '\n')
+    Igual "[$i] $q" $Pares[$i][1] $v[$i][0]
+    $cambia = $Pares[$i][0] -cne $Pares[$i][1]
+    Igual "[$i] devuelve los bytes de antes solo si cambia" $(if ($cambia) { 'si:' + $Pares[$i][0] } else { '' }) $v[$i][1]
+  }
+}
+
+$Pruebas['m73 (a1) CREATE SEQUENCE, CREATE UNIQUE INDEX, CREATE SCHEMA, ADD CONSTRAINT y ADD COLUMN llevan IF NOT EXISTS en lo que se ejecuta: en mayusculas, en minusculas y en varias lineas'] = {
+  $pares = @(
+    @('CREATE SEQUENCE X', 'CREATE SEQUENCE IF NOT EXISTS X'),
+    @('create sequence x start with 1 increment by 50;', 'create sequence IF NOT EXISTS x start with 1 increment by 50;'),
+    @("CREATE`r`n  SEQUENCE`n  BATCH_STEP_EXECUTION_SEQ`n  START WITH 1;", "CREATE`r`n  SEQUENCE`n  IF NOT EXISTS BATCH_STEP_EXECUTION_SEQ`n  START WITH 1;"),
+    @('CREATE UNIQUE INDEX I ON T(C)', 'CREATE UNIQUE INDEX IF NOT EXISTS I ON T(C)'),
+    @('create unique index i on t (c);', 'create unique index IF NOT EXISTS i on t (c);'),
+    @('CREATE INDEX I ON T(C)', 'CREATE INDEX IF NOT EXISTS I ON T(C)'),
+    @('CREATE HASH INDEX I ON T(C)', 'CREATE HASH INDEX IF NOT EXISTS I ON T(C)'),
+    @('CREATE UNIQUE HASH INDEX S.I ON T(C)', 'CREATE UNIQUE HASH INDEX IF NOT EXISTS S.I ON T(C)'),
+    @('CREATE SPATIAL INDEX I ON T(C)', 'CREATE SPATIAL INDEX IF NOT EXISTS I ON T(C)'),
+    @("create`n  unique`n  index`n  i`n  on t(c);", "create`n  unique`n  index`n  IF NOT EXISTS i`n  on t(c);"),
+    @('CREATE SCHEMA S', 'CREATE SCHEMA IF NOT EXISTS S'),
+    @('create schema s authorization sa;', 'create schema IF NOT EXISTS s authorization sa;'),
+    @("CREATE SCHEMA`n  S;", "CREATE SCHEMA`n  IF NOT EXISTS S;"),
+    @('ALTER TABLE T ADD CONSTRAINT K FOREIGN KEY (C) REFERENCES P(ID)', 'ALTER TABLE T ADD CONSTRAINT IF NOT EXISTS K FOREIGN KEY (C) REFERENCES P(ID)'),
+    @('alter table t add constraint k unique (c);', 'alter table t add constraint IF NOT EXISTS k unique (c);'),
+    @("ALTER TABLE T`n  ADD CONSTRAINT`n  K PRIMARY KEY (C)", "ALTER TABLE T`n  ADD CONSTRAINT`n  IF NOT EXISTS K PRIMARY KEY (C)"),
+    @('ALTER TABLE IF EXISTS S.T ADD CONSTRAINT K CHECK (C > 0)', 'ALTER TABLE IF EXISTS S.T ADD CONSTRAINT IF NOT EXISTS K CHECK (C > 0)'),
+    @('ALTER TABLE T ADD COLUMN C INT', 'ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT'),
+    @('alter table s.t add column c varchar(10) not null;', 'alter table s.t add column IF NOT EXISTS c varchar(10) not null;'),
+    @('ALTER TABLE T ADD C INT', 'ALTER TABLE T ADD IF NOT EXISTS C INT'),
+    @("ALTER TABLE T`n  ADD`n  COLUMN`n  C INT;", "ALTER TABLE T`n  ADD`n  COLUMN`n  IF NOT EXISTS C INT;"),
+    @('ALTER TABLE IF EXISTS T ADD COLUMN C INT', 'ALTER TABLE IF EXISTS T ADD COLUMN IF NOT EXISTS C INT'),
+    @('create sequence A; create sequence B; alter table T add column D int;', 'create sequence IF NOT EXISTS A; create sequence IF NOT EXISTS B; alter table T add column IF NOT EXISTS D int;')
+  )
+  Comprueba-Sql-M73 'm73-a1' $pares
+}
+
+$Pruebas['m73 (a1b) el resto de lo que acepta IF NOT EXISTS en las tres gramaticas de H2 (1.4.193, 1.4.200 y 2.x): tablas con modificadores, vistas, roles, usuarios, constantes, dominios, alias, agregados, triggers y tablas enlazadas'] = {
+  $pares = @(
+    @('CREATE TABLE T (ID INT)', 'CREATE TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE CACHED TABLE T (ID INT)', 'CREATE CACHED TABLE IF NOT EXISTS T (ID INT)'),
+    @('create memory table t (id int)', 'create memory table IF NOT EXISTS t (id int)'),
+    @('CREATE GLOBAL TEMPORARY TABLE T (ID INT)', 'CREATE GLOBAL TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE LOCAL TEMPORARY TABLE T (ID INT)', 'CREATE LOCAL TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE TEMP TABLE T (ID INT)', 'CREATE TEMP TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE MEMORY TEMPORARY TABLE T (ID INT)', 'CREATE MEMORY TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @("CREATE FORCE LINKED TABLE T('org.h2.Driver', 'jdbc:h2:mem:x', 'sa', '', 'P')", "CREATE FORCE LINKED TABLE IF NOT EXISTS T('org.h2.Driver', 'jdbc:h2:mem:x', 'sa', '', 'P')"),
+    @('CREATE VIEW V AS SELECT 1 FROM DUAL', 'CREATE VIEW IF NOT EXISTS V AS SELECT 1 FROM DUAL'),
+    @('create force view v as select 1 from dual', 'create force view IF NOT EXISTS v as select 1 from dual'),
+    @('CREATE ROLE R', 'CREATE ROLE IF NOT EXISTS R'),
+    @("CREATE USER U PASSWORD 'p'", "CREATE USER IF NOT EXISTS U PASSWORD 'p'"),
+    @('CREATE CONSTANT K VALUE 1', 'CREATE CONSTANT IF NOT EXISTS K VALUE 1'),
+    @('CREATE DOMAIN D AS INT', 'CREATE DOMAIN IF NOT EXISTS D AS INT'),
+    @('CREATE ALIAS A FOR "com.acme.Util.f"', 'CREATE ALIAS IF NOT EXISTS A FOR "com.acme.Util.f"'),
+    @('CREATE AGGREGATE G FOR "com.acme.Media"', 'CREATE AGGREGATE IF NOT EXISTS G FOR "com.acme.Media"'),
+    @('CREATE TRIGGER TR AFTER INSERT ON T CALL "com.acme.Disparo"', 'CREATE TRIGGER IF NOT EXISTS TR AFTER INSERT ON T CALL "com.acme.Disparo"')
+  )
+  Comprueba-Sql-M73 'm73-a1b' $pares
+}
+
+$Pruebas['m73 (a2) lo que ya lleva IF NOT EXISTS no cambia (ni en mayusculas, minusculas o espacios de mas); tampoco lo que no lo acepta en alguna gramatica ni lo que va en un comentario o un texto; lo demas del fichero queda byte a byte'] = {
+  $enie = [string][char]0xF1 + 'and' + [char]0xFA
+  $pares = @(
+    @('CREATE SEQUENCE IF NOT EXISTS X', 'CREATE SEQUENCE IF NOT EXISTS X'),
+    @('create   index  if  not  exists  i on t(c)', 'create   index  if  not  exists  i on t(c)'),
+    @("CREATE SCHEMA`n  IF NOT EXISTS`n  S", "CREATE SCHEMA`n  IF NOT EXISTS`n  S"),
+    @('ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT', 'ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT'),
+    @('ALTER TABLE T ADD IF NOT EXISTS C INT', 'ALTER TABLE T ADD IF NOT EXISTS C INT'),
+    @('alter table t add constraint  if not exists  k unique (c)', 'alter table t add constraint  if not exists  k unique (c)'),
+    @('CREATE TABLE IF NOT EXISTS T (ID INT)', 'CREATE TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL', 'CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL'),
+    @('CREATE OR REPLACE FORCE VIEW V AS SELECT 1 FROM DUAL', 'CREATE OR REPLACE FORCE VIEW V AS SELECT 1 FROM DUAL'),
+    @('CREATE INDEX ON T(C)', 'CREATE INDEX ON T(C)'),
+    @('create unique index on t(c)', 'create unique index on t(c)'),
+    @('CREATE PRIMARY KEY ON T(C)', 'CREATE PRIMARY KEY ON T(C)'),
+    @('CREATE SCHEMA AUTHORIZATION SA', 'CREATE SCHEMA AUTHORIZATION SA'),
+    @('CREATE MATERIALIZED VIEW V AS SELECT 1 FROM DUAL', 'CREATE MATERIALIZED VIEW V AS SELECT 1 FROM DUAL'),
+    @('ALTER TABLE T ADD PRIMARY KEY (C)', 'ALTER TABLE T ADD PRIMARY KEY (C)'),
+    @('ALTER TABLE T ADD UNIQUE (C)', 'ALTER TABLE T ADD UNIQUE (C)'),
+    @('ALTER TABLE T ADD FOREIGN KEY (C) REFERENCES P(ID)', 'ALTER TABLE T ADD FOREIGN KEY (C) REFERENCES P(ID)'),
+    @('ALTER TABLE T ADD CHECK (C > 0)', 'ALTER TABLE T ADD CHECK (C > 0)'),
+    @('ALTER TABLE T ADD (A INT, B INT)', 'ALTER TABLE T ADD (A INT, B INT)'),
+    @('ALTER TABLE T ADD COLUMN (A INT, B INT)', 'ALTER TABLE T ADD COLUMN (A INT, B INT)'),
+    @('ALTER TABLE T ALTER COLUMN C INT', 'ALTER TABLE T ALTER COLUMN C INT'),
+    @('ALTER TABLE T DROP COLUMN C', 'ALTER TABLE T DROP COLUMN C'),
+    @('-- CREATE SEQUENCE X', '-- CREATE SEQUENCE X'),
+    @("-- no es la de 'ayer'`nCREATE SEQUENCE X", "-- no es la de 'ayer'`nCREATE SEQUENCE IF NOT EXISTS X"),
+    @('/* CREATE TABLE T (ID INT); ALTER TABLE T ADD COLUMN C INT */', '/* CREATE TABLE T (ID INT); ALTER TABLE T ADD COLUMN C INT */'),
+    @("INSERT INTO LOG VALUES ('CREATE SEQUENCE X; ALTER TABLE T ADD COLUMN C INT')", "INSERT INTO LOG VALUES ('CREATE SEQUENCE X; ALTER TABLE T ADD COLUMN C INT')"),
+    @("INSERT INTO LOG VALUES ('it''s: CREATE TABLE T'); CREATE SEQUENCE X", "INSERT INTO LOG VALUES ('it''s: CREATE TABLE T'); CREATE SEQUENCE IF NOT EXISTS X"),
+    @('CREATE ALIAS A AS $$ String f() { return "CREATE SEQUENCE X"; } $$', 'CREATE ALIAS IF NOT EXISTS A AS $$ String f() { return "CREATE SEQUENCE X"; } $$'),
+    @("CREATE /* a */ SEQUENCE /* b */ X", "CREATE /* a */ SEQUENCE /* b */ IF NOT EXISTS X"),
+    @("insert into T values ('$enie')`r`ncreate sequence S;`r`n", "insert into T values ('$enie')`r`ncreate sequence IF NOT EXISTS S;`r`n"),
+    @('', '')
+  )
+  Comprueba-Sql-M73 'm73-a2' $pares
+}
+
+$Pruebas['m73 (a3) un caso hecho de antes cuyo original guardo que una secuencia, un indice, un esquema, una vista, una restriccion o una columna ya existe (en espanol, en ingles o solo con el codigo) se ejecuta otra vez; los demas errores, no'] = {
+  $casos = @(1..16 | ForEach-Object { 'importe=' + $_ + '0.00' })
+  $e = Escenario-M73 'm73-a3' ([ordered]@{ cargaJob = $casos })
+  $r = Prueba-M73 $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $h2 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: '
+  $dicen = @{
+    1  = @($true, ($h2 + 'Sequence "BATCH_STEP_EXECUTION_SEQ" already exists; SQL statement: CREATE SEQUENCE BATCH_STEP_EXECUTION_SEQ [90035-200]'))
+    2  = @($true, ($h2 + 'Sequence "BATCH_STEP_EXECUTION_SEQ" ya existe; Sentencia SQL: CREATE SEQUENCE BATCH_STEP_EXECUTION_SEQ [90035-200]'))
+    3  = @($true, ($h2 + '[90035-200]'))
+    4  = @($true, ($h2 + 'Indice "IX_A" ya existe; Sentencia SQL: CREATE UNIQUE INDEX IX_A ON T_A(ID) [42111-200]'))
+    5  = @($true, ($h2 + 'Index "IX_A" already exists [42111-200]'))
+    6  = @($true, ($h2 + 'Schema "S_A" already exists'))
+    7  = @($true, ($h2 + 'View "V_A" ya existe; Sentencia SQL: CREATE VIEW V_A AS SELECT 1 FROM DUAL'))
+    8  = @($true, ($h2 + 'Constraint "K_A" already exists; SQL statement: ALTER TABLE T_A ADD CONSTRAINT K_A UNIQUE (ID) [90045-200]'))
+    9  = @($true, ($h2 + 'Nombre de columna Duplicada "COL_X"; Sentencia SQL: ALTER TABLE T_A ADD COLUMN COL_X INT [42121-200]'))
+    10 = @($true, ("Failed to execute SQL script statement #1: ALTER TABLE T_A ADD COLUMN COL_X INT; nested exception is " + $h2 + 'Duplicate column name "COL_X" [42121-200]'))
+    11 = @($true, ($h2 + 'Role "R_A" already exists [90069-200]; User "U_A" ya existe [90033-200]; Trigger "TR_A" ya existe [90041-200]; Constant "K" ya existe [90114-200]; Function alias "A" already exists [90076-200]; Domain "D" ya existe [90119-200]'))
+    12 = @($false, ($h2 + 'Duplicate column name "C"; SQL statement: CREATE TABLE T_A (C INT, C INT) [42121-200]'))
+    13 = @($false, ($h2 + 'Tabla "T_A" no encontrada; Sentencia SQL: SELECT * FROM T_A [42102-200]'))
+    14 = @($false, ('Se han tratado 1190035 filas y el codigo 420112 no es un error de H2'))
+    15 = @($false, ('java.lang.NullPointerException'))
+  }
+  foreach ($n in $dicen.Keys) { Escribe $e.Local ('salidas/original/cargaJob/caso-' + $n.ToString('D2') + '/error.txt') ($dicen[$n][1] + "`n") }
+  $r = Prueba-M73 $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas a Copilot' $llamadas (Llamadas $e).Count
+  $esperado = @(1..16 | ForEach-Object { if ($dicen.ContainsKey($_) -and $dicen[$_][0]) { '5' } else { '3' } }) -join ','
+  $despues = @(1..16 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-' + $_.ToString('D2')) }) -join ','
+  Igual 'los once con el error se ejecutan otra vez (original y original-2) y los demas, no' $esperado $despues
+  Comprueba 'la consola dice cuantos' ($r.Salida -match 'Se ejecuta otra vez el original de 11 caso\(s\)') (Cola $r.Salida)
+  Comprueba 'y que es porque su error.txt dice que algo ya existe (no solo una tabla)' ($r.Salida -match 'dice que algo ya existe') (Cola $r.Salida)
+}
+
+$Pruebas['m73 (a3b) $PatronYaExiste: cada codigo de H2 de algo que ya existe se reconoce por si solo, y la columna repetida solo con un ALTER TABLE'] = {
+  $texto = [System.IO.File]::ReadAllText($Script)
+  foreach ($v in @('CodigosYaExiste', 'ColumnaRepetida', 'PatronYaExiste')) {
+    $l = [regex]::Match($texto, '(?m)^\$' + $v + ' = .*$')
+    Comprueba "$v esta definido en una linea" $l.Success ''
+    Invoke-Expression $l.Value
+  }
+  foreach ($c in @(42101, 42111, 90033, 90035, 90038, 90041, 90045, 90069, 90076, 90078, 90114, 90119)) { Comprueba "el codigo $c, solo" ("[$c-200]" -match $PatronYaExiste) '' }
+  Comprueba 'ya existe, solo' ('Tabla "T" ya existe' -match $PatronYaExiste) ''
+  Comprueba 'already exists, solo' ('Table "T" already exists' -match $PatronYaExiste) ''
+  Comprueba 'un codigo pegado a otras cifras no cuenta' (-not ('1190035 y 420112' -match $PatronYaExiste)) ''
+  foreach ($c in @('Duplicate column name "C"', 'Nombre de columna Duplicada "C"', '[42121-200]')) {
+    Comprueba "con ALTER TABLE: $c" (("ALTER TABLE T ADD COLUMN C INT; $c") -match $PatronYaExiste) ''
+    Comprueba "sin ALTER TABLE: $c" (-not (("CREATE TABLE T (C INT, C INT); $c") -match $PatronYaExiste)) ''
+  }
+}
+
+$Pruebas['m73 (a4) un datos.sql que crea una secuencia, un indice, un esquema y una columna que la base ya tiene: el caso corre en el original y en el migrado, y lo guardado en casos no cambia'] = {
+  $sql = 'create sequence BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IX_A on T_A(ID); alter table T_A add column COL_X int; create schema S_A; alter table T_A add constraint K_A unique (ID)'
+  $e = Escenario-M73 'm73-a4' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A' 'tablas=1/CALENDARIO_02'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba 'el original no deja error.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  $con = 'cargaJob/caso-01|create sequence IF NOT EXISTS BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IF NOT EXISTS IX_A on T_A(ID); alter table T_A add column IF NOT EXISTS COL_X int; create schema IF NOT EXISTS S_A; alter table T_A add constraint IF NOT EXISTS K_A unique (ID)'
+  Igual 'el original vio las cinco sentencias con IF NOT EXISTS en sus tres ejecuciones' 3 @(Sql-M68 $e $e.CopiaOrig | Where-Object { $_ -ceq $con }).Count
+  Igual 'y el migrado, en la suya' 1 @(Sql-M68 $e $e.CopiaMig | Where-Object { $_ -ceq $con }).Count
+  Igual 'lo guardado en casos no cambia' $sql (Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim()
+  $rel = 'src/test/resources/prueba-local/cargaJob/caso-01/datos.sql'
+  Igual 'ni lo que queda en la copia del original' $sql (Lee $e.CopiaOrig $rel).Trim()
+  Igual 'ni en la copia del migrado' $sql (Lee $e.CopiaMig $rel).Trim()
+  $e = Escenario-M73 'm73-a4b' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A;en' 'tablas=1/CALENDARIO_02'
+  Igual 'con los mensajes de H2 en ingles tambien sale con 0' 0 $r.Codigo
+}
+
+# Un script con Get-Normal y lo de comparar que, con el dia 2026-11-22 como el de la ejecucion ($Hoy), por cada 'Caso <id> @{ carpeta/fichero = contenido } @{ ... }' de $Cuerpo (el original
+# y el migrado) escribe una linea 'R <id> <tipo>|<fichero>|<original>|<migrado>|<lineas>|<linea>|<nota>|<clave>' por diferencia (Get-TipoDif), o 'R <id> (ninguna)'. Un contenido que es un
+# [byte[]] se escribe tal cual: los de $Bin (nombre -> bytes) se escriben aparte y el script los lee con Bin '<nombre>'. Devuelve id -> sus lineas.
+function Compara-M73([string]$Nombre, [string]$Cuerpo, [hashtable]$Bin = @{}) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Raiz, [string]$BinDir)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Cfg = @{ CompararIgnorar = @('*.log') }
+Add-Type -AssemblyName System.IO.Compression
+function Bin([string]$N) { return , [System.IO.File]::ReadAllBytes((Join-Path $BinDir $N)) }
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
+  $dirs = @{}
+  foreach ($x in @(@('A', $A), @('B', $B))) {
+    $d = Join-Path (Join-Path $Raiz $Id) $x[0]
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    foreach ($k in $x[1].Keys) {
+      $p = Join-Path $d $k
+      [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      if ($x[1][$k] -is [byte[]]) { [System.IO.File]::WriteAllBytes($p, $x[1][$k]) } else { [System.IO.File]::WriteAllText($p, $x[1][$k]) }
+    }
+    $dirs[$x[0]] = $d
+  }
+  $dif = @(Compare-Caso $dirs.A $dirs.B)
+  $dif = @(Join-OtraCarpeta $dif $dirs.A $dirs.B)
+  foreach ($d in $dif) { 'R ' + $Id + ' ' + (Get-TipoDif $d) + '|' + $d.fichero + '|' + $d.original + '|' + $d.migrado + '|' + $d.lineas + '|' + $d.linea + '|' + $d.nota + '|' + $d.clave }
+  if ($dif.Count -eq 0) { 'R ' + $Id + ' (ninguna)' }
+}
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $FnComparaM73) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
+  $bd = Join-Path $Dir ($Nombre + '-bin')
+  [void](New-Item -ItemType Directory -Path $bd -Force)
+  foreach ($k in $Bin.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $bd $k), [byte[]]$Bin[$k]) }
+  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')), $bd)
+  $v = [ordered]@{}
+  foreach ($l in @($r.Salida -split "`n")) {
+    if ($l -cmatch '^R (\S+) (.*)$') { $id = $Matches[1]; if (-not $v.Contains($id)) { $v[$id] = @() }; $v[$id] += $Matches[2].TrimEnd() }
+  }
+  if ($v.Count -eq 0) { Comprueba "${Nombre}: el script da alguna linea R" $false (Cola $r.Salida) }
+  return $v
+}
+# Las funciones del script que necesita Compara-M73.
+$FnComparaM73 = (@('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado'))
+
+# Get-Normal del dia 2026-11-22 sobre cada texto de $Textos (uno por linea, sin saltos): devuelve lo que sale, en el mismo orden.
+function Normaliza-M73([string]$Nombre, [string[]]$Textos) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Entrada)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+'@
+  $cuerpo = @'
+foreach ($l in [System.IO.File]::ReadAllLines($Entrada)) { 'N ' + (Get-Normal $l) }
+'@
+  $en = Join-Path $Dir "$Nombre.txt"
+  [System.IO.File]::WriteAllLines($en, $Textos)
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Get-Normal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($en)
+  return @(@($r.Salida -split "`n") | Where-Object { $_ -cmatch '^N ' } | ForEach-Object { $_.Substring(2).TrimEnd("`r") })
+}
+
+$Pruebas['m73 (b1) la misma fecha de hoy con hora en una carpeta del original y del migrado, con otra hora cada uno (informes/<hoy>-10-26-58/ y informes/<hoy>-10-31-07/): se emparejan por su clave y, con el mismo contenido, salen iguales; con otro, distintos'] = {
+  $cuerpo = @'
+Caso 'igual' @{ 'informes/2026-11-22-10-26-58/resumen.txt' = "importe;10`n" } @{ 'informes/2026-11-22-10-31-07/resumen.txt' = "importe;10`n" }
+Caso 'distinto' @{ 'informes/2026-11-22-10-26-58/resumen.txt' = "importe;10`n" } @{ 'informes/2026-11-22-10-31-07/resumen.txt' = "importe;11`n" }
+Caso 'dos-ejecuciones' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "b`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n"; 'informes/2026-11-22-10-31-09/r.txt' = "b`n" }
+Caso 'dos-una-distinta' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "b`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n"; 'informes/2026-11-22-10-31-09/r.txt' = "c`n" }
+Caso 'dos-y-una' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "a`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n" }
+'@
+  $v = Compara-M73 'm73-b1' $cuerpo
+  Igual 'el mismo contenido en las dos carpetas con hora: ninguna diferencia' @('(ninguna)') @($v['igual'])
+  Igual 'otro contenido: una de contenido, con la ruta del original y la clave normalizada' @('contenido|informes/2026-11-22-10-26-58/resumen.txt|importe;10|importe;11|1|1||informes/<hoy:yyyy-MM-dd><hora>/resumen.txt') @($v['distinto'])
+  Igual 'dos carpetas con hora en cada lado: se emparejan por orden y salen iguales' @('(ninguna)') @($v['dos-ejecuciones'])
+  Igual 'dos carpetas con hora en cada lado y la segunda distinta: una sola diferencia, la de la segunda' @('contenido|informes/2026-11-22-10-27-00/r.txt|b|c|1|1||informes/<hoy:yyyy-MM-dd><hora>/r.txt') @($v['dos-una-distinta'])
+  Igual 'dos en el original y una en el migrado: la que sobra en el original, falta' @('falta|informes/2026-11-22-10-27-00/r.txt|a|(no esta)|1|1||informes/<hoy:yyyy-MM-dd><hora>/r.txt') @($v['dos-y-una'])
+}
+
+$Pruebas['m73 (b2) la hora de hoy con cualquier separador (-, _, ., :, T, espacio, coma o nada), con o sin milisegundos y en cualquier formato de fecha de hoy, pasa a la marca del formato y <hora>'] = {
+  $esperado = [ordered]@{
+    '2026-11-22 10:26:58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T10:26:58.123'     = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T10:26:58,123456'  = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22-10-26-58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22_10-26-58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22_10_26_58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22.10.26.58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22-10-26-58-123'     = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T102658'           = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22 102658123'        = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22 10:26'            = '<hoy:yyyy-MM-dd><hora>'
+    '20261122_102658'             = '<hoy:yyyyMMdd><hora>'
+    '20261122102658'              = '<hoy:yyyyMMdd><hora>'
+    '20261122102658123'           = '<hoy:yyyyMMdd><hora>'
+    '20261122T10:26:58'           = '<hoy:yyyyMMdd><hora>'
+    '22/11/2026 10:26:58'         = '<hoy:dd/MM/yyyy><hora>'
+    '22/11/2026, 10:26:58'        = '<hoy:dd/MM/yyyy><hora>'
+    '22/11/2026-10-26-58'         = '<hoy:dd/MM/yyyy><hora>'
+    '22112026_102658'             = '<hoy:ddMMyyyy><hora>'
+    '2026_11_22-10_26_58'         = '<hoy:yyyy_MM_dd><hora>'
+    '2026/11/22 10:26:58'         = '<hoy:yyyy/MM/dd><hora>'
+    '22-11-2026 10:26:58'         = '<hoy:dd-MM-yyyy><hora>'
+    '22-11-2026_10-26-58'         = '<hoy:dd-MM-yyyy><hora>'
+    '22.11.2026 10.26.58'         = '<hoy:dd.MM.yyyy><hora>'
+    '22.11.2026 10:26:58'         = '<hoy:dd.MM.yyyy><hora>'
+    '2026.11.22 10:26:58'         = '<hoy:yyyy.MM.dd><hora>'
+    '22_11_2026-10_26_58'         = '<hoy:dd_MM_yyyy><hora>'
+    '11/22/2026 10:26:58'         = '<hoy:MM/dd/yyyy><hora>'
+    '11-22-2026 10:26:58'         = '<hoy:MM-dd-yyyy><hora>'
+    'informes/2026-11-22-10-26-58/resumen.xlsx' = 'informes/<hoy:yyyy-MM-dd><hora>/resumen.xlsx'
+    'informes_20261122_102658.csv' = 'informes_<hoy:yyyyMMdd><hora>.csv'
+    'en 2026-11-22 y en 22/11/2026' = 'en <hoy:yyyy-MM-dd> y en <hoy:dd/MM/yyyy>'
+    'a las 10:26:58 y a las 10:26:58.123' = 'a las <hora> y a las <hora>'
+    'dos: 2026-11-22 10:26:58 y 2026-11-22 10:31:07' = 'dos: <hoy:yyyy-MM-dd><hora> y <hoy:yyyy-MM-dd><hora>'
+  }
+  $v = Normaliza-M73 'm73-b2' @($esperado.Keys)
+  $i = 0
+  foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
+  # Dos horas distintas del mismo dia dan el mismo texto: es lo que hace que el original y el migrado salgan iguales.
+  $dos = Normaliza-M73 'm73-b2b' @('informes/2026-11-22-10-26-58/resumen.xlsx', 'informes/2026-11-22-10-31-07/resumen.xlsx', 'r_20261122_102658.txt', 'r_20261122_103107.txt')
+  Igual 'dos horas, la misma ruta normalizada' $dos[0] $dos[1]
+  Igual 'dos horas sin separador, el mismo nombre normalizado' $dos[2] $dos[3]
+}
+
+$Pruebas['m73 (b3) lo que no es de la ejecucion sigue como esta: una fecha de otro dia con hora (en cualquier formato), una hora sin fecha ni dos puntos, un numero de 6 cifras y una fecha de hoy que no es fecha'] = {
+  $quedan = @(
+    '1980-05-12 00:00:00',
+    '2026-11-21 10:26:58',
+    '2026-11-21T10:26:58.123',
+    '12/05/1980 10:00:00',
+    '21/11/2026 10:26:58',
+    '12-05-1980 10:00:00',
+    '2026-11-21-10-26-58',
+    '20261121_102658',
+    'a las 10-26-58 y las 10.26.58',
+    'importe 102658 y 10:26',
+    'id=220000 y 2026-13-22 y 2026-11-2',
+    'Nov 22, 2026 y 22-nov-2026 y 22/11/26'
+  )
+  $v = Normaliza-M73 'm73-b3' $quedan
+  for ($i = 0; $i -lt $quedan.Count; $i++) { Igual $quedan[$i] $quedan[$i] $v[$i] }
+  $mez = @(Normaliza-M73 'm73-b3m' @('hecho 2026-11-22 10-26.58'))
+  Igual 'una hora con dos separadores distintos no es una hora: la fecha pasa a su marca y lo demas se queda' 'hecho <hoy:yyyy-MM-dd> 10-26.58' $mez[0]
+  $cuerpo = @'
+Caso 'negocio' @{ 'a.txt' = "vence 1980-05-12 00:00:00`n" } @{ 'a.txt' = "vence 1980-05-11 23:00:00`n" }
+Caso 'negocio-igual' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" }
+Caso 'negocio-otro-formato' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 11:00:00`n" }
+Caso 'hoy' @{ 'a.txt' = "hecho 2026-11-22 10:26:58`n" } @{ 'a.txt' = "hecho 2026-11-22 10:31:07`n" }
+'@
+  $c = Compara-M73 'm73-b3c' $cuerpo
+  Igual 'una fecha de negocio con hora que cambia: contenido' @('contenido|a.txt|vence 1980-05-12 00:00:00|vence 1980-05-11 23:00:00|1|1||a.txt') @($c['negocio'])
+  Igual 'la misma, igual' @('(ninguna)') @($c['negocio-igual'])
+  Igual 'una fecha de negocio dd/MM/yyyy con hora que cambia: contenido' @('contenido|a.txt|vence 12/05/1980 10:00:00|vence 12/05/1980 11:00:00|1|1||a.txt') @($c['negocio-otro-formato'])
+  Igual 'la de hoy con otra hora: igual' @('(ninguna)') @($c['hoy'])
+}
+
+$Pruebas['m73 (b4) una marca de tiempo Unix de hoy en segundos (10 cifras) o en milisegundos (13) pasa a <hora>; un numero de 10 o 13 cifras fuera de los dias de la ejecucion, no'] = {
+  $esperado = [ordered]@{
+    'ts=1795348800'                = 'ts=<hora>'
+    'ts=1795348800123'             = 'ts=<hora>'
+    'a 1795348800 y 1795348800999 b' = 'a <hora> y <hora> b'
+    '{"t":1795348800,"u":1795348800123}' = '{"t":<hora>,"u":<hora>}'
+    'ayer 1795262400'              = 'ayer 1795262400'
+    'ayer 1795262400123'           = 'ayer 1795262400123'
+    'manana 1795435200'            = 'manana 1795435200'
+    'de hace anos 1700000000'      = 'de hace anos 1700000000'
+    'una cuenta 1234567890'        = 'una cuenta 1234567890'
+    'un numero 1795348800123456'   = 'un numero 1795348800123456'
+    'once 17953488001'             = 'once 17953488001'
+    'decimal 1.1795348800'         = 'decimal 1.1795348800'
+    'de 9 cifras 179534880'        = 'de 9 cifras 179534880'
+  }
+  $v = Normaliza-M73 'm73-b4' @($esperado.Keys)
+  $i = 0
+  foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
+}
+
+$Pruebas['m73 (b5) de punta a punta: el original deja informes/<hoy>-10-26-58/resumen.txt y el migrado informes/<hoy>-10-31-07/resumen.txt con lo mismo: el caso sale igual (no distinto, ni una carpeta distinta)'] = {
+  $e = Escenario-M73 'm73-b5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes-txt'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  $hoy = (Get-Date).ToString('yyyy-MM-dd')
+  Comprueba 'el original guardo su carpeta con la hora (si no, esta prueba no prueba nada)' (Test-Path -LiteralPath (Get-Ruta $e.Local "salidas/original/cargaJob/caso-01/ficheros/informes/$hoy-10-26-58/resumen.txt")) ''
+}
+
+# Las lineas (Get-LineasNormales) de un fichero de nombre $Fichero y bytes $Bytes, con el dia 2026-11-22 como el de la ejecucion, como las ensena la consola (Get-Legible).
+function Lineas-M73([string]$Nombre, [string]$Fichero, [byte[]]$Bytes) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Ruta)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)
+'@
+  $cola = 'foreach ($l in @(Get-LineasNormales $Ruta)) { ''L '' + (Get-Legible $l) }'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnComparaM73 + @('Get-Legible'))) + "`n" + $cola))
+  $x = Join-Path $Dir "$Nombre-$Fichero"
+  [System.IO.File]::WriteAllBytes($x, $Bytes)
+  $r = Lanzar $f @($x)
+  return @(@($r.Salida -split "`n") | Where-Object { $_ -cmatch '^L ' } | ForEach-Object { $_.Substring(2).TrimEnd("`r") })
+}
+
+# Un zip (en bytes) con las partes de $Partes (nombre -> texto o [byte[]]), con la fecha de cada entrada fija: los mismos bytes cada vez que se construye.
+function Zip-M73($Partes) {
+  Add-Type -AssemblyName System.IO.Compression
+  $ms = New-Object System.IO.MemoryStream
+  $zip = New-Object System.IO.Compression.ZipArchive($ms, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+  $fijo = New-Object System.DateTimeOffset(2020, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
+  foreach ($k in $Partes.Keys) {
+    $e = $zip.CreateEntry($k)
+    $e.LastWriteTime = $fijo
+    $b = $Partes[$k]
+    if ($b -is [string]) { $b = (New-Object System.Text.UTF8Encoding($false)).GetBytes($b) }
+    if ($b.Length -gt 0) { $s = $e.Open(); $s.Write($b, 0, $b.Length); $s.Dispose() }
+  }
+  $zip.Dispose()
+  return , $ms.ToArray()
+}
+
+# Un .xlsx (en bytes) con el XML minimo: $Creado va en docProps/core.xml y $Estilo en xl/styles.xml (no cuentan). $Hojas: nombre de hoja -> celdas, cada una @(ref, tipo, valor [, cache])
+# con tipo s (cadena compartida), i (cadena en la propia celda), n (numero), b (booleano), f (formula, con su valor en cache).
+function Xlsx-M73([string]$Creado, $Hojas, [string]$Estilo = 'a') {
+  $esc = { param([string]$s) [System.Security.SecurityElement]::Escape($s) }
+  $compartidas = New-Object System.Collections.ArrayList
+  $partes = [ordered]@{}
+  $partes['[Content_Types].xml'] = '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'
+  $partes['_rels/.rels'] = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+  $partes['docProps/core.xml'] = '<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/"><dcterms:created>' + $Creado + '</dcterms:created></cp:coreProperties>'
+  $partes['docProps/app.xml'] = '<?xml version="1.0" encoding="UTF-8"?><Properties><TotalTime>' + $Creado.Length + '</TotalTime></Properties>'
+  $partes['xl/styles.xml'] = '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="' + $Estilo + '"/></font></fonts></styleSheet>'
+  $hojasXml = ''; $rels = ''; $n = 0
+  foreach ($nombre in $Hojas.Keys) {
+    $n++
+    $filas = [ordered]@{}
+    foreach ($c in $Hojas[$nombre]) {
+      $fila = [regex]::Match($c[0], '\d+').Value
+      if (-not $filas.Contains($fila)) { $filas[$fila] = '' }
+      $v = [string]$c[2]
+      switch ($c[1]) {
+        's' { $ix = $compartidas.IndexOf($v); if ($ix -lt 0) { $ix = $compartidas.Add($v) }; $xml = '<c r="' + $c[0] + '" t="s"><v>' + $ix + '</v></c>' }
+        'i' { $xml = '<c r="' + $c[0] + '" t="inlineStr"><is><t>' + (& $esc $v) + '</t></is></c>' }
+        'b' { $xml = '<c r="' + $c[0] + '" t="b"><v>' + $v + '</v></c>' }
+        'f' { $xml = '<c r="' + $c[0] + '"><f>' + (& $esc $v) + '</f><v>' + $c[3] + '</v></c>' }
+        default { $xml = '<c r="' + $c[0] + '"><v>' + $v + '</v></c>' }
+      }
+      $filas[$fila] += $xml
+    }
+    $datos = ''
+    foreach ($f in $filas.Keys) { $datos += '<row r="' + $f + '">' + $filas[$f] + '</row>' }
+    $partes["xl/worksheets/sheet$n.xml"] = '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + $datos + '</sheetData></worksheet>'
+    $hojasXml += '<sheet name="' + (& $esc $nombre) + '" sheetId="' + $n + '" r:id="rId' + $n + '"/>'
+    $rels += '<Relationship Id="rId' + $n + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + $n + '.xml"/>'
+  }
+  $partes['xl/workbook.xml'] = '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + $hojasXml + '</sheets></workbook>'
+  $partes['xl/_rels/workbook.xml.rels'] = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + $rels + '</Relationships>'
+  if ($compartidas.Count -gt 0) {
+    $partes['xl/sharedStrings.xml'] = '<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="' + $compartidas.Count + '" uniqueCount="' + $compartidas.Count + '">' + (($compartidas | ForEach-Object { '<si><t>' + (& $esc $_) + '</t></si>' }) -join '') + '</sst>'
+  }
+  return , (Zip-M73 $partes)
+}
+
+function Sha-M73([byte[]]$Bytes) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { return ((@($sha.ComputeHash($Bytes)) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
+}
+
+# Un .png de mentira de 19 bytes; $Ultimo es su ultimo byte.
+function Png-M73([byte]$Ultimo = 0x80) { return , ([byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xFE, $Ultimo)) }
+
+# Un .gz (en bytes) con el texto $Texto.
+function Gz-M73([string]$Texto) {
+  $ms = New-Object System.IO.MemoryStream
+  $g = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Compress, $true)
+  $b = [System.Text.Encoding]::UTF8.GetBytes($Texto)
+  $g.Write($b, 0, $b.Length); $g.Dispose()
+  return , $ms.ToArray()
+}
+
+# Un PDF de mentira (en bytes) con el texto $Cuerpo y, si $Fecha no es '', su /CreationDate, su /ModDate (de $Fecha) y su /ID (de $Id).
+function Pdf-M73([string]$Fecha, [string]$Id, [string]$Cuerpo) {
+  $info = ''; $trailer = '<< /Root 1 0 R >>'
+  if ($Fecha) { $info = " /CreationDate (D:$Fecha+01'00') /ModDate (D:$Fecha+01'00')"; $trailer = "<< /Root 1 0 R /ID [<$Id><$Id>] >>" }
+  $t = "%PDF-1.4`n1 0 obj << /Producer (acme)$info >> endobj`n2 0 obj << /Length 5 >> stream`n$Cuerpo`nendstream endobj`ntrailer $trailer`n%%EOF`n"
+  return , [System.Text.Encoding]::GetEncoding(28591).GetBytes($t + [string][char]0x80)
+}
+
+# El libro de los tests: dos hojas (Hoja1: texto, numero, texto con la hora de hoy y $Texto en B3; Datos: una cadena con enie y u con tilde, un booleano y una formula).
+function Libro-M73([string]$Texto = 'x', [string]$Hora = '10:26:58', [string]$Estilo = 'a') {
+  $hojas = [ordered]@{
+    Hoja1 = @(@('A1', 's', 'importe'), @('B1', 'n', '10'), @('A2', 's', "generado 2026-11-22 $Hora"), @('B3', 's', $Texto))
+    Datos = @(@('A1', 'i', ([string][char]0xF1 + 'and' + [char]0xFA)), @('B2', 'b', '1'), @('C3', 'f', 'SUM(B1:B1)', '10'))
+  }
+  return , (Xlsx-M73 ('2026-11-22T' + $Hora + 'Z') $hojas $Estilo)
+}
+
+$Pruebas['m73 (c1) dos .xlsx con las mismas celdas y distinto docProps/core.xml, estilos y hora dentro de una celda: iguales; se leen celda a celda (hoja!celda: valor), con las cadenas compartidas, en el orden de las hojas'] = {
+  $a = Libro-M73 'x' '10:26:58' 'a'
+  $b = Libro-M73 'x' '10:31:07' 'b'
+  Comprueba 'los dos .xlsx no son el mismo fichero' ((Sha-M73 $a) -ne (Sha-M73 $b)) ''
+  $v = Compara-M73 'm73-c1' "Caso 'igual' @{ 'ficheros/informe.xlsx' = (Bin 'a') } @{ 'ficheros/informe.xlsx' = (Bin 'b') }" @{ a = $a; b = $b }
+  Igual 'iguales' @('(ninguna)') @($v['igual'])
+  $l = Lineas-M73 'm73-c1l' 'informe.xlsx' $a
+  $esperadas = @('Hoja1!A1: importe', 'Hoja1!B1: 10', 'Hoja1!A2: generado <hoy:yyyy-MM-dd><hora>', 'Hoja1!B3: x', ('Datos!A1: ' + [char]0xF1 + 'and' + [char]0xFA), 'Datos!B2: TRUE', 'Datos!C3: =SUM(B1:B1) -> 10')
+  Igual 'las lineas del libro: hoja!celda: valor, las hojas en orden, la cadena compartida resuelta, la enie y la u con tilde, el booleano y la formula con su valor' ($esperadas -join '|') ($l -join '|')
+}
+
+$Pruebas['m73 (c2) una celda distinta: distinto, con la primera linea distinta Hoja1!B3 en los dos lados; ni lo que sale en la consola ni el JSON llevan bytes que no sean de texto; de punta a punta, igual con otra hora y distinto con otra celda'] = {
+  $a = Libro-M73 'x'
+  $b = Libro-M73 'y' '10:31:07' 'b'
+  $v = Compara-M73 'm73-c2' "Caso 'dif' @{ 'ficheros/informe.xlsx' = (Bin 'a') } @{ 'ficheros/informe.xlsx' = (Bin 'b') }" @{ a = $a; b = $b }
+  Igual 'una diferencia de contenido: la linea 4, Hoja1!B3, en cada lado, sin nota' @('contenido|ficheros/informe.xlsx|Hoja1!B3: x|Hoja1!B3: y|1|4||ficheros/informe.xlsx') @($v['dif'])
+  $e = Escenario-M73 'm73-c2e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes;celda'
+  Igual 'de punta a punta sale con 2 (el Maven falso deja el libro con otra celda en el migrado: un caso distinto)' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)[0]
+  Igual 'con la linea del original: la celda' 'Hoja1!B3: x' "$($d.original)"
+  Igual 'y la del migrado' 'Hoja1!B3: y' "$($d.migrado)"
+  $json = [System.IO.File]::ReadAllText($e.Json)
+  $mal = '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]'
+  Comprueba 'el JSON no lleva bytes de control ni caracteres de reemplazo' ($json -notmatch $mal) ''
+  Comprueba 'la consola tampoco' ($r.Salida -notmatch $mal) (Cola $r.Salida)
+  Comprueba 'y la consola dice la celda' ($r.Salida.Contains('Hoja1!B3')) (Cola $r.Salida)
+  $e = Escenario-M73 'm73-c2f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes'
+  Igual 'dos libros con las mismas celdas y otra hora (en la carpeta, en docProps y en una celda): sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m73 (c3) un numero que es una fecha de Excel de uno de los dias de la ejecucion: con fraccion de hora, <hoy:excel><hora> (otra hora, igual); sin ella, <hoy:excel>; el dia siguiente, no'] = {
+  $serial = ([datetime]'2026-11-22' - [datetime]'1899-12-30').Days
+  $hojas = { param([string]$Fraccion, [int]$Dia) [ordered]@{ Hoja1 = @(@('A1', 'n', "$serial.$Fraccion"), @('A2', 'n', "$serial"), @('A3', 'n', "$Dia"), @('A4', 'n', '0.4351851852'), @('A5', 'n', '1234567')) } }
+  $a = Xlsx-M73 '2026-11-22T10:26:58Z' (& $hojas '4351851852' ($serial + 1))
+  $b = Xlsx-M73 '2026-11-22T10:31:07Z' (& $hojas '4382870370' ($serial + 1))
+  $c = Xlsx-M73 '2026-11-22T10:31:07Z' (& $hojas '4382870370' ($serial + 2))
+  $cuerpo = "Caso 'igual' @{ 'i.xlsx' = (Bin 'a') } @{ 'i.xlsx' = (Bin 'b') }`nCaso 'manana' @{ 'i.xlsx' = (Bin 'a') } @{ 'i.xlsx' = (Bin 'c') }"
+  $v = Compara-M73 'm73-c3' $cuerpo @{ a = $a; b = $b; c = $c }
+  Igual 'la misma fecha con otra hora: igual' @('(ninguna)') @($v['igual'])
+  Igual 'el dia de despues no es de hoy: sale como numero, y distinto' @("contenido|i.xlsx|Hoja1!A3: $($serial + 1)|Hoja1!A3: $($serial + 2)|1|3||i.xlsx") @($v['manana'])
+  $l = Lineas-M73 'm73-c3l' 'i.xlsx' $a
+  Igual 'con fraccion, <hoy:excel><hora>; sin ella, <hoy:excel>; el dia siguiente, otro numero que sigue como esta, y los que no son una fecha de hoy' "Hoja1!A1: <hoy:excel><hora>|Hoja1!A2: <hoy:excel>|Hoja1!A3: $($serial + 1)|Hoja1!A4: 0.4351851852|Hoja1!A5: 1234567" ($l -join '|')
+}
+
+$Pruebas['m73 (c4) un .png (y otro binario, o un fichero con un byte 0): una sola linea binario: <n> bytes, sha256 <hash>; distinto con la nota, igual si los bytes lo son'] = {
+  $a = Png-M73 0x80
+  $b = Png-M73 0x81
+  $n1 = [byte[]](0x61, 0x00, 0x62, 0xFF)
+  $n2 = [byte[]](0x61, 0x00, 0x63, 0xFF)
+  $cuerpo = "Caso 'igual' @{ 'ficheros/logo.png' = (Bin 'a') } @{ 'ficheros/logo.png' = (Bin 'a') }`nCaso 'dif' @{ 'ficheros/logo.png' = (Bin 'a') } @{ 'ficheros/logo.png' = (Bin 'b') }`nCaso 'nul' @{ 'datos.dat' = (Bin 'n1') } @{ 'datos.dat' = (Bin 'n2') }"
+  $v = Compara-M73 'm73-c4' $cuerpo @{ a = $a; b = $b; n1 = $n1; n2 = $n2 }
+  $nota = 'binario: se compara entero (sha256), no por dentro'
+  Igual 'los mismos bytes: igual' @('(ninguna)') @($v['igual'])
+  Igual 'otro byte: una linea binario en cada lado, con su hash, y la nota' @("contenido|ficheros/logo.png|binario: 19 bytes, sha256 $(Sha-M73 $a)|binario: 19 bytes, sha256 $(Sha-M73 $b)|1|1|$nota|ficheros/logo.png") @($v['dif'])
+  Igual 'un fichero con un byte 0 en los primeros 8 KB, aunque su extension no diga nada, tambien es binario' @("contenido|datos.dat|binario: 4 bytes, sha256 $(Sha-M73 $n1)|binario: 4 bytes, sha256 $(Sha-M73 $n2)|1|1|$nota|datos.dat") @($v['nul'])
+  $e = Escenario-M73 'm73-c4e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'png-otro'
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)[0]
+  Igual 'de punta a punta: el caso sale distinto con la linea binario en el JSON' "binario: 19 bytes, sha256 $(Sha-M73 $a)|binario: 19 bytes, sha256 $(Sha-M73 $b)" "$($d.original)|$($d.migrado)"
+  Comprueba 'y la consola no lleva bytes de control' ($r.Salida -notmatch '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]') (Cola $r.Salida)
+  $e = Escenario-M73 'm73-c4f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  [void](Prueba-M73 $e 'png')
+  Igual 'con el mismo .png en los dos lados, igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m73 (c5) un .zip con un .txt que lleva la hora de hoy dentro, una imagen y un .xlsx dentro, y un .gz con un texto: se leen entrada a entrada, con su nombre delante; otra hora, igual; otro contenido, distinto en la linea de esa entrada'] = {
+  $png = Png-M73 0x80
+  $zip = {
+    param([string]$Hora, [string]$Importe = '10', [string]$LibroTexto = 'x')
+    Zip-M73 ([ordered]@{ 'r.txt' = "hecho 2026-11-22 $Hora`nimporte;$Importe`n"; 'logo.png' = $png; 'sub/libro.xlsx' = (Libro-M73 $LibroTexto $Hora); 'sub/' = '' })
+  }
+  $gz = { param([string]$Hora) Gz-M73 "hecho 2026-11-22 $Hora`nimporte;10`n" }
+  $roto = [byte[]](0x50, 0x4B, 0x03, 0x04, 0x01, 0x02)
+  $roto2 = [byte[]](0x50, 0x4B, 0x03, 0x04, 0x01, 0x03)
+  $bin = @{ z1 = (& $zip '10:26:58'); z2 = (& $zip '10:31:07'); z3 = (& $zip '10:31:07' '11'); z4 = (& $zip '10:31:07' '10' 'y'); g1 = (& $gz '10:26:58'); g2 = (& $gz '10:31:07'); r1 = $roto; r2 = $roto2 }
+  $cuerpo = @'
+Caso 'igual' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z2') }
+Caso 'dif' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z3') }
+Caso 'libro' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z4') }
+Caso 'gz' @{ 'r.txt.gz' = (Bin 'g1') } @{ 'r.txt.gz' = (Bin 'g2') }
+Caso 'malo' @{ 'roto.zip' = (Bin 'r1') } @{ 'roto.zip' = (Bin 'r2') }
+'@
+  $v = Compara-M73 'm73-c5' $cuerpo $bin
+  Igual 'el zip con otra hora en el .txt y en el libro de dentro: igual' @('(ninguna)') @($v['igual'])
+  Igual 'otro importe en el .txt: una diferencia, la linea de r.txt (despues de logo.png y la hora), con el nombre de la entrada delante' @('contenido|ficheros/lote.zip|r.txt: importe;10|r.txt: importe;11|1|3||ficheros/lote.zip') @($v['dif'])
+  Igual 'una celda distinta en el libro de dentro: sub/libro.xlsx: Hoja1!B3' @('contenido|ficheros/lote.zip|sub/libro.xlsx: Hoja1!B3: x|sub/libro.xlsx: Hoja1!B3: y|1|7||ficheros/lote.zip') @($v['libro'])
+  Igual 'un .gz con un texto con otra hora: igual' @('(ninguna)') @($v['gz'])
+  Igual 'un .zip roto (no se puede abrir): una linea binario y la nota, no basura' @("contenido|roto.zip|binario: 6 bytes, sha256 $(Sha-M73 $roto)|binario: 6 bytes, sha256 $(Sha-M73 $roto2)|1|1|binario: se compara entero (sha256), no por dentro|roto.zip") @($v['malo'])
+  $l = Lineas-M73 'm73-c5l' 'lote.zip' (& $zip '10:26:58')
+  $esperadas = @(('logo.png: binario: 19 bytes, sha256 ' + (Sha-M73 $png)), 'r.txt: hecho <hoy:yyyy-MM-dd><hora>', 'r.txt: importe;10', 'sub/libro.xlsx: Hoja1!A1: importe')
+  Igual 'las primeras lineas del zip: cada entrada con su nombre delante, la imagen como binario y las entradas en orden de nombre' ($esperadas -join '|') (@($l | Select-Object -First 4) -join '|')
+}
+
+$Pruebas['m73 (c6) un PDF: sin su /CreationDate, /ModDate ni /ID se compara como binario, asi que dos PDF que solo cambian en eso salen iguales; si cambia otra cosa, distinto con la nota de la fecha de creacion'] = {
+  $bin = @{ p1 = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola'); p2 = (Pdf-M73 '20261122103107' 'CC33DD44' 'hola'); p3 = (Pdf-M73 '20261122103107' 'CC33DD44' 'adios') }
+  $cuerpo = "Caso 'igual' @{ 'ficheros/informe.pdf' = (Bin 'p1') } @{ 'ficheros/informe.pdf' = (Bin 'p2') }`nCaso 'dif' @{ 'ficheros/informe.pdf' = (Bin 'p1') } @{ 'ficheros/informe.pdf' = (Bin 'p3') }"
+  $v = Compara-M73 'm73-c6' $cuerpo $bin
+  Igual 'dos PDF que solo cambian en la fecha y el /ID: igual' @('(ninguna)') @($v['igual'])
+  $dif = @($v['dif'])
+  Igual 'con otro cuerpo: una diferencia' 1 $dif.Count
+  Comprueba 'es una linea binario en cada lado' ($dif[0] -cmatch '^contenido\|ficheros/informe\.pdf\|binario: \d+ bytes, sha256 [0-9a-f]{64}\|binario: \d+ bytes, sha256 [0-9a-f]{64}\|1\|1\|') $dif[0]
+  Comprueba 'con la nota que dice que puede ser la fecha de creacion' ($dif[0].Contains('un PDF lleva su fecha de creacion dentro')) $dif[0]
+}
+
+$Pruebas['m73 (d2) Get-MotivoCambiante: un .xlsx con la fecha de hoy en una celda, un .zip o un .gz con la hora de hoy en un texto y un PDF con su fecha de creacion no valen como test fijo (el motivo de siempre); sin fechas (o con la fecha solo en docProps) valen, y un .png tambien'] = {
+  $serial = ([datetime]'2026-11-22' - [datetime]'1899-12-30').Days
+  $png = Png-M73 0x80
+  $ficheros = [ordered]@{
+    'con-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(@('A1', 's', 'importe'), @('A2', 'n', "$serial.5")) }))
+    'texto-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(, @('A1', 's', 'generado 2026-11-22 10:26:58')) }))
+    'sin-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(@('A1', 's', 'importe'), @('A2', 'n', '15')) }))
+    'con-zip.zip' = (Zip-M73 ([ordered]@{ 'r.txt' = "hecho 2026-11-22 10:26:58`n"; 'logo.png' = $png }))
+    'nombre-zip.zip' = (Zip-M73 ([ordered]@{ 'r_20261122.txt' = "importe;10`n" }))
+    'sin-zip.zip' = (Zip-M73 ([ordered]@{ 'r.txt' = "importe;10`n"; 'logo.png' = $png }))
+    'con-gz.txt.gz' = (Gz-M73 "hecho 2026-11-22 10:26:58`n")
+    'sin-gz.txt.gz' = (Gz-M73 "importe;10`n")
+    'con-pdf.pdf' = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola')
+    'sin-pdf.pdf' = (Pdf-M73 '' '' 'hola')
+    'pdf-otro-dia.pdf' = (Pdf-M73 '20200101120000' 'CC33DD44' 'hola')
+    'zip-en-zip.zip' = (Zip-M73 ([ordered]@{ 'dentro.zip' = (Zip-M73 ([ordered]@{ 'informe-2026-11-22.txt' = "importe;10`n" })) }))
+    'sin-zip-en-zip.zip' = (Zip-M73 ([ordered]@{ 'dentro.zip' = (Zip-M73 ([ordered]@{ 'informe.txt' = "importe;10`n" })) }))
+    'logo.png' = $png
+  }
+  $d = Join-Path $Dir 'm73-d2-ficheros'
+  if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  foreach ($k in $ficheros.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $d $k), [byte[]]$ficheros[$k]) }
+  $f = Join-Path $Dir 'm73-d2.ps1'
+  $cabeza = @'
+param([string]$Raiz)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)
+'@
+  $cola = 'foreach ($n in @(Get-ChildItem -LiteralPath $Raiz -File | ForEach-Object { $_.Name })) { ''M '' + $n + '' ['' + (Get-MotivoCambiante $Raiz @($n)) + '']'' }'
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnLeer + @('Get-Normal', 'Test-NombreCorto'))) + "`n" + (Texto-De-Funciones $comun @('Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + $cola))
+  $r = Lanzar $f @($d)
+  $m = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^M (\S+) \[(.*)\]$') { $m[$Matches[1]] = $Matches[2] } }
+  $motivo = 'lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion.'
+  foreach ($k in @('con-excel.xlsx', 'texto-excel.xlsx', 'con-zip.zip', 'nombre-zip.zip', 'con-gz.txt.gz', 'con-pdf.pdf', 'pdf-otro-dia.pdf', 'zip-en-zip.zip')) { Igual "$k no vale como test fijo, con el motivo de siempre" "$k $motivo" $m[$k] }
+  foreach ($k in @('sin-excel.xlsx', 'sin-zip.zip', 'sin-gz.txt.gz', 'sin-pdf.pdf', 'sin-zip-en-zip.zip', 'logo.png')) { Igual "$k vale" '' $m[$k] }
+}
+
+$Pruebas['m73 (c7) cada tipo, por su lado: una extension de binario sin ningun byte 0 es binario; un .xlsx que es un zip sin libro se lee como zip; un .gz sale con el nombre de dentro; una entrada vacia se dice; un zip dentro de un zip dentro de un zip dentro de un zip se queda en un binario'] = {
+  $bin = '^binario: \d+ bytes, sha256 [0-9a-f]{64}$'
+  $texto = [System.Text.Encoding]::GetEncoding(28591).GetBytes('no es un jpeg de verdad')
+  $l = @(Lineas-M73 'm73-c7a' 'logo.jpg' $texto)
+  Comprueba 'un .jpg sin byte 0: una linea binario' ($l.Count -eq 1 -and $l[0] -cmatch $bin) ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7b' 'logo.txt' $texto)
+  Igual 'los mismos bytes en un .txt: el texto' 'no es un jpeg de verdad' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7c' 'raro.xlsx' (Zip-M73 ([ordered]@{ 'r.txt' = "importe;10`n" })))
+  Igual 'un .xlsx que es un zip sin libro: sus entradas' 'r.txt: importe;10' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7d' 'datos.txt.gz' (Gz-M73 "a;b`n"))
+  Igual 'un .gz: el nombre de dentro (el del fichero sin .gz) y su linea' 'm73-c7d-datos.txt: a;b' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7e' 'vacia.zip' (Zip-M73 ([ordered]@{ 'r.txt' = 'x'; 'vacio.txt' = '' })))
+  Igual 'una entrada vacia sale como (vacio), con las entradas en orden de nombre' 'r.txt: x|vacio.txt: (vacio)' ($l -join '|')
+  $tres = Zip-M73 ([ordered]@{ 'l1.zip' = (Zip-M73 ([ordered]@{ 'l2.zip' = (Zip-M73 ([ordered]@{ 'a.txt' = 'x' })) })) })
+  $l = @(Lineas-M73 'm73-c7f' 'tres.zip' $tres)
+  Igual 'dos zips dentro: se leen hasta el texto' 'l1.zip: l2.zip: a.txt: x' ($l -join '|')
+  $cuatro = Zip-M73 ([ordered]@{ 'l1.zip' = (Zip-M73 ([ordered]@{ 'l2.zip' = (Zip-M73 ([ordered]@{ 'l3.zip' = (Zip-M73 ([ordered]@{ 'a.txt' = 'x' })) })) })) })
+  $l = @(Lineas-M73 'm73-c7g' 'cuatro.zip' $cuatro)
+  Comprueba 'tres zips dentro: el tercero ya es un binario' ($l.Count -eq 1 -and $l[0] -cmatch ('^l1\.zip: l2\.zip: l3\.zip: ' + $bin.TrimStart('^'))) ($l -join '|')
 }
 
 # ================================ LANZADOR ================================

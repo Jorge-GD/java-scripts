@@ -57,9 +57,10 @@ QUE HACE
      siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
      de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. El original se
      ejecuta con UTF-8, como en el servidor (sus Maven llevan JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 y, con el, lo que ya hubiera). Para obligar a
-     repetirlo todo, borra prueba-local\salidas. Antes de ejecutar un caso (en el original, en el migrado y al prepararlo), cada CREATE TABLE de su
-     datos.sql pasa a CREATE TABLE IF NOT EXISTS en la copia que se ejecuta (el test ya crea tablas en su base y H2 dice 'ya existe'; lo guardado en
-     casos\ no cambia), y el original de un caso hecho de antes cuyo error.txt guardado dice 'ya existe' se ejecuta otra vez. Cada caso, en su Maven
+     repetirlo todo, borra prueba-local\salidas. Antes de ejecutar un caso (en el original, en el migrado y al prepararlo), cada CREATE de su
+     datos.sql (tabla, secuencia, indice, esquema, vista...) y cada ALTER TABLE ... ADD (columna, restriccion) que acepta IF NOT EXISTS lo lleva en la copia
+     que se ejecuta (el test y Spring Batch ya crean cosas en su base y H2 dice 'ya existe'; lo guardado en casos\ no cambia), y el original de un caso
+     hecho de antes cuyo error.txt guardado dice que algo ya existe se ejecuta otra vez. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
@@ -195,9 +196,15 @@ $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no 
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
-# El error.txt de un caso cuyo datos.sql crea una tabla que ya esta en la base del test: H2 dice 'Tabla "X" ya existe' o 'Table "X" already exists' ([42101-...]).
+# El error.txt de un caso cuyo datos.sql crea algo que ya esta en la base del test (o que Spring Batch crea solo en el migrado): H2 dice 'Tabla "X" ya existe' o
+# 'Sequence "X" already exists' y el codigo ([42101-...], [90035-...]). Lo que dicen los _messages_*.prop de H2 (1.4.193, 1.4.200 y 2.x) y su ErrorCode.java: ya existe
+# o already exists (tabla 42101, indice 42111, usuario 90033, secuencia 90035, vista 90038, trigger 90041, restriccion 90045, rol 90069, alias de funcion y
+# agregado 90076, esquema 90078, constante 90114, dominio 90119) y la columna repetida (42121: 'Duplicate column name' o 'Nombre de columna Duplicada'), que solo
+# cuenta si el error trae un ALTER TABLE (un CREATE TABLE con dos columnas iguales es un error del SQL, no de la base y no se arregla ejecutandolo otra vez).
 # Reset-OriginalesYaExiste lo busca en el error.txt guardado de un original.
-$PatronYaExiste = '(?i)ya existe|already exists|42101'
+$CodigosYaExiste = '(?<!\d)(?:42101|42111|90033|90035|90038|90041|90045|90069|90076|90078|90114|90119)(?!\d)'
+$ColumnaRepetida = '(?:duplicate column name|nombre de columna duplicada|(?<!\d)42121(?!\d))'
+$PatronYaExiste = '(?i)ya existe|already exists|' + $CodigosYaExiste + '|(?s:ALTER\s+TABLE.*' + $ColumnaRepetida + '|' + $ColumnaRepetida + '.*ALTER\s+TABLE)'
 # Lo que dice el motivo de un caso cuyo original no corre porque el test crea mal una tabla (Get-MotivoTablaMal): la cuenta del final de la prueba lo busca.
 # $PatronCreateTabla es el CREATE TABLE que H2 rechaza (grupo s, la sentencia): el error de H2 (Get-PistaArnes y Get-MotivoTablaMal) o ese motivo ya dicho
 # (Get-PistaArnes sobre el prueba-local.json de antes, donde el motivo ya no trae el error).
@@ -576,7 +583,7 @@ function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ 
 # $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
 # una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
 # repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
-# Mientras Maven ejecuta el caso, su datos.sql lleva cada CREATE TABLE con IF NOT EXISTS (Edit-DatosSql); al acabar queda como estaba.
+# Mientras Maven ejecuta el caso, su datos.sql lleva IF NOT EXISTS en cada CREATE y ADD que lo acepta (Edit-DatosSql); al acabar queda como estaba.
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
   Remove-Carpeta $sal
@@ -596,19 +603,53 @@ function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso
   return $r
 }
 
-# Cambia en el datos.sql $Ruta cada CREATE TABLE <tabla> que no lleva IF NOT EXISTS por CREATE TABLE IF NOT EXISTS <tabla> (sin distinguir mayusculas; la gramatica de H2 es
-# CREATE [CACHED | MEMORY] [TEMP | [GLOBAL | LOCAL] TEMPORARY] TABLE [IF NOT EXISTS] <tabla>, h2database.com/html/commands.html#create_table). El test del arnes ya crea tablas en su
-# base (la del calendario en el original; las de Spring Batch en el migrado, que las crea solo) y un datos.sql que las crea otra vez da 'ya existe': el caso no se pudo preparar o
-# sale distinto sin que el batch tenga la culpa. Devuelve los bytes de antes, para dejar el fichero como estaba al acabar el caso (lo guardado en casos\ no cambia), o $null si
-# no hay fichero o no cambia nada. Se lee y se escribe en Latin-1, byte a byte: lo demas del fichero no cambia, sea cual sea su codificacion.
+# Pone IF NOT EXISTS al datos.sql $Ruta en cada CREATE y cada ALTER TABLE ... ADD que lo lleva en las tres gramaticas de H2 (1.4.193, 1.4.200 y 2.x; help.csv de cada
+# etiqueta de h2database/h2database, h2database.com/html/commands.html): CREATE [CACHED | MEMORY] [TEMP | [GLOBAL | LOCAL] TEMPORARY] TABLE, CREATE [FORCE] [[GLOBAL | LOCAL]
+# TEMPORARY] LINKED TABLE, SEQUENCE, [UNIQUE | HASH | SPATIAL] INDEX <nombre>, SCHEMA <nombre>, [FORCE] VIEW, ROLE, USER, CONSTANT, DOMAIN, ALIAS, AGGREGATE, TRIGGER, y
+# ALTER TABLE <tabla> ADD [COLUMN] <columna> y ADD CONSTRAINT <nombre>. No lo lleva (se deja como esta): CREATE OR REPLACE VIEW (con los dos, H2 deja la vista de antes y no la
+# reemplaza), un indice sin nombre, CREATE PRIMARY KEY, CREATE SCHEMA AUTHORIZATION sin nombre y CREATE MATERIALIZED VIEW (solo 2.x), ADD PRIMARY KEY / UNIQUE / FOREIGN KEY /
+# CHECK sin CONSTRAINT <nombre> y ADD ( lista de columnas ) (sin nombre o sin IF NOT EXISTS en la gramatica). El test del arnes ya crea cosas en su base (la del calendario en el
+# original; las de Spring Batch en el migrado, que las crea solo) y un datos.sql que las crea otra vez da 'ya existe': el caso no se pudo preparar o sale distinto sin que el
+# batch tenga la culpa. Lo que va en un comentario (-- o /* */), en un texto ('...' o $$...$$) o entre comillas dobles no se toca (Get-MascaraSql). Lo que ya lleva IF NOT EXISTS,
+# tampoco. Devuelve los bytes de antes, para dejar el fichero como estaba al acabar el caso (lo guardado en casos\ no cambia), o $null si no hay fichero o no cambia nada. Se lee
+# y se escribe en Latin-1, byte a byte: lo demas del fichero no cambia, sea cual sea su codificacion.
 function Edit-DatosSql([string]$Ruta) {
   if (-not (Test-Path -LiteralPath $Ruta -PathType Leaf)) { return $null }
   $bytes = [System.IO.File]::ReadAllBytes($Ruta)
   $texto = $Latin.GetString($bytes)
-  $nuevo = [regex]::Replace($texto, '(?i)\bCREATE\s+TABLE(?>\s+)(?!IF\s+NOT\s+EXISTS\b)', '$&IF NOT EXISTS ')
-  if ($nuevo -ceq $texto) { return $null }
+  $mascara = Get-MascaraSql $texto
+  $ya = '(?!IF\s+NOT\s+EXISTS\b)'
+  $alter = 'ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[^\s;(]+\s+ADD'
+  $patrones = @(
+    ('\bCREATE\s+(?:(?:CACHED|MEMORY)\s+)?(?:(?:TEMP|TEMPORARY|(?:GLOBAL|LOCAL)\s+TEMPORARY)\s+)?TABLE(?>\s+)(?<p>)' + $ya),
+    ('\bCREATE\s+(?:FORCE\s+)?(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMPORARY\s+)?LINKED\s+TABLE(?>\s+)(?<p>)' + $ya),
+    ('\bCREATE\s+(?:(?:UNIQUE|HASH|SPATIAL|NULLS\s+(?:ALL\s+|NOT\s+)?DISTINCT)\s+)*INDEX(?>\s+)(?<p>)' + $ya + '(?!ON\b)'),
+    ('\bCREATE\s+(?:SEQUENCE|SCHEMA|ROLE|USER|CONSTANT|DOMAIN|ALIAS|AGGREGATE|TRIGGER)(?>\s+)(?<p>)' + $ya + '(?!AUTHORIZATION\b)'),
+    ('\bCREATE\s+(?:FORCE\s+)?VIEW(?>\s+)(?<p>)' + $ya),
+    ('\b' + $alter + '(?>\s+)(?:(?>COLUMN\s+)|(?!COLUMN\b))(?<p>)' + $ya + '(?!CONSTRAINT\b|PRIMARY\b|UNIQUE\b|FOREIGN\b|CHECK\b|\()'),
+    ('\b' + $alter + '\s+CONSTRAINT(?>\s+)(?<p>)' + $ya)
+  )
+  $puestos = New-Object System.Collections.Generic.SortedSet[int]
+  foreach ($p in $patrones) { foreach ($m in [regex]::Matches($mascara, $p, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { [void]$puestos.Add($m.Groups['p'].Index) } }
+  if ($puestos.Count -eq 0) { return $null }
+  $nuevo = $texto
+  foreach ($i in @($puestos | Sort-Object -Descending)) { $nuevo = $nuevo.Insert($i, 'IF NOT EXISTS ') }
   [System.IO.File]::WriteAllBytes($Ruta, $Latin.GetBytes($nuevo))
   return , $bytes
+}
+
+# $Texto con lo que no es SQL por dentro tapado, del mismo largo (para buscar sentencias sin leer un comentario o un texto como si fuera una): un comentario (-- hasta el final de la
+# linea, /* */) pasa a espacios; un texto ('...' con '' dentro, $$...$$) o un nombre entre comillas dobles conserva sus delimitadores y lleva x por dentro.
+function Get-MascaraSql([string]$Texto) {
+  $tapa = [System.Text.RegularExpressions.MatchEvaluator] {
+    param($m)
+    $v = $m.Value
+    if ($v.StartsWith('--') -or $v.StartsWith('/*')) { return (' ' * $v.Length) }
+    $d = 1
+    if ($v.StartsWith('$$')) { $d = 2 }
+    return ($v.Substring(0, $d) + ('x' * ($v.Length - 2 * $d)) + $v.Substring($v.Length - $d))
+  }
+  return [regex]::Replace($Texto, '--[^\r\n]*|/\*.*?\*/|''(?:[^'']|'''')*''|"(?:[^"]|"")*"|\$\$.*?\$\$', $tapa, [System.Text.RegularExpressions.RegexOptions]::Singleline)
 }
 
 # Anade las filas de este lanzamiento a datos\prueba-local-tiempos.json (se anade, no se pisa). Un fallo al guardar no para la prueba.
@@ -1804,8 +1845,8 @@ function Reset-CasosExcepcion($Tareas) {
   if ($n -gt 0) { Save-Originales; Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
 }
 
-# Un caso hecho en otro lanzamiento cuyo original guardo un error.txt que dice que una tabla ya existe ($PatronYaExiste: su datos.sql crea una tabla que el test del original
-# ya crea; ahora el script la crea con IF NOT EXISTS, Edit-DatosSql) vuelve a ejecutar su original, sin IA y sin -Rehacer: se quita su entrada de originales.json (un original sin
+# Un caso hecho en otro lanzamiento cuyo original guardo un error.txt que dice que algo ya existe ($PatronYaExiste: su datos.sql crea una tabla, una secuencia, un indice... que el
+# test del original ya crea; ahora el script lo crea con IF NOT EXISTS, Edit-DatosSql) vuelve a ejecutar su original, sin IA y sin -Rehacer: se quita su entrada de originales.json (un original sin
 # estado.txt ya se ejecuta en cada lanzamiento; este trae el estado.txt de un job que corrio igualmente). Los demas casos no se tocan. Dice cuantos son.
 function Reset-OriginalesYaExiste($Tareas) {
   $o = Get-Originales
@@ -1818,7 +1859,7 @@ function Reset-OriginalesYaExiste($Tareas) {
     $o.Remove("$j|$c")
     $n++
   }
-  if ($n -gt 0) { Info "Se ejecuta otra vez el original de $n caso(s) hecho(s) en otro lanzamiento: su error.txt dice que una tabla ya existe (su datos.sql la crea y el test ya la crea)." }
+  if ($n -gt 0) { Info "Se ejecuta otra vez el original de $n caso(s) hecho(s) en otro lanzamiento: su error.txt dice que algo ya existe (una tabla, una secuencia, un indice...: su datos.sql lo crea y la base del test ya lo tiene)." }
 }
 
 # Un caso hecho como no-aplica (sin probar en local: la IA no lo vio correr en el original, por ejemplo por unas tablas que el test no creaba) se decidio con el test
@@ -2186,30 +2227,226 @@ function Get-Hoy([datetime]$Desde, [datetime]$Hasta) {
   return @($dias | Select-Object -Unique)
 }
 
-# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las fechas con hora de la
-# ejecucion ($Hoy: la fecha y la hora juntas pasan a <hora>), las horas sueltas (HH:mm:ss y sus fracciones, sin fecha delante: tambien
-# pasan a <hora>) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato se sigue viendo), con la
-# hora pegada detras (aaaammdd_hhmmss). Una fecha con hora que no es de $Hoy es un dato del negocio y se queda como esta, hora incluida:
-# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. $Dias son los dias de la ejecucion que dejo ese texto (por defecto,
-# $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
+# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra, en el contenido de un fichero y en su ruta (la clave con la que se emparejan los
+# ficheros de los dos lados es la ruta normalizada, Compare-Caso): la ruta de cada copia (<copia>); una marca de tiempo Unix de un dia de la ejecucion (10 cifras en segundos o
+# 13 en milisegundos, en UTC o en hora local: <hora>; un numero de 10 o 13 cifras de otro dia, no); la fecha de hoy en cada formato (<hoy:formato>: cada formato con su marca,
+# un cambio de formato se sigue viendo) y, si lleva detras una hora HH?mm?ss (el separador de las horas, de los minutos y de los segundos, el mismo: - _ . : o ninguno; entre la
+# fecha y la hora, - _ . : T, una coma o un espacio, o nada; con fraccion .123 ,123 -123 o 123 pegada), <hoy:formato><hora> (HH:mm sin segundos tambien, solo con dos puntos);
+# las horas sueltas (HH:mm:ss y sus fracciones, sin una fecha de otro dia delante) pasan a <hora>. Una fecha con hora que no es de $Dias es un dato del negocio y se queda
+# como esta, hora incluida: si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. Los formatos de fecha no son los de texto (Nov 22, 2026) ni los de dos
+# cifras de anio. $Dias son los dias de la ejecucion que dejo ese texto (por defecto, $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
 function Get-Normal([string]$Texto, $Dias = $null) {
   if ($null -eq $Dias) { $Dias = $Hoy }
   $t = $Texto
   foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
-  foreach ($d in $Dias) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
-  $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
-  foreach ($d in $Dias) {
-    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
+  $ticks = @($Dias | ForEach-Object { $_.Date.Ticks })
+  $epoca = New-Object System.DateTime 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc)
+  $marcas = [regex]::Matches($t, '(?<![\d.])\d{10}(?:\d{3})?(?!\d)')
+  for ($i = $marcas.Count - 1; $i -ge 0; $i--) {
+    $segundos = [double]$marcas[$i].Value
+    if ($marcas[$i].Length -eq 13) { $segundos = [Math]::Floor($segundos / 1000) }
+    $utc = $epoca.AddSeconds($segundos)
+    if ($ticks -contains $utc.Date.Ticks -or $ticks -contains $utc.ToLocalTime().Date.Ticks) { $t = $t.Remove($marcas[$i].Index, $marcas[$i].Length).Insert($marcas[$i].Index, '<hora>') }
   }
-  return ($t -replace '(<hoy:[^>]+>)[_\-T\. ]?\d{6}(\d{3})?(?!\d)', '$1<hora>')
+  $h = '(?:[01]\d|2[0-3])'
+  $m = '[0-5]\d'
+  $hora = '(?:' + $h + '(?<s>[-_.:])' + $m + '\k<s>' + $m + '(?:[.,]\d+|[-_]\d{3}(?!\d))?|' + $h + $m + $m + '(?:\d{3})?(?!\d)|' + $h + ':' + $m + '(?![\d:]))'
+  foreach ($d in $Dias) {
+    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd', 'yyyy/MM/dd', 'dd-MM-yyyy', 'dd.MM.yyyy', 'yyyy.MM.dd', 'dd_MM_yyyy', 'MM/dd/yyyy', 'MM-dd-yyyy')) {
+      $fecha = $d.ToString($f, $Inv)
+      if (-not $t.Contains($fecha)) { continue }
+      $t = [regex]::Replace($t, [regex]::Escape($fecha) + '(?:[Tt_\-.:]|,?[ ]+)?' + $hora, "<hoy:$f><hora>")
+      $t = $t.Replace($fecha, "<hoy:$f>")
+    }
+  }
+  return ($t -replace '(?<!\d{4}[-/._]\d{2}[-/._]\d{2}[ Tt]|\d{2}[-/._]\d{2}[-/._]\d{4}[ Tt])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>')
 }
 
-# Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
-# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
-function Get-LineasNormales([string]$Ruta, $Dias = $null) {
-  $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta))) $Dias) -split '\r?\n')
+# El tipo de un contenido ($Bytes, de un fichero o de una entrada con el nombre $Nombre): xlsx (un zip con extension .xlsx o .xlsm), zip (los demas: .zip, .docx, .jar...), gz,
+# pdf, binario (un byte 0 en los primeros 8 KB, o una extension de las que son siempre binarias) o texto. El tipo se decide por los bytes y la extension, no por si se
+# lee bien: un libro roto sigue siendo xlsx y Get-LineasContenido decide que hace con el.
+function Get-TipoContenido([string]$Nombre, [byte[]]$Bytes) {
+  $n = $Bytes.Length
+  if ($n -ge 4 -and $Bytes[0] -eq 0x50 -and $Bytes[1] -eq 0x4B -and (($Bytes[2] -eq 3 -and $Bytes[3] -eq 4) -or ($Bytes[2] -eq 5 -and $Bytes[3] -eq 6))) {
+    if (@('.xlsx', '.xlsm') -contains [System.IO.Path]::GetExtension($Nombre).ToLowerInvariant()) { return 'xlsx' }
+    return 'zip'
+  }
+  if ($n -ge 2 -and $Bytes[0] -eq 0x1F -and $Bytes[1] -eq 0x8B) { return 'gz' }
+  if ($n -ge 5 -and $Latin.GetString($Bytes, 0, 5) -ceq '%PDF-') { return 'pdf' }
+  $binarias = @('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff', '.webp', '.class', '.xls', '.doc', '.ppt', '.7z', '.rar', '.tar', '.bz2', '.xz', '.so', '.dll', '.exe', '.ser', '.mp3', '.mp4', '.wav', '.avi', '.mov', '.woff', '.woff2', '.ttf', '.otf', '.p12', '.pfx', '.jks')
+  if ($binarias -contains [System.IO.Path]::GetExtension($Nombre).ToLowerInvariant()) { return 'binario' }
+  if ([System.Array]::IndexOf($Bytes, [byte]0, 0, [Math]::Min($n, 8192)) -ge 0) { return 'binario' }
+  return 'texto'
+}
+
+# La linea de un binario: binario: <n> bytes, sha256 <hash>. Dos binarios son iguales si sus bytes lo son. Un PDF generado lleva dentro su fecha de creacion y de
+# modificacion y un identificador distinto en cada ejecucion: sin comprimir (los de un PDF antiguo o simple; en un PDF con objetos comprimidos no se ven), /CreationDate,
+# /ModDate, /ID y las fechas y ids del XMP se sustituyen por un valor fijo del mismo largo antes de contar y de sacar el hash (con $Crudo, no).
+function Get-LineaBinaria([byte[]]$Bytes, [bool]$Crudo = $false) {
+  $b = $Bytes
+  if (-not $Crudo -and $b.Length -ge 5 -and $Latin.GetString($b, 0, 5) -ceq '%PDF-') {
+    $t = $Latin.GetString($b)
+    $t = [regex]::Replace($t, '/(CreationDate|ModDate)\s*\(D:[^)]*\)', [System.Text.RegularExpressions.MatchEvaluator]{ param($m) '/' + $m.Groups[1].Value + ' (D:' + ('0' * 14) + ')' })
+    $t = [regex]::Replace($t, '/ID\s*\[\s*<[0-9A-Fa-f]*>\s*<[0-9A-Fa-f]*>\s*\]', '/ID [<00><00>]')
+    $t = [regex]::Replace($t, '(<(?:xmp|pdf|xmpMM):(?:CreateDate|ModifyDate|MetadataDate)>)[^<]*', '$1')
+    $t = [regex]::Replace($t, '(?i)uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', 'uuid:00000000-0000-0000-0000-000000000000')
+    $b = $Latin.GetBytes($t)
+  }
+  return ('binario: ' + $b.Length + ' bytes, sha256 ' + (Get-Hash256 $b))
+}
+
+# Un .xlsx o .xlsm leido sin Excel (ECMA-376: xl/workbook.xml con las hojas, xl/_rels/workbook.xml.rels con el fichero de cada una, xl/sharedStrings.xml con los textos y
+# xl/worksheets/*.xml con las celdas <c r= t=> con <v>, <is> o <f>): una linea por celda con valor, '<hoja>!<celda>: <valor>', las hojas en su orden y las celdas en el del fichero.
+# Una formula sale como =<formula> y su ultimo valor (-> valor). Un numero que es una fecha de Excel de uno de los $Dias (sin tener en cuenta la hora) sale <hoy:excel><hora>
+# si lleva fraccion de dia y <hoy:excel> si no, y el resto de valores pasan por Get-Normal; las fechas y estilos de docProps/ y xl/styles.xml no cuentan. Un salto de linea dentro
+# de un valor sale como \n. Con $Crudo, sin normalizar nada (ni las fechas de Excel ni Get-Normal). Lanza una excepcion si no es un libro que se pueda leer.
+function Get-LineasExcel([byte[]]$Bytes, $Dias = $null, [bool]$Crudo = $false) {
+  if ($null -eq $Dias) { $Dias = $Hoy }
+  Add-Type -AssemblyName System.IO.Compression
+  $nsR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  $inv = [System.Globalization.CultureInfo]::InvariantCulture
+  $ticks = @($Dias | ForEach-Object { $_.Date.Ticks })
+  $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
+  try {
+    $abre = {
+      param([string]$Parte)
+      $e = $zip.GetEntry($Parte)
+      if ($null -eq $e) { return $null }
+      $cfg = New-Object System.Xml.XmlReaderSettings
+      $cfg.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+      $cfg.XmlResolver = $null
+      $cfg.CloseInput = $true
+      $lector = [System.Xml.XmlReader]::Create($e.Open(), $cfg)
+      try { $d = New-Object System.Xml.XmlDocument; $d.XmlResolver = $null; $d.Load($lector); return $d } finally { $lector.Dispose() }
+    }
+    $texto = {
+      param($Nodo)
+      $s = ''
+      foreach ($h in $Nodo.ChildNodes) {
+        if ($h.LocalName -ceq 't') { $s += $h.InnerText }
+        elseif ($h.LocalName -ceq 'r') { foreach ($t in $h.ChildNodes) { if ($t.LocalName -ceq 't') { $s += $t.InnerText } } }
+      }
+      return $s
+    }
+    $libro = & $abre 'xl/workbook.xml'
+    if ($null -eq $libro) { throw 'no hay xl/workbook.xml' }
+    $base = [datetime]'1899-12-30'
+    foreach ($p in $libro.GetElementsByTagName('workbookPr', '*')) { if (@('1', 'true') -contains $p.GetAttribute('date1904')) { $base = [datetime]'1904-01-01' } }
+    $destinos = @{}
+    $rels = & $abre 'xl/_rels/workbook.xml.rels'
+    if ($rels) { foreach ($n in $rels.GetElementsByTagName('Relationship', '*')) { $destinos[$n.GetAttribute('Id')] = $n.GetAttribute('Target') } }
+    $comp = New-Object 'System.Collections.Generic.List[string]'
+    $ss = & $abre 'xl/sharedStrings.xml'
+    if ($ss) { foreach ($si in $ss.GetElementsByTagName('si', '*')) { $comp.Add((& $texto $si)) } }
+    $lineas = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($h in $libro.GetElementsByTagName('sheet', '*')) {
+      $dest = [string]$destinos[$h.GetAttribute('id', $nsR)]
+      if (-not $dest) { continue }
+      $parte = 'xl/' + $dest
+      if ($dest.StartsWith('/')) { $parte = $dest.TrimStart('/') }
+      $hoja = & $abre $parte
+      if ($null -eq $hoja) { continue }
+      $nombre = $h.GetAttribute('name')
+      foreach ($c in $hoja.GetElementsByTagName('c', '*')) {
+        $tipo = $c.GetAttribute('t')
+        $v = $null; $f = ''; $dentro = $null
+        foreach ($x in $c.ChildNodes) {
+          if ($x.LocalName -ceq 'v') { $v = $x.InnerText } elseif ($x.LocalName -ceq 'f') { $f = $x.InnerText } elseif ($x.LocalName -ceq 'is') { $dentro = & $texto $x }
+        }
+        $valor = $v
+        $i = 0
+        if ($tipo -ceq 's' -and $null -ne $v -and [int]::TryParse($v, [ref]$i) -and $i -ge 0 -and $i -lt $comp.Count) { $valor = $comp[$i] }
+        elseif ($tipo -ceq 'inlineStr') { $valor = $dentro }
+        elseif ($tipo -ceq 'b') { if ($v -ceq '1') { $valor = 'TRUE' } elseif ($v -ceq '0') { $valor = 'FALSE' } }
+        elseif ((-not $tipo -or $tipo -ceq 'n') -and -not $Crudo) {
+          $num = 0.0
+          if ($null -ne $v -and [double]::TryParse($v, [System.Globalization.NumberStyles]::Float, $inv, [ref]$num) -and $num -ge 1 -and $num -lt 2958466) {
+            $dia = [Math]::Floor($num)
+            if ($ticks -contains $base.AddDays($dia).Ticks) { if ($num -gt $dia) { $valor = '<hoy:excel><hora>' } else { $valor = '<hoy:excel>' } }
+          }
+        }
+        if ($f) { $valor = '=' + $f + $(if ($valor) { ' -> ' + $valor } else { '' }) }
+        if (-not $valor) { continue }
+        $lineas.Add($nombre + '!' + $c.GetAttribute('r') + ': ' + ($valor -replace "\r\n|\r|\n", '\n'))
+      }
+    }
+  } finally { $zip.Dispose() }
+  if ($lineas.Count -eq 0) { return @() }
+  # Una sola pasada de Get-Normal para todas las lineas (sin saltos dentro de una linea, nada cruza de una a otra), en la forma de los ficheros: bytes UTF-8 vistos como Latin-1.
+  $todo = $Latin.GetString($Utf8.GetBytes(($lineas -join "`n")))
+  if (-not $Crudo) { $todo = Get-Normal $todo $Dias }
+  return @($todo -split "`n")
+}
+
+# Las lineas de un zip o de un docx, jar...: una por linea de cada entrada (las carpetas no cuentan) con el nombre de la entrada, normalizado, delante, y las entradas en el orden de
+# ese nombre (un zip con las mismas entradas en otro orden es el mismo contenido). Cada entrada se lee segun su tipo (Get-LineasContenido): texto, un libro, otro zip (hasta
+# 3 niveles) o un binario. Una entrada vacia sale como '<nombre>: (vacio)' para que sobre o falte. Con $Crudo, sin normalizar nada. Lanza una excepcion si no se puede abrir.
+function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0, [bool]$Crudo = $false) {
+  Add-Type -AssemblyName System.IO.Compression
+  $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
+  $claves = New-Object 'System.Collections.Generic.List[string]'
+  $trozos = New-Object 'System.Collections.Generic.List[object]'
+  try {
+    foreach ($e in $zip.Entries) {
+      if ($e.FullName.EndsWith('/')) { continue }
+      $ms = New-Object System.IO.MemoryStream
+      $s = $e.Open()
+      try { $s.CopyTo($ms) } finally { $s.Dispose() }
+      $nombre = $Latin.GetString($Utf8.GetBytes($e.FullName))
+      if (-not $Crudo) { $nombre = Get-Normal $nombre $Dias }
+      $l = @(Get-LineasContenido $e.FullName $ms.ToArray() $Dias ($Nivel + 1) $Crudo)
+      if ($l.Count -eq 0) { $l = @('(vacio)') }
+      $claves.Add($nombre + [char]0 + $trozos.Count.ToString('D6'))
+      $trozos.Add(@($l | ForEach-Object { $nombre + ': ' + $_ }))
+    }
+  } finally { $zip.Dispose() }
+  $k = $claves.ToArray()
+  $orden = New-Object 'int[]' $k.Length
+  for ($i = 0; $i -lt $k.Length; $i++) { $orden[$i] = $i }
+  [System.Array]::Sort($k, $orden, [System.StringComparer]::Ordinal)
+  $todo = @()
+  foreach ($i in $orden) { $todo += @($trozos[$i]) }
+  return $todo
+}
+
+# Las lineas de un contenido ya leido ($Bytes de un fichero o de una entrada con el nombre $Nombre), segun su tipo (Get-TipoContenido): un libro de Excel, una linea por celda
+# (Get-LineasExcel); un zip o un gz, las de lo que lleva dentro, cada entrada con su nombre (Get-LineasZip; un gz lleva el nombre del fichero sin .gz); un binario (y un
+# libro o un zip que no se pueden abrir), la linea binario: <n> bytes, sha256 <hash> (Get-LineaBinaria); un texto, sus lineas normalizadas (Get-Normal; los saltos \r\n cuentan
+# como \n y el ultimo salto no cuenta como linea; se leen byte a byte, Latin-1: dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este). Con $Crudo, sin
+# normalizar nada: las mismas lineas tal cual salen (Get-MotivoCambiante, de regresion.ps1, compara las dos para saber si el contenido lleva algo de esta ejecucion).
+function Get-LineasContenido([string]$Nombre, [byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0, [bool]$Crudo = $false) {
+  $tipo = Get-TipoContenido $Nombre $Bytes
+  if ($Nivel -ge 3 -and (@('xlsx', 'zip', 'gz') -contains $tipo)) { return @(Get-LineaBinaria $Bytes $Crudo) }
+  if ($tipo -ceq 'xlsx') {
+    try { return @(Get-LineasExcel $Bytes $Dias $Crudo) } catch { $tipo = 'zip' }
+  }
+  if ($tipo -ceq 'zip') {
+    try { return @(Get-LineasZip $Bytes $Dias $Nivel $Crudo) } catch { return @(Get-LineaBinaria $Bytes $Crudo) }
+  }
+  if ($tipo -ceq 'gz') {
+    try {
+      $ms = New-Object System.IO.MemoryStream
+      $g = New-Object System.IO.Compression.GZipStream((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.CompressionMode]::Decompress)
+      try { $g.CopyTo($ms) } finally { $g.Dispose() }
+      $dentro = [System.IO.Path]::GetFileName($Nombre) -replace '(?i)\.gz$', ''
+      $l = @(Get-LineasContenido $dentro $ms.ToArray() $Dias ($Nivel + 1) $Crudo)
+      if ($l.Count -eq 0) { $l = @('(vacio)') }
+      $nom = $Latin.GetString($Utf8.GetBytes($dentro))
+      if (-not $Crudo) { $nom = Get-Normal $nom $Dias }
+      return @($l | ForEach-Object { $nom + ': ' + $_ })
+    } catch { return @(Get-LineaBinaria $Bytes $Crudo) }
+  }
+  if ($tipo -ceq 'pdf' -or $tipo -ceq 'binario') { return @(Get-LineaBinaria $Bytes $Crudo) }
+  $t = $Latin.GetString($Bytes)
+  if (-not $Crudo) { $t = Get-Normal $t $Dias }
+  $l = @($t -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   return $l
+}
+
+# Las lineas de un fichero, normalizadas (Get-LineasContenido).
+function Get-LineasNormales([string]$Ruta, $Dias = $null) {
+  return @(Get-LineasContenido $Ruta ([System.IO.File]::ReadAllBytes($Ruta)) $Dias)
 }
 
 # Las lineas $L de una tabla (un .csv de tablas\: campos separados por ';', la primera linea con los nombres de las columnas) con las
@@ -2287,10 +2524,11 @@ function Get-Legible([string]$Linea) {
 }
 
 # Si dos ficheros distintos solo cambian en la codificacion (JEP 400: UTF-8 por defecto desde Java 18) o en el formato
-# de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''.
+# de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''. Un binario, un libro o un zip no son texto: no tienen codificacion ni formato de numeros que mirar.
 function Get-NotaJdk([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   $ba = [System.IO.File]::ReadAllBytes($A)
   $bb = [System.IO.File]::ReadAllBytes($B)
+  if ((Get-TipoContenido $A $ba) -cne 'texto' -or (Get-TipoContenido $B $bb) -cne 'texto') { return '' }
   $limpio = { param([string]$s, $d) ((Get-Normal $s.TrimStart([char]0xFEFF) $d) -replace '\r\n', "`n").TrimEnd("`n") }
   $ua = & $limpio ($Utf8.GetString($ba)) $DiasA
   $ub = & $limpio ($Utf8.GetString($bb)) $DiasB
@@ -2328,8 +2566,14 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
   $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
   if ($A -and $B) { $nota = Get-NotaJdk $A $B $DiasA $DiasB }
-  $nota = (@($notaTabla, $nota) | Where-Object { $_ }) -join '; '
-  return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
+  $original = & $lado $x $A
+  $migrado = & $lado $y $B
+  # Lo que se compara entero (un binario) y un PDF, que lleva dentro su fecha de creacion, lo dicen.
+  $notaBin = ''
+  if ($original -clike 'binario: *' -or $migrado -clike 'binario: *') { $notaBin = 'binario: se compara entero (sha256), no por dentro' }
+  if (($A -match '(?i)\.pdf$' -or $B -match '(?i)\.pdf$') -and $notaBin) { $notaBin += '; un PDF lleva su fecha de creacion dentro: si solo cambia eso, es la fecha de creacion (se ignoran /CreationDate, /ModDate y /ID cuando estan sin comprimir)' }
+  $nota = (@($notaTabla, $nota, $notaBin) | Where-Object { $_ }) -join '; '
+  return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = $original; Migrado = $migrado; Nota = $nota }
 }
 
 # Las diferencias entre lo que dejo un caso en dos carpetas: una por fichero que no coincide (con su ruta relativa).
@@ -2349,13 +2593,27 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
       $rel = Get-Rel $lado[1] $f.FullName
       if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$' -or (Test-Ignorado $rel)) { continue }
       $k = Get-Normal $rel $lado[2]
-      if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = ''; B = ''; Rel = $rel } }
-      $pares[$k][$lado[0]] = $f.FullName
+      if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = (New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)); B = (New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)) } }
+      $pares[$k][$lado[0]][$rel] = $f.FullName
+    }
+  }
+  # Dos ficheros de un lado con la misma clave y otra ruta (la carpeta con la hora de dos ejecuciones del job) se emparejan, por orden de ruta, con los del otro lado.
+  $emparejados = @()
+  foreach ($k in @($pares.Keys | Sort-Object)) {
+    $ra = [string[]]@($pares[$k].A.Keys)
+    $rb = [string[]]@($pares[$k].B.Keys)
+    [System.Array]::Sort($ra, [System.StringComparer]::Ordinal)
+    [System.Array]::Sort($rb, [System.StringComparer]::Ordinal)
+    for ($i = 0; $i -lt [Math]::Max($ra.Count, $rb.Count); $i++) {
+      $p = @{ Clave = $k; A = ''; B = ''; Rel = '' }
+      if ($i -lt $ra.Count) { $p.A = $pares[$k].A[$ra[$i]]; $p.Rel = $ra[$i] }
+      if ($i -lt $rb.Count) { $p.B = $pares[$k].B[$rb[$i]]; if (-not $p.Rel) { $p.Rel = $rb[$i] } }
+      $emparejados += , $p
     }
   }
   $dif = @()
-  foreach ($k in @($pares.Keys | Sort-Object)) {
-    $p = $pares[$k]
+  foreach ($p in $emparejados) {
+    $k = $p.Clave
     $tabla = ($p.Rel -cmatch '^tablas/.+\.csv$')
     # Una tabla en un solo lado sin ninguna fila de datos (vacia, solo la cabecera o lineas en blanco) es como una tabla que no esta.
     if ($tabla -and -not ($p.A -and $p.B) -and @(Get-LineasNormales ($p.A + $p.B) | Where-Object { $_.Trim() }).Count -le 1) { continue }
