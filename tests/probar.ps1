@@ -6274,7 +6274,7 @@ $Pruebas['m70 (b3) estilo-constructor: sin clases en la plantilla, manda el que 
   Igual 'sin empate manda el que mas usa, haya o no Lombok en el pom' 'L1' (Ficheros-M70 (Cal-M70 $e3 'estilo-constructor'))
 }
 
-$Pruebas['m70 (b4) estilo-constructor y estilo-logger: si la plantilla tambien mezcla estilos, se quedan en aviso'] = {
+$Pruebas['m70 (b4) estilo-constructor y estilo-logger: si la plantilla tambien mezcla estilos, salen igual como error (cambiado en M72 b)'] = {
   $e = Escenario-M70 'm70-b4' @{
     A1 = (Dependencias-M70 'A1' $true)
     A2 = (Dependencias-M70 'A2' $true)
@@ -6296,8 +6296,8 @@ $Pruebas['m70 (b4) estilo-constructor y estilo-logger: si la plantilla tambien m
     $h = @($cal | Where-Object { $_.Detalle.StartsWith("[$regla]") })
     Igual "$regla : sale una vez" 1 $h.Count
     if ($h.Count -eq 1) {
-      Igual "$regla : como aviso" 'aviso' $h[0].Sev
-      Comprueba "$regla : y dice que la plantilla tambien lo hace" ($h[0].Detalle -like '*(se queda en aviso: la plantilla tambien lo hace)') $h[0].Detalle
+      Igual "$regla : como error, aunque la plantilla tambien mezcle" 'error' $h[0].Sev
+      Comprueba "$regla : y no dice que se queda en aviso" ($h[0].Detalle -notlike '*se queda en aviso*') $h[0].Detalle
     }
   }
 }
@@ -6347,6 +6347,270 @@ $Pruebas['m70 (c) el prompt del paso calidad y las reglas de calidad del codigo 
   Comprueba 'el hallazgo del lote es el de los constructores' ($prompt -match 'DosSin\.java:\d+ - \[constructores-sin-autowired\] 2 constructores') $prompt
   Comprueba 'el paso dice que hacer con varios constructores, con @Value y con el estilo' ($prompt -match 'Varios constructores sin @Autowired: deja uno solo' -and $prompt -match 'Estilo \(constructor, logger\): pasa la clase al estilo que dice el hallazgo') $prompt
   Comprueba 'las reglas del codigo nuevo piden un solo constructor, @Value con expresion y el estilo del batch' ($prompt -match 'Un solo constructor por componente de Spring' -and $prompt -match 'mismo estilo que el resto del batch y la PLANTILLA') $prompt
+}
+
+# ============== M72: CLASES FINAL QUE SPRING TIENE QUE ENVOLVER Y ESTILO SIN BATIBURRILLO (sin IA) ==============
+# Clase de un escenario M72: como Clase-M70, pero con los modificadores a elegir (por defecto 'public final').
+function Clase-M72([string]$Nombre, [string]$Cabeza, [string]$Miembros, [string]$Mods = 'public final', [string]$Pkg = 'com.acme.life.application.usecases') {
+  return "package $Pkg;`n`n/** Clase $Nombre. */`n$Cabeza`n$Mods class $Nombre {`n$Miembros}`n"
+}
+
+# Un metodo vacio con su anotacion encima (vacia = ninguna) y sus modificadores.
+function Metodo-M72([string]$Nombre, [string]$Anot, [string]$Mods = 'public') {
+  $a = ''
+  if ($Anot) { $a = "    $Anot`n" }
+  return "$a    $Mods void $Nombre() {`n    }`n`n"
+}
+
+# El texto de un fichero del repo del escenario (para buscar en que linea esta una clase).
+function Fuente-M72($E, [string]$Nombre) { return (Lee $E.Repo ('src/main/java/com/acme/life/application/usecases/' + $Nombre + '.java')) }
+
+$Pruebas['m72 (a1) clase-final-proxy: una clase final con @Repository sale; sin final, no'] = {
+  $e = Escenario-M70 'm72-a1' @{
+    RepoFinal   = (Clase-M72 'RepoFinal' '@Repository' '')
+    RepoPaquete = (Clase-M72 'RepoPaquete' '@Repository' '' 'final')
+    RepoLargo   = (Clase-M72 'RepoLargo' '@org.springframework.stereotype.Repository' '')
+    RepoAbierto = (Clase-M72 'RepoAbierto' '@Repository' '' 'public')
+  }
+  $h = Cal-M70 $e 'clase-final-proxy'
+  Igual 'sale en las tres finales (tambien sin public y con el nombre completo de la anotacion) y no en la que no es final' 'RepoFinal RepoLargo RepoPaquete' (Ficheros-M70 $h)
+  $d = @($h | Where-Object { $_.Fichero -like '*RepoFinal.java' })
+  Igual 'es un error' 'error' $d[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Fuente-M72 $e 'RepoFinal') 'public final class RepoFinal') $d[0].Linea
+  Comprueba 'dice por que anotacion, que el bean no se crea y el job no arranca, y que se quita final' ($d[0].Detalle -like '*Clase final que Spring tiene que envolver con un proxy (por @Repository): el bean no se crea y el job no arranca ("Cannot subclass final class"). Quita final de la clase.') $d[0].Detalle
+  Igual 'ninguna sale ademas como metodo-final-proxy' 0 @(Hallazgos $e.Repo | Where-Object { $_.Detalle -like '`[metodo-final-proxy`]*' }).Count
+}
+
+$Pruebas['m72 (a2) clase-final-proxy: un @Component final con un metodo @Transactional, @Async, @Retryable o de cache sale; sin esas anotaciones, no'] = {
+  $e = Escenario-M70 'm72-a2' @{
+    ConTx      = (Clase-M72 'ConTx' '@Component' ((Metodo-M72 'antes' '') + (Metodo-M72 'guarda' '@Transactional')))
+    ConTxArgs  = (Clase-M72 'ConTxArgs' '@Component' (Metodo-M72 'guarda' "@Transactional(rollbackFor = Exception.class, readOnly = true)`n    @SuppressWarnings(`"x`")"))
+    ConAsync   = (Clase-M72 'ConAsync' '@Service' (Metodo-M72 'sube' '@Async'))
+    ConRetry   = (Clase-M72 'ConRetry' '@Component' (Metodo-M72 'reintenta' '@Retryable(maxAttempts = 3)'))
+    ConCache   = (Clase-M72 'ConCache' '@Component' (Metodo-M72 'lee' '@Cacheable("clientes")'))
+    ConPut     = (Clase-M72 'ConPut' '@Component' (Metodo-M72 'pon' '@CachePut(value = "clientes", key = "#a")'))
+    ConEvict   = (Clase-M72 'ConEvict' '@Component' (Metodo-M72 'borra' '@CacheEvict(allEntries = true)'))
+    ConCaching = (Clase-M72 'ConCaching' '@Component' (Metodo-M72 'varias' '@Caching(evict = { @CacheEvict("a"), @CacheEvict("b") })'))
+    Pasivo     = (Clase-M72 'Pasivo' '@Component' ((Metodo-M72 'cada' '@Scheduled(fixedRate = 1000)') + (Metodo-M72 'oye' '@EventListener') + (Metodo-M72 'otra' '@Override')))
+    Abierto    = (Clase-M72 'Abierto' '@Component' (Metodo-M72 'guarda' '@Transactional') 'public')
+  }
+  $h = Cal-M70 $e 'clase-final-proxy'
+  Igual 'sale en las ocho finales con un metodo anotado, y no en la que no tiene esas anotaciones ni en la que no es final' 'ConAsync ConCache ConCaching ConEvict ConPut ConRetry ConTx ConTxArgs' (Ficheros-M70 $h)
+  $d = @($h | Where-Object { $_.Fichero -like '*ConTx.java' })
+  Comprueba 'dice la anotacion y que esta en un metodo' ($d[0].Detalle -like '*(por @Transactional en un metodo): el bean no se crea*') $d[0].Detalle
+  Igual 'en la linea de la clase, no en la del metodo' (Linea-De (Fuente-M72 $e 'ConTx') 'public final class ConTx') $d[0].Linea
+  $c = @($h | Where-Object { $_.Fichero -like '*ConCaching.java' })
+  Comprueba 'una anotacion con otras dentro cuenta una vez, con su nombre' ($c[0].Detalle -like '*(por @Caching en un metodo)*') $c[0].Detalle
+}
+
+$Pruebas['m72 (a3) clase-final-proxy: una @Configuration final sale, salvo con proxyBeanMethods = false'] = {
+  $e = Escenario-M70 'm72-a3' @{
+    CfgFinal  = (Clase-M72 'CfgFinal' '@Configuration' '')
+    CfgTrue   = (Clase-M72 'CfgTrue' '@Configuration(proxyBeanMethods = true)' '')
+    CfgFalse  = (Clase-M72 'CfgFalse' '@Configuration(proxyBeanMethods = false)' '')
+    CfgOtros  = (Clase-M72 'CfgOtros' '@Configuration(value = "cfg", proxyBeanMethods=false)' '')
+    CfgAbierta = (Clase-M72 'CfgAbierta' '@Configuration' '' 'public')
+  }
+  $h = Cal-M70 $e 'clase-final-proxy'
+  Igual 'sale en la final y en la que dice proxyBeanMethods = true; no con proxyBeanMethods = false (con otros argumentos, tampoco) ni sin final' 'CfgFinal CfgTrue' (Ficheros-M70 $h)
+  $d = @($h | Where-Object { $_.Fichero -like '*CfgFinal.java' })
+  Comprueba 'dice que es por @Configuration' ($d[0].Detalle -like '*(por @Configuration):*') $d[0].Detalle
+}
+
+$Pruebas['m72 (a4) clase-final-proxy: un @Bean con @StepScope, @JobScope o @Scope(TARGET_CLASS) que devuelve una clase final del migrado: sale en esa clase'] = {
+  $config = @'
+package com.acme.life.application.usecases;
+
+/** Beans con scope. */
+@Configuration
+public class Config {
+
+    /** Con scope de step. */
+    @Bean
+    @StepScope
+    public Lector lector() {
+        return new Lector();
+    }
+
+    /** Con scope de job y el tipo con su paquete. */
+    @Bean
+    @JobScope
+    public com.acme.life.application.usecases.Escritor escritor() {
+        return new Escritor();
+    }
+
+    /** Con un scope de proxy de clase. */
+    @Bean
+    @Scope(value = "step", proxyMode = ScopedProxyMode.TARGET_CLASS)
+    public Otro otro() {
+        return new Otro();
+    }
+
+    /** Sin scope. */
+    @Bean
+    public Plano plano() {
+        return new Plano();
+    }
+
+    /** Con scope, pero la clase no es final. */
+    @Bean
+    @StepScope
+    public Abierto abierto() {
+        return new Abierto();
+    }
+
+    /** Con un scope que no es de proxy de clase. */
+    @Bean
+    @Scope("prototype")
+    public Proto proto() {
+        return new Proto();
+    }
+}
+'@
+  $e = Escenario-M70 'm72-a4' @{
+    Config   = $config
+    Lector   = (Clase-M72 'Lector' '' '')
+    Escritor = (Clase-M72 'Escritor' '' '')
+    Otro     = (Clase-M72 'Otro' '' '')
+    Plano    = (Clase-M72 'Plano' '' '')
+    Abierto  = (Clase-M72 'Abierto' '' '' 'public')
+    Proto    = (Clase-M72 'Proto' '' '')
+  }
+  $h = Cal-M70 $e 'clase-final-proxy'
+  Igual 'sale en las tres finales que devuelve un @Bean con scope de proxy, y no en la del @Bean sin scope, en la que no es final, en la del scope prototype ni en la Config' 'Escritor Lector Otro' (Ficheros-M70 $h)
+  $l = @($h | Where-Object { $_.Fichero -like '*Lector.java' })
+  Igual 'sale en la linea de la clase final, no en la del @Bean' (Linea-De (Fuente-M72 $e 'Lector') 'public final class Lector') $l[0].Linea
+  Comprueba 'dice que es por @StepScope del @Bean lector()' ($l[0].Detalle -like '*(por @StepScope en el @Bean lector()): el bean no se crea*') $l[0].Detalle
+  $s = @($h | Where-Object { $_.Fichero -like '*Escritor.java' })
+  Comprueba 'con @JobScope y el tipo con su paquete, igual' ($s[0].Detalle -like '*(por @JobScope en el @Bean escritor())*') $s[0].Detalle
+}
+
+$Pruebas['m72 (a5) metodo-final-proxy: un metodo final con @Transactional, @Async, @Retryable o de cache en una clase que no es final'] = {
+  $miembros = (Metodo-M72 'guarda' '@Transactional' 'public final') + (Metodo-M72 'sube' '@Async' 'public final') + (Metodo-M72 'reintenta' '@Retryable' 'final') +
+    (Metodo-M72 'lee' '@Cacheable("x")' 'public final synchronized') + (Metodo-M72 'libre' '' 'public final') + (Metodo-M72 'normal' '@Transactional' 'public') +
+    (Metodo-M72 'cada' '@Scheduled(fixedRate = 1000)' 'public final')
+  $e = Escenario-M70 'm72-a5' @{
+    Servicio = (Clase-M72 'Servicio' '@Service' $miembros 'public')
+    Cerrada  = (Clase-M72 'Cerrada' '@Service' (Metodo-M72 'guarda' '@Transactional' 'public final'))
+  }
+  $h = Cal-M70 $e 'metodo-final-proxy'
+  Igual 'sale en los cuatro metodos final con anotacion de proxy de la clase abierta, y en ninguno mas' 'Servicio Servicio Servicio Servicio' (Ficheros-M70 $h)
+  $g = @($h | Where-Object { $_.Linea -eq (Linea-De (Fuente-M72 $e 'Servicio') 'public final void guarda()') })
+  Igual 'sale en la linea del metodo' 1 $g.Count
+  $l = @($h | Where-Object { $_.Linea -eq (Linea-De (Fuente-M72 $e 'Servicio') 'public final synchronized void lee()') })
+  Igual 'y el cuarto, detras de tres metodos con cuerpo, tambien en su linea' 1 $l.Count
+  Igual 'es un error' 'error' $g[0].Sev
+  Comprueba 'dice la anotacion, que Spring no puede interceptarlo y que se quita final' ($g[0].Detalle -like '*Metodo final con @Transactional: Spring no lo puede interceptar y la anotacion no hace nada. Quita final.') $g[0].Detalle
+  Comprueba 'y el de @Async dice @Async' (@($h | Where-Object { $_.Detalle -like '*Metodo final con @Async:*' }).Count -eq 1)
+  Igual 'en la clase final, el metodo no sale aparte: sale la clase (clase-final-proxy)' 'Cerrada' (Ficheros-M70 (Cal-M70 $e 'clase-final-proxy'))
+}
+
+$Pruebas['m72 (a6) una clase final sin nada de eso, un record, un @Validated de @ConfigurationProperties, metodos private o static y lo que esta en comentarios o cadenas: no sale nada'] = {
+  $record = @'
+package com.acme.life.application.usecases;
+
+/** Un par de valores. */
+public record Par(String a, int b) {
+}
+'@
+  $comentado = (Clase-M72 'Comentado' "@Service`n/* @Transactional */" ("    // @Transactional`n    private static final String X = `"@Repository @Transactional`";`n`n" + (Metodo-M72 'f' '' 'public final')))
+  $e = Escenario-M70 'm72-a6' @{
+    Util      = (Clase-M72 'Util' '' "    private Util() {`n    }`n`n    /** Devuelve lo mismo. */`n    public static String f(String a) {`n        return a;`n    }`n")
+    Par       = $record
+    Componente = (Clase-M72 'Componente' '@Component' ((Metodo-M72 'cada' '@Scheduled(fixedRate = 1000)') + (Metodo-M72 'oye' '@EventListener')))
+    Comentado = $comentado
+    Config    = (Clase-M72 'Config' '@Configuration(proxyBeanMethods = false)' '')
+    Props     = (Clase-M72 'Props' "@ConfigurationProperties(`"acme`")`n@Validated" '')
+    Privado   = (Clase-M72 'Privado' '@Component' ((Metodo-M72 'a' '@Transactional' 'private') + (Metodo-M72 'b' '@Async' 'static')))
+  }
+  Igual 'ni clase-final-proxy' 0 (Cal-M70 $e 'clase-final-proxy').Count
+  Igual 'ni metodo-final-proxy' 0 (Cal-M70 $e 'metodo-final-proxy').Count
+}
+
+$Pruebas['m72 (a8) el prompt del paso calidad y las reglas del codigo nuevo dicen que una clase o un metodo que Spring envuelve no lleva final'] = {
+  $e = Escenario-M70 'm72-a8' @{ RepoFinal = (Clase-M72 'RepoFinal' '@Repository' '') }
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'calidad', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1'))
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false; return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el hallazgo del lote es el de la clase final' ($prompt -match 'RepoFinal\.java:\d+ - \[clase-final-proxy\] Clase final que Spring tiene que envolver') $prompt
+  Comprueba 'el paso dice que se quita final y nada mas' ($prompt -match 'Clase o metodo final que Spring envuelve con un proxy: quita final y nada mas') $prompt
+  Comprueba 'las reglas del codigo nuevo piden no poner final en lo que Spring envuelve' ($prompt -match 'Sin final en una clase ni en un metodo que Spring envuelve con un proxy') $prompt
+}
+
+$Pruebas['m72 (a7) las dos reglas de proxy se exigen aunque la plantilla tambien las tenga'] = {
+  $fallos = { param($pkg) @{
+      RepoFinal = (Clase-M72 'RepoFinal' '@Repository' '' 'public final' $pkg)
+      Servicio  = (Clase-M72 'Servicio' '@Service' (Metodo-M72 'guarda' '@Transactional' 'public final') 'public' $pkg)
+    } }
+  $e = Escenario-M70 'm72-a7' (& $fallos 'com.acme.life.application.usecases') (& $fallos 'com.acme.plantilla.application.usecases')
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  $cal = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'calidad' })
+  foreach ($regla in @('clase-final-proxy', 'metodo-final-proxy')) {
+    $h = @($cal | Where-Object { $_.Detalle.StartsWith("[$regla]") })
+    Igual "$regla : sale una vez" 1 $h.Count
+    if ($h.Count -eq 1) {
+      Igual "$regla : sigue siendo error" 'error' $h[0].Sev
+      Comprueba "$regla : y no dice que se queda en aviso" ($h[0].Detalle -notlike '*se queda en aviso*') $h[0].Detalle
+    }
+  }
+}
+
+$Pruebas['m72 (b1) estilo-logger y estilo-constructor: aunque la plantilla mezcle, manda lo que mas usa el migrado y salen como error solo las pocas'] = {
+  $repo = @{ F1 = (Logger-M70 'F1' 'factory') }
+  foreach ($i in 1..20) { $repo["S$i"] = (Logger-M70 "S$i" 'slf4j') }
+  $e = Escenario-M70 'm72-b1' $repo @{
+    Q1 = (Logger-M70 'Q1' 'slf4j' $PkgPlantilla)
+    Q2 = (Logger-M70 'Q2' 'factory' $PkgPlantilla)
+    Q3 = (Logger-M70 'Q3' 'factory' $PkgPlantilla)
+  }
+  $h = Cal-M70 $e 'estilo-logger'
+  Igual 'con 20 con @Slf4j y 1 con LoggerFactory (la plantilla mezcla y usa mas LoggerFactory) sale solo la de LoggerFactory' 'F1' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Comprueba 'cuenta el migrado (20 de 21) y no habla de la plantilla' ($h[0].Detalle -like '*Logger con LoggerFactory; en el resto del batch (20 de 21 clases) se usa @Slf4j.*' -and $h[0].Detalle -notlike '*plantilla*') $h[0].Detalle
+  $c = Escenario-M70 'm72-b1-ctor' @{
+    L1 = (Dependencias-M70 'L1' $true)
+    L2 = (Dependencias-M70 'L2' $true)
+    L3 = (Dependencias-M70 'L3' $true)
+    M1 = (Dependencias-M70 'M1' $false)
+  } @{
+    P1 = (Dependencias-M70 'P1' $false $PkgPlantilla)
+    P2 = (Dependencias-M70 'P2' $false $PkgPlantilla)
+    P3 = (Dependencias-M70 'P3' $true $PkgPlantilla)
+  }
+  $hc = Cal-M70 $c 'estilo-constructor'
+  Igual 'con el constructor igual: la plantilla mezcla y usa mas el constructor a mano, pero sale solo la de a mano (el migrado usa 3 con Lombok)' 'M1' (Ficheros-M70 $hc)
+  Igual 'y es un error' 'error' $hc[0].Sev
+}
+
+$Pruebas['m72 (b2) estilo: si la plantilla usa un solo estilo, manda la plantilla; si mezcla y el migrado empata, Lombok solo si el pom lo tiene'] = {
+  $e = Escenario-M70 'm72-b2' @{ S1 = (Logger-M70 'S1' 'slf4j'); S2 = (Logger-M70 'S2' 'slf4j'); S3 = (Logger-M70 'S3' 'slf4j'); F1 = (Logger-M70 'F1' 'factory') } @{
+    Q1 = (Logger-M70 'Q1' 'factory' $PkgPlantilla)
+    Q2 = (Logger-M70 'Q2' 'factory' $PkgPlantilla)
+  }
+  $h = Cal-M70 $e 'estilo-logger'
+  Igual 'la plantilla solo usa LoggerFactory: salen las tres con @Slf4j, aunque sean mayoria' 'S1 S2 S3' (Ficheros-M70 $h)
+  Igual 'como error' 'error' $h[0].Sev
+  Comprueba 'y el texto dice que en la plantilla tambien se usa LoggerFactory' ($h[0].Detalle -like '*Logger con @Slf4j; en el resto del batch (1 de 4 clases) y en la plantilla se usa LoggerFactory.*') $h[0].Detalle
+  $dos = @{ L1 = (Dependencias-M70 'L1' $true); M1 = (Dependencias-M70 'M1' $false) }
+  $masMano = @{ P1 = (Dependencias-M70 'P1' $true $PkgPlantilla); P2 = (Dependencias-M70 'P2' $false $PkgPlantilla); P3 = (Dependencias-M70 'P3' $false $PkgPlantilla) }
+  $masLombok = @{ P1 = (Dependencias-M70 'P1' $true $PkgPlantilla); P2 = (Dependencias-M70 'P2' $true $PkgPlantilla); P3 = (Dependencias-M70 'P3' $false $PkgPlantilla) }
+  Igual 'la plantilla mezcla (mas a mano) y el migrado empata, con Lombok en el pom: manda Lombok y sale la de a mano' 'M1' (Ficheros-M70 (Cal-M70 (Escenario-M70 'm72-b2-lombok' $dos $masMano $true) 'estilo-constructor'))
+  Igual 'la plantilla mezcla (mas con Lombok) y el migrado empata, sin Lombok en el pom: manda el constructor a mano y sale la de Lombok' 'L1' (Ficheros-M70 (Cal-M70 (Escenario-M70 'm72-b2-sin' $dos $masLombok $false) 'estilo-constructor'))
+}
+
+$Pruebas['m72 (c1) estilo: la linea de la consola solo nombra los estilos que tienen alguna clase'] = {
+  $e = Escenario-M70 'm72-c1' @{ S1 = (Logger-M70 'S1' 'slf4j'); S2 = (Logger-M70 'S2' 'slf4j'); F1 = (Logger-M70 'F1' 'factory') } @{ Q1 = (Logger-M70 'Q1' 'factory' $PkgPlantilla) }
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Comprueba 'con la plantilla en LoggerFactory: 2 con @Slf4j frente a 1 con LoggerFactory' ($r.Salida.Contains('Estilo: 2 loggers con @Slf4j frente a 1 con LoggerFactory')) (Cola $r.Salida)
+  # la plantilla usa solo otro logger y el migrado no tiene ninguna clase con ese: no sale 'frente a 0 con otro logger'
+  $e2 = Escenario-M70 'm72-c1-otro' @{ S1 = (Logger-M70 'S1' 'slf4j'); S2 = (Logger-M70 'S2' 'slf4j'); F1 = (Logger-M70 'F1' 'factory') } @{ O1 = (Logger-M70 'O1' 'otro' $PkgPlantilla) }
+  $r2 = Rescate @('-Repo', $e2.Repo, '-Plantilla', $e2.Plantilla, '-SinBuild')
+  $linea = @($r2.Salida -split "`r?`n" | Where-Object { $_.Contains('Estilo:') })
+  Igual 'sale una linea de estilo' 1 $linea.Count
+  if ($linea.Count -eq 1) {
+    Comprueba 'nombra los dos estilos del migrado, con sus numeros' ($linea[0].Contains('2 con @Slf4j') -and $linea[0].Contains('1 logger con LoggerFactory')) $linea[0]
+    Comprueba 'no dice frente a 0 ni nombra el logger que ninguna clase usa' (-not $linea[0].Contains('frente a') -and -not $linea[0].Contains('otro logger')) $linea[0]
+  }
 }
 
 # ================================ LANZADOR ================================

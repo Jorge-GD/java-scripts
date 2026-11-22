@@ -223,11 +223,15 @@ $Cfg += @{
   # fecha-antigua, coleccion-antigua. Las de Spring salen de Sonar way:
   # constructores-sin-autowired (S6829), autowired-varios (S6818),
   # inyeccion-estatica (S7178), value-sin-expresion (S6804). Las de estilo
-  # miran todo el batch: estilo-constructor y estilo-logger.
+  # miran todo el batch: estilo-constructor y estilo-logger. Las de proxy
+  # (clase-final-proxy y metodo-final-proxy) no son de Sonar: Spring no puede
+  # envolver una clase o un metodo final y el job no arranca.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
-    'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger')
-  # Reglas que se exigen aunque la plantilla tampoco las cumpla (las de estilo no: si la plantilla mezcla estilos, se quedan en aviso)
-  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion')
+    'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
+    'clase-final-proxy', 'metodo-final-proxy')
+  # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
+  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -551,12 +555,21 @@ $RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inje
 $RxValorValue = '@Value\s*\(\s*(?:value\s*=\s*)?"((?:\\.|[^"\\])*)"\s*\)'
 # Clases (class) con sus anotaciones y su cuerpo. Una anotacion pegada: @Nombre o @Nombre(...), con parentesis dentro hasta tres niveles
 $RxAnot = '@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?\s+'
-$RxClaseDecl = New-Object System.Text.RegularExpressions.Regex ('(?<anot>(?:' + $RxAnot + ')*)(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*(?<![.\w])class\s+(?<nombre>\w+)(?=[^{;]*(?<cuerpo>\{(?:[^{}]|(?<o>\{)|(?<-o>\}))*(?(o)(?!))\}))')
+$RxClaseDecl = New-Object System.Text.RegularExpressions.Regex ('(?<anot>(?:' + $RxAnot + ')*)(?<mods>(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*)(?<![.\w])class\s+(?<nombre>\w+)(?=[^{;]*(?<cuerpo>\{(?:[^{}]|(?<o>\{)|(?<-o>\}))*(?(o)(?!))\}))')
 $RxHoja = New-Object System.Text.RegularExpressions.Regex '\{[^{}]*\}'
 $RxLombokCtor = New-Object System.Text.RegularExpressions.Regex '@(?:[\w.]+\.)?(?:NoArgsConstructor|RequiredArgsConstructor|AllArgsConstructor)\b(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?'
 $RxComponente = '@(?:[\w.]+\.)?(?:Component|Service|Repository|Controller|RestController|Configuration)\b'
 $RxAutowiredOInject = '@(?:[\w.]+\.)?(?:Autowired|Inject)\b'
 $RxAutowiredObligatorio = '@(?:[\w.]+\.)?Autowired\b(?!\s*\(\s*required\s*=\s*false\s*\))'
+# Una anotacion suelta (con sus argumentos, que no se miran por dentro: @Caching(evict = @CacheEvict(...)) es una) y un metodo con sus anotaciones,
+# sus modificadores, su tipo de retorno y su nombre (el cuerpo de la clase ya trae las llaves reducidas a \x01)
+$RxAnotUna = New-Object System.Text.RegularExpressions.Regex '@(?<n>[\w.]+)(?<arg>\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?'
+$RxMetodo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<anot>(?:' + $RxAnot + ')+)(?<mods>(?>(?:(?:public|protected|private|static|abstract|final|synchronized|native|strictfp|default)\s+)*))(?:<[^;\x01()]*>\s*)?(?<tipo>[\w.]+)(?:\s*<[^;\x01()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
+# Las anotaciones con las que Spring envuelve un bean con un proxy de clase (CGLIB: una subclase, que una clase final no admite). En un metodo
+# basta una de estas; en la clase, tambien las de abajo, @Configuration (salvo con proxyBeanMethods = false) y los scopes de proxy (@StepScope,
+# @JobScope y @Scope con TARGET_CLASS, que valen tambien en el @Bean que devuelve la clase).
+$ProxyMetodo = @('Transactional', 'Async', 'Retryable', 'Cacheable', 'CachePut', 'CacheEvict', 'Caching')
+$ProxyClase = @('Repository', 'Validated') + $ProxyMetodo
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
 $RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
@@ -608,16 +621,20 @@ function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Det
 
 function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, $Indice).Split("`n").Count }
 
-# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones y lo que
-# tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01.
+# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones, si es final y lo que
+# tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01 seguido de los saltos
+# de linea que tenia (asi se sabe la linea de cada cosa: LineaCuerpo es la de la llave que abre la clase).
+$EvalHoja = [System.Text.RegularExpressions.MatchEvaluator] { param($h) return ([string][char]1) + ("`n" * ($h.Value.Split("`n").Count - 1)) }
 function Get-Clases([string]$Limpio) {
   $res = New-Object System.Collections.Generic.List[object]
-  $hoja = [string][char]1
   foreach ($m in $script:RxClaseDecl.Matches($Limpio)) {
     $top = $m.Groups['cuerpo'].Value
     $top = $top.Substring(1, $top.Length - 2)
-    do { $antes = $top; $top = $script:RxHoja.Replace($top, $hoja) } while ($top -ne $antes)
-    [void]$res.Add([pscustomobject]@{ Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); Anot = $m.Groups['anot'].Value; Top = $top })
+    do { $antes = $top; $top = $script:RxHoja.Replace($top, $script:EvalHoja) } while ($top -ne $antes)
+    [void]$res.Add([pscustomobject]@{
+        Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); LineaCuerpo = (Get-LineaDe $Limpio $m.Groups['cuerpo'].Index)
+        Anot = $m.Groups['anot'].Value; Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Top = $top
+      })
   }
   return $res.ToArray()
 }
@@ -635,6 +652,47 @@ function Get-Constructores($Clase) {
     [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor') })
   }
   return $res.ToArray()
+}
+
+# Las anotaciones de un texto, cada una con su nombre sin paquete y sus argumentos tal cual.
+function Get-Anotaciones([string]$Anot) {
+  return @($script:RxAnotUna.Matches($Anot) | ForEach-Object { [pscustomobject]@{ Nombre = $_.Groups['n'].Value.Split('.')[-1]; Arg = $_.Groups['arg'].Value } })
+}
+
+# Los metodos de una clase que llevan alguna anotacion: sus anotaciones (Get-Anotaciones), si son final, si un proxy los puede interceptar (no
+# lo son los private ni los static: Spring los ignora), su tipo de retorno (sin paquete), su nombre y la linea de su declaracion.
+function Get-Metodos($Clase) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($m in $script:RxMetodo.Matches($Clase.Top)) {
+    $linea = $Clase.LineaCuerpo + $Clase.Top.Substring(0, $m.Groups['mods'].Index).Split("`n").Count - 1
+    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Interceptable = ($m.Groups['mods'].Value -cnotmatch '\b(?:private|static)\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Linea = $linea })
+  }
+  return $res.ToArray()
+}
+
+# De unas anotaciones (Get-Anotaciones), las que hacen que Spring envuelva el bean con un proxy de clase (CGLIB: una subclase, y una clase final no
+# se puede heredar), con su @. $Donde: 'metodo' (las de $ProxyMetodo), 'bean' (los scopes de proxy, que valen en el @Bean que devuelve la clase) o
+# 'clase' (todas, mas @Configuration salvo con proxyBeanMethods = false; @Validated no cuenta en una clase con @ConfigurationProperties: Spring
+# Boot la excluye de la validacion de metodos, EnableConfigurationPropertiesRegistrar.java).
+# Fuentes (fuentes-m72, 22-11): Spring Framework, core/aop/proxying.adoc: "final classes cannot be proxied, because they cannot be extended" y "final
+# methods cannot be advised, because they cannot be overridden"; Configuration.java: "Configuration classes must be non-final (allowing for subclasses
+# at runtime), unless the proxyBeanMethods flag is set to false"; PersistenceExceptionTranslationPostProcessor.java: proxy para los beans con
+# @Repository, y Spring Boot (AopAutoConfiguration y PersistenceExceptionTranslationAutoConfiguration): spring.aop.proxy-target-class es true por
+# defecto; StepScope.java y JobScope.java (Spring Batch): son @Scope(proxyMode = TARGET_CLASS). @Transactional, @Async, @Cacheable (y las de cache),
+# @Validated y @Retryable los aplica el mismo proxy automatico (EnableTransactionManagement, EnableAsync, EnableCaching, MethodValidationPostProcessor,
+# EnableResilientMethods). Sonar way no tiene una regla que lo mida.
+function Get-AnotacionesProxy($Anots, [string]$Donde) {
+  $res = @()
+  $conPropiedades = (@($Anots | Where-Object { $_.Nombre -ceq 'ConfigurationProperties' }).Count -gt 0)
+  foreach ($a in $Anots) {
+    $scope = ($a.Nombre -ceq 'StepScope' -or $a.Nombre -ceq 'JobScope' -or ($a.Nombre -ceq 'Scope' -and $a.Arg -cmatch '\bTARGET_CLASS\b'))
+    $vale = $false
+    if ($Donde -eq 'metodo') { $vale = ($script:ProxyMetodo -ccontains $a.Nombre) }
+    elseif ($Donde -eq 'bean') { $vale = $scope }
+    else { $vale = ($scope -or ($script:ProxyClase -ccontains $a.Nombre -and -not ($a.Nombre -ceq 'Validated' -and $conPropiedades)) -or ($a.Nombre -ceq 'Configuration' -and $a.Arg -cnotmatch '\bproxyBeanMethods\s*=\s*false')) }
+    if ($vale) { $res += '@' + $a.Nombre }
+  }
+  return $res
 }
 
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
@@ -662,9 +720,10 @@ $EstiloTextos = @{
 }
 
 # Estilo coherente. $Datos trae, por regla (Ctor y Logger), una fila por clase contada (RelRaiz, Linea, Estilo) y $Plantilla las cuentas de la
-# plantilla (estilo -> clases), o $null si lo que se mira es la propia plantilla. Si el migrado mezcla estilos, manda el de la plantilla (si
-# tiene clases que contar) o el que mas usa el migrado; si empatan, Lombok cuando el pom del migrado lo tiene. Cada clase de otro estilo sale
-# en $Out. Devuelve las cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola.
+# plantilla (estilo -> clases), o $null si lo que se mira es la propia plantilla. Si el migrado mezcla estilos, manda el de la plantilla cuando
+# usa uno solo; si la plantilla mezcla o no tiene clases que contar, manda el que mas usa el migrado (asi una plantilla que mezcla no obliga a
+# cambiar la mayoria del migrado); si empatan, Lombok cuando el pom del migrado lo tiene. Cada clase de otro estilo sale en $Out. Devuelve las
+# cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola (solo con los estilos que tienen clases).
 function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
   $pom = Get-Pom $Hechos.Raiz
   $conLombok = [bool]($pom -and $pom.Valido -and ($pom.Deps -contains 'lombok'))
@@ -677,7 +736,7 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
     $cuentas[$r.Hecho] = $mias
     if ($mias.Count -lt 2) { continue }
     $base = $mias
-    $enPlantilla = ($Plantilla -and $Plantilla[$r.Hecho].Count -gt 0)
+    $enPlantilla = ($Plantilla -and $Plantilla[$r.Hecho].Count -eq 1)
     if ($enPlantilla) { $base = $Plantilla[$r.Hecho] }
     $orden = $r.SinLombok
     if ($conLombok) { $orden = $r.ConLombok }
@@ -701,7 +760,9 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
       }
       else { $otros += "$c con " + $script:EstiloTextos[$s].Nombre }
     }
-    $mezcla += (($otros -join ' y ') + " frente a $n con " + $script:EstiloTextos[$manda].Nombre)
+    $texto = ($otros -join ' y ')
+    if ($n -gt 0) { $texto += " frente a $n con " + $script:EstiloTextos[$manda].Nombre }
+    $mezcla += $texto
   }
   $linea = ''
   if ($mezcla.Count -gt 0) { $linea = 'Estilo: ' + ($mezcla -join '; ') }
@@ -714,6 +775,8 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
 function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   $out = New-Object System.Collections.Generic.List[object]
   $datos = @{ Ctor = (New-Object System.Collections.Generic.List[object]); Logger = (New-Object System.Collections.Generic.List[object]) }
+  $finales = New-Object System.Collections.Generic.List[object]   # las clases final (RelRaiz, Linea, Nombre, Motivos por los que Spring las envolveria)
+  $tiposProxy = @{}                                              # tipo devuelto por un @Bean con scope de proxy -> sus motivos
   foreach ($f in $Hechos.Ficheros) {
     $marcado = Get-Limpio $f.Texto
     $limpio = $marcado.Replace('/*JD*/', '').Replace('/*C*/', '')
@@ -776,6 +839,21 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       # S6818: solo uno puede llevar @Autowired sin required = false
       $marcados = @($ctores | Where-Object { $_.Anot -cmatch $script:RxAutowiredObligatorio }).Count
       if ($marcados -ge 2) { Add-Cal $out $f.RelRaiz $c.Linea 'autowired-varios' "@Autowired en $marcados constructores: solo uno puede llevarlo (Sonar S6818)." }
+      # Spring envuelve con un proxy de clase lo que lleva @Repository, @Transactional...: una clase final no se puede heredar y el bean no se crea.
+      # Una clase final sale cuando acabe el recorrido (un @Bean con scope de proxy de otro fichero puede devolverla); un metodo final, aqui.
+      $motivos = @(Get-AnotacionesProxy @(Get-Anotaciones $c.Anot) 'clase')
+      foreach ($mt in @(Get-Metodos $c)) {
+        $enMetodo = @()
+        if ($mt.Interceptable) { $enMetodo = @(Get-AnotacionesProxy $mt.Anots 'metodo') }
+        if ($enMetodo.Count -gt 0 -and $c.Final) { $motivos += @($enMetodo | ForEach-Object { "$_ en un metodo" }) }
+        elseif ($enMetodo.Count -gt 0 -and $mt.Final) { Add-Cal $out $f.RelRaiz $mt.Linea 'metodo-final-proxy' ('Metodo final con ' + ($enMetodo -join ', ') + ': Spring no lo puede interceptar y la anotacion no hace nada. Quita final.') }
+        $enBean = @(Get-AnotacionesProxy $mt.Anots 'bean')
+        if ($enBean.Count -gt 0 -and @($mt.Anots | Where-Object { $_.Nombre -ceq 'Bean' }).Count -gt 0) {
+          if (-not $tiposProxy.ContainsKey($mt.Tipo)) { $tiposProxy[$mt.Tipo] = @() }
+          $tiposProxy[$mt.Tipo] += ($enBean[0] + ' en el @Bean ' + $mt.Nombre + '()')
+        }
+      }
+      if ($c.Final) { [void]$finales.Add([pscustomobject]@{ RelRaiz = $f.RelRaiz; Linea = $c.Linea; Nombre = $c.Nombre; Motivos = $motivos }) }
       # estilo: las clases con anotacion de componente que reciben dependencias por constructor (Lombok o a mano), y las que declaran un logger
       if ($componente) {
         $escritos = @($ctores | Where-Object { $_.Escrito })
@@ -810,6 +888,13 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
     $mc = $script:RxColeccion.Match($limpio)
     if ($mc.Success) {
       Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $mc.Index) 'coleccion-antigua' ($mc.Value + ': usa StringBuilder, ArrayList o HashMap si no hace falta sincronizar')
+    }
+  }
+  foreach ($x in $finales) {
+    $motivos = @($x.Motivos)
+    if ($tiposProxy.ContainsKey($x.Nombre)) { $motivos += @($tiposProxy[$x.Nombre]) }
+    if ($motivos.Count -gt 0) {
+      Add-Cal $out $x.RelRaiz $x.Linea 'clase-final-proxy' ('Clase final que Spring tiene que envolver con un proxy (por ' + (($motivos | Select-Object -Unique) -join ', ') + '): el bean no se crea y el job no arranca ("Cannot subclass final class"). Quita final de la clase.')
     }
   }
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
@@ -2504,7 +2589,7 @@ $TextoPaso = @{
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
   cobertura  = 'Escribe o amplia el test de la clase listada hasta cubrir sus lineas sin cubrir, sin tocar nada fuera de src/test/ (el detalle va en el prompt del lote).'
   sonar      = 'Corrige las incidencias de Sonar listadas SIN cambiar el comportamiento ni la API publica (el detalle de lo que se pide va en el prompt del lote).'
-  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. No toques nada mas de esos ficheros.'
+  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. Clase o metodo final que Spring envuelve con un proxy: quita final y nada mas. No toques nada mas de esos ficheros.'
 }
 
 # Lo que se le pide al codigo que la IA escribe en cualquier paso.
@@ -2512,7 +2597,7 @@ $TextoCalidad = @(
   'Vale para el codigo NUEVO de este lote y para los metodos que modifiques. No es permiso para refactorizar lo demas.',
   '- Javadoc, en el idioma de los comentarios de la PLANTILLA. Cada clase, interfaz, record o enum publico que crees lleva un Javadoc que dice que es y que papel tiene en su capa (puerto, adaptador, caso de uso...). Cada metodo publico que crees, y todos los de una interfaz, llevan Javadoc: que hace, @param, @return y @throws cuando existan. No hace falta en metodos con @Override, getters, setters ni constructores. Un Javadoc que solo repite el nombre no vale.',
   '- Inyeccion por constructor con campos private final. Nada de @Autowired ni @Inject en campos: inyeccion por un unico constructor, campos final, sin estado mutable en el componente.',
-  '- Un solo constructor por componente de Spring (si hay varios, @Autowired en el que debe usar Spring). @Value solo con ${...} o #{...} y nunca en un campo static. Constructor y logger con el mismo estilo que el resto del batch y la PLANTILLA (Lombok o a mano, @Slf4j o LoggerFactory).',
+  '- Un solo constructor por componente de Spring (si hay varios, @Autowired en el que debe usar Spring). @Value solo con ${...} o #{...} y nunca en un campo static. Constructor y logger con el mismo estilo que el resto del batch y la PLANTILLA (Lombok o a mano, @Slf4j o LoggerFactory). Sin final en una clase ni en un metodo que Spring envuelve con un proxy (@Repository, @Configuration, @Transactional, @Async, @StepScope...): el bean no se crea.',
   '- Para datos inmutables nuevos (valores, DTO, propiedades de configuracion) usa record si la PLANTILLA tambien los usa.',
   '- Usa el logger de la PLANTILLA. Nunca System.out, System.err ni printStackTrace. Ningun catch vacio: registra la excepcion con el logger y sigue como hasta ahora, o explica en un comentario por que se ignora. No la relances ni quites el catch: cambia el comportamiento.',
   '- try-with-resources para todo lo que se cierra. Optional solo como valor de retorno. Colecciones inmutables (List.of, Stream.toList) cuando no se modifican.',
