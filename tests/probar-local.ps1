@@ -6353,6 +6353,14 @@ $Pruebas['m68 (b4) un .log que no cabe en salidas ni con nombre corto no cuenta 
   Comprueba 'el siguiente lanzamiento reutiliza el original' ($r.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
 }
 
+$Pruebas['m68 (b5) los patrones de CompararIgnorar casan con el nombre del fichero, no con su ruta: con job-*.log, el log por job que solo deja el migrado no cuenta y otro .log (ejecucion.log) si'] = {
+  $e = Escenario-M68 'm68-b5' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CompararIgnorar = @('job-*.log') }
+  $r = Prueba-M68 $e 'logs'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'con una sola diferencia: el otro .log' 'ficheros/logs/jobs/cargaJob/ejecucion.log' (@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { $_.fichero }) -join ',')
+}
+
 # --- (c) la base del test del migrado tiene las tablas de la base del test del original ---
 # 'tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1 pone esa base en el test del arnes que casa desde su llamada n; el caso vacio de cada lado deja un tablas\<T>.csv por tabla.
 
