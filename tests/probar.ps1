@@ -6594,5 +6594,20 @@ $Pruebas['m72 (b2) estilo: si la plantilla usa un solo estilo, manda la plantill
   Igual 'la plantilla mezcla (mas con Lombok) y el migrado empata, sin Lombok en el pom: manda el constructor a mano y sale la de Lombok' 'L1' (Ficheros-M70 (Cal-M70 (Escenario-M70 'm72-b2-sin' $dos $masLombok $false) 'estilo-constructor'))
 }
 
+$Pruebas['m72 (c1) estilo: la linea de la consola solo nombra los estilos que tienen alguna clase'] = {
+  $e = Escenario-M70 'm72-c1' @{ S1 = (Logger-M70 'S1' 'slf4j'); S2 = (Logger-M70 'S2' 'slf4j'); F1 = (Logger-M70 'F1' 'factory') } @{ Q1 = (Logger-M70 'Q1' 'factory' $PkgPlantilla) }
+  $r = Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild')
+  Comprueba 'con la plantilla en LoggerFactory: 2 con @Slf4j frente a 1 con LoggerFactory' ($r.Salida.Contains('Estilo: 2 loggers con @Slf4j frente a 1 con LoggerFactory')) (Cola $r.Salida)
+  # la plantilla usa solo otro logger y el migrado no tiene ninguna clase con ese: no sale 'frente a 0 con otro logger'
+  $e2 = Escenario-M70 'm72-c1-otro' @{ S1 = (Logger-M70 'S1' 'slf4j'); S2 = (Logger-M70 'S2' 'slf4j'); F1 = (Logger-M70 'F1' 'factory') } @{ O1 = (Logger-M70 'O1' 'otro' $PkgPlantilla) }
+  $r2 = Rescate @('-Repo', $e2.Repo, '-Plantilla', $e2.Plantilla, '-SinBuild')
+  $linea = @($r2.Salida -split "`r?`n" | Where-Object { $_.Contains('Estilo:') })
+  Igual 'sale una linea de estilo' 1 $linea.Count
+  if ($linea.Count -eq 1) {
+    Comprueba 'nombra los dos estilos del migrado, con sus numeros' ($linea[0].Contains('2 con @Slf4j') -and $linea[0].Contains('1 logger con LoggerFactory')) $linea[0]
+    Comprueba 'no dice frente a 0 ni nombra el logger que ninguna clase usa' (-not $linea[0].Contains('frente a') -and -not $linea[0].Contains('otro logger')) $linea[0]
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

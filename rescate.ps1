@@ -721,7 +721,7 @@ $EstiloTextos = @{
 # plantilla (estilo -> clases), o $null si lo que se mira es la propia plantilla. Si el migrado mezcla estilos, manda el de la plantilla cuando
 # usa uno solo; si la plantilla mezcla o no tiene clases que contar, manda el que mas usa el migrado (asi una plantilla que mezcla no obliga a
 # cambiar la mayoria del migrado); si empatan, Lombok cuando el pom del migrado lo tiene. Cada clase de otro estilo sale en $Out. Devuelve las
-# cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola.
+# cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola (solo con los estilos que tienen clases).
 function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
   $pom = Get-Pom $Hechos.Raiz
   $conLombok = [bool]($pom -and $pom.Valido -and ($pom.Deps -contains 'lombok'))
@@ -758,7 +758,9 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
       }
       else { $otros += "$c con " + $script:EstiloTextos[$s].Nombre }
     }
-    $mezcla += (($otros -join ' y ') + " frente a $n con " + $script:EstiloTextos[$manda].Nombre)
+    $texto = ($otros -join ' y ')
+    if ($n -gt 0) { $texto += " frente a $n con " + $script:EstiloTextos[$manda].Nombre }
+    $mezcla += $texto
   }
   $linea = ''
   if ($mezcla.Count -gt 0) { $linea = 'Estilo: ' + ($mezcla -join '; ') }
