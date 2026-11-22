@@ -156,9 +156,14 @@ Comprueba, por texto, el código de `src/main`:
 | `salida-consola` | error | `System.out`, `System.err`, `printStackTrace`. |
 | `catch-vacio` | error | `catch` sin nada dentro (un comentario que lo explique vale). |
 | `envoltorio-new` | error | `new Integer(...)` y similares. |
+| `constructores-sin-autowired` | error | Un componente de Spring con 2 constructores o más (también los de Lombok) y ninguno con `@Autowired` o `@Inject`: Spring no sabe cuál usar (Sonar S6829). |
+| `autowired-varios` | error | `@Autowired` en más de un constructor sin `required = false` (Sonar S6818). |
+| `inyeccion-estatica` | error | `@Value`, `@Autowired` o `@Inject` en un campo `static`: Spring no lo inyecta (Sonar S7178). |
+| `value-sin-expresion` | error | `@Value("...")` en un campo sin `${...}` ni `#{...}` (Sonar S6804). |
+| `estilo-constructor`, `estilo-logger` | error | El batch mezcla estilos de constructor (Lombok o a mano) o de logger (`@Slf4j`, `LoggerFactory` u otro): salen las clases que no siguen el estilo de la plantilla, o el más usado. |
 | `instanceof-cast`, `fecha-antigua`, `coleccion-antigua` | aviso | Sintaxis y API antiguas. No se arreglan solas: pueden cambiar el comportamiento. |
 
-El Javadoc se exige aunque la plantilla no lo tenga. Las demás reglas bajan a aviso si la plantilla también las incumple.
+El Javadoc y las cuatro reglas de Spring se exigen aunque la plantilla no las cumpla. Las demás reglas bajan a aviso si la plantilla también las incumple (las de estilo, si la plantilla también mezcla).
 Para apagar una regla, quítala de `CalidadErrores` en `.rescate/config.json`.
 Para que `calidad` vaya como `sonar` (la IA solo compila, cada lote pasa los tests ligeros y la suite entera va en un control), pon `"PasosSoloCompila": ["sonar", "calidad"]` y `"PasosTestsElegidos": ["sonar", "calidad"]` en `.rescate/config.json` (el de la copia de rescate, `<migrado>-rescate/.rescate/config.json`, si lo lanza `migracion.ps1`); por defecto solo `sonar`. Mide el paso en `.rescate/intentos.tsv` antes y después.
 
