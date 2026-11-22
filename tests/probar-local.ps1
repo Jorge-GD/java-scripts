@@ -7398,6 +7398,23 @@ $Pruebas['m73 (a3) un caso hecho de antes cuyo original guardo que una secuencia
   Comprueba 'y que es porque su error.txt dice que algo ya existe (no solo una tabla)' ($r.Salida -match 'dice que algo ya existe') (Cola $r.Salida)
 }
 
+$Pruebas['m73 (a3b) $PatronYaExiste: cada codigo de H2 de algo que ya existe se reconoce por si solo, y la columna repetida solo con un ALTER TABLE'] = {
+  $texto = [System.IO.File]::ReadAllText($Script)
+  foreach ($v in @('CodigosYaExiste', 'ColumnaRepetida', 'PatronYaExiste')) {
+    $l = [regex]::Match($texto, '(?m)^\$' + $v + ' = .*$')
+    Comprueba "$v esta definido en una linea" $l.Success ''
+    Invoke-Expression $l.Value
+  }
+  foreach ($c in @(42101, 42111, 90033, 90035, 90038, 90041, 90045, 90069, 90076, 90078, 90114, 90119)) { Comprueba "el codigo $c, solo" ("[$c-200]" -match $PatronYaExiste) '' }
+  Comprueba 'ya existe, solo' ('Tabla "T" ya existe' -match $PatronYaExiste) ''
+  Comprueba 'already exists, solo' ('Table "T" already exists' -match $PatronYaExiste) ''
+  Comprueba 'un codigo pegado a otras cifras no cuenta' (-not ('1190035 y 420112' -match $PatronYaExiste)) ''
+  foreach ($c in @('Duplicate column name "C"', 'Nombre de columna Duplicada "C"', '[42121-200]')) {
+    Comprueba "con ALTER TABLE: $c" (("ALTER TABLE T ADD COLUMN C INT; $c") -match $PatronYaExiste) ''
+    Comprueba "sin ALTER TABLE: $c" (-not (("CREATE TABLE T (C INT, C INT); $c") -match $PatronYaExiste)) ''
+  }
+}
+
 $Pruebas['m73 (a4) un datos.sql que crea una secuencia, un indice, un esquema y una columna que la base ya tiene: el caso corre en el original y en el migrado, y lo guardado en casos no cambia'] = {
   $sql = 'create sequence BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IX_A on T_A(ID); alter table T_A add column COL_X int; create schema S_A; alter table T_A add constraint K_A unique (ID)'
   $e = Escenario-M73 'm73-a4' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
@@ -7563,6 +7580,8 @@ $Pruebas['m73 (b3) lo que no es de la ejecucion sigue como esta: una fecha de ot
   )
   $v = Normaliza-M73 'm73-b3' $quedan
   for ($i = 0; $i -lt $quedan.Count; $i++) { Igual $quedan[$i] $quedan[$i] $v[$i] }
+  $mez = @(Normaliza-M73 'm73-b3m' @('hecho 2026-11-22 10-26.58'))
+  Igual 'una hora con dos separadores distintos no es una hora: la fecha pasa a su marca y lo demas se queda' 'hecho <hoy:yyyy-MM-dd> 10-26.58' $mez[0]
   $cuerpo = @'
 Caso 'negocio' @{ 'a.txt' = "vence 1980-05-12 00:00:00`n" } @{ 'a.txt' = "vence 1980-05-11 23:00:00`n" }
 Caso 'negocio-igual' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" }
@@ -7841,6 +7860,9 @@ $Pruebas['m73 (d2) Get-MotivoCambiante: un .xlsx con la fecha de hoy en una celd
     'sin-gz.txt.gz' = (Gz-M73 "importe;10`n")
     'con-pdf.pdf' = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola')
     'sin-pdf.pdf' = (Pdf-M73 '' '' 'hola')
+    'pdf-otro-dia.pdf' = (Pdf-M73 '20200101120000' 'CC33DD44' 'hola')
+    'zip-en-zip.zip' = (Zip-M73 ([ordered]@{ 'dentro.zip' = (Zip-M73 ([ordered]@{ 'informe-2026-11-22.txt' = "importe;10`n" })) }))
+    'sin-zip-en-zip.zip' = (Zip-M73 ([ordered]@{ 'dentro.zip' = (Zip-M73 ([ordered]@{ 'informe.txt' = "importe;10`n" })) }))
     'logo.png' = $png
   }
   $d = Join-Path $Dir 'm73-d2-ficheros'
@@ -7863,8 +7885,29 @@ $Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.T
   $m = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^M (\S+) \[(.*)\]$') { $m[$Matches[1]] = $Matches[2] } }
   $motivo = 'lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion.'
-  foreach ($k in @('con-excel.xlsx', 'texto-excel.xlsx', 'con-zip.zip', 'nombre-zip.zip', 'con-gz.txt.gz', 'con-pdf.pdf')) { Igual "$k no vale como test fijo, con el motivo de siempre" "$k $motivo" $m[$k] }
-  foreach ($k in @('sin-excel.xlsx', 'sin-zip.zip', 'sin-gz.txt.gz', 'sin-pdf.pdf', 'logo.png')) { Igual "$k vale" '' $m[$k] }
+  foreach ($k in @('con-excel.xlsx', 'texto-excel.xlsx', 'con-zip.zip', 'nombre-zip.zip', 'con-gz.txt.gz', 'con-pdf.pdf', 'pdf-otro-dia.pdf', 'zip-en-zip.zip')) { Igual "$k no vale como test fijo, con el motivo de siempre" "$k $motivo" $m[$k] }
+  foreach ($k in @('sin-excel.xlsx', 'sin-zip.zip', 'sin-gz.txt.gz', 'sin-pdf.pdf', 'sin-zip-en-zip.zip', 'logo.png')) { Igual "$k vale" '' $m[$k] }
+}
+
+$Pruebas['m73 (c7) cada tipo, por su lado: una extension de binario sin ningun byte 0 es binario; un .xlsx que es un zip sin libro se lee como zip; un .gz sale con el nombre de dentro; una entrada vacia se dice; un zip dentro de un zip dentro de un zip dentro de un zip se queda en un binario'] = {
+  $bin = '^binario: \d+ bytes, sha256 [0-9a-f]{64}$'
+  $texto = [System.Text.Encoding]::GetEncoding(28591).GetBytes('no es un jpeg de verdad')
+  $l = @(Lineas-M73 'm73-c7a' 'logo.jpg' $texto)
+  Comprueba 'un .jpg sin byte 0: una linea binario' ($l.Count -eq 1 -and $l[0] -cmatch $bin) ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7b' 'logo.txt' $texto)
+  Igual 'los mismos bytes en un .txt: el texto' 'no es un jpeg de verdad' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7c' 'raro.xlsx' (Zip-M73 ([ordered]@{ 'r.txt' = "importe;10`n" })))
+  Igual 'un .xlsx que es un zip sin libro: sus entradas' 'r.txt: importe;10' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7d' 'datos.txt.gz' (Gz-M73 "a;b`n"))
+  Igual 'un .gz: el nombre de dentro (el del fichero sin .gz) y su linea' 'm73-c7d-datos.txt: a;b' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7e' 'vacia.zip' (Zip-M73 ([ordered]@{ 'r.txt' = 'x'; 'vacio.txt' = '' })))
+  Igual 'una entrada vacia sale como (vacio), con las entradas en orden de nombre' 'r.txt: x|vacio.txt: (vacio)' ($l -join '|')
+  $tres = Zip-M73 ([ordered]@{ 'l1.zip' = (Zip-M73 ([ordered]@{ 'l2.zip' = (Zip-M73 ([ordered]@{ 'a.txt' = 'x' })) })) })
+  $l = @(Lineas-M73 'm73-c7f' 'tres.zip' $tres)
+  Igual 'dos zips dentro: se leen hasta el texto' 'l1.zip: l2.zip: a.txt: x' ($l -join '|')
+  $cuatro = Zip-M73 ([ordered]@{ 'l1.zip' = (Zip-M73 ([ordered]@{ 'l2.zip' = (Zip-M73 ([ordered]@{ 'l3.zip' = (Zip-M73 ([ordered]@{ 'a.txt' = 'x' })) })) })) })
+  $l = @(Lineas-M73 'm73-c7g' 'cuatro.zip' $cuatro)
+  Comprueba 'tres zips dentro: el tercero ya es un binario' ($l.Count -eq 1 -and $l[0] -cmatch ('^l1\.zip: l2\.zip: l3\.zip: ' + $bin.TrimStart('^'))) ($l -join '|')
 }
 
 # ================================ LANZADOR ================================
