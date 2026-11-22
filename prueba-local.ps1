@@ -33,7 +33,8 @@ QUE HACE
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
      motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar y una linea por cada job (3 como
-     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes).
+     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa; en el del migrado, las causas de fallo que se repiten y una linea por cada
+     pareja de carpetas (3 como mucho) con 2 casos o mas donde el original y el migrado dejaban un fichero en carpetas distintas (Get-PrevioArnes).
      El test que se escribe otra vez no se borra: pasa a prueba-local\arnes-anterior\<lado> (y el caso vacio del original, a
      salidas\vacio-anterior), pisando el de la vez anterior (Save-Anterior).
      El test del original que se escribe otra vez no puede quedar peor que el de antes con un caso vacio (el estado del job, las tablas y las columnas de
@@ -73,7 +74,10 @@ QUE HACE
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
      prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
      lanzamiento los escriba otra vez con ese motivo. Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
-     un solo lado es lo mismo que una tabla que no esta.
+     un solo lado es lo mismo que una tabla que no esta. Un fichero que el original deja en una carpeta y el migrado, con el mismo nombre (normalizado), en
+     otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
+     alguna copia del original o, si no, la primera linea distinta (Join-OtraCarpeta). Lo que solo esta en un lado y las tablas\ no se emparejan. Los casos
+     con esa diferencia, aunque el nombre lleve otra fecha, son un solo grupo (la pareja de carpetas) y la consola dice que suele ser el test del migrado.
   6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
      <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
      cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
@@ -87,7 +91,7 @@ QUE HACE
      a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
   7. Solo con -Reparar (no se combina con -Desde ni con -Deshacer; hace falta el worktree de rescate, y su carpeta sin cambios
      sin commit): despues de la prueba de siempre, arregla el migrado hasta que los casos distintos salgan iguales. Cada
-     diferencia tiene una clave (el nombre de su fichero, normalizado); se arregla primero la clave con mas casos distintos, y
+     diferencia tiene una clave (el nombre de su fichero, normalizado; la pareja de carpetas, si es otraCarpeta); se arregla primero la clave con mas casos distintos, y
      despues de cada arreglo se recalcula. Una tarea de IA por clave escribe, en la copia del migrado y solo en src\main\, el
      arreglo; el script lo da por bueno si pasa seis puertas, de la mas barata a la mas cara: la llamada acaba bien; la IA no
      dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); algo cambia en src\main\
@@ -901,16 +905,36 @@ function Get-LineasFalloMigrado {
     if (-not $por.ContainsKey($firma)) { $por[$firma] = [pscustomobject]@{ casos = 0; estado = $mig[0].estado; causa = [string]$mig[0].causa } }
     $por[$firma].casos++
   }
-  $orden = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-  foreach ($firma in $por.Keys) { if ($por[$firma].casos -ge $CausasMinimas) { $orden[(999999 - $por[$firma].casos).ToString('D6') + '|' + $firma] = $por[$firma] } }
   $lineas = @()
-  foreach ($k in @(Sort-Ordinal @($orden.Keys) | Select-Object -First $CausasMaximas)) {
-    $g = $orden[$k]
+  foreach ($g in @(Get-MasRepetidas $por)) {
     $causa = $g.causa
     if ($causa.Length -gt 200) { $causa = $causa.Substring(0, 200) }
     $lineas += "- En $($g.casos) casos el migrado acaba $($g.estado) y el original no: $causa."
   }
   return $lineas
+}
+
+# Lo que el original y el migrado dejaban en carpetas distintas en el migrado de antes, para el test del migrado que se escribe otra vez: de los casos distintos del
+# prueba-local.json de antes ($Anterior) con diferencias otraCarpeta (Join-OtraCarpeta), cada pareja de carpetas (su clave: un caso cuenta una vez por pareja, aunque
+# deje varios ficheros en ella) con $CausasMinimas casos o mas, la de mas casos primero y $CausasMaximas como mucho: 'En N casos el original deja sus ficheros en A
+# y el migrado en B: da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original.' Sin ninguna, @().
+function Get-LineasOtraCarpeta {
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($c in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'distinto' })) {
+    foreach ($d in @(@($c.diferencias) | Where-Object { $_.otraCarpeta } | Group-Object -Property clave -CaseSensitive | ForEach-Object { $_.Group[0] })) {
+      if (-not $por.ContainsKey($d.clave)) { $por[$d.clave] = [pscustomobject]@{ casos = 0; original = (Format-Carpetas $d.carpetasOriginal); migrado = (Format-Carpetas $d.carpetasMigrado) } }
+      $por[$d.clave].casos++
+    }
+  }
+  return @(Get-MasRepetidas $por | ForEach-Object { "- En $($_.casos) casos el original deja sus ficheros en $($_.original) y el migrado en $($_.migrado): da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original." })
+}
+
+# Las entradas de $Por (firma -> objeto con 'casos', cuantos casos) con $CausasMinimas casos o mas: la de mas casos primero, a igualdad por la firma en orden
+# ordinal, y $CausasMaximas como mucho.
+function Get-MasRepetidas($Por) {
+  $orden = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($firma in $Por.Keys) { if ($Por[$firma].casos -ge $CausasMinimas) { $orden[(999999 - $Por[$firma].casos).ToString('D6') + '|' + $firma] = $Por[$firma] } }
+  return @(Sort-Ordinal @($orden.Keys) | Select-Object -First $CausasMaximas | ForEach-Object { $orden[$_] })
 }
 
 # Lo que fallo la otra vez, para el primer intento de un test que se escribe otra vez ($T no esta hecha: se rehace con -RehacerOriginal o -RehacerArnes, se
@@ -923,7 +947,9 @@ function Get-LineasFalloMigrado {
 #    y la primera linea de su causa (Get-LineasVacio): el test nuevo no debe dejarlo peor (Test-ArnesEscrito);
 #  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFalloMigrado), con una
 #    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
-#    si viene de src/main, es un fallo del migrado y no se tapa.
+#    si viene de src/main, es un fallo del migrado y no se tapa;
+#  - para el del migrado, una linea por cada pareja de carpetas (3 como mucho) con 2 casos o mas donde el original dejaba un fichero en una carpeta y el migrado en
+#    otra (otraCarpeta) en ese prueba-local.json (Get-LineasOtraCarpeta): que de a las propiedades de carpetas del test los mismos valores que les da el del original.
 # Sin nada de eso es '' y el prompt no cambia. Invoke-Lote lo pone como la correccion del primer intento, por el mismo camino que el motivo de un reintento; la
 # huella (Get-HuellaArnes) no lo lleva: un test que no se rehace no se escribe otra vez por esto. Una tarea que aun no ha llamado a la IA (se dijo que no a
 # la pregunta de llamar a Copilot) conserva el de antes si ahora no hay otro.
@@ -946,6 +972,8 @@ function Get-PrevioArnes($T, $Antes) {
   if ($T.entradas.repo -eq 'migrado' -and $Anterior) {
     $lineas = @(Get-LineasFalloMigrado)
     if ($lineas.Count -gt 0) { $partes += 'Si viene de una clase de una libreria porque al test le falta algo que en produccion prepara el arranque, preparalo como los tests de ejemplo. Si viene del codigo de src/main, no lo tapes: es un fallo del migrado.' + "`n" + ($lineas -join "`n") }
+    $carpetas = @(Get-LineasOtraCarpeta)
+    if ($carpetas.Count -gt 0) { $partes += ($carpetas -join "`n") }
   }
   if ($partes.Count -gt 0) { return "Lo que fallo la otra vez (de un lanzamiento anterior):`n" + ($partes -join "`n") }
   if ($Antes -and $Antes.estado -eq 'pendiente' -and $Antes.intentos -eq 0 -and $Antes.entradas.PSObject.Properties['previo']) { return [string]$Antes.entradas.previo }

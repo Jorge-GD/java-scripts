@@ -7056,5 +7056,77 @@ foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ##
   Igual '4: otra pareja de carpetas, con dos del original' '4 ## fichero|ficheros/enviados,trabajo/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-03 ## 1 caso distinto, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y trabajo/enviados' $g[3]
 }
 
+# Una linea de lo que el prueba-local.json de antes decia de las carpetas: 'En N casos el original deja sus ficheros en A y el migrado en B: ...'
+function Linea-M67([int]$N, [string]$Original, [string]$Migrado) {
+  return "- En $N casos el original deja sus ficheros en $Original y el migrado en ${Migrado}: da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original."
+}
+
+# Deja en el prueba-local.json de $E los casos de $Parejas: lista de (cuantos casos, carpetas del original, carpetas del migrado y, si se pone, 'dos': el primer
+# caso lleva ademas otro fichero de la misma pareja). Cada caso sale distinto, con su diferencia otraCarpeta.
+function Anterior-M67($E, $Parejas) {
+  $o = Lee-Json $E.Json
+  $casos = @()
+  $n = 0
+  foreach ($p in $Parejas) {
+    for ($i = 0; $i -lt $p[0]; $i++) {
+      $n++
+      $dif = @()
+      foreach ($nombre in @("CIERRE_2024_06_$n.txt") + @(if ($i -eq 0 -and $p.Count -gt 3) { "OTRO_2024_06_$n.txt" })) {
+        $dif += , [ordered]@{ fichero = $nombre; clave = (@($p[1]) -join ',') + ' -> ' + (@($p[2]) -join ','); lineas = 1; linea = 1; original = 'en ' + (@($p[1]) -join ' y '); migrado = 'en ' + (@($p[2]) -join ' y '); nota = ''; otraCarpeta = $true; carpetasOriginal = @($p[1]); carpetasMigrado = @($p[2]) }
+      }
+      $casos += , [ordered]@{ job = 'cargaJob'; caso = ('caso-' + $n.ToString('D2')); titulo = ''; resultado = 'distinto'; motivo = ''; diferencias = $dif; fallos = @() }
+    }
+  }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+}
+
+$Pruebas['m67 (c1) el prueba-local.json de antes con 3 casos de la misma pareja de carpetas (uno con dos ficheros de ella): sin -RehacerArnes, ni llamadas ni prompt nuevo; con -RehacerArnes, el primer intento del migrado lleva la linea, una vez, con 3 casos, y la huella no cambia'] = {
+  $e = Escenario-M64 'm67-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $huella = (Tarea-Arnes $e 'migrado').entradas.huella
+  Anterior-M67 $e @(, @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida'), 'dos'))
+  $llamadas = @(Llamadas-Arnes $e 'migrado').Count
+  $r = Prueba $e
+  Igual 'sin -RehacerArnes sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas del migrado' $llamadas @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'y el prompt de antes no lleva la linea' (-not (Registro-Arnes $e 'migrado' 1).Contains('el original deja sus ficheros')) ''
+  Anterior-M67 $e @(, @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida'), 'dos'))   # el lanzamiento de arriba lo ha pisado
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $linea = Linea-M67 3 'ficheros/enviados y trabajo/enviados' 'ficheros/salida'
+  Comprueba 'el primer intento del migrado lleva la linea de los 3 casos (el caso con dos ficheros de la pareja cuenta una vez)' ($mig.Contains($linea)) (Cola $mig)
+  Comprueba 'dentro del bloque de lo que fallo la otra vez, una sola vez' ($mig.Contains($M61Bloque) -and [regex]::Matches($mig, 'el original deja sus ficheros').Count -eq 1) (Cola $mig)
+  Comprueba 'sin la frase de las causas de fallo (no hay ninguna)' (-not $mig.Contains($M64Frase)) (Cola $mig)
+  Comprueba 'el del original no la lleva' (-not (Registro-Arnes $e 'original' 1).Contains('el original deja sus ficheros')) ''
+  Comprueba 'la tarea del migrado guarda la linea en entradas.previo' ([string](Tarea-Arnes $e 'migrado').entradas.previo -match [regex]::Escape($linea)) ''
+  Igual 'la huella del migrado no cambia' $huella (Tarea-Arnes $e 'migrado').entradas.huella
+}
+
+$Pruebas['m67 (c2) una pareja con un solo caso no sale; de las de 2 casos, las primeras por orden de firma, 3 lineas como mucho y la de mas casos primero; las carpetas se dicen con y; sin ninguna pareja repetida, el prompt no cambia'] = {
+  $e = Escenario-M64 'm67-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M67 $e @(@(1, @('g'), @('h')), @(2, @('e'), @('f')), @(2, @('c'), @('d')), @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida')), @(2, @('a'), @('b')))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $l3 = Linea-M67 3 'ficheros/enviados y trabajo/enviados' 'ficheros/salida'
+  $lab = Linea-M67 2 'a' 'b'
+  $lcd = Linea-M67 2 'c' 'd'
+  Comprueba 'la de 3 casos' ($mig.Contains($l3)) (Cola $mig)
+  Comprueba 'las de 2 casos, a -> b y c -> d, por orden de firma' ($mig.Contains($lab) -and $mig.Contains($lcd) -and $mig.IndexOf($lab) -lt $mig.IndexOf($lcd)) (Cola $mig)
+  Comprueba 'la de mas casos va antes' ($mig.IndexOf($l3) -lt $mig.IndexOf($lab)) (Cola $mig)
+  Comprueba 'tres lineas en total: la tercera pareja de 2 casos (e -> f) y la de un caso (g -> h) no salen' ([regex]::Matches($mig, 'el original deja sus ficheros').Count -eq 3 -and -not $mig.Contains('en e y el migrado') -and -not $mig.Contains('en g y el migrado')) (Cola $mig)
+  $e = Escenario-M64 'm67-c2b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Anterior-M67 $e @(@(1, @('a'), @('b')), @(1, @('c'), @('d')))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con dos parejas de un solo caso sale con 0' 0 $r.Codigo
+  Comprueba 'el prompt del migrado no lleva ni el bloque de lo que fallo la otra vez' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
