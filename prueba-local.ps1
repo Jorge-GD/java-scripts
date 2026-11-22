@@ -43,7 +43,9 @@ QUE HACE
      siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
      de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. El original se
      ejecuta con UTF-8, como en el servidor (sus Maven llevan JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 y, con el, lo que ya hubiera). Para obligar a
-     repetirlo todo, borra prueba-local\salidas. Cada caso, en su Maven
+     repetirlo todo, borra prueba-local\salidas. Antes de ejecutar un caso (en el original, en el migrado y al prepararlo), cada CREATE TABLE de su
+     datos.sql pasa a CREATE TABLE IF NOT EXISTS en la copia que se ejecuta (el test ya crea tablas en su base y H2 dice 'ya existe'; lo guardado en
+     casos\ no cambia), y el original de un caso hecho de antes cuyo error.txt guardado dice 'ya existe' se ejecuta otra vez. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
@@ -171,6 +173,9 @@ $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no 
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
+# El error.txt de un caso cuyo datos.sql crea una tabla que ya esta en la base del test: H2 dice 'Tabla "X" ya existe' o 'Table "X" already exists' ([42101-...]).
+# Reset-OriginalesYaExiste lo busca en el error.txt guardado de un original.
+$PatronYaExiste = '(?i)ya existe|already exists|42101'
 # Lo que dice el motivo de un caso cuyo original no corre porque el test crea mal una tabla (Get-MotivoTablaMal): la cuenta del final de la prueba lo busca.
 # $PatronCreateTabla es el CREATE TABLE que H2 rechaza (grupo s, la sentencia): el error de H2 (Get-PistaArnes y Get-MotivoTablaMal) o ese motivo ya dicho
 # (Get-PistaArnes sobre el prueba-local.json de antes, donde el motivo ya no trae el error).
@@ -543,18 +548,39 @@ function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ 
 # $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
 # una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
 # repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
+# Mientras Maven ejecuta el caso, su datos.sql lleva cada CREATE TABLE con IF NOT EXISTS (Edit-DatosSql); al acabar queda como estaba.
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
   Remove-Carpeta $sal
   $sinRed = -not $script:ConRed.ContainsKey($Dir)
-  $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
-  if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
-    Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
-    Remove-Carpeta $sal
-    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que
-    if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+  $sql = Join-Ruta $Dir "$Casos/$Job/$Caso/datos.sql"
+  $bytes = Edit-DatosSql $sql
+  try {
+    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
+    if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
+      Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
+      Remove-Carpeta $sal
+      $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que
+      if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+    }
   }
+  finally { if ($null -ne $bytes) { [System.IO.File]::WriteAllBytes($sql, $bytes) } }
   return $r
+}
+
+# Cambia en el datos.sql $Ruta cada CREATE TABLE <tabla> que no lleva IF NOT EXISTS por CREATE TABLE IF NOT EXISTS <tabla> (sin distinguir mayusculas; la gramatica de H2 es
+# CREATE [CACHED | MEMORY] [TEMP | [GLOBAL | LOCAL] TEMPORARY] TABLE [IF NOT EXISTS] <tabla>, h2database.com/html/commands.html#create_table). El test del arnes ya crea tablas en su
+# base (la del calendario en el original; las de Spring Batch en el migrado, que las crea solo) y un datos.sql que las crea otra vez da 'ya existe': el caso no se pudo preparar o
+# sale distinto sin que el batch tenga la culpa. Devuelve los bytes de antes, para dejar el fichero como estaba al acabar el caso (lo guardado en casos\ no cambia), o $null si
+# no hay fichero o no cambia nada. Se lee y se escribe en Latin-1, byte a byte: lo demas del fichero no cambia, sea cual sea su codificacion.
+function Edit-DatosSql([string]$Ruta) {
+  if (-not (Test-Path -LiteralPath $Ruta -PathType Leaf)) { return $null }
+  $bytes = [System.IO.File]::ReadAllBytes($Ruta)
+  $texto = $Latin.GetString($bytes)
+  $nuevo = [regex]::Replace($texto, '(?i)\bCREATE\s+TABLE(?>\s+)(?!IF\s+NOT\s+EXISTS\b)', '$&IF NOT EXISTS ')
+  if ($nuevo -ceq $texto) { return $null }
+  [System.IO.File]::WriteAllBytes($Ruta, $Latin.GetBytes($nuevo))
+  return , $bytes
 }
 
 # Anade las filas de este lanzamiento a datos\prueba-local-tiempos.json (se anade, no se pisa). Un fallo al guardar no para la prueba.
@@ -1458,6 +1484,23 @@ function Reset-CasosExcepcion($Tareas) {
     $n++
   }
   if ($n -gt 0) { Save-Originales; Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
+}
+
+# Un caso hecho en otro lanzamiento cuyo original guardo un error.txt que dice que una tabla ya existe ($PatronYaExiste: su datos.sql crea una tabla que el test del original
+# ya crea; ahora el script la crea con IF NOT EXISTS, Edit-DatosSql) vuelve a ejecutar su original, sin IA y sin -Rehacer: se quita su entrada de originales.json (un original sin
+# estado.txt ya se ejecuta en cada lanzamiento; este trae el estado.txt de un job que corrio igualmente). Los demas casos no se tocan. Dice cuantos son.
+function Reset-OriginalesYaExiste($Tareas) {
+  $o = Get-Originales
+  $n = 0
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
+    $j = $t.entradas.job
+    $c = $t.entradas.caso
+    $dicen = @('original', 'original-2' | Where-Object { $f = Join-Ruta $Local "salidas/$_/$j/$c/error.txt"; (Test-Path -LiteralPath $f) -and [System.IO.File]::ReadAllText($f) -match $PatronYaExiste })
+    if ($dicen.Count -eq 0) { continue }
+    $o.Remove("$j|$c")
+    $n++
+  }
+  if ($n -gt 0) { Info "Se ejecuta otra vez el original de $n caso(s) hecho(s) en otro lanzamiento: su error.txt dice que una tabla ya existe (su datos.sql la crea y el test ya la crea)." }
 }
 
 # Un caso hecho como no-aplica (sin probar en local: la IA no lo vio correr en el original, por ejemplo por unas tablas que el test no creaba) se decidio con el test
@@ -3081,6 +3124,7 @@ try {
     $tareasCasos += @(Get-TareasCasos $p $jm)
   }
   Reset-CasosExcepcion $tareasCasos
+  Reset-OriginalesYaExiste $tareasCasos
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }

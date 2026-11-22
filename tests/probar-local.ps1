@@ -6228,5 +6228,94 @@ $Pruebas['m64 (e) un lanzamiento sin -RehacerArnes con ese mismo prueba-local.js
   Igual 'la huella de los dos tests es la misma' $huellas (@((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ',')
 }
 
+# ===================== M68: menos ruido y puertas mas finas en la prueba en local =====================
+# Escenarios con el Copilot de m40 y el Maven de m68 (tests/falsos/m68-mvn.ps1; sus banderas, en RESCATE_M68). RESCATE_M40 = 'tablas=1/CALENDARIO_02' deja esa
+# tabla en la base de prueba de los dos tests desde su primera llamada (m40-copilot.ps1).
+
+function Escenario-M68([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm68-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza con las banderas $Banderas del Maven falso, la base de los tests $Tablas ('tablas=<n>/<T_A,T_B>' de m40-copilot.ps1) y las variables de entorno $Env (nombre -> valor).
+function Prueba-M68($E, [string]$Banderas = '', [string]$Tablas = '', [string[]]$A = @(), [hashtable]$Env = @{}) {
+  $env:RESCATE_M68 = $Banderas
+  $env:RESCATE_M40 = $Tablas
+  foreach ($k in $Env.Keys) { Set-Item -Path "env:$k" -Value ([string]$Env[$k]) }
+  try { return (Prueba $E $A) }
+  finally {
+    $env:RESCATE_M68 = ''
+    $env:RESCATE_M40 = ''
+    foreach ($k in $Env.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+  }
+}
+
+# El datos.sql que vio cada ejecucion de un caso en la copia $Copia (m68-sql.log), como 'job/caso|sql', en orden.
+function Sql-M68($E, [string]$Copia) {
+  $f = Join-Path $E.Llamadas 'm68-sql.log'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_.StartsWith($Copia + '|') } | ForEach-Object { $_.Substring($Copia.Length + 1) })
+}
+
+$SqlM68 = 'create table CALENDARIO_02 (ID int)'
+
+$Pruebas['m68 (a1) un datos.sql que crea una tabla que el test ya crea (CALENDARIO_02): el caso corre en el original y en el migrado sin ya existe, y lo guardado en casos no cambia'] = {
+  $e = Escenario-M68 'm68-a1' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $SqlM68") })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba 'el original deja estado.txt y no deja error.txt' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/estado.txt')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  $con = 'cargaJob/caso-01|create table IF NOT EXISTS CALENDARIO_02 (ID int)'
+  Igual 'el original vio IF NOT EXISTS en sus tres ejecuciones (la que prepara el caso y las dos de comparar)' 3 @(Sql-M68 $e $e.CopiaOrig | Where-Object { $_ -ceq $con }).Count
+  Igual 'y el migrado, en la suya' 1 @(Sql-M68 $e $e.CopiaMig | Where-Object { $_ -ceq $con }).Count
+  Igual 'ninguna ejecucion vio el datos.sql sin cambiar' 0 @(@(Sql-M68 $e $e.CopiaOrig) + @(Sql-M68 $e $e.CopiaMig) | Where-Object { $_ -ceq "cargaJob/caso-01|$SqlM68" }).Count
+  $rel = 'src/test/resources/prueba-local/cargaJob/caso-01/datos.sql'
+  Igual 'lo guardado en casos no cambia' $SqlM68 (Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim()
+  Igual 'ni lo que queda en la copia del original' $SqlM68 (Lee $e.CopiaOrig $rel).Trim()
+  Igual 'ni en la copia del migrado' $SqlM68 (Lee $e.CopiaMig $rel).Trim()
+}
+
+$Pruebas['m68 (a2) un CREATE TABLE que ya lleva IF NOT EXISTS no se toca (en mayusculas, en minusculas, con espacios de mas), el que no lo lleva si aunque vaya despues en la misma linea, y lo demas del fichero queda byte a byte'] = {
+  $enie = "insert into T_C values ('" + [char]0xF1 + 'and' + [char]0xFA + "')"
+  $sql = "create table IF NOT EXISTS T_A (ID int); CREATE   TABLE  if  not  exists  T_B (ID int); Create Table T_C (ID int); $enie"
+  $e = Escenario-M68 'm68-a2' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M68 $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $visto = @(Sql-M68 $e $e.CopiaMig)
+  Igual 'el migrado vio solo el tercero cambiado, y la enie y la u con tilde enteras' "cargaJob/caso-01|create table IF NOT EXISTS T_A (ID int); CREATE   TABLE  if  not  exists  T_B (ID int); Create Table IF NOT EXISTS T_C (ID int); $enie" ($visto -join '|')
+  Igual 'ninguno queda doble' 0 @($visto | Where-Object { $_ -match '(?i)IF NOT EXISTS\s+IF NOT EXISTS' }).Count
+  Igual 'lo guardado en casos no cambia' $sql ((Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim())
+}
+
+$Pruebas['m68 (a3) un caso hecho de antes cuyo original guardo ya existe, already exists o 42101 se ejecuta otra vez, sin -Rehacer y sin llamar a Copilot; los demas, no'] = {
+  $e = Escenario-M68 'm68-a3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') })
+  $r = Prueba-M68 $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $antes = @(1..5 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'cada caso se ejecuto 3 veces en el original (prepararlo y dos de comparar)' '3,3,3,3,3' $antes
+  $dicen = @{
+    1 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Tabla "CALENDARIO_02" ya existe; Sentencia SQL: CREATE TABLE CALENDARIO_02 (ID INT) [42101-200]'
+    2 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CALENDARIO_02" already exists; SQL statement: CREATE TABLE CALENDARIO_02 (ID INT)'
+    3 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: [42101-200]'
+    5 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Tabla "CALENDARIO_02" ya existe'
+  }
+  foreach ($n in $dicen.Keys) { Escribe $e.Local "salidas/original/cargaJob/caso-0$n/error.txt" ($dicen[$n] + "`n") }
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-05/estado.txt')   # el 5 tiene la forma de siempre: sin estado.txt, solo el error
+  $r = Prueba-M68 $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas a Copilot' $llamadas (Llamadas $e).Count
+  $despues = @(1..5 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'los cuatro con el error se ejecutan otra vez (original y original-2) y el otro, no' '5,5,5,3,5' $despues
+  Comprueba 'la consola dice cuantos' ($r.Salida -match 'Se ejecuta otra vez el original de 4 caso\(s\)') (Cola $r.Salida)
+  Comprueba 'el error.txt guardado de antes ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  Igual 'los cinco salen iguales' 'igual,igual,igual,igual,igual' ((Resultados $e) -join ',')
+  $r = Prueba-M68 $e
+  Comprueba 'un tercer lanzamiento ya no ejecuta ninguno otra vez' ($r.Salida -match 'Original: se reutilizan las salidas de 5 caso\(s\) y se ejecutan 0\.' -and $r.Salida -notmatch 'Se ejecuta otra vez el original') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
