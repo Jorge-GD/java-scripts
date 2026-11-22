@@ -75,7 +75,7 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 (datos\propiedades.json) con una sola tarea y un commit (arreglo-propiedades.ps1). Solo se queda con el cambio si compila, no fallan mas tests
                 que antes y ninguna clave empeora; datos\propiedades-arreglo.json. Una tarea que no sale bien se avisa (atascada) y la pasada sigue
     revision    con la respuesta corregir, despues de propiedades y antes de prueba-local: revisa el arbol final por flujos (revision.ps1) y solo lee. Una tarea por
-                unidad (un step con sus piezas, o un fichero suelto) con las 9 reglas del catalogo y como mucho 5 hallazgos por unidad, cada uno con una cita que
+                unidad (un step con sus piezas, o un fichero suelto) con las 8 reglas del catalogo y como mucho 5 hallazgos por unidad, cada uno con una cita que
                 el script comprueba. Mira lo que cambio frente a tu rama, lo que tiene papel de Spring Batch y las clases sin uso de datos\practicas-despues.json
                 (o de practicas-antes.json); con -RevisarTodo, todos los .java de src/main/java. Lo que una lectura toque del repositorio se deshace y la tarea no
                 vale. Va con -Limite, -MaxHoras y los fallos seguidos de Copilot como las demas fases; datos\revision.json

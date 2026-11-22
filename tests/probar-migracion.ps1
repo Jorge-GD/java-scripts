@@ -8615,7 +8615,7 @@ $Pruebas['w2 (k) FLUJO.md (Paso 2) cuenta la fase propiedades y la revision: que
   $paso = [regex]::Match($f, '(?s)## Paso 2\. Corregir lo del informe.*?(?=\r?\n## |\z)').Value
   Comprueba 'el Paso 2 existe' ($paso.Length -gt 0)
   Comprueba 'dice que revisa un step con sus piezas o un fichero suelto' ($paso -match 'step' -and $paso -match 'fichero suelto') $paso
-  Comprueba 'con las 9 reglas del cat.logo' ($paso -match '9 reglas') $paso
+  Comprueba 'con las 8 reglas del cat.logo' ($paso -match '8 reglas') $paso
   Comprueba 'que solo lee, que cada hallazgo lleva una cita comprobada y el tope de 5 por unidad' ($paso -match 'solo lee' -and $paso -match 'cita comprobada' -and $paso -match '5 hallazgos por unidad') $paso
   Comprueba 'que -RevisarTodo revisa todos los .java' ($paso -match '-RevisarTodo' -and $paso -match 'src/main/java') $paso
   Comprueba 'y que el resultado va a datos\revision.json' ($paso.Contains('datos\revision.json')) $paso
