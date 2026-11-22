@@ -7910,5 +7910,359 @@ $Pruebas['m73 (c7) cada tipo, por su lado: una extension de binario sin ningun b
   Comprueba 'tres zips dentro: el tercero ya es un binario' ($l.Count -eq 1 -and $l[0] -cmatch ('^l1\.zip: l2\.zip: l3\.zip: ' + $bin.TrimStart('^'))) ($l -join '|')
 }
 
+# ===================== M77: la prueba en local dice quien no arranca (original o migrado, test o codigo) y no ejecuta casos que no valen =====================
+# m77-mvn.ps1 (sobre m48-mvn.ps1) deja, segun el guion de RESCATE_M77 ('guion:regex sobre job/caso', separados por ';'), un job que no arranca o que falla igual: el
+# original con NoSuchBeanDefinitionException (orig-bean), BeanCreationException (orig-creacion), JobParametersInvalidException (orig-parametros) o FAILED con una
+# NoSuchFileException de una carpeta fija (orig-failed, orig-failed-caso); el migrado con una clase final (mig-proxy), una referencia circular (mig-circular) o un
+# bean repetido (mig-override); o los dos lados (ambos-bean). RESCATE_M48 sigue valiendo.
+
+$M77Bean = "org.springframework.beans.factory.NoSuchBeanDefinitionException: No bean named 'contableConfig' available"
+$M77Fichero = 'java.nio.file.NoSuchFileException: C:\datos\salida\outbox'
+$M77Motivo = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
+
+function Escenario-M77([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm77-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes $aj)
+}
+
+# Lanza con los guiones $Guion de m77-mvn.ps1 y, con $M48, los de m48-mvn.ps1.
+function Prueba-M77($E, [string]$Guion, [string[]]$A = @(), [string]$M48 = '') {
+  $env:RESCATE_M77 = $Guion
+  $env:RESCATE_M48 = $M48
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M77 = ''; $env:RESCATE_M48 = '' }
+}
+
+# Los casos de un job que han tenido un Maven de $Lado (original, original-2 o migrado) en este lanzamiento, por su registro en prueba-local\registros: 'caso-01,caso-02'.
+function Casos-M77($E, [string]$Lado, [string]$Job = 'cargaJob') {
+  $d = Get-Ruta $E.Local 'registros'
+  if (-not (Test-Path -LiteralPath $d)) { return '' }
+  return ((@(Get-ChildItem -LiteralPath $d -File -Filter "mvn-*-$Lado-$Job-caso-*.log" | ForEach-Object { [regex]::Match($_.Name, '(caso-\d+)\.log$').Groups[1].Value } | Sort-Object -Unique)) -join ',')
+}
+
+$Pruebas['m77 (a1) cargaJob con 5 casos y el original con NoSuchBeanDefinitionException en todos: del original (y del original-2) se ejecutan los 3 primeros, del migrado los mismos 3, y los otros 2 salen sin probar con el motivo nuevo'] = {
+  $e = Escenario-M77 'm77-a1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-'
+  Igual 'sale con 2 (los 3 primeros salen distintos)' 2 $r.Codigo
+  Igual 'el original ejecuta solo los 3 primeros casos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original')
+  Igual 'el original-2, los mismos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original-2')
+  Igual 'el migrado, los mismos: ninguno mas de ese job en ningun lado' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado')
+  Igual 'los tres primeros distintos y los otros 2 sin probar' 'distinto,distinto,distinto,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  foreach ($c in @('caso-04', 'caso-05')) { Igual "el motivo de $c" $M77Motivo "$((Caso $e 'cargaJob' $c).motivo)" }
+  Comprueba 'la consola dice que para tras los 3 primeros' ($r.Salida -match 'El original no arranca el job cargaJob con este test \(NoSuchBeanDefinitionException\): no ejecuto sus demas casos') (Cola $r.Salida)
+  Comprueba 'y no guarda salida del original del cuarto caso' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-04'))) ''
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-'
+  Igual 'otro lanzamiento (los 3 primeros se reutilizan): los 2 siguen sin probar' 'distinto,distinto,distinto,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  Comprueba 'y tampoco ejecuta ahora el cuarto en el original' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-04'))) ''
+}
+
+$Pruebas['m77 (a2) no se para con causas distintas en los 3 primeros casos, con solo 2 iguales, ni con un job de menos de 3 casos'] = {
+  $e = Escenario-M77 'm77-a2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); tarifaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-0[13]$;orig-creacion:^cargaJob/caso-02$;orig-bean:^remesaJob/caso-0[12]$;orig-bean:^tarifaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'cargaJob (3 causas distintas en los 3 primeros): sus 4 casos en el original' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'original' 'cargaJob')
+  Igual 'y en el migrado' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'migrado' 'cargaJob')
+  Igual 'remesaJob (2 iguales y el tercero bien): sus 4 casos en el original' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'original' 'remesaJob')
+  Igual 'y en el migrado' 'caso-01,caso-02,caso-03,caso-04' (Casos-M77 $e 'migrado' 'remesaJob')
+  Igual 'tarifaJob (2 casos): los dos en el original' 'caso-01,caso-02' (Casos-M77 $e 'original' 'tarifaJob')
+  Igual 'y en el migrado' 'caso-01,caso-02' (Casos-M77 $e 'migrado' 'tarifaJob')
+  Comprueba 'ningun caso sale sin probar' (@(Resultados $e | Where-Object { $_ -ceq 'sin probar en local' }).Count -eq 0) ((Resultados $e) -join ',')
+  Comprueba 'y la consola no dice que deja de ejecutar casos' ($r.Salida -notmatch 'no ejecuto sus demas casos') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (a3) con 3 FAILED iguales en el original (la ruta de la causa lleva el nombre del caso, Get-CausaNormal la deja igual) tambien se para; con 3 casos no queda nada que parar'] = {
+  $e = Escenario-M77 'm77-a3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-failed-caso:^cargaJob/caso-;orig-failed:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'cargaJob: el original ejecuta los 3 primeros casos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original' 'cargaJob')
+  Igual 'y el migrado, los mismos' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado' 'cargaJob')
+  foreach ($c in @('caso-04', 'caso-05')) { Igual "cargaJob/$c sale sin probar, con el motivo" "sin probar en local|$M77Motivo" "$((Caso $e 'cargaJob' $c).resultado)|$((Caso $e 'cargaJob' $c).motivo)" }
+  Comprueba 'la consola dice que falla igual en los 3 primeros' ($r.Salida -match 'El original falla igual en los 3 primeros casos del job cargaJob con este test \(FAILED\): no ejecuto sus demas casos') (Cola $r.Salida)
+  Igual 'remesaJob (3 casos): los 3 en el original' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original' 'remesaJob')
+  Igual 'y los 3 en el migrado' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado' 'remesaJob')
+}
+
+$Pruebas['m77 (a4) un original que acaba bien en los 3 primeros casos no se para: el job ejecuta todos sus casos'] = {
+  $e = Escenario-M77 'm77-a4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e ''
+  Igual 'el original ejecuta los 5 casos' 'caso-01,caso-02,caso-03,caso-04,caso-05' (Casos-M77 $e 'original')
+  Igual 'y el migrado, los 5' 'caso-01,caso-02,caso-03,caso-04,caso-05' (Casos-M77 $e 'migrado')
+  Comprueba 'ningun caso sale sin probar' (@(Resultados $e | Where-Object { $_ -ceq 'sin probar en local' }).Count -eq 0) ((Resultados $e) -join ',')
+  Comprueba 'y la consola no dice que deja de ejecutar casos' ($r.Salida -notmatch 'no ejecuto sus demas casos') (Cola $r.Salida)
+}
+
+$M77Orig = "El original no arranca el job cargaJob (NoSuchBeanDefinitionException: $M77Bean). Es el test del original, no el codigo: relanza con -RehacerOriginal."
+$M77Igual = "El original falla igual en todos los casos de cargaJob (FAILED: $M77Fichero). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal."
+
+$Pruebas['m77 (b1) la linea final sale una vez por job, con la clase y la causa, y sin -RehacerArnes para ese job; un job cuyo migrado no arranca sigue con la suya'] = {
+  $e = Escenario-M77 'm77-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-' @() 'excepcion-mig:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'la linea de cargaJob (parado), con la clase y la causa' ($r.Salida.Contains($M77Orig)) (Cola $r.Salida)
+  Igual 'una sola linea de esas (la otra, la de la consola, dice "con este test")' 1 (Veces-M50 $r.Salida 'El original no arranca el job cargaJob (')
+  Comprueba 'cargaJob no lleva la linea de -RehacerArnes del migrado' ($r.Salida -notmatch 'El migrado no arranca el job cargaJob') (Cola $r.Salida)
+  Comprueba 'remesaJob (el migrado no arranca en ningun caso y el original si) conserva la suya' ($r.Salida.Contains('El migrado no arranca el job remesaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Comprueba 'y el original de remesaJob no se da por no arrancado ni por fallo igual' ($r.Salida -notmatch 'El original no arranca el job remesaJob' -and $r.Salida -notmatch 'El original falla igual en todos los casos de remesaJob') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (b2) los dos lados con la misma excepcion de arranque (casos igual): la linea sale; con causas distintas en los 3 casos no sale ninguna'] = {
+  $e = Escenario-M77 'm77-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'ambos-bean:^cargaJob/caso-'
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la linea de cargaJob sale' ($r.Salida.Contains($M77Orig)) (Cola $r.Salida)
+  Igual 'una sola vez' 1 (Veces-M50 $r.Salida 'El original no arranca el job')
+  $e = Escenario-M77 'm77-b2b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-01$;orig-creacion:^cargaJob/caso-0[23]$'
+  Igual 'sin parar: sus 3 casos en el original' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'original')
+  Igual 'los 3 salen distintos' 'distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Comprueba 'y no sale ninguna linea del original' ($r.Salida -notmatch 'El original no arranca el job' -and $r.Salida -notmatch 'El original falla igual en todos') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (b3) el original FAILED con la misma causa en todos los casos comparados (2 o mas): la linea de que falla igual, una vez, tambien en un job que se paro; con un caso distinto en medio, ninguna'] = {
+  $e = Escenario-M77 'm77-b3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); tarifaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-failed:^cargaJob/caso-;orig-failed-caso:^remesaJob/caso-;orig-failed:^tarifaJob/caso-0[12]$'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'cargaJob (2 casos, sin parar): la linea de que falla igual' ($r.Salida.Contains($M77Igual)) (Cola $r.Salida)
+  Comprueba 'remesaJob (se para tras 3): su linea, con la causa del primer caso' ($r.Salida.Contains('El original falla igual en todos los casos de remesaJob (FAILED: java.nio.file.NoSuchFileException: C:\datos\salida\caso-01\outbox). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal.')) (Cola $r.Salida)
+  Comprueba 'tarifaJob (2 FAILED y un caso bien) no la lleva' ($r.Salida -notmatch 'El original falla igual en todos los casos de tarifaJob') (Cola $r.Salida)
+  Igual 'dos lineas de esas, una por job' 2 (Veces-M50 $r.Salida 'El original falla igual en todos los casos de')
+  Comprueba 'y ninguna es de no arranca (un FAILED no es una excepcion de arranque)' ($r.Salida -notmatch 'El original no arranca el job') (Cola $r.Salida)
+  Comprueba 'ni lleva la linea de -RehacerArnes del migrado' ($r.Salida -notmatch 'El migrado no arranca el job') (Cola $r.Salida)
+}
+
+$M77Frase = 'Con el test de antes, estos casos acababan mal en el original, que en produccion funciona: al test le falta lo que en produccion prepara el arranque (un bean, una propiedad, una carpeta). Preparalo como los tests de ejemplo, sin tocar src/main.'
+
+$Pruebas['m77 (c1) con un prueba-local.json de antes con el original FAILED o EXCEPCION con la misma causa, el prompt del test del original que se rehace lleva las causas y la frase; el del migrado no'] = {
+  $e = Escenario-M77 'm77-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M77 $e ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $e @(@(13, "original:EXCEPCION:$M77Bean"), @(2, "original:FAILED:$M77Fichero"), @(1, 'original:FAILED:java.lang.IllegalStateException: sin correo'), @(2, 'migrado:FAILED:java.lang.IllegalStateException: sin hora'))
+  $r = Prueba-M77 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el prompt del original lleva la frase' ($orig.Contains($M77Frase)) (Cola $orig)
+  Comprueba 'y la causa de los 13 casos, en una linea' ($orig.Contains("- En 13 casos el original acaba EXCEPCION: $M77Bean.")) (Cola $orig)
+  Comprueba 'y la de los 2 FAILED' ($orig.Contains("- En 2 casos el original acaba FAILED: $M77Fichero.")) (Cola $orig)
+  Comprueba 'sin la de un solo caso ni la del migrado' ($orig -notmatch 'sin correo' -and $orig -notmatch 'sin hora') (Cola $orig)
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado no lleva ni las causas ni la frase del original' (-not $mig.Contains('NoSuchBeanDefinitionException') -and -not $mig.Contains('NoSuchFileException') -and -not $mig.Contains('le falta lo que en produccion prepara el arranque (un bean')) (Cola $mig)
+}
+
+$Pruebas['m77 (c2) con el prueba-local.json que escribe un lanzamiento parado (original EXCEPCION en 3 casos), -RehacerOriginal pasa la causa al test nuevo'] = {
+  $e = Escenario-M77 'm77-c2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-'
+  Igual 'el primero sale con 2' 2 $r.Codigo
+  Igual 'el json del primero lleva la clase del fallo del original' 'NoSuchBeanDefinitionException' "$(@((Caso $e 'cargaJob' 'caso-01').fallos)[0].clase)"
+  $r = Prueba-M77 $e '' @('-RehacerOriginal')
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el segundo test del original lleva la causa de los 3 casos' ($orig.Contains("- En 3 casos el original acaba EXCEPCION: $M77Bean.")) (Cola $orig)
+}
+
+# El texto de las asignaciones del script que dan valor a las variables $Nombres (las del script, no las de dentro de una funcion).
+function Texto-De-Variables([string]$Ruta, [string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Ruta, [ref]$null, [ref]$null)
+  $as = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and $Nombres -contains $n.Left.VariablePath.UserPath }, $false))
+  return (($as | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+$M77Proxy = 'java.lang.IllegalArgumentException: Cannot subclass final class com.acme.poliza.PolizaJdbcAdapter'
+$M77FraseProxy = 'Es el codigo del migrado, no el test: una clase final que Spring tiene que envolver con un proxy (regla clase-final-proxy del paso de calidad).'
+$M77LineaProxy = "El migrado no arranca el job cargaJob en ningun caso (UnsatisfiedDependencyException: $M77Proxy). $M77FraseProxy Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba."
+
+$Pruebas['m77 (d1) el migrado con Cannot subclass final class en todos los casos: la linea nueva con clase-final-proxy, sin -RehacerArnes'] = {
+  $e = Escenario-M77 'm77-d1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'mig-proxy:^cargaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'la linea dice que es el codigo, la frase y la regla' ($r.Salida.Contains($M77LineaProxy)) (Cola $r.Salida)
+  Igual 'una sola vez' 1 (Veces-M50 $r.Salida 'El migrado no arranca el job')
+  Comprueba 'sin -RehacerArnes' ($r.Salida -notmatch 'El migrado no arranca el job[^\n]*RehacerArnes') (Cola $r.Salida)
+  Comprueba 'dentro del bloque del grupo 1' ($r.Salida -cmatch '(?s)Grupo 1: 2 casos distintos, el migrado acaba EXCEPCION: .*?El migrado no arranca el job cargaJob.*?distinto: cargaJob/caso-01 \(') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (d2) con BeanCurrentlyInCreationException y con BeanDefinitionOverrideException: la linea de cada uno con su regla'] = {
+  $e = Escenario-M77 'm77-d2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'mig-circular:^cargaJob/caso-;mig-override:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'cargaJob: la referencia circular' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (UnsatisfiedDependencyException: org.springframework.beans.factory.BeanCurrentlyInCreationException: ') -and $r.Salida.Contains('Es el codigo del migrado, no el test: beans que se necesitan unos a otros en circulo (regla referencia-circular del paso de calidad). Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba.')) (Cola $r.Salida)
+  Comprueba 'remesaJob: el bean repetido' ($r.Salida.Contains('El migrado no arranca el job remesaJob en ningun caso (BeanDefinitionOverrideException: org.springframework.beans.factory.support.BeanDefinitionOverrideException: ') -and $r.Salida.Contains('Es el codigo del migrado, no el test: dos beans con el mismo nombre (regla bean-repetido del paso de calidad). Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba.')) (Cola $r.Salida)
+  Comprueba 'ninguna de las dos aconseja -RehacerArnes' ($r.Salida -notmatch 'El migrado no arranca el job[^\n]*RehacerArnes') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (d3) la puerta del caso vacio con Cannot subclass final class acepta el test al primer intento (una sola llamada a Copilot), lo avisa, lo guarda y solo ejecuta el primer caso del job'] = {
+  $e = Escenario-M77 'm77-d3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M77 $e 'mig-proxy:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'la tarea del migrado queda hecha, con un solo intento' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Igual 'con una sola llamada a Copilot' 1 @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'la consola no lo rechaza' ($r.Salida -notmatch 'Arnes del migrado rechazado') (Cola $r.Salida)
+  Igual 'el aviso de la puerta y la linea del final: la frase dos veces' 2 (Veces-M50 $r.Salida $M77FraseProxy)
+  Comprueba 'el aviso dice que otro intento no lo arregla' ($r.Salida.Contains('Otro intento no lo arregla: corre el paso de calidad de rescate.ps1.')) (Cola $r.Salida)
+  Comprueba 'el test se guarda' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado')) ''
+  Igual 'el migrado ejecuta solo el primer caso' 'caso-01' (Casos-M77 $e 'migrado')
+  Igual 'el segundo sale sin probar' 'distinto,sin probar en local' ((Resultados $e) -join ',')
+  Igual 'con el motivo de siempre' 'el migrado no arranca el job con este test' "$((Caso $e 'cargaJob' 'caso-02').motivo)"
+  # otro lanzamiento: el test guardado pasa otra vez por la puerta (Use-ArnesGuardado, $SoloAviso) y el job se prueba otra vez con un solo caso
+  $r = Prueba-M77 $e 'mig-proxy:^cargaJob/'
+  Comprueba 'con el test guardado: el mismo aviso de la puerta, y el de la linea del final' ((Veces-M50 $r.Salida $M77FraseProxy) -eq 2) (Cola $r.Salida)
+  Igual 'sin otra llamada a Copilot' 1 @(Llamadas-Arnes $e 'migrado').Count
+  Igual 'y el migrado sigue ejecutando solo el primer caso' 'caso-01' (Casos-M77 $e 'migrado')
+  Igual 'el segundo sigue sin probar' 'distinto,sin probar en local' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m77 (d4) con otra excepcion (la de m48 y m50 (f)) todo sigue como hoy: la puerta rechaza el primer intento, el test se acepta en el segundo y la linea aconseja -RehacerArnes'] = {
+  $e = Escenario-M77 'm77-d4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $env:M48_VACIOS = '1'
+  try { $r = Prueba-M77 $e '' @() 'vacio-excepcion-mig:/vacio;excepcion-mig:^cargaJob/caso-' }
+  finally { Remove-Item -Path 'env:M48_VACIOS' -ErrorAction SilentlyContinue }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el primer intento se rechaza por el caso vacio' ($r.Salida -match 'Arnes del migrado rechazado: Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'la tarea queda hecha con 2 intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'la linea de siempre, con -RehacerArnes' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Comprueba 'y nada de lo nuevo' ($r.Salida -notmatch 'Es el codigo del migrado' -and $r.Salida -notmatch 'El original no arranca el job') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (d5) la lista de excepciones de arranque (la jerarquia de BeansException, ApplicationContextException y la de Boot) y la tabla de errores del codigo, funcion a funcion'] = {
+  $f = Join-Path $Dir 'm77-d5.ps1'
+  $cabeza = Texto-De-Variables $Script @('ExcepcionesArranque', 'ErroresCodigo')
+  $funciones = Texto-De-Funciones $Script @('Test-ExcepcionArranque', 'Get-ErrorCodigo')
+  $cola = @'
+foreach ($c in @('BeansException', 'BeanCreationException', 'UnsatisfiedDependencyException', 'NoSuchBeanDefinitionException', 'BeanCurrentlyInCreationException', 'BeanDefinitionOverrideException', 'BeanDefinitionStoreException', 'ApplicationContextException', 'ConfigurationPropertiesBindException', 'org.springframework.beans.factory.NoSuchBeanDefinitionException', 'JobParametersInvalidException', 'IllegalArgumentException', 'IllegalStateException', 'FAILED', 'una excepcion', '', 'ConflictingBeanDefinitionException', 'MiBeanCreationException')) { 'A [' + $c + '] ' + (Test-ExcepcionArranque $c) }
+foreach ($x in @(@('UnsatisfiedDependencyException', 'java.lang.IllegalArgumentException: Cannot subclass final class com.acme.X'), @('BeanCreationException', 'java.lang.IllegalStateException: sin correo'), @('BeanCreationException', 'org.springframework.beans.factory.BeanCurrentlyInCreationException: Error creating bean'), @('BeanCreationException', 'Requested bean is currently in creation: Is there an unresolvable circular reference or an asynchronous initialization dependency?'), @('BeanDefinitionOverrideException', ''), @('BeanCreationException', 'org.springframework.context.annotation.ConflictingBeanDefinitionException: Annotation-specified bean name'), @('NoSuchBeanDefinitionException', "No bean named 'x' available"), @('', ''))) {
+  $e = Get-ErrorCodigo $x[0] $x[1]
+  $c = $x[1].Substring(0, [Math]::Min(30, $x[1].Length))
+  if ($e) { 'E [' + $x[0] + '] [' + $c + '] ' + $e.regla + ' | ' + $e.frase } else { 'E [' + $x[0] + '] [' + $c + '] -' }
+}
+'@
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + $funciones + "`n" + $cola))
+  $r = Lanzar $f @()
+  $l = @($r.Salida -split "`n" | ForEach-Object { $_.Trim() })
+  foreach ($c in @('BeansException', 'BeanCreationException', 'UnsatisfiedDependencyException', 'NoSuchBeanDefinitionException', 'BeanCurrentlyInCreationException', 'BeanDefinitionOverrideException', 'BeanDefinitionStoreException', 'ApplicationContextException', 'ConfigurationPropertiesBindException', 'org.springframework.beans.factory.NoSuchBeanDefinitionException')) { Comprueba "$c es una excepcion de arranque" ($l -contains "A [$c] True") ($r.Salida) }
+  foreach ($c in @('JobParametersInvalidException', 'IllegalArgumentException', 'IllegalStateException', 'FAILED', 'una excepcion', '', 'ConflictingBeanDefinitionException', 'MiBeanCreationException')) { Comprueba "[$c] no lo es" ($l -contains "A [$c] False") ($r.Salida) }
+  Comprueba 'Cannot subclass final class: clase-final-proxy' ($l -contains 'E [UnsatisfiedDependencyException] [java.lang.IllegalArgumentExcep] clase-final-proxy | una clase final que Spring tiene que envolver con un proxy') ($r.Salida)
+  Comprueba 'una IllegalStateException cualquiera: nada' ($l -contains 'E [BeanCreationException] [java.lang.IllegalStateExceptio] -') ($r.Salida)
+  Comprueba 'BeanCurrentlyInCreationException (en la causa) y unresolvable circular reference: referencia-circular' (($l -contains 'E [BeanCreationException] [org.springframework.beans.fact] referencia-circular | beans que se necesitan unos a otros en circulo') -and ($l -contains 'E [BeanCreationException] [Requested bean is currently in] referencia-circular | beans que se necesitan unos a otros en circulo')) ($r.Salida)
+  Comprueba 'BeanDefinitionOverrideException (en la clase) y ConflictingBeanDefinitionException (en la causa): bean-repetido' (($l -contains 'E [BeanDefinitionOverrideException] [] bean-repetido | dos beans con el mismo nombre') -and ($l -contains 'E [BeanCreationException] [org.springframework.context.an] bean-repetido | dos beans con el mismo nombre')) ($r.Salida)
+  Comprueba 'una NoSuchBeanDefinitionException o sin nada: nada (puede ser el test)' (($l -contains 'E [NoSuchBeanDefinitionException] [No bean named ''x'' available] -') -and ($l -contains 'E [] [] -')) ($r.Salida)
+}
+
+$Pruebas['m77 (e1) prueba-local.json lleva, por cada job que no arranca o que falla igual en todos sus casos (parado o con error del codigo), el lado, el estado, la clase, la causa, la regla si la hay y si se paro'] = {
+  $e = Escenario-M77 'm77-e1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00'); pagoJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-;mig-proxy:^remesaJob/caso-;orig-failed:^tarifaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  $jobs = @((Lee-Json $e.Json).jobs)
+  $c = $jobs | Where-Object { $_.job -ceq 'cargaJob' }
+  Igual 'cargaJob (el original no arranca, parado): lado, estado, clase, causa y parado' "original|EXCEPCION|NoSuchBeanDefinitionException|$M77Bean|True" "$($c.falloIgual.lado)|$($c.falloIgual.estado)|$($c.falloIgual.clase)|$($c.falloIgual.causa)|$($c.falloIgual.parado)"
+  Comprueba 'y sin regla' ($null -eq $c.falloIgual.PSObject.Properties['regla']) ''
+  Igual 'lo demas del job sigue (casos, iguales, distintos, sin probar)' '4|0|3|1' "$($c.casos)|$($c.iguales)|$($c.distintos)|$($c.sinProbar)"
+  $m = $jobs | Where-Object { $_.job -ceq 'remesaJob' }
+  Igual 'remesaJob (error del codigo del migrado): lado, estado, clase, causa, regla y parado' "migrado|EXCEPCION|UnsatisfiedDependencyException|$M77Proxy|clase-final-proxy|False" "$($m.falloIgual.lado)|$($m.falloIgual.estado)|$($m.falloIgual.clase)|$($m.falloIgual.causa)|$($m.falloIgual.regla)|$($m.falloIgual.parado)"
+  $t = $jobs | Where-Object { $_.job -ceq 'tarifaJob' }
+  Igual 'tarifaJob (el original FAILED igual en sus 2 casos): lado, estado, clase de la causa, causa y parado' "original|FAILED|NoSuchFileException|$M77Fichero|False" "$($t.falloIgual.lado)|$($t.falloIgual.estado)|$($t.falloIgual.clase)|$($t.falloIgual.causa)|$($t.falloIgual.parado)"
+  $p = $jobs | Where-Object { $_.job -ceq 'pagoJob' }
+  Comprueba 'pagoJob (arranca) no lleva falloIgual' ($null -eq $p.PSObject.Properties['falloIgual']) ''
+}
+
+# --- (f) la pista de una ruta fija que el test del original no lleva a la carpeta del caso ---
+
+# Deja en el original un application.properties con la carpeta fija de produccion (la barra doble de un .properties de Windows) y un .yml con otra cosa.
+function Escenario-M77f([string]$Nombre) {
+  $e = Escenario-M77 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  [void](Commit-En $e.Legacy 'src/main/resources/application.properties' "app.salida.dir=C:\\datos\\salida\\outbox`napp.otro=1`n" 'propiedades')
+  return $e
+}
+
+# Hace el primer lanzamiento, deja en el json de antes $Fallos (ver Anterior-M64) y rehace el test del original: devuelve el prompt de su primer intento.
+function Previo-M77($E, $Grupos) {
+  $r = Prueba-M77 $E ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $E $Grupos
+  $r = Prueba-M77 $E '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  return (Registro-Arnes $E 'original' 1)
+}
+
+$Pruebas['m77 (f1) FAILED con una NoSuchFileException de una carpeta fija: el prompt del test del original dice que el original usa esa ruta, que el test tiene que darle una carpeta del caso como el del migrado y en que propiedad esta'] = {
+  $e = Escenario-M77f 'm77-f1'
+  $orig = Previo-M77 $e @(, @(2, "original:FAILED:$M77Fichero"))
+  Comprueba 'dice la ruta fija y la clase' ($orig.Contains('El original usa la ruta fija C:\datos\salida\outbox (NoSuchFileException), que no es una carpeta del caso')) (Cola $orig)
+  Comprueba 'dice que el test del original tiene que dar a la propiedad una carpeta del caso, como hace el del migrado' ($orig.Contains('Da a la propiedad que la define una carpeta del caso, como hace el test del migrado')) (Cola $orig)
+  Comprueba 'y dice donde esta ese valor' ($orig.Contains('Ese valor esta en src/main/resources/application.properties:1 (app.salida.dir).')) (Cola $orig)
+  Igual 'una sola vez la pista' 1 (Veces-M50 $orig 'El original usa la ruta fija')
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado no la lleva' (-not $mig.Contains('El original usa la ruta fija')) (Cola $mig)
+}
+
+$Pruebas['m77 (f2) FileNotFoundException y AccessDeniedException con una ruta absoluta: tambien; una ruta dentro de la carpeta del caso, una causa sin ruta o sin esas clases: no; sin fichero de propiedades que la tenga, la pista no dice donde esta'] = {
+  $e = Escenario-M77f 'm77-f2'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.io.FileNotFoundException: /var/batch/salida/resumen.txt (No such file or directory)'))
+  Comprueba 'FileNotFoundException: la ruta, sin lo que va entre parentesis' ($orig.Contains('El original usa la ruta fija /var/batch/salida/resumen.txt (FileNotFoundException), que no es una carpeta del caso')) (Cola $orig)
+  Comprueba 'y como no esta en las propiedades, no dice donde' (-not $orig.Contains('Ese valor esta en')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2b'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.nio.file.AccessDeniedException: C:\datos\salida\outbox\resumen.txt'))
+  Comprueba 'AccessDeniedException: la ruta y, con la carpeta de arriba, donde esta' ($orig.Contains('El original usa la ruta fija C:\datos\salida\outbox\resumen.txt (AccessDeniedException)') -and $orig.Contains('Ese valor esta en src/main/resources/application.properties:1 (app.salida.dir).')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2c'
+  $dentro = 'java.nio.file.NoSuchFileException: ' + (Join-Path $e.CopiaOrig 'target/prueba-local/cargaJob/caso-01/ficheros/outbox')
+  $orig = Previo-M77 $e @(, @(2, "original:FAILED:$dentro"))
+  Comprueba 'una ruta dentro de la carpeta del caso (prueba-local): sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+  Comprueba 'pero con su linea de causa' ($orig.Contains('- En 2 casos el original acaba FAILED: java.nio.file.NoSuchFileException')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2d'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.lang.IllegalStateException: sin correo en C:\datos\salida'))
+  Comprueba 'una causa con una ruta pero de otra clase: sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2e'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.nio.file.NoSuchFileException: D:\trabajo\otra-copia\target\prueba-local\cargaJob\caso-01\ficheros\outbox'))
+  Comprueba 'una carpeta de caso con otro prefijo (otra ruta de la copia, un nombre corto de Windows): sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+  $e = Escenario-M77f 'm77-f2f'
+  $orig = Previo-M77 $e @(, @(2, 'original:FAILED:java.nio.file.NoSuchFileException: ' + (Join-Path $e.CopiaOrig 'src/main/resources/lista.txt')))
+  Comprueba 'una ruta de la copia (no de un caso): tampoco' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
+}
+
+# --- (g) no se vuelve al test de antes del original si ese dejaba un job que el original no arrancaba ---
+
+# El mismo escenario que m69 (b4): el test nuevo del original deja el caso vacio en FAILED y el de antes lo dejaba COMPLETED. $Anterior lo deja en el prueba-local.json.
+function Vuelta-M77([string]$Nombre, $Casos) {
+  $e = Escenario-M69 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $antes = [pscustomobject]@{ e = $e; original = (Test-Guardado $e 'original'); vacio = (Foto-Carpeta $e 'salidas/vacio') }
+  Anterior-M64 $e $Casos
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $antes | Add-Member -NotePropertyName r -NotePropertyValue (Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal'))
+  return $antes
+}
+
+$Pruebas['m77 (g1) el test de antes dejaba un job con el original FAILED igual en todos sus casos y el nuevo queda peor en el caso vacio: se queda el nuevo y una Info lo dice'] = {
+  $v = Vuelta-M77 'm77-g1' @(, @(2, "original:FAILED:$M77Fichero"))
+  $r = $v.r; $e = $v.e
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'el primer intento se rechaza por peor' ($r.Salida.Contains("Arnes del original rechazado: $PeorM69")) (Cola $r.Salida)
+  $info = "Me quedo con el test nuevo del original: queda peor que el de antes en el caso vacio ($($PeorM69.TrimEnd('.'))), pero el de antes dejaba el job cargaJob sin probar (el original fallaba igual en todos sus casos)."
+  Comprueba 'el ultimo intento: la Info dice que se queda el nuevo y por que' ($r.Salida.Contains($info)) (Cola $r.Salida)
+  Comprueba 'y no dice que se sigue con el de antes' (-not $r.Salida.Contains('sigo con el de antes')) (Cola $r.Salida)
+  Comprueba 'arnes/original es el nuevo' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3') -and (Test-Guardado $e 'original') -ne $v.original) ''
+  Comprueba 'la copia del original tiene el nuevo' ((Lee $e.CopiaOrig 'src/test/java/com/acme/viejo/PruebaLocalTest.java').Contains('M69_VERSION=v3')) ''
+  Comprueba 'salidas/vacio es el del nuevo' ((Foto-Carpeta $e 'salidas/vacio') -ne $v.vacio) ''
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'y su motivo no es el de la vuelta' ([string](Tarea-Arnes $e 'original').motivo -notmatch 'quedaba peor') ''
+}
+
+$Pruebas['m77 (g2) el test de antes no dejaba ningun job asi (solo fallaba el migrado): se vuelve al de antes, como hoy'] = {
+  $v = Vuelta-M77 'm77-g2' @(, @(2, 'migrado:FAILED:java.lang.IllegalStateException: sin correo'))
+  $r = $v.r; $e = $v.e
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $aviso = "El test nuevo del original quedaba peor que el de antes ($($PeorM69.TrimEnd('.'))): sigo con el de antes."
+  Comprueba 'el ultimo intento no se acepta: sale el aviso de que se sigue con el de antes' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Comprueba 'y ninguna Info de que se queda el nuevo' (-not $r.Salida.Contains('Me quedo con el test nuevo del original')) (Cola $r.Salida)
+  Igual 'arnes/original es el de antes, byte a byte' $v.original (Test-Guardado $e 'original')
+  Igual 'salidas/vacio es el de antes, entero' $v.vacio (Foto-Carpeta $e 'salidas/vacio')
+}
+
+$Pruebas['m77 (g3) un solo caso del job con el original FAILED en el prueba-local.json de antes no basta (2 como minimo, como en (b)): se vuelve al de antes'] = {
+  $v = Vuelta-M77 'm77-g3' @(, @(1, "original:FAILED:$M77Fichero"))
+  Comprueba 'sale el aviso de que se sigue con el de antes' ($v.r.Salida.Contains('sigo con el de antes')) (Cola $v.r.Salida)
+  Igual 'arnes/original es el de antes' $v.original (Test-Guardado $v.e 'original')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
