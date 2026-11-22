@@ -1066,16 +1066,18 @@ function Add-CalSqlInit($Out, $Hechos, $Props, $Deps) {
 # MapJobRepositoryFactoryBean) y Spring Boot 3 le da a Batch el DataSource del negocio, salvo uno marcado con @BatchDataSource
 # (fuentes-m76/sboot-BatchDataSource.java, "@since 2.2.0"; BatchAutoConfiguration: batchDataSource.getIfAvailable(() -> dataSource)). Con un
 # DataSource que no es en memoria faltan las tablas BATCH_ (filas SBT5-01 y SBT5-02: esquema nuevo) o se crean en la base del negocio. Propia: lo que
-# le da a Batch su base en memoria: un @BatchDataSource o un DefaultBatchConfiguration con getDataSource en un fichero que declara una base embebida
-# en memoria, o un ResourcelessJobRepository (fuentes-m76/sbatch-ResourcelessJobRepository.java, "@since 5.2.0"). Termina: Batch acaba en una base que
-# no es en memoria (sin propia y con la base del negocio fuera de memoria).
+# le da a Batch su base en memoria: un @BatchDataSource, un @EnableBatchProcessing(dataSourceRef = "x") (fuentes-m76/sbatch50-EnableBatchProcessing.java:
+# 173-176, "the bean name of the data source to use. Default to dataSource") o un DefaultBatchConfiguration con getDataSource en un fichero que
+# declara una base embebida en memoria, o un ResourcelessJobRepository (fuentes-m76/sbatch-ResourcelessJobRepository.java, "@since 5.2.0"). Termina:
+# Batch acaba en una base que no es en memoria (sin propia y con la base del negocio fuera de memoria).
 function Get-RepoBatch($Hechos, $Props, $Deps) {
   $propia = ''
   foreach ($f in $Hechos.Ficheros) {
-    if (-not ($f.Texto -cmatch 'BatchDataSource|ResourcelessJobRepository|DefaultBatchConfiguration')) { continue }
+    if (-not ($f.Texto -cmatch 'BatchDataSource|ResourcelessJobRepository|DefaultBatchConfiguration|dataSourceRef')) { continue }
     $sin = Get-SinComentarios $f.Texto
     $mem = ($sin -cmatch $script:RxMemoriaJava)
     if ($mem -and $sin -cmatch '@(?:[\w.]+\.)?BatchDataSource\b') { $propia = $f.RelRaiz + ' (un DataSource con @BatchDataSource en memoria)' }
+    elseif ($mem -and $sin -cmatch '@(?:[\w.]+\.)?EnableBatchProcessing\s*\([^)]*\bdataSourceRef\s*=') { $propia = $f.RelRaiz + ' (un @EnableBatchProcessing(dataSourceRef) con un DataSource en memoria)' }
     elseif ($mem -and $sin -cmatch '\bextends\s+DefaultBatchConfiguration\b' -and $sin -cmatch '\bgetDataSource\s*\(') { $propia = $f.RelRaiz + ' (un DefaultBatchConfiguration con un DataSource en memoria)' }
     elseif ($sin -cmatch '\bResourcelessJobRepository\b') { $propia = $f.RelRaiz + ' (un ResourcelessJobRepository)' }
     if ($propia) { break }

@@ -7164,5 +7164,17 @@ $Pruebas['m76 (i5) repositorio-batch: un setDataSource vacio dentro de un coment
   Igual 'en comentarios de linea, de bloque y de javadoc, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
 }
 
+$Pruebas['m76 (i6) repositorio-batch: @EnableBatchProcessing(dataSourceRef = "x") con un DataSource en memoria en el mismo fichero es una base propia de Batch (Spring Batch 5); enable-batch sigue saliendo'] = {
+  $cuerpo = "    @Bean(`"batchDs`")`n    public DataSource batchDs() {`n        $MemoriaH2`n    }`n"
+  $e = EscenarioBase-M76 'm76-i6' @{ BatchCfg = (Clase-M70 'BatchCfg' "@Configuration`n@EnableBatchProcessing(dataSourceRef = `"batchDs`")" $cuerpo) }
+  $o = Original-M76 $e $OriginalMapa
+  Igual 'con dataSourceRef y una H2 en memoria, repositorio-batch no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Igual 'y enable-batch sale en esa clase' 'BatchCfg' (Ficheros-M70 @(Cal-M76 $e 'enable-batch' $o))
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/BatchCfg.java' (Clase-M70 'BatchCfg' "@Configuration`n@EnableBatchProcessing(dataSourceRef = `"batchDs`")" $cuerpo.Replace($MemoriaH2, 'return DataSourceBuilder.create().url("jdbc:oracle:thin:@//host:1521/svc").build();'))
+  Igual 'con dataSourceRef y un DataSource que no es en memoria, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/BatchCfg.java' (Clase-M70 'BatchCfg' "@Configuration`n@EnableBatchProcessing" $cuerpo)
+  Igual 'con un DataSource en memoria pero sin dataSourceRef (Batch sigue en dataSource), sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
