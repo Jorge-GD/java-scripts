@@ -6906,5 +6906,31 @@ $Pruebas['m76 (d2) parametros-v4: tambien en .cmd, .bat, .yml, .properties, Dock
   Comprueba 'con la barra del shell el texto dice el nombre sin ella' ($f[0].Detalle -like "*cuyo nombre es 'fecha(date)'*por 'fecha=2024-01-01,java.time.LocalDate'*") $f[0].Detalle
 }
 
+$Pruebas['m76 (e1) varios-jobs-sin-nombre (SB30-09): dos jobs y ningun spring.batch.job.name es un aviso, una vez; con el nombre en el yml, en un script o con el runner apagado, nada; con un solo job, nada'] = {
+  $dos = @{
+    Jobs1 = (Beans-M76 'Jobs1' @('@Bean public Job altaJob(JobRepository r) {'))
+    Jobs2 = (Beans-M76 'Jobs2' @('@Bean public Job bajaJob(JobRepository r) {', '@Bean public Step paso() {'))
+  }
+  $e = Escenario-M70 'm76-e1' $dos
+  $h = Cal-M76 $e 'varios-jobs-sin-nombre'
+  Igual 'sale una vez, en el primer job' 'Jobs1' (Ficheros-M70 $h)
+  Igual 'es un aviso' 'aviso' $h[0].Sev
+  Igual 'en la linea del metodo' (Linea-De (Fuente-M72 $e 'Jobs1') 'public Job altaJob') $h[0].Linea
+  Comprueba 'el texto dice los jobs, que Spring Boot 3 ya no arranca varios sin nombre, que hacer y que puede venir de fuera' ($h[0].Detalle -like "*Hay 2 jobs (altaJob, bajaJob) y ninguna spring.batch.job.name en la configuracion: Spring Boot 3 ya no admite arrancar varios jobs y exige decir cual con spring.batch.job.name. Ponla en application.yml o en el lanzador (-Dspring.batch.job.name=...); si el nombre viene de fuera del repo (un configmap), deja este aviso.*") $h[0].Detalle
+
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  batch:`n    job:`n      name: altaJob`n"
+  Igual 'con spring.batch.job.name en el yml, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  batch:`n    job:`n      enabled: false`n"
+  Igual 'con el runner apagado (spring.batch.job.enabled: false), no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo 'src/main/resources/application.yml' "life:`n  inventory: legado`n"
+  Escribe $e.Repo 'bin/lanza.sh' "#!/bin/sh`njava -Dspring.batch.job.name=altaJob -jar batch-life.jar`n"
+  Igual 'con -Dspring.batch.job.name en un script, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo 'bin/lanza.sh') -Force
+  Escribe $e.Repo ('src/main/java/com/acme/life/application/usecases/Jobs2.java') (Beans-M76 'Jobs2' @('@Bean public Step bajaStep() {'))
+  Igual 'con un solo job, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo ('src/main/java/com/acme/life/application/usecases/Jobs2.java') (Beans-M76 'Jobs2' @('@Bean public Job bajaJob(JobRepository r) {') "@Configuration`n@Profile(`"pre`")")
+  Igual 'con el otro job en un @Profile, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

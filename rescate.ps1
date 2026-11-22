@@ -581,8 +581,8 @@ $ProxyClase = @('Repository', 'Validated') + $ProxyMetodo
 $RxParametros = New-Object System.Text.RegularExpressions.Regex '\G(?<p>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)'
 # Un campo de primer nivel de una clase: anotaciones, modificadores, tipo, genericos, nombre y valor inicial (el cuerpo trae las llaves reducidas a \x01)
 $RxCampo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<anot>(?:' + $RxAnot + ')*)(?<mods>(?>(?:(?:public|protected|private|static|final|transient|volatile)\s+)*))(?<tipo>[\w.]+)\s*(?:<(?<gen>[^;\x01()=]*)>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*(?<ini>=[^;]*)?;')
-# Un metodo @Bean en el texto con sus cadenas (sin comentarios): sus argumentos y su nombre
-$RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?Bean\b(?:\s*\((?<args>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\))?(?:\s*@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*(?:<[^;{()]*>\s*)?[\w.]+(?:\s*<[^;{()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
+# Un metodo @Bean en el texto con sus cadenas (sin comentarios): sus argumentos, el tipo que devuelve y su nombre
+$RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?Bean\b(?:\s*\((?<args>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\))?(?:\s*@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*(?:<[^;{()]*>\s*)?(?<tipo>[\w.]+)(?:\s*<[^;{()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
 # Un parametro de job con la notacion de Spring Batch 4, nombre(tipo)=valor, con o sin barras de shell delante de los parentesis
 $RxParametroV4 = New-Object System.Text.RegularExpressions.Regex '(?<![\w.])(?<n>[A-Za-z_][\w.-]*)\\?\((?<t>long|date|double|string)\\?\)=(?<v>[^\s"'',;|&)\\]*)'
 $RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
@@ -905,7 +905,7 @@ function Add-CalCiclos($Out, $Nodos, $SupersDe, $Props) {
 }
 
 # Los nombres de bean que dan los metodos @Bean de un texto (sin comentarios, con sus cadenas): los de @Bean("a"), @Bean(name = "a") o
-# @Bean({"a", "b"}) o, sin nombre, el del metodo; cada uno con su linea.
+# @Bean({"a", "b"}) o, sin nombre, el del metodo; cada uno con su linea, el tipo que devuelve el metodo y el nombre del metodo.
 function Get-NombresBean([string]$Texto) {
   $res = New-Object System.Collections.Generic.List[object]
   foreach ($m in $script:RxBeanMetodo.Matches($Texto)) {
@@ -914,7 +914,7 @@ function Get-NombresBean([string]$Texto) {
     if (-not $e.Success) { $e = [regex]::Match($a, ',\s*(?:value|name)\s*=\s*(?<n>\{[^}]*\}|"[^"]*")') }
     $nombres = @($m.Groups['nombre'].Value)
     if ($e.Success) { $nombres = @([regex]::Matches($e.Groups['n'].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }) }
-    foreach ($n in $nombres) { [void]$res.Add([pscustomobject]@{ Nombre = $n; Linea = (Get-LineaDe $Texto $m.Groups['nombre'].Index) }) }
+    foreach ($n in $nombres) { [void]$res.Add([pscustomobject]@{ Nombre = $n; Tipo = $m.Groups['tipo'].Value; Metodo = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Texto $m.Groups['nombre'].Index) }) }
   }
   return $res.ToArray()
 }
@@ -980,6 +980,19 @@ function Add-CalParametrosV4($Out, $Hechos) {
       Add-Cal $Out $s.Rel ($i + 1) 'parametros-v4' ("Parametro de job con la notacion de Spring Batch 4: en Spring Batch 5 se lee como un texto cuyo nombre es '$primero', asi que el job no recibe el parametro y no falla. Cambia " + ($cambios -join ' y ') + '.')
     }
   }
+}
+
+# Varios jobs y ningun nombre (fila SB30-09, fuentes-guias/sb-Spring-Boot-3.0-Migration-Guide.html: "Running multiple batch jobs is no longer
+# supported" y "a job name to execute on startup must be supplied" con spring.batch.job.name). Cuenta los metodos @Bean que devuelven un Job (sin
+# @Profile ni @Conditional en su fichero) y busca el nombre en las propiedades del migrado y en sus scripts, Dockerfile y yml (-D, --, variable de
+# entorno SPRING_BATCH_JOB_NAME). Con spring.batch.job.enabled a false el runner no arranca ningun job y no hace falta. Siempre aviso: el nombre
+# puede venir de fuera del repo. Una vez, en el primer job.
+function Add-CalVariosJobs($Out, $Beans, $Props, $Otros) {
+  $jobs = @($Beans | Where-Object { -not $_.Cond -and $_.Tipo -cmatch '^(?:[\w.]+\.)?(?:Job|SimpleJob|FlowJob)$' } | Group-Object { $_.RelRaiz + ':' + $_.Linea } | ForEach-Object { $_.Group[0] } | Sort-Object RelRaiz, Linea)
+  if ($jobs.Count -lt 2) { return }
+  if (@(Get-Propiedad $Props 'spring.batch.job.name').Count -gt 0 -or @(Get-Propiedad $Props 'spring.batch.job.enabled' | Where-Object { $_.Valor -ieq 'false' }).Count -gt 0) { return }
+  if (@($Otros | Where-Object { $_.Texto -match '(?i)spring[._]batch[._]job[._]name\b' }).Count -gt 0) { return }
+  Add-Cal $Out $jobs[0].RelRaiz $jobs[0].Linea 'varios-jobs-sin-nombre' ("Hay $($jobs.Count) jobs ($((@($jobs | ForEach-Object { $_.Metodo }) -join ', '))) y ninguna spring.batch.job.name en la configuracion: Spring Boot 3 ya no admite arrancar varios jobs y exige decir cual con spring.batch.job.name. Ponla en application.yml o en el lanzador (-Dspring.batch.job.name=...); si el nombre viene de fuera del repo (un configmap), deja este aviso.")
 }
 
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
@@ -1124,7 +1137,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
     if ($f.Texto.Contains('@Bean')) {
       $sinCom = Get-SinComentarios $f.Texto
       $cond = ($sinCom -cmatch $script:RxCondicion)
-      foreach ($b in @(Get-NombresBean $sinCom)) { [void]$beans.Add([pscustomobject]@{ Nombre = $b.Nombre; RelRaiz = $f.RelRaiz; Linea = $b.Linea; Cond = $cond }) }
+      foreach ($b in @(Get-NombresBean $sinCom)) { [void]$beans.Add([pscustomobject]@{ Nombre = $b.Nombre; Tipo = $b.Tipo; Metodo = $b.Metodo; RelRaiz = $f.RelRaiz; Linea = $b.Linea; Cond = $cond }) }
     }
     # Constructores y logger de cada clase (las anidadas cuentan aparte)
     foreach ($c in @(Get-Clases $limpio)) {
@@ -1210,6 +1223,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   Add-CalCiclos $out $nodos.ToArray() $supersDe $props
   Add-CalBeansRepetidos $out $beans.ToArray() $clasesBean.ToArray() $props
   Add-CalParametrosV4 $out $Hechos
+  Add-CalVariosJobs $out $beans.ToArray() $props $Hechos.Otros
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }
