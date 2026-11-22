@@ -7938,7 +7938,7 @@ function Prueba-M77($E, [string]$Guion, [string[]]$A = @(), [string]$M48 = '') {
 function Casos-M77($E, [string]$Lado, [string]$Job = 'cargaJob') {
   $d = Get-Ruta $E.Local 'registros'
   if (-not (Test-Path -LiteralPath $d)) { return '' }
-  return ((@(Get-ChildItem -LiteralPath $d -File -Filter "mvn-*-$Lado-$Job-caso-*.log" | ForEach-Object { [regex]::Match($_.Name, '(caso-\d+)\.log$').Groups[1].Value } | Sort-Object)) -join ',')
+  return ((@(Get-ChildItem -LiteralPath $d -File -Filter "mvn-*-$Lado-$Job-caso-*.log" | ForEach-Object { [regex]::Match($_.Name, '(caso-\d+)\.log$').Groups[1].Value } | Sort-Object -Unique)) -join ',')
 }
 
 $Pruebas['m77 (a1) cargaJob con 5 casos y el original con NoSuchBeanDefinitionException en todos: del original (y del original-2) se ejecutan los 3 primeros, del migrado los mismos 3, y los otros 2 salen sin probar con el motivo nuevo'] = {
@@ -8049,6 +8049,93 @@ $Pruebas['m77 (c2) con el prueba-local.json que escribe un lanzamiento parado (o
   $r = Prueba-M77 $e '' @('-RehacerOriginal')
   $orig = Registro-Arnes $e 'original' 1
   Comprueba 'el segundo test del original lleva la causa de los 3 casos' ($orig.Contains("- En 3 casos el original acaba EXCEPCION: $M77Bean.")) (Cola $orig)
+}
+
+# El texto de las asignaciones del script que dan valor a las variables $Nombres (las del script, no las de dentro de una funcion).
+function Texto-De-Variables([string]$Ruta, [string[]]$Nombres) {
+  $ast = [System.Management.Automation.Language.Parser]::ParseFile($Ruta, [ref]$null, [ref]$null)
+  $as = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and $Nombres -contains $n.Left.VariablePath.UserPath }, $false))
+  return (($as | ForEach-Object { $_.Extent.Text }) -join "`n")
+}
+
+$M77Proxy = 'java.lang.IllegalArgumentException: Cannot subclass final class com.acme.poliza.PolizaJdbcAdapter'
+$M77FraseProxy = 'Es el codigo del migrado, no el test: una clase final que Spring tiene que envolver con un proxy (regla clase-final-proxy del paso de calidad).'
+$M77LineaProxy = "El migrado no arranca el job cargaJob en ningun caso (UnsatisfiedDependencyException: $M77Proxy). $M77FraseProxy Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba."
+
+$Pruebas['m77 (d1) el migrado con Cannot subclass final class en todos los casos: la linea nueva con clase-final-proxy, sin -RehacerArnes'] = {
+  $e = Escenario-M77 'm77-d1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'mig-proxy:^cargaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'la linea dice que es el codigo, la frase y la regla' ($r.Salida.Contains($M77LineaProxy)) (Cola $r.Salida)
+  Igual 'una sola vez' 1 (Veces-M50 $r.Salida 'El migrado no arranca el job')
+  Comprueba 'sin -RehacerArnes' ($r.Salida -notmatch 'El migrado no arranca el job[^\n]*RehacerArnes') (Cola $r.Salida)
+  Comprueba 'dentro del bloque del grupo 1' ($r.Salida -cmatch '(?s)Grupo 1: 2 casos distintos, el migrado acaba EXCEPCION: .*?El migrado no arranca el job cargaJob.*?distinto: cargaJob/caso-01 \(') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (d2) con BeanCurrentlyInCreationException y con BeanDefinitionOverrideException: la linea de cada uno con su regla'] = {
+  $e = Escenario-M77 'm77-d2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'mig-circular:^cargaJob/caso-;mig-override:^remesaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'cargaJob: la referencia circular' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (UnsatisfiedDependencyException: org.springframework.beans.factory.BeanCurrentlyInCreationException: ') -and $r.Salida.Contains('Es el codigo del migrado, no el test: beans que se necesitan unos a otros en circulo (regla referencia-circular del paso de calidad). Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba.')) (Cola $r.Salida)
+  Comprueba 'remesaJob: el bean repetido' ($r.Salida.Contains('El migrado no arranca el job remesaJob en ningun caso (BeanDefinitionOverrideException: org.springframework.beans.factory.support.BeanDefinitionOverrideException: ') -and $r.Salida.Contains('Es el codigo del migrado, no el test: dos beans con el mismo nombre (regla bean-repetido del paso de calidad). Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba.')) (Cola $r.Salida)
+  Comprueba 'ninguna de las dos aconseja -RehacerArnes' ($r.Salida -notmatch 'El migrado no arranca el job[^\n]*RehacerArnes') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (d3) la puerta del caso vacio con Cannot subclass final class acepta el test al primer intento (una sola llamada a Copilot), lo avisa, lo guarda y solo ejecuta el primer caso del job'] = {
+  $e = Escenario-M77 'm77-d3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M77 $e 'mig-proxy:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'la tarea del migrado queda hecha, con un solo intento' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Igual 'con una sola llamada a Copilot' 1 @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'la consola no lo rechaza' ($r.Salida -notmatch 'Arnes del migrado rechazado') (Cola $r.Salida)
+  Igual 'el aviso de la puerta y la linea del final: la frase dos veces' 2 (Veces-M50 $r.Salida $M77FraseProxy)
+  Comprueba 'el aviso dice que otro intento no lo arregla' ($r.Salida.Contains('Otro intento no lo arregla: corre el paso de calidad de rescate.ps1.')) (Cola $r.Salida)
+  Comprueba 'el test se guarda' (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes/migrado')) ''
+  Igual 'el migrado ejecuta solo el primer caso' 'caso-01' (Casos-M77 $e 'migrado')
+  Igual 'el segundo sale sin probar' 'distinto,sin probar en local' ((Resultados $e) -join ',')
+  Igual 'con el motivo de siempre' 'el migrado no arranca el job con este test' "$((Caso $e 'cargaJob' 'caso-02').motivo)"
+  # otro lanzamiento: el test guardado pasa otra vez por la puerta (Use-ArnesGuardado, $SoloAviso) y el job se prueba otra vez con un solo caso
+  $r = Prueba-M77 $e 'mig-proxy:^cargaJob/'
+  Comprueba 'con el test guardado: el mismo aviso de la puerta, y el de la linea del final' ((Veces-M50 $r.Salida $M77FraseProxy) -eq 2) (Cola $r.Salida)
+  Igual 'sin otra llamada a Copilot' 1 @(Llamadas-Arnes $e 'migrado').Count
+  Igual 'y el migrado sigue ejecutando solo el primer caso' 'caso-01' (Casos-M77 $e 'migrado')
+  Igual 'el segundo sigue sin probar' 'distinto,sin probar en local' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m77 (d4) con otra excepcion (la de m48 y m50 (f)) todo sigue como hoy: la puerta rechaza el primer intento, el test se acepta en el segundo y la linea aconseja -RehacerArnes'] = {
+  $e = Escenario-M77 'm77-d4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $env:M48_VACIOS = '1'
+  try { $r = Prueba-M77 $e '' @() 'vacio-excepcion-mig:/vacio;excepcion-mig:^cargaJob/caso-' }
+  finally { Remove-Item -Path 'env:M48_VACIOS' -ErrorAction SilentlyContinue }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el primer intento se rechaza por el caso vacio' ($r.Salida -match 'Arnes del migrado rechazado: Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'la tarea queda hecha con 2 intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'la linea de siempre, con -RehacerArnes' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Comprueba 'y nada de lo nuevo' ($r.Salida -notmatch 'Es el codigo del migrado' -and $r.Salida -notmatch 'El original no arranca el job') (Cola $r.Salida)
+}
+
+$Pruebas['m77 (d5) la lista de excepciones de arranque (la jerarquia de BeansException, ApplicationContextException y la de Boot) y la tabla de errores del codigo, funcion a funcion'] = {
+  $f = Join-Path $Dir 'm77-d5.ps1'
+  $cabeza = Texto-De-Variables $Script @('ExcepcionesArranque', 'ErroresCodigo')
+  $funciones = Texto-De-Funciones $Script @('Test-ExcepcionArranque', 'Get-ErrorCodigo')
+  $cola = @'
+foreach ($c in @('BeansException', 'BeanCreationException', 'UnsatisfiedDependencyException', 'NoSuchBeanDefinitionException', 'BeanCurrentlyInCreationException', 'BeanDefinitionOverrideException', 'BeanDefinitionStoreException', 'ApplicationContextException', 'ConfigurationPropertiesBindException', 'org.springframework.beans.factory.NoSuchBeanDefinitionException', 'JobParametersInvalidException', 'IllegalArgumentException', 'IllegalStateException', 'FAILED', 'una excepcion', '', 'ConflictingBeanDefinitionException', 'MiBeanCreationException')) { 'A [' + $c + '] ' + (Test-ExcepcionArranque $c) }
+foreach ($x in @(@('UnsatisfiedDependencyException', 'java.lang.IllegalArgumentException: Cannot subclass final class com.acme.X'), @('BeanCreationException', 'java.lang.IllegalStateException: sin correo'), @('BeanCreationException', 'org.springframework.beans.factory.BeanCurrentlyInCreationException: Error creating bean'), @('BeanCreationException', 'Requested bean is currently in creation: Is there an unresolvable circular reference or an asynchronous initialization dependency?'), @('BeanDefinitionOverrideException', ''), @('BeanCreationException', 'org.springframework.context.annotation.ConflictingBeanDefinitionException: Annotation-specified bean name'), @('NoSuchBeanDefinitionException', "No bean named 'x' available"), @('', ''))) {
+  $e = Get-ErrorCodigo $x[0] $x[1]
+  $c = $x[1].Substring(0, [Math]::Min(30, $x[1].Length))
+  if ($e) { 'E [' + $x[0] + '] [' + $c + '] ' + $e.regla + ' | ' + $e.frase } else { 'E [' + $x[0] + '] [' + $c + '] -' }
+}
+'@
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + $funciones + "`n" + $cola))
+  $r = Lanzar $f @()
+  $l = @($r.Salida -split "`n" | ForEach-Object { $_.Trim() })
+  foreach ($c in @('BeansException', 'BeanCreationException', 'UnsatisfiedDependencyException', 'NoSuchBeanDefinitionException', 'BeanCurrentlyInCreationException', 'BeanDefinitionOverrideException', 'BeanDefinitionStoreException', 'ApplicationContextException', 'ConfigurationPropertiesBindException', 'org.springframework.beans.factory.NoSuchBeanDefinitionException')) { Comprueba "$c es una excepcion de arranque" ($l -contains "A [$c] True") ($r.Salida) }
+  foreach ($c in @('JobParametersInvalidException', 'IllegalArgumentException', 'IllegalStateException', 'FAILED', 'una excepcion', '', 'ConflictingBeanDefinitionException', 'MiBeanCreationException')) { Comprueba "[$c] no lo es" ($l -contains "A [$c] False") ($r.Salida) }
+  Comprueba 'Cannot subclass final class: clase-final-proxy' ($l -contains 'E [UnsatisfiedDependencyException] [java.lang.IllegalArgumentExcep] clase-final-proxy | una clase final que Spring tiene que envolver con un proxy') ($r.Salida)
+  Comprueba 'una IllegalStateException cualquiera: nada' ($l -contains 'E [BeanCreationException] [java.lang.IllegalStateExceptio] -') ($r.Salida)
+  Comprueba 'BeanCurrentlyInCreationException (en la causa) y unresolvable circular reference: referencia-circular' (($l -contains 'E [BeanCreationException] [org.springframework.beans.fact] referencia-circular | beans que se necesitan unos a otros en circulo') -and ($l -contains 'E [BeanCreationException] [Requested bean is currently in] referencia-circular | beans que se necesitan unos a otros en circulo')) ($r.Salida)
+  Comprueba 'BeanDefinitionOverrideException (en la clase) y ConflictingBeanDefinitionException (en la causa): bean-repetido' (($l -contains 'E [BeanDefinitionOverrideException] [] bean-repetido | dos beans con el mismo nombre') -and ($l -contains 'E [BeanCreationException] [org.springframework.context.an] bean-repetido | dos beans con el mismo nombre')) ($r.Salida)
+  Comprueba 'una NoSuchBeanDefinitionException o sin nada: nada (puede ser el test)' (($l -contains 'E [NoSuchBeanDefinitionException] [No bean named ''x'' available] -') -and ($l -contains 'E [] [] -')) ($r.Salida)
 }
 
 # ================================ LANZADOR ================================

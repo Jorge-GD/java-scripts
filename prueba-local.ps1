@@ -192,6 +192,17 @@ $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene 
 $MotivoNoArranca = 'el migrado no arranca el job con este test'
 # Lo que dice un caso que no se ejecuta porque el original de su job falla igual en los primeros $CasosParaParar casos (Invoke-Originales); Get-Resultado lo pone como motivo.
 $MotivoNoArrancaOriginal = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
+# Los errores del CODIGO del migrado que hacen que su job no arranque (Get-ErrorCodigo): otro test no los arregla. Cada uno con el patron de su clase o su causa, la regla del
+# paso de calidad de rescate.ps1 que lo detecta y una frase. Las fuentes (spring-framework, descargadas y citadas en el informe de M77): 'Cannot subclass final class' es el
+# texto de Enhancer (spring-core/.../cglib/proxy/Enhancer.java:653, el que sale cuando CglibAopProxy.java:223 envuelve una clase final); BeanCurrentlyInCreationException
+# (spring-beans/.../BeanCurrentlyInCreationException.java:21-23) dice 'unresolvable circular reference'; BeanDefinitionOverrideException (spring-beans/.../support/
+# BeanDefinitionOverrideException.java:22) y ConflictingBeanDefinitionException (spring-context/.../annotation/ClassPathBeanDefinitionScanner.java:350) son dos beans con el
+# mismo nombre. Una NoSuchBeanDefinitionException o una BeanCreationException sin mas puede ser el test (le falta un bean): no estan.
+$ErroresCodigo = @(
+  [pscustomobject]@{ patron = 'Cannot subclass final class'; regla = 'clase-final-proxy'; frase = 'una clase final que Spring tiene que envolver con un proxy' }
+  [pscustomobject]@{ patron = 'BeanCurrentlyInCreationException|unresolvable circular reference'; regla = 'referencia-circular'; frase = 'beans que se necesitan unos a otros en circulo' }
+  [pscustomobject]@{ patron = 'BeanDefinitionOverrideException|ConflictingBeanDefinitionException'; regla = 'bean-repetido'; frase = 'dos beans con el mismo nombre' }
+)
 # Cuantos casos seguidos de un job (los primeros) tienen que acabar en el original FAILED o EXCEPCION con la misma causa (Get-FirmaFallo) para que sus demas casos no se ejecuten
 # ni en el original ni en el migrado (Invoke-Originales): el original funciona en produccion, asi que si falla igual en todos es su test, no su codigo.
 $CasosParaParar = 3
@@ -716,6 +727,16 @@ function Get-Excepcion([string]$Sal) {
 function Test-ExcepcionArranque([string]$Clase) {
   return ($ExcepcionesArranque -ccontains (($Clase -split '\.')[-1]))
 }
+
+# El error del codigo (una fila de $ErroresCodigo: regla y frase) que dicen la clase $Clase (la de Get-Excepcion) o la causa $Causa de un job que no arranca, o $null si no
+# es ninguno: entonces puede ser el test.
+function Get-ErrorCodigo([string]$Clase, [string]$Causa) {
+  foreach ($e in $ErroresCodigo) { if ("$Clase $Causa" -cmatch $e.patron) { return $e } }
+  return $null
+}
+
+# Lo que dice de un error del codigo $E (Get-ErrorCodigo): 'Es el codigo del migrado, no el test: <frase> (regla <regla> del paso de calidad).'
+function Format-ErrorCodigo($E) { return "Es el codigo del migrado, no el test: $($E.frase) (regla $($E.regla) del paso de calidad)." }
 
 # El estado (la linea estado=) del estado.txt de $Sal, o '' si no hay fichero o no lo dice.
 function Get-Estado([string]$Sal) {
@@ -1551,6 +1572,14 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
       $causa = Get-CausaCorta $r.Causa
       $detalle = $clase
       if ($causa) { $detalle = "$clase ($causa)" }
+      # Un error del codigo del migrado (Get-ErrorCodigo: clase final, referencia circular, bean repetido): otro intento no lo arregla. Se acepta aunque queden intentos, con un
+      # aviso que lo dice, y el job se prueba con un solo caso (Invoke-Salidas) aunque el test este guardado ($SoloAviso).
+      $codigo = Get-ErrorCodigo $clase $causa
+      if ($codigo) {
+        Aviso "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $detalle. $(Format-ErrorCodigo $codigo) Otro intento no lo arregla: corre el paso de calidad de rescate.ps1."
+        $script:NoArranca[$j] = [pscustomobject]@{ clase = $clase; veces = $T.intentos + 1 }
+        continue
+      }
       $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $detalle. Revisa lo que simula el test y las propiedades que le pasa."
       if (-not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) { return $roto }
       Aviso $roto
@@ -3044,6 +3073,26 @@ function Format-LineaOriginal([string]$Job, $F) {
   return "El original falla igual en todos los casos de $Job ($($F.estado): $($F.causa)). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal."
 }
 
+# Los jobs cuyo migrado acaba EXCEPCION en todos los casos que se han comparado y con lo mismo (todos esos casos estan en un mismo grupo de fallo EXCEPCION de $Grupos):
+# lo normal es que sea el test del migrado (arnes\migrado) y no su codigo. Uno por job: su grupo (numero), la clase y la causa del primer caso, el detalle ('clase: causa') y
+# su error del codigo (Get-ErrorCodigo; $null si no lo es). Lo usan la consola (Show-Resultado) y prueba-local.json (Get-PorJob).
+function Get-JobsMigradoNoArranca($Res, $Grupos) {
+  $jobs = @()
+  foreach ($g in @($Grupos | Where-Object { $_.firma -cmatch '^fallo\|EXCEPCION\|' })) {
+    $lista = @($g.casos)
+    foreach ($j in @($lista | ForEach-Object { (Get-CasoDe $Res $_).job } | Select-Object -Unique)) {
+      $casos = @($Res | Where-Object { $_.job -ceq $j -and (Test-Ejecutable $_) })
+      if (@($casos | Where-Object { $lista -ccontains ($_.job + '/' + $_.caso) }).Count -ne $casos.Count) { continue }
+      $clase = Get-Excepcion (Join-Ruta $Local "salidas/migrado/$j/$($casos[0].caso)")
+      $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
+      $detalle = $clase
+      if ($causa) { $detalle = "${clase}: $causa" }
+      $jobs += [pscustomobject]@{ job = $j; grupo = $g.numero; clase = $clase; causa = $causa; detalle = $detalle; error = (Get-ErrorCodigo $clase $causa) }
+    }
+  }
+  return $jobs
+}
+
 # La tabla por consola, los casos distintos por grupo (Get-Grupos: la cabecera, los casos, lo medido y el detalle de los dos primeros) y, despues, lo que
 # no es igual de los demas, caso a caso. Si un grupo de fallo EXCEPCION cubre todos los casos que se han comparado de un job, lo normal es que sea el
 # test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso. Si el test se
@@ -3055,6 +3104,7 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
   $fmt = "{0,-$ancho} {1,6} {2,8} {3,10} {4,11}"
   Info ($fmt -f 'Job', 'Casos', 'Iguales', 'Distintos', 'Sin probar')
   foreach ($p in $PorJob) { Info ($fmt -f $p.job, $p.casos, $p.iguales, $p.distintos, $p.sinProbar) }
+  $noArrancan = @(Get-JobsMigradoNoArranca $Res $Grupos)
   foreach ($g in @($Grupos)) {
     $lista = @($g.casos)
     $miembros = @($lista | ForEach-Object { Get-CasoDe $Res $_ })
@@ -3064,17 +3114,10 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
     Info "    casos: $texto"
     foreach ($h in @($g.hechos)) { Info "    medido: $h" }
     if ($g.firma -cmatch ':otraCarpeta(\||$)') { Aviso '    Suele ser el test del migrado, que da a su propiedad de carpeta otro valor: relanza con -RehacerArnes. Si no, mira la propiedad en el application.yml del migrado o un cambio del codigo.' }
-    if ($g.firma -cmatch '^fallo\|EXCEPCION\|') {
-      foreach ($j in @($miembros | ForEach-Object { $_.job } | Select-Object -Unique)) {
-        $casos = @($Res | Where-Object { $_.job -ceq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
-        if (@($casos | Where-Object { $lista -ccontains ($_.job + '/' + $_.caso) }).Count -ne $casos.Count) { continue }
-        $clase = Get-Excepcion (Join-Ruta $Local "salidas/migrado/$j/$($casos[0].caso)")
-        $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
-        $detalle = $clase
-        if ($causa) { $detalle = "${clase}: $causa" }
-        if ($script:NoArranca.ContainsKey($j)) { Aviso "    El migrado no arranca el job $j ($detalle). El test ya se escribio $($script:NoArranca[$j].veces) veces con este error: puede ser el codigo del migrado. Pregunta a Copilot, en el repo del migrado, si el job arrancaria igual fuera del test." }
-        else { Aviso "    El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes." }
-      }
+    foreach ($n in @($noArrancan | Where-Object { $_.grupo -eq $g.numero })) {
+      if ($n.error) { Aviso "    El migrado no arranca el job $($n.job) en ningun caso ($($n.detalle)). $(Format-ErrorCodigo $n.error) Corre el paso de calidad de rescate.ps1 y vuelve a lanzar la prueba." }
+      elseif ($script:NoArranca.ContainsKey($n.job)) { Aviso "    El migrado no arranca el job $($n.job) ($($n.detalle)). El test ya se escribio $($script:NoArranca[$n.job].veces) veces con este error: puede ser el codigo del migrado. Pregunta a Copilot, en el repo del migrado, si el job arrancaria igual fuera del test." }
+      else { Aviso "    El migrado no arranca el job $($n.job) en ningun caso ($($n.detalle)). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes." }
     }
     foreach ($r in @($miembros | Select-Object -First 2)) {
       Fallo "    distinto: $($r.job)/$($r.caso) ($($r.titulo))"
