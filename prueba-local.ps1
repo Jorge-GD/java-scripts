@@ -2488,7 +2488,8 @@ function Get-CausaNormal([string]$Causa, [string]$Caso) {
 # ordinal). Cada uno: numero, tipo, firma, casos ('job/caso', por job y caso), descripcion (la cabecera de la consola, sin 'Grupo <n>: ') y hechos (vacio).
 # - De fallo: el migrado acaba FAILED, EXCEPCION o sin estado.txt y el original no. Firma 'fallo|<estado>|<causa normalizada>' (Get-CausaNormal).
 # - De fichero: los demas. Firma 'fichero|' y la lista ordenada de '<clave>:<tipo>' de sus diferencias; el tipo es falta (no esta en el migrado), sobra
-#   (solo esta en el migrado), noGuardado o contenido.
+#   (solo esta en el migrado), noGuardado, otraCarpeta (un fichero que cada lado deja en otra carpeta, Join-OtraCarpeta: su clave es la pareja de carpetas
+#   y no el nombre, que lleva la fecha del caso, y su cabecera dice las carpetas de cada lado) o contenido.
 function Get-Grupos($Res) {
   $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
   foreach ($r in @($Res | Where-Object { $_.resultado -eq 'distinto' })) {
@@ -2519,7 +2520,9 @@ function Get-Grupos($Res) {
     if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0] -ConRegistro) }
     else {
       $lista = @(Sort-Ordinal @($m[0].ent.Keys))
-      $desc = "$cuantos, en $($m[0].ent[$lista[0]].fichero): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1)
+      $primera = $m[0].ent[$lista[0]]
+      if ($primera.otraCarpeta) { $desc = "$cuantos, el migrado deja sus ficheros en $(Format-Carpetas $primera.carpetasMigrado) y el original en $(Format-Carpetas $primera.carpetasOriginal)" }
+      else { $desc = "$cuantos, en $($primera.fichero): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1) }
       if ($lista.Count -eq 2) { $desc += ' y 1 fichero mas' }
       if ($lista.Count -gt 2) { $desc += " y $($lista.Count - 1) ficheros mas" }
     }
@@ -2628,6 +2631,7 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
     if ($lista.Count -gt 10) { $texto += " y $($lista.Count - 10) mas" }
     Info "    casos: $texto"
     foreach ($h in @($g.hechos)) { Info "    medido: $h" }
+    if ($g.firma -cmatch ':otraCarpeta(\||$)') { Aviso '    Suele ser el test del migrado, que da a su propiedad de carpeta otro valor: relanza con -RehacerArnes. Si no, mira la propiedad en el application.yml del migrado o un cambio del codigo.' }
     if ($g.firma -cmatch '^fallo\|EXCEPCION\|') {
       foreach ($j in @($miembros | ForEach-Object { $_.job } | Select-Object -Unique)) {
         $casos = @($Res | Where-Object { $_.job -ceq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
