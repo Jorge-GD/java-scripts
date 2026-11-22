@@ -228,10 +228,10 @@ $Cfg += @{
   # envolver una clase o un metodo final y el job no arranca.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch', 'parametros-v4')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
-    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido')
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido', 'parametros-v4')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -361,7 +361,14 @@ function Get-Hechos([string]$Raiz) {
       $ymls.Add([pscustomobject]@{ Rel = Get-Rel $Raiz $f.FullName; Nombre = $f.Name; Texto = $t })
     }
   }
-  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray() }
+  # Lo que lanza o configura el batch fuera de src/test (scripts, Dockerfile, yml, properties), con su texto
+  $otros = New-Object System.Collections.Generic.List[object]
+  foreach ($f in @(Get-Arbol $Raiz)) {
+    if ($f.Length -gt 1MB -or $f.Name -notmatch '(?i)^(?:Dockerfile.*|.+\.(?:sh|ksh|bash|cmd|bat|ya?ml|properties))$') { continue }
+    $rel = Get-Rel $Raiz $f.FullName
+    if (-not $rel.StartsWith('src/test/')) { $otros.Add([pscustomobject]@{ Rel = $rel; Texto = [System.IO.File]::ReadAllText($f.FullName) }) }
+  }
+  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray(); Otros = $otros.ToArray() }
 }
 
 function Get-Norm([string]$Fqn, [string]$BasePkg) {
@@ -576,6 +583,8 @@ $RxParametros = New-Object System.Text.RegularExpressions.Regex '\G(?<p>(?:[^()]
 $RxCampo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<anot>(?:' + $RxAnot + ')*)(?<mods>(?>(?:(?:public|protected|private|static|final|transient|volatile)\s+)*))(?<tipo>[\w.]+)\s*(?:<(?<gen>[^;\x01()=]*)>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*(?<ini>=[^;]*)?;')
 # Un metodo @Bean en el texto con sus cadenas (sin comentarios): sus argumentos y su nombre
 $RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?Bean\b(?:\s*\((?<args>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\))?(?:\s*@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*(?:<[^;{()]*>\s*)?[\w.]+(?:\s*<[^;{()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
+# Un parametro de job con la notacion de Spring Batch 4, nombre(tipo)=valor, con o sin barras de shell delante de los parentesis
+$RxParametroV4 = New-Object System.Text.RegularExpressions.Regex '(?<![\w.])(?<n>[A-Za-z_][\w.-]*)\\?\((?<t>long|date|double|string)\\?\)=(?<v>[^\s"'',;|&)\\]*)'
 $RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
@@ -945,6 +954,34 @@ function Add-CalBeansRepetidos($Out, $Beans, $Clases, $Props) {
   }
 }
 
+# Parametros de job con la notacion de Spring Batch 4, nombre(tipo)=valor (fila SBT5-09,
+# fuentes-guias/sbatch-Spring-Batch-5.0-Migration-Guide.md: "parameterName(parameterType)=value" frente a "parameterName=parameterValue,parameterType,
+# identificationFlag", con el tipo como nombre completo de clase): Spring Batch 5 ya no la lee, el parametro llega como un texto con ese nombre
+# y el job no recibe el suyo, sin fallar. Se busca en los scripts, Dockerfile, yml y properties del migrado (fuera de comentarios) y en los
+# literales de Java. Una vez por linea. El tipo de date es java.time.LocalDate (si lleva hora, java.time.LocalDateTime).
+function Add-CalParametrosV4($Out, $Hechos) {
+  $tipos = @{ long = 'java.lang.Long'; date = 'java.time.LocalDate'; double = 'java.lang.Double'; string = 'java.lang.String' }
+  $fuentes = @($Hechos.Ficheros | Where-Object { $_.Texto.Contains(')=') } | ForEach-Object { @{ Rel = $_.RelRaiz; Texto = (Get-SinComentarios $_.Texto); Comentario = '' } }) +
+    @($Hechos.Otros | Where-Object { $_.Texto.Contains(')=') } | ForEach-Object { @{ Rel = $_.Rel; Texto = $_.Texto; Comentario = '(?i)^\s*(?:#|!|::|@?rem\b)' } })
+  foreach ($s in $fuentes) {
+    $lineas = @($s.Texto -split "`r?`n")
+    for ($i = 0; $i -lt $lineas.Count; $i++) {
+      if ($s.Comentario -and $lineas[$i] -match $s.Comentario) { continue }
+      $cambios = @()
+      $primero = $null
+      foreach ($m in $script:RxParametroV4.Matches($lineas[$i])) {
+        $v = $m.Groups['v'].Value
+        $viejo = $m.Groups['n'].Value + '(' + $m.Groups['t'].Value + ')'
+        if (-not $primero) { $primero = $viejo }
+        if (-not $v) { $v = 'valor' }
+        $cambios += ("'" + $viejo + '=' + $m.Groups['v'].Value + "' por '" + $m.Groups['n'].Value + '=' + $v + ',' + $tipos[$m.Groups['t'].Value] + "'")
+      }
+      if ($cambios.Count -eq 0) { continue }
+      Add-Cal $Out $s.Rel ($i + 1) 'parametros-v4' ("Parametro de job con la notacion de Spring Batch 4: en Spring Batch 5 se lee como un texto cuyo nombre es '$primero', asi que el job no recibe el parametro y no falla. Cambia " + ($cambios -join ' y ') + '.')
+    }
+  }
+}
+
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
 function Get-SinComentarios([string]$Texto) {
   return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
@@ -1172,6 +1209,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   }
   Add-CalCiclos $out $nodos.ToArray() $supersDe $props
   Add-CalBeansRepetidos $out $beans.ToArray() $clasesBean.ToArray() $props
+  Add-CalParametrosV4 $out $Hechos
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }

@@ -6873,5 +6873,38 @@ $Pruebas['m76 (c2) revision.ps1 ya no lleva BOOT-ENABLEBATCH: lo mide rescate.ps
   Comprueba 'y la cabecera dice que ya sale del diagnostico' ($texto -match 'BOOT-ENABLEBATCH[^\r\n]*rescate\.ps1') ''
 }
 
+$Pruebas['m76 (d1) parametros-v4 (SBT5-09): fecha(date)=valor en un .sh sale; la notacion nueva, no'] = {
+  $e = Escenario-M70 'm76-d1' @{}
+  Escribe $e.Repo 'scripts/vieja.sh' "#!/bin/sh`njava -jar batch-life.jar `"fecha(date)=2024-01-01`" `"id(long)=7`"`n"
+  Escribe $e.Repo 'scripts/nueva.sh' "#!/bin/sh`njava -jar batch-life.jar fecha=2024-01-01,java.time.LocalDate id=7,java.lang.Long`n"
+  $h = Cal-M76 $e 'parametros-v4'
+  Igual 'sale solo en el script viejo, una vez aunque lleve dos parametros' 'vieja' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Igual 'en la linea del java' 2 $h[0].Linea
+  Igual 'con la ruta del fichero' 'scripts/vieja.sh' ($h[0].Fichero -replace '\\', '/')
+  Comprueba 'el texto dice que se lee como un texto, que el job no recibe el parametro y no falla, y la notacion nueva de cada uno' ($h[0].Detalle -like "*Parametro de job con la notacion de Spring Batch 4: en Spring Batch 5 se lee como un texto cuyo nombre es 'fecha(date)', asi que el job no recibe el parametro y no falla. Cambia 'fecha(date)=2024-01-01' por 'fecha=2024-01-01,java.time.LocalDate' y 'id(long)=7' por 'id=7,java.lang.Long'.*") $h[0].Detalle
+}
+
+$Pruebas['m76 (d2) parametros-v4: tambien en .cmd, .bat, .yml, .properties, Dockerfile y un literal de Java, con o sin barras; no en un comentario ni en src/test'] = {
+  $e = Escenario-M70 'm76-d2' @{
+    Lanza = (Clase-M70 'Lanza' '@Component' "    String[] args = {`"total(double)=1.5`"};`n    // `"borrado(long)=1`"`n")
+  }
+  Escribe $e.Repo 'bin/a.cmd' "java -jar b.jar nombre(string)=x`r`n"
+  Escribe $e.Repo 'bin/b.bat' "REM java -jar b.jar viejo(long)=1`r`njava -jar b.jar n(long)=%NUM%`r`n"
+  Escribe $e.Repo 'k8s/c.yml' "args:`n  - `"fecha(date)=2024-01-01`"`n"
+  Escribe $e.Repo 'k8s/d.yaml' "args: [`"x(long)=3`"]`n"
+  Escribe $e.Repo 'k8s/e.properties' "job.args=y(long)=4`n"
+  Escribe $e.Repo 'Dockerfile' "FROM eclipse-temurin:21`nCMD [`"java`", `"-jar`", `"b.jar`", `"z(long)=5`"]`n"
+  Escribe $e.Repo 'bin/f.sh' "# java -jar b.jar viejo(long)=1`njava -jar b.jar fecha\(date\)=2024-01-01`n"
+  Escribe $e.Repo 'src/test/resources/test.properties' "t(long)=1`n"
+  Escribe $e.Repo 'notas.txt' "n(long)=1`n"
+  $h = Cal-M76 $e 'parametros-v4'
+  Igual 'salen los ocho que lo llevan en codigo, y no el comentario de f.sh, el de b.bat, el de Lanza, src/test ni notas.txt' 'a b c d Dockerfile e f Lanza' (Ficheros-M70 $h)
+  Igual 'de b.bat, la linea 2 (no la del REM)' '2' (@($h | Where-Object { $_.Fichero -like '*b.bat' } | ForEach-Object { $_.Linea }) -join ' ')
+  Igual 'de Lanza, la linea del literal y no la del comentario' (Linea-De (Fuente-M72 $e 'Lanza') 'total(double)') (@($h | Where-Object { $_.Fichero -like '*Lanza.java' } | ForEach-Object { $_.Linea }) -join ' ')
+  $f = @($h | Where-Object { $_.Fichero -like '*f.sh' })
+  Comprueba 'con la barra del shell el texto dice el nombre sin ella' ($f[0].Detalle -like "*cuyo nombre es 'fecha(date)'*por 'fecha=2024-01-01,java.time.LocalDate'*") $f[0].Detalle
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
