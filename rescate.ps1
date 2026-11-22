@@ -228,10 +228,10 @@ $Cfg += @{
   # envolver una clase o un metodo final y el job no arranca.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
-    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular')
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -574,6 +574,9 @@ $ProxyClase = @('Repository', 'Validated') + $ProxyMetodo
 $RxParametros = New-Object System.Text.RegularExpressions.Regex '\G(?<p>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)'
 # Un campo de primer nivel de una clase: anotaciones, modificadores, tipo, genericos, nombre y valor inicial (el cuerpo trae las llaves reducidas a \x01)
 $RxCampo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<anot>(?:' + $RxAnot + ')*)(?<mods>(?>(?:(?:public|protected|private|static|final|transient|volatile)\s+)*))(?<tipo>[\w.]+)\s*(?:<(?<gen>[^;\x01()=]*)>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*(?<ini>=[^;]*)?;')
+# Un metodo @Bean en el texto con sus cadenas (sin comentarios): sus argumentos y su nombre
+$RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?Bean\b(?:\s*\((?<args>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\))?(?:\s*@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*(?:<[^;{()]*>\s*)?[\w.]+(?:\s*<[^;{()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
+$RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
 $RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
@@ -892,6 +895,56 @@ function Add-CalCiclos($Out, $Nodos, $SupersDe, $Props) {
   }
 }
 
+# Los nombres de bean que dan los metodos @Bean de un texto (sin comentarios, con sus cadenas): los de @Bean("a"), @Bean(name = "a") o
+# @Bean({"a", "b"}) o, sin nombre, el del metodo; cada uno con su linea.
+function Get-NombresBean([string]$Texto) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($m in $script:RxBeanMetodo.Matches($Texto)) {
+    $a = $m.Groups['args'].Value
+    $e = [regex]::Match($a, '^\s*(?:(?:value|name)\s*=\s*)?(?<n>\{[^}]*\}|"[^"]*")')
+    if (-not $e.Success) { $e = [regex]::Match($a, ',\s*(?:value|name)\s*=\s*(?<n>\{[^}]*\}|"[^"]*")') }
+    $nombres = @($m.Groups['nombre'].Value)
+    if ($e.Success) { $nombres = @([regex]::Matches($e.Groups['n'].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }) }
+    foreach ($n in $nombres) { [void]$res.Add([pscustomobject]@{ Nombre = $n; Linea = (Get-LineaDe $Texto $m.Groups['nombre'].Index) }) }
+  }
+  return $res.ToArray()
+}
+
+# Nombre de bean que Spring da a una clase de componente sin nombre explicito: el de la clase con la primera letra en minuscula (salvo con las dos
+# primeras en mayuscula, como java.beans.Introspector.decapitalize).
+function Get-NombreBeanClase([string]$Clase) {
+  if ($Clase.Length -gt 1 -and [char]::IsUpper($Clase[0]) -and [char]::IsUpper($Clase[1])) { return $Clase }
+  return ($Clase.Substring(0, 1).ToLowerInvariant() + $Clase.Substring(1))
+}
+
+# Beans repetidos. Dos @Bean con el mismo nombre en ficheros distintos: desde Spring Boot 2.1 la sobrescritura esta desactivada
+# (fuentes-guias/sb-Spring-Boot-2.1-Release-Notes.html: "Bean overriding has been disabled by default"; fila SB21-01) y con
+# spring.main.allow-bean-definition-overriding a true se queda en aviso. Dos clases de componente con el mismo nombre de bean (nombre simple de la
+# clase, sin nombre explicito): el escaner lanza ConflictingBeanDefinitionException aunque se permita la sobrescritura
+# (fuentes-m76/sfw-ClassPathBeanDefinitionScanner.java, checkCandidate). Lo que lleva @Profile o @Conditional* no cuenta (puede ser de perfiles
+# distintos): ni un @Bean de un fichero que los use ni una clase que los lleve. Sale en cada fichero del grupo, una vez.
+function Add-CalBeansRepetidos($Out, $Beans, $Clases, $Props) {
+  $permite = @(Get-Propiedad $Props 'spring.main.allow-bean-definition-overriding' | Where-Object { $_.Valor -ieq 'true' })
+  foreach ($g in @($Beans | Where-Object { -not $_.Cond } | Group-Object Nombre)) {
+    $ficheros = @($g.Group | ForEach-Object { $_.RelRaiz } | Select-Object -Unique)
+    if ($ficheros.Count -lt 2) { continue }
+    foreach ($b in $g.Group) {
+      $otros = (@($ficheros | Where-Object { $_ -cne $b.RelRaiz }) -join ', ')
+      $texto = "Dos beans se llaman '$($g.Name)' (tambien en $otros): desde Spring Boot 2.1 la sobrescritura de beans esta desactivada y la aplicacion no arranca. Cambia el nombre de uno (el metodo o @Bean(`"otroNombre`")) o quita el que sobra."
+      if ($permite.Count -gt 0) { $texto += ' spring.main.allow-bean-definition-overriding esta a true en ' + $permite[0].Rel + ': el ultimo que se registra gana, y no se sabe cual.' }
+      Add-Cal $Out $b.RelRaiz $b.Linea 'bean-repetido' $texto ($permite.Count -gt 0)
+    }
+  }
+  foreach ($g in @($Clases | Where-Object { -not $_.Cond } | Group-Object Nombre)) {
+    $ficheros = @($g.Group | ForEach-Object { $_.RelRaiz } | Select-Object -Unique)
+    if ($ficheros.Count -lt 2) { continue }
+    foreach ($c in $g.Group) {
+      $otros = (@($ficheros | Where-Object { $_ -cne $c.RelRaiz }) -join ', ')
+      Add-Cal $Out $c.RelRaiz $c.Linea 'bean-repetido' "Dos clases dan el mismo nombre de bean '$($g.Name)' (tambien $otros): Spring no arranca (ConflictingBeanDefinitionException), ni permitiendo la sobrescritura. Ponle nombre a una (@Service(`"otroNombre`")) o renombra la clase."
+    }
+  }
+}
+
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
 function Get-SinComentarios([string]$Texto) {
   return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
@@ -977,6 +1030,8 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   $props = @(Get-PropiedadesConfig $Hechos)                      # las propiedades de los application*.yml y .properties
   $nodos = New-Object System.Collections.Generic.List[object]    # los beans del migrado y lo que piden (referencia-circular)
   $supersDe = @{}                                                # clase -> sus supertipos
+  $beans = New-Object System.Collections.Generic.List[object]    # los nombres de bean que dan los metodos @Bean (bean-repetido)
+  $clasesBean = New-Object System.Collections.Generic.List[object]  # las clases de componente sin nombre explicito, con su nombre de bean
   foreach ($f in $Hechos.Ficheros) {
     $marcado = Get-Limpio $f.Texto
     $limpio = $marcado.Replace('/*JD*/', '').Replace('/*C*/', '')
@@ -1028,6 +1083,12 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
         }
       }
     }
+    # Nombres de los metodos @Bean del fichero (con sus cadenas); un @Profile o @Conditional en cualquier parte del fichero los saca de la cuenta
+    if ($f.Texto.Contains('@Bean')) {
+      $sinCom = Get-SinComentarios $f.Texto
+      $cond = ($sinCom -cmatch $script:RxCondicion)
+      foreach ($b in @(Get-NombresBean $sinCom)) { [void]$beans.Add([pscustomobject]@{ Nombre = $b.Nombre; RelRaiz = $f.RelRaiz; Linea = $b.Linea; Cond = $cond }) }
+    }
     # Constructores y logger de cada clase (las anidadas cuentan aparte)
     foreach ($c in @(Get-Clases $limpio)) {
       $ctores = @(Get-Constructores $c)
@@ -1044,6 +1105,9 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       $motivos = @(Get-AnotacionesProxy @(Get-Anotaciones $c.Anot) 'clase')
       $metodos = @(Get-Metodos $c)
       $supersDe[$c.Nombre] = @($c.Supers)
+      if ($componente -and (@(Get-Anotaciones $c.Anot | Where-Object { $_.Arg -cmatch '""' }).Count -eq 0)) {
+        [void]$clasesBean.Add([pscustomobject]@{ Nombre = (Get-NombreBeanClase $c.Nombre); RelRaiz = $f.RelRaiz; Linea = $c.Linea; Cond = ($c.Anot -cmatch $script:RxCondicion) })
+      }
       foreach ($nd in @(Get-NodosBean $c $f.RelRaiz $ctores $metodos $componente)) { [void]$nodos.Add($nd) }
       foreach ($mt in $metodos) {
         $enMetodo = @()
@@ -1101,6 +1165,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
     }
   }
   Add-CalCiclos $out $nodos.ToArray() $supersDe $props
+  Add-CalBeansRepetidos $out $beans.ToArray() $clasesBean.ToArray() $props
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }

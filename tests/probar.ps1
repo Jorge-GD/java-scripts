@@ -6783,5 +6783,69 @@ public class Config {
   Igual 'sale en Config, una vez' 'Config' (Ficheros-M70 $h)
 }
 
+# Una @Configuration con estos beans (cada uno: la anotacion y el metodo), en el paquete que se diga.
+function Beans-M76([string]$Nombre, [string[]]$Beans, [string]$Cabeza = '@Configuration', [string]$Pkg = 'com.acme.life.application.usecases') {
+  $m = ''
+  foreach ($b in $Beans) { $m += "    $b`n        return null;`n    }`n`n" }
+  return (Clase-M70 $Nombre $Cabeza $m $Pkg)
+}
+
+$Pruebas['m76 (b1) bean-repetido (SB21-01): dos metodos @Bean con el mismo nombre en clases distintas salen en las dos; con otro nombre o en la misma clase, no'] = {
+  $e = Escenario-M70 'm76-b1' @{
+    CfgA  = (Beans-M76 'CfgA' @('@Bean public Lector lector() {', '@Bean public Escritor escritor() {'))
+    CfgB  = (Beans-M76 'CfgB' @('@Bean public Lector lector() {', '@Bean public Otro otro() {'))
+    CfgC  = (Beans-M76 'CfgC' @('@Bean public Lector lectorPropio() {', '@Bean public Procesador procesar(String a) {', '@Bean public Procesador procesar(int a, int b) {'))
+  }
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'sale en las dos clases con lector(), y no en la que tiene otro nombre ni en la que sobrecarga el suyo' 'CfgA CfgB' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*CfgA.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea del metodo' (Linea-De (Fuente-M72 $e 'CfgA') 'public Lector lector()') $a[0].Linea
+  Comprueba 'el texto dice el nombre, la otra clase, que la sobrescritura esta desactivada desde Spring Boot 2.1 y que hacer' ($a[0].Detalle -like "*Dos beans se llaman 'lector' (tambien en*CfgB.java*): desde Spring Boot 2.1 la sobrescritura de beans esta desactivada y la aplicacion no arranca. Cambia el nombre de uno (el metodo o @Bean(`"otroNombre`")) o quita el que sobra.*") $a[0].Detalle
+}
+
+$Pruebas['m76 (b2) bean-repetido: el nombre explicito de @Bean cuenta (value, name o una lista); un @Profile o @Conditional en la clase o en el metodo hace que no cuente'] = {
+  $e = Escenario-M70 'm76-b2' @{
+    ExA = (Beans-M76 'ExA' @('@Bean("compartido") public Uno uno() {'))
+    ExB = (Beans-M76 'ExB' @('@Bean(name = "compartido") public Dos dos() {'))
+    ExC = (Beans-M76 'ExC' @('@Bean(autowireCandidate = false, name = {"alias", "tercero"}) public Tres tres() {'))
+    ExD = (Beans-M76 'ExD' @('@Bean(initMethod = "close") public Cuatro tercero() {'))
+    ExE = (Beans-M76 'ExE' @('@Bean(initMethod = "close") public Cinco cinco() {'))
+    PfA = (Beans-M76 'PfA' @('@Bean public Fuente fuente() {') '@Configuration' )
+    PfB = (Beans-M76 'PfB' @('@Bean @Profile("pre") public Fuente fuente() {'))
+    CnA = (Beans-M76 'CnA' @('@Bean public Fuente conectar() {') "@Configuration`n@Profile(`"dev`")")
+    CnB = (Beans-M76 'CnB' @('@Bean public Fuente conectar() {') "@Configuration`n@ConditionalOnProperty(`"x`")")
+  }
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'salen ExA y ExB (compartido) y ExC y ExD (tercero: un alias y el nombre de un metodo); ExE no, y los de perfil tampoco' 'ExA ExB ExC ExD' (Ficheros-M70 $h)
+}
+
+$Pruebas['m76 (b3) bean-repetido: con spring.main.allow-bean-definition-overriding a true, los @Bean repetidos bajan a aviso'] = {
+  $repo = @{ CfgA = (Beans-M76 'CfgA' @('@Bean public Lector lector() {')); CfgB = (Beans-M76 'CfgB' @('@Bean public Lector lector() {')) }
+  $e = Escenario-M70 'm76-b3' $repo
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  main:`n    allow-bean-definition-overriding: true`n"
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'salen los dos' 'CfgA CfgB' (Ficheros-M70 $h)
+  Igual 'como aviso' 'aviso aviso' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'y dice que la propiedad esta a true en el yml' ($h[0].Detalle -like '*spring.main.allow-bean-definition-overriding esta a true en src/main/resources/application.yml*') $h[0].Detalle
+}
+
+$Pruebas['m76 (b4) bean-repetido: dos componentes con el mismo nombre de clase en paquetes distintos y sin nombre explicito salen en los dos, aunque se permita la sobrescritura'] = {
+  $e = Escenario-M70 'm76-b4' @{
+    Duplicada = (Clase-M70 'Duplicada' '@Service' '')
+    Nombrada  = (Clase-M70 'Nombrada' '@Service' '')
+    Perfil    = (Clase-M70 'Perfil' "@Service`n@Profile(`"dev`")" '')
+  }
+  $otro = 'com.acme.life.infrastructure.adapters'
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Duplicada.java' (Clase-M70 'Duplicada' '@Component' '' $otro)
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Nombrada.java' (Clase-M70 'Nombrada' '@Service("otra")' '' $otro)
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Perfil.java' (Clase-M70 'Perfil' "@Service`n@Profile(`"pre`")" '' $otro)
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring.main.allow-bean-definition-overriding: true`n"
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'sale Duplicada en sus dos paquetes; Nombrada (una con nombre explicito) y Perfil (con @Profile) no' 'Duplicada Duplicada' (Ficheros-M70 $h)
+  Igual 'como error, porque la propiedad no vale para los componentes' 'error error' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'el texto dice el nombre del bean, la otra clase y que hacer' ($h[0].Detalle -like "*Dos clases dan el mismo nombre de bean 'duplicada' (tambien*Duplicada.java*): Spring no arranca (ConflictingBeanDefinitionException), ni permitiendo la sobrescritura. Ponle nombre a una (@Service(`"otroNombre`")) o renombra la clase.*") $h[0].Detalle
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
