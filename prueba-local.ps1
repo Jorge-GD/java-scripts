@@ -50,7 +50,8 @@ QUE HACE
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
      acabar, dice cuanto es test y cuanto Maven.
-  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
+  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\; no los ficheros de CompararIgnorar, por defecto los .log, el log por job del
+     framework nuevo, ni cuentan como sin guardar si no se pudieron copiar), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
      fecha de hoy (en cada lado, los dias de su propia ejecucion: los de hoy en el migrado y los de cuando se ejecuto el original, que
      puede ser de otro dia; un caso distinto cuyo original es de otro dia se confirma ejecutandolo otra vez; un caso cuyo migrado no deja ni
@@ -160,6 +161,9 @@ $Cfg += @{
   # Propiedades que saltan plugins que no influyen en el test: Invoke-Job las pasa en cada caso (no en el test-compile, ni en el arnes ni en los
   # tests unitarios). Sin JaCoCo: su argLine lo usa surefire. Vacia la lista (en ajustes.json: "MavenCasoRapido": []) para no saltar ninguno.
   MavenCasoRapido = @('-Dcheckstyle.skip', '-Denforcer.skip', '-Dspotbugs.skip', '-Dpmd.skip', '-Dmaven.javadoc.skip', '-Dmaven.source.skip', '-Dmaven.gitcommitid.skip', '-Dlicense.skip')
+  # Ficheros de la salida de un caso que no se comparan, en ninguno de los dos lados (Test-Ignorado): patrones como -like sobre el nombre del fichero. El framework nuevo
+  # deja un log por job en ficheros\logs\ y el original no: no es salida del batch. Vacia la lista (en ajustes.json: "CompararIgnorar": []) para compararlo todo.
+  CompararIgnorar = @('*.log')
 }
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
 # Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
@@ -403,10 +407,16 @@ function Copy-Salida([string]$De, [string]$A, [string]$Job, [string]$Donde, $Dia
   return $no
 }
 
-# Lo que no se pudo guardar de un lado de un caso en este lanzamiento (lo de Copy-Salida), o nada.
+# Es $Rel (la ruta de un fichero de la salida de un caso) de los que no se comparan ($Cfg.CompararIgnorar: patrones como -like sobre el nombre del fichero)?
+function Test-Ignorado([string]$Rel) {
+  $nombre = $Rel.Substring($Rel.LastIndexOf('/') + 1)
+  return (@($Cfg.CompararIgnorar | Where-Object { $_ -and $nombre -like $_ }).Count -gt 0)
+}
+
+# Lo que no se pudo guardar de un lado de un caso en este lanzamiento (lo de Copy-Salida), o nada. Un fichero que no se compara (Test-Ignorado) no cuenta.
 function Get-NoGuardados([string]$Nombre, [string]$Job, [string]$Caso) {
   $k = "$Nombre|$Job|$Caso"
-  if ($script:NoGuardados.ContainsKey($k)) { return @($script:NoGuardados[$k]) }
+  if ($script:NoGuardados.ContainsKey($k)) { return @($script:NoGuardados[$k] | Where-Object { -not (Test-Ignorado $_.fichero) }) }
   return @()
 }
 
@@ -2006,7 +2016,8 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
 # Las diferencias entre lo que dejo un caso en dos carpetas: una por fichero que no coincide (con su ruta relativa).
 # Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
 # mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
-# Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
+# Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Tampoco los ficheros
+# de $Cfg.CompararIgnorar (Test-Ignorado: por defecto los .log, el log por job del framework nuevo). Los demas
 # .csv de tablas\ se comparan sin orden de columnas ni de filas (Resolve-ParTablas), y uno que esta en un solo lado y no tiene ninguna fila
 # de datos no es una diferencia. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy): un original de otro dia no
 # lleva las fechas de hoy. Cada diferencia lleva su clave (Get-Normal de la ruta, con los dias de su lado): la de las diferencias de un mismo
@@ -2017,7 +2028,7 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
     if (-not (Test-Path -LiteralPath $lado[1])) { continue }
     foreach ($f in @(Get-ChildItem -LiteralPath $lado[1] -Recurse -File)) {
       $rel = Get-Rel $lado[1] $f.FullName
-      if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$') { continue }
+      if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$' -or (Test-Ignorado $rel)) { continue }
       $k = Get-Normal $rel $lado[2]
       if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = ''; B = ''; Rel = $rel } }
       $pares[$k][$lado[0]] = $f.FullName

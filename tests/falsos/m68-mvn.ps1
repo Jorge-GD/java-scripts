@@ -5,6 +5,10 @@
 #    'Tabla "T" ya existe' (con la bandera en, 'Table "T" already exists') y el codigo 42101. Con IF NOT EXISTS, el caso corre.
 #  - RESCATE_M68 trae banderas separadas por ';':
 #      en        el error de arriba, en ingles
+#      logs      el migrado (batch-nuevo) deja el log por job del framework nuevo: ficheros/logs/job-<job>-a1b2c3.log y ficheros/logs/jobs/<job>/ejecucion.log
+#      logs-orig lo mismo en el original (batch-viejo)
+#      txt       el migrado deja ademas ficheros/extra.txt (un fichero que no es un log)
+#      sin-sitio los dos lados dejan ficheros/<100 letras>/<100 letras>/dato.log: ni con nombre corto cabe en salidas\ (no se guarda)
 $raiz = (Get-Location).Path
 $job = ''; $caso = ''
 foreach ($a in $args) {
@@ -38,6 +42,25 @@ if ($caso -ne 'vacio' -and (Test-Path -LiteralPath $sql)) {
     [System.IO.File]::WriteAllText((Join-Path $dir 'error.txt'), ($fallo + "`n"))
     '[ERROR] El test no prepara el caso'
     exit 1
+  }
+}
+$migrado = ($raiz -like '*batch-nuevo*')
+if (Test-Path -LiteralPath $dir) {
+  if (($migrado -and $banderas -contains 'logs') -or (-not $migrado -and $banderas -contains 'logs-orig')) {
+    foreach ($rel in @("ficheros/logs/job-$job-a1b2c3.log", "ficheros/logs/jobs/$job/ejecucion.log")) {
+      $f = [System.IO.Path]::Combine([string[]](@($dir) + $rel.Split('/')))
+      [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
+      [System.IO.File]::WriteAllText($f, "log del framework nuevo`n")
+    }
+  }
+  if ($banderas -contains 'txt' -and $migrado) {
+    [void](New-Item -ItemType Directory -Path (Join-Path $dir 'ficheros') -Force)
+    [System.IO.File]::WriteAllText((Join-Path (Join-Path $dir 'ficheros') 'extra.txt'), "solo el migrado`n")
+  }
+  if ($banderas -contains 'sin-sitio') {
+    $f = [System.IO.Path]::Combine($dir, 'ficheros', ('a' * 100), ('b' * 100), 'dato.log')
+    [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
+    [System.IO.File]::WriteAllText($f, "un log de una ruta tan larga que ni con nombre corto cabe en salidas`n")
   }
 }
 $salida

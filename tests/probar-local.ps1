@@ -6317,5 +6317,41 @@ $Pruebas['m68 (a3) un caso hecho de antes cuyo original guardo ya existe, alread
   Comprueba 'un tercer lanzamiento ya no ejecuta ninguno otra vez' ($r.Salida -match 'Original: se reutilizan las salidas de 5 caso\(s\) y se ejecutan 0\.' -and $r.Salida -notmatch 'Se ejecuta otra vez el original') (Cola $r.Salida)
 }
 
+$Pruebas['m68 (b1) un .log que solo deja el migrado (el log por job del framework nuevo): los casos salen iguales, y el log queda guardado'] = {
+  $e = Escenario-M68 'm68-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M68 $e 'logs'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'los dos logs del migrado estan en salidas' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/ficheros/logs/job-cargaJob-a1b2c3.log')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/ficheros/logs/jobs/cargaJob/ejecucion.log'))) ''
+  Comprueba 'y el original no los tiene' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/ficheros/logs'))) ''
+}
+
+$Pruebas['m68 (b2) un .txt que solo deja el migrado sigue saliendo distinto, aunque deje tambien sus logs: la unica diferencia es el .txt'] = {
+  $e = Escenario-M68 'm68-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e 'logs;txt'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'con una sola diferencia: el .txt' 'ficheros/extra.txt' (@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { $_.fichero }) -join ',')
+}
+
+$Pruebas['m68 (b3) con CompararIgnorar vacio (en ajustes.json), el .log vuelve a contar: el caso sale distinto con los dos logs'] = {
+  $e = Escenario-M68 'm68-b3' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CompararIgnorar = @() }
+  $r = Prueba-M68 $e 'logs'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'con los dos logs entre las diferencias' 'ficheros/logs/job-cargaJob-a1b2c3.log,ficheros/logs/jobs/cargaJob/ejecucion.log' ((@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { $_.fichero }) | Sort-Object { $_ }) -join ',')
+}
+
+$Pruebas['m68 (b4) un .log que no cabe en salidas ni con nombre corto no cuenta como fichero sin guardar (la consola si lo dice): el caso sale igual y el siguiente lanzamiento reutiliza el original'] = {
+  $e = Escenario-M68 'm68-b4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e 'sin-sitio'
+  Comprueba 'la consola dice que el log no se pudo guardar' ($r.Salida -match 'dato\.log: no se ha podido guardar') (Cola $r.Salida)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Igual 'sin ninguna diferencia' 0 @((Caso $e 'cargaJob' 'caso-01').diferencias).Count
+  $r = Prueba-M68 $e
+  Comprueba 'el siguiente lanzamiento reutiliza el original' ($r.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
