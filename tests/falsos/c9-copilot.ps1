@@ -22,7 +22,13 @@ if ($texto -match 'tareas/([\w\-\.]+)\.prompt\.md') {
 $reintento = 0
 if ($prompt -cmatch 'CORRECCI') { $reintento = 1 }
 $flags = (@($args | Where-Object { "$_" -match '^--(model=|effort=|add-dir=|deny-tool=)' }) -join ' ')
-if ($env:C9_LLAMADAS) { [System.IO.File]::AppendAllText($env:C9_LLAMADAS, "$id|$reintento|$flags|$raiz`n") }
+if ($env:C9_LLAMADAS) {
+  # varias llamadas a la vez: sin un cerrojo, dos AppendAllText a la vez se pisan y se pierde una linea
+  $sha = [System.Security.Cryptography.SHA1]::Create()
+  $mx = New-Object System.Threading.Mutex($false, ('c9-llamadas-' + ((@($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($env:C9_LLAMADAS))) | ForEach-Object { $_.ToString('x2') }) -join '')))
+  [void]$mx.WaitOne()
+  try { [System.IO.File]::AppendAllText($env:C9_LLAMADAS, "$id|$reintento|$flags|$raiz`n") } finally { $mx.ReleaseMutex() }
+}
 if ($env:C9_PROMPTS) {
   $n = 1
   while (Test-Path -LiteralPath ([System.IO.Path]::Combine($env:C9_PROMPTS, "$id-$n.md"))) { $n++ }
