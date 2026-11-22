@@ -6497,6 +6497,8 @@ $Pruebas['m72 (a5) metodo-final-proxy: un metodo final con @Transactional, @Asyn
   Igual 'sale en los cuatro metodos final con anotacion de proxy de la clase abierta, y en ninguno mas' 'Servicio Servicio Servicio Servicio' (Ficheros-M70 $h)
   $g = @($h | Where-Object { $_.Linea -eq (Linea-De (Fuente-M72 $e 'Servicio') 'public final void guarda()') })
   Igual 'sale en la linea del metodo' 1 $g.Count
+  $l = @($h | Where-Object { $_.Linea -eq (Linea-De (Fuente-M72 $e 'Servicio') 'public final synchronized void lee()') })
+  Igual 'y el cuarto, detras de tres metodos con cuerpo, tambien en su linea' 1 $l.Count
   Igual 'es un error' 'error' $g[0].Sev
   Comprueba 'dice la anotacion, que Spring no puede interceptarlo y que se quita final' ($g[0].Detalle -like '*Metodo final con @Transactional: Spring no lo puede interceptar y la anotacion no hace nada. Quita final.') $g[0].Detalle
   Comprueba 'y el de @Async dice @Async' (@($h | Where-Object { $_.Detalle -like '*Metodo final con @Async:*' }).Count -eq 1)
