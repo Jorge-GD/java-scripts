@@ -6420,6 +6420,14 @@ $Pruebas['m68 (c4) el primer intento del migrado ya lleva la lista de tablas de 
   Igual 'el segundo lanzamiento no escribe ningun test otra vez' $n @(Llamadas $e).Count
 }
 
+$Pruebas['m68 (c5) los nombres de las tablas se comparan sin distinguir mayusculas, como Get-TablasFaltan: calendario_02 en el migrado es CALENDARIO_02 del original'] = {
+  $e = Escenario-M68 'm68-c5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02:arnes-original;tablas=1/calendario_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de tablas' ($r.Salida -notmatch 'tablas que si tiene la del test del original') (Cola $r.Salida)
+}
+
 # --- (d) un job que no arranca con el test aceptado no se ejecuta en todos sus casos ---
 # Estos escenarios usan el Maven de m48 (excepcion-mig: el migrado acaba EXCEPCION en el caso vacio y en los casos; el original, no) o el de m68-excepcion.ps1 (lo mismo,
 # con otra clase de excepcion en los casos). Con Intentos = 2 (por defecto), el primer test se rechaza por el caso vacio y el segundo se acepta con el aviso.
@@ -6471,6 +6479,25 @@ $Pruebas['m68 (d3) si el primer caso acaba EXCEPCION con otra clase que la del c
   Comprueba 'el test se acepta con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
   Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
   Igual 'ninguno sin probar' 0 @(Resultados $e | Where-Object { $_ -eq 'sin probar en local' }).Count
+}
+
+$Pruebas['m68 (d4) un test que se acepta sin haberse rechazado por eso (con Intentos = 1 el primer intento es el ultimo) no recorta nada: se ejecutan los 5 casos y sale la linea de siempre'] = {
+  $e = Escenario-M48 'm68-d4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test se acepta a la primera, con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'los cinco salen distintos' 'distinto,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (d5) si el primer caso arranca, los demas se ejecutan aunque alguno acabe EXCEPCION con la misma clase: solo se mira el primero'] = {
+  $e = Escenario-M68d 'm68-d5'
+  $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio;excepcion-mig:^cargaJob/caso-0[2-5]' @() '' @{ M48_VACIOS = 9 }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test se acepta con el aviso del caso vacio' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'el primero sale igual y los otros cuatro, distintos: ninguno sin probar' 'igual,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
 }
 
 # ================================ LANZADOR ================================
