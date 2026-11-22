@@ -3741,13 +3741,24 @@ function Stop-Vacios([string[]]$Jobs) {
   Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n"))
 }
 
-function Get-PorJob($Res) {
+# Por job: sus casos, iguales, distintos y sin probar y, si no arranca o falla igual en todos sus casos, 'falloIgual' (para quien lea el json despues): el lado (original o
+# migrado), el estado, la clase de la excepcion (Get-ClaseFallo), la causa del primer caso, la regla del paso de calidad si es un error del codigo del migrado
+# (Get-ErrorCodigo) y si no se ejecutaron todos sus casos ('parado': Invoke-Originales dejo los demas sin probar, o su test del migrado no arranca y solo se ejecuto el
+# primero, Invoke-Salidas). Son los jobs de Get-JobsFalloOriginal y los de Get-JobsMigradoNoArranca con un error del codigo.
+function Get-PorJob($Res, $Grupos) {
+  $originales = @(Get-JobsFalloOriginal $Res)
+  $migrados = @(Get-JobsMigradoNoArranca $Res $Grupos | Where-Object { $_.error })
   $porJob = @()
   foreach ($p in $pruebas) {
     $rs = @($Res | Where-Object { $_.job -ceq $p.job })
     $ig = @($rs | Where-Object { $_.resultado -eq 'igual' }).Count
     $di = @($rs | Where-Object { $_.resultado -eq 'distinto' }).Count
-    $porJob += [ordered]@{ job = $p.job; casos = $rs.Count; iguales = $ig; distintos = $di; sinProbar = ($rs.Count - $ig - $di) }
+    $o = [ordered]@{ job = $p.job; casos = $rs.Count; iguales = $ig; distintos = $di; sinProbar = ($rs.Count - $ig - $di) }
+    $orig = @($originales | Where-Object { $_.job -ceq $p.job })[0]
+    $mig = @($migrados | Where-Object { $_.job -ceq $p.job })[0]
+    if ($orig) { $o.falloIgual = [ordered]@{ lado = 'original'; estado = $orig.fallo.estado; clase = (Get-ClaseFallo $orig.fallo); causa = [string]$orig.fallo.causa; parado = $script:ParadaOriginal.ContainsKey($p.job) } }
+    elseif ($mig) { $o.falloIgual = [ordered]@{ lado = 'migrado'; estado = 'EXCEPCION'; clase = $mig.clase; causa = $mig.causa; regla = $mig.error.regla; parado = $script:NoArranca.ContainsKey($p.job) } }
+    $porJob += $o
   }
   return $porJob
 }
@@ -3800,7 +3811,7 @@ function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   $o = [ordered]@{
     version = 1; original = $LegacyRoot; commitOriginal = $HeadOrig; migrado = $MigradoRoot; commitMigrado = $headMig; codigoMigrado = $codigo; hashArnesMigrado = $hash
     modelo = $ModeloElegido; inicio = $Inicio.ToString('s'); fin = (Get-Date).ToString('s'); minutos = [Math]::Round($reloj.Elapsed.TotalMinutes, 1); llamadas = $script:Llamadas
-    arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = @(Get-PorJob $Res); casos = $Res; grupos = $grupos; noPromete = $NoPromete
+    arneses = [ordered]@{ original = $ArnesOrig.estado; migrado = $ArnesMig.estado }; jobs = @(Get-PorJob $Res $grupos); casos = $Res; grupos = $grupos; noPromete = $NoPromete
   }
   if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
   if ($Reparar) { $o.reparaciones = @($Reparaciones) }

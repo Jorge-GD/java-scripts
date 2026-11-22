@@ -8138,5 +8138,22 @@ foreach ($x in @(@('UnsatisfiedDependencyException', 'java.lang.IllegalArgumentE
   Comprueba 'una NoSuchBeanDefinitionException o sin nada: nada (puede ser el test)' (($l -contains 'E [NoSuchBeanDefinitionException] [No bean named ''x'' available] -') -and ($l -contains 'E [] [] -')) ($r.Salida)
 }
 
+$Pruebas['m77 (e1) prueba-local.json lleva, por cada job que no arranca o que falla igual en todos sus casos (parado o con error del codigo), el lado, el estado, la clase, la causa, la regla si la hay y si se paro'] = {
+  $e = Escenario-M77 'm77-e1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00'); pagoJob = @('importe=10.00', 'importe=20.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-;mig-proxy:^remesaJob/caso-;orig-failed:^tarifaJob/caso-'
+  Igual 'sale con 2' 2 $r.Codigo
+  $jobs = @((Lee-Json $e.Json).jobs)
+  $c = $jobs | Where-Object { $_.job -ceq 'cargaJob' }
+  Igual 'cargaJob (el original no arranca, parado): lado, estado, clase, causa y parado' "original|EXCEPCION|NoSuchBeanDefinitionException|$M77Bean|True" "$($c.falloIgual.lado)|$($c.falloIgual.estado)|$($c.falloIgual.clase)|$($c.falloIgual.causa)|$($c.falloIgual.parado)"
+  Comprueba 'y sin regla' ($null -eq $c.falloIgual.PSObject.Properties['regla']) ''
+  Igual 'lo demas del job sigue (casos, iguales, distintos, sin probar)' '4|0|3|1' "$($c.casos)|$($c.iguales)|$($c.distintos)|$($c.sinProbar)"
+  $m = $jobs | Where-Object { $_.job -ceq 'remesaJob' }
+  Igual 'remesaJob (error del codigo del migrado): lado, estado, clase, causa, regla y parado' "migrado|EXCEPCION|UnsatisfiedDependencyException|$M77Proxy|clase-final-proxy|False" "$($m.falloIgual.lado)|$($m.falloIgual.estado)|$($m.falloIgual.clase)|$($m.falloIgual.causa)|$($m.falloIgual.regla)|$($m.falloIgual.parado)"
+  $t = $jobs | Where-Object { $_.job -ceq 'tarifaJob' }
+  Igual 'tarifaJob (el original FAILED igual en sus 2 casos): lado, estado, clase de la causa, causa y parado' "original|FAILED|NoSuchFileException|$M77Fichero|False" "$($t.falloIgual.lado)|$($t.falloIgual.estado)|$($t.falloIgual.clase)|$($t.falloIgual.causa)|$($t.falloIgual.parado)"
+  $p = $jobs | Where-Object { $_.job -ceq 'pagoJob' }
+  Comprueba 'pagoJob (arranca) no lleva falloIgual' ($null -eq $p.PSObject.Properties['falloIgual']) ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
