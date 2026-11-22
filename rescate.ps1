@@ -228,7 +228,7 @@ $Cfg += @{
   # envolver una clase o un metodo final y el job no arranca.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
     'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido')
@@ -1102,8 +1102,14 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       if ($marcados -ge 2) { Add-Cal $out $f.RelRaiz $c.Linea 'autowired-varios' "@Autowired en $marcados constructores: solo uno puede llevarlo (Sonar S6818)." }
       # Spring envuelve con un proxy de clase lo que lleva @Repository, @Transactional...: una clase final no se puede heredar y el bean no se crea.
       # Una clase final sale cuando acabe el recorrido (un @Bean con scope de proxy de otro fichero puede devolverla); un metodo final, aqui.
-      $motivos = @(Get-AnotacionesProxy @(Get-Anotaciones $c.Anot) 'clase')
+      $anotsClase = @(Get-Anotaciones $c.Anot)
+      $motivos = @(Get-AnotacionesProxy $anotsClase 'clase')
       $metodos = @(Get-Metodos $c)
+      # Spring Boot 3: @EnableBatchProcessing "is now discouraged" y "should be removed"; un bean con ella o que extienda DefaultBatchConfiguration
+      # hace que la configuracion automatica de Batch se aparte (fuentes-guias/sb-Spring-Boot-3.0-Migration-Guide.html; fila SB30-08)
+      if (@($anotsClase | Where-Object { $_.Nombre -ceq 'EnableBatchProcessing' }).Count -gt 0 -or @($c.Supers) -ccontains 'DefaultBatchConfiguration') {
+        Add-Cal $out $f.RelRaiz $c.Linea 'enable-batch' '@EnableBatchProcessing (o extender DefaultBatchConfiguration): en Spring Boot 3 la configuracion automatica de Batch se aparta, asi que el job no se lanza al arrancar y no se crean las tablas BATCH_. Quita la anotacion (o la clase) y deja la configuracion automatica; si el equipo lanza los jobs de otra forma, es un aviso que se puede dejar.'
+      }
       $supersDe[$c.Nombre] = @($c.Supers)
       if ($componente -and (@(Get-Anotaciones $c.Anot | Where-Object { $_.Arg -cmatch '""' }).Count -eq 0)) {
         [void]$clasesBean.Add([pscustomobject]@{ Nombre = (Get-NombreBeanClase $c.Nombre); RelRaiz = $f.RelRaiz; Linea = $c.Linea; Cond = ($c.Anot -cmatch $script:RxCondicion) })

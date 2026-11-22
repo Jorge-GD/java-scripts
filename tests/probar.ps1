@@ -6847,5 +6847,31 @@ $Pruebas['m76 (b4) bean-repetido: dos componentes con el mismo nombre de clase e
   Comprueba 'el texto dice el nombre del bean, la otra clase y que hacer' ($h[0].Detalle -like "*Dos clases dan el mismo nombre de bean 'duplicada' (tambien*Duplicada.java*): Spring no arranca (ConflictingBeanDefinitionException), ni permitiendo la sobrescritura. Ponle nombre a una (@Service(`"otroNombre`")) o renombra la clase.*") $h[0].Detalle
 }
 
+$Pruebas['m76 (c1) enable-batch (SB30-08): @EnableBatchProcessing o extender DefaultBatchConfiguration sale como error; con la plantilla igual, aviso; sin eso, nada'] = {
+  $e = Escenario-M70 'm76-c1' @{
+    Anotada  = (Clase-M70 'Anotada' "@Configuration`n@EnableBatchProcessing" '')
+    Extiende = (Java-M76 'Extiende' 'class' '' ' extends DefaultBatchConfiguration')
+    Larga    = (Clase-M70 'Larga' "@Configuration`n@org.springframework.batch.core.configuration.annotation.EnableBatchProcessing(modular = true)" '')
+    Normal   = (Clase-M70 'Normal' '@Configuration' "    // @EnableBatchProcessing en un comentario`n    private static final String X = `"EnableBatchProcessing`";`n")
+    Hija     = (Java-M76 'Hija' 'class' '' ' extends Normal implements Serializable')
+  }
+  $h = Cal-M76 $e 'enable-batch'
+  Igual 'sale en las tres clases que lo hacen' 'Anotada Extiende Larga' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*Anotada.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Fuente-M72 $e 'Anotada') 'public class Anotada') $a[0].Linea
+  Comprueba 'el texto dice que la configuracion automatica se aparta, que el job no se lanza ni se crean las tablas, y que hacer' ($a[0].Detalle -like '*@EnableBatchProcessing (o extender DefaultBatchConfiguration): en Spring Boot 3 la configuracion automatica de Batch se aparta, asi que el job no se lanza al arrancar y no se crean las tablas BATCH_. Quita la anotacion (o la clase) y deja la configuracion automatica*') $a[0].Detalle
+  $p = Escenario-M70 'm76-c1-plantilla' @{ Anotada = (Clase-M70 'Anotada' "@Configuration`n@EnableBatchProcessing" '') } @{ Plantilla = (Clase-M70 'Plantilla' "@Configuration`n@EnableBatchProcessing" '' $PkgPlantilla) }
+  $hp = Cal-M76 $p 'enable-batch'
+  Igual 'con la plantilla haciendo lo mismo: sale una vez, como aviso' 'aviso' (($hp | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'y dice que se queda en aviso porque la plantilla tambien lo hace' ($hp[0].Detalle -like '*(se queda en aviso: la plantilla tambien lo hace)') $hp[0].Detalle
+}
+
+$Pruebas['m76 (c2) revision.ps1 ya no lleva BOOT-ENABLEBATCH: lo mide rescate.ps1 sin IA'] = {
+  $texto = Lee (Split-Path -Parent $aqui) 'revision.ps1'
+  Comprueba 'el catalogo de la revision no tiene BOOT-ENABLEBATCH' (-not $texto.Contains("@('BOOT-ENABLEBATCH'")) ''
+  Comprueba 'y la cabecera dice que ya sale del diagnostico' ($texto -match 'BOOT-ENABLEBATCH[^\r\n]*rescate\.ps1') ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

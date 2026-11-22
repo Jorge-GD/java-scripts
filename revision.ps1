@@ -6,8 +6,9 @@ comun.ps1, tareas.ps1 y practicas.ps1 (Get-JavaFiles, Get-Rel, Join-Ruta, Invoke
 Restore-Tarea, Set-CitasProbadas, Test-LineaCita, Get-JavaSinComentarios, Get-ArgumentosLlamada). Solo ASCII: los textos con tilde van como \uXXXX.
 Vale para Windows PowerShell 5.1 y para PowerShell 7. Es un tipo de tarea mas del motor de tareas.ps1: 'revision-flujo' (plantilla tareas\revision-flujo.md).
 
-  Get-ReglasRevision        el catalogo: { id, titulo, que, tokens }. Solo las reglas que nada mas mide: SB-FACTORIAS, J21-FORMATO y
-                            J21-SECURITYMANAGER no estan porque ya salen del diagnostico (rescate.ps1) o de las buenas practicas (practicas.ps1).
+  Get-ReglasRevision        el catalogo: { id, titulo, que, tokens }. Solo las reglas que nada mas mide: SB-FACTORIAS, J21-FORMATO,
+                            J21-SECURITYMANAGER y BOOT-ENABLEBATCH no estan porque ya salen del diagnostico (rescate.ps1, enable-batch) o de las
+                            buenas practicas (practicas.ps1).
   Get-UnidadesRevision      las unidades { id, tipo (step o fichero), nombre, ficheros, sinResolver }, en orden estable.
   Get-TareasRevision        las tareas revision-flujo (con huella: una tarea hecha con la misma huella no se vuelve a pedir).
   Test-Revision             la comprobacion de lo que escribe Copilot (la llama Test-Salida de tareas.ps1).
@@ -34,8 +35,8 @@ $Cfg += @{
 # ============================== CATALOGO ==============================
 # Cada regla: id, titulo, lo que busca (una sola linea: va tal cual al prompt) y los textos de los que la cita lleva al menos uno. Los textos con
 # tilde llevan \uXXXX y salen por [regex]::Unescape (sin barras inversas que no sean esas). Fuentes: referencia de Spring Batch (late binding),
-# guia de migracion de Spring Batch 5.0, guia de Spring Boot 3.0, JEP 403; SB-ESTADO: Sonar S3749 (miembros de un singleton de Spring), Step Scope e
-# ItemStream de Spring Batch; ERR-TRAGADA: Configuring Skip Logic de Spring Batch. Un catch vacio no es de ERR-TRAGADA: ya lo mide rescate.ps1 (catch-vacio).
+# guia de migracion de Spring Batch 5.0, JEP 403; SB-ESTADO: Sonar S3749 (miembros de un singleton de Spring), Step Scope e
+# ItemStream de Spring Batch; ERR-TRAGADA: Configuring Skip Logic de Spring Batch. Un catch vacio no es de ERR-TRAGADA: ya lo mide rescate.ps1 (catch-vacio). @EnableBatchProcessing tampoco: lo mide rescate.ps1 (enable-batch).
 function Get-ReglasRevision {
   $r = @(
     @('SB-LISTENER', 'Listener que nadie registra',
@@ -50,9 +51,6 @@ function Get-ReglasRevision {
     @('SB-CONTEXTO', 'Objeto no serializable en el ExecutionContext',
       'Guarda en el ExecutionContext (put) un objeto que no es Serializable. Desde Spring Batch 5 el serializador por defecto es el de Java: un objeto que no es Serializable hace fallar el guardado del contexto.',
       @('put')),
-    @('BOOT-ENABLEBATCH', '@EnableBatchProcessing apaga la configuraci\u00f3n autom\u00e1tica',
-      '@EnableBatchProcessing, o una clase que extiende DefaultBatchConfiguration: en Spring Boot 3 la configuraci\u00f3n autom\u00e1tica de Batch se aparta, as\u00ed que no lanza el job al arrancar ni crea las tablas BATCH_.',
-      @('EnableBatchProcessing', 'DefaultBatchConfiguration')),
     @('J21-INTERNOS', 'Acceso a internos del JDK',
       'setAccessible(true) sobre clases del JDK, o uso de APIs internas sun.* o com.sun.*: desde Java 17 el JDK cierra sus internos (JEP 403) y lanza InaccessibleObjectException.',
       @('setAccessible', 'sun.')),
