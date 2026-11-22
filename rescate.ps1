@@ -220,10 +220,14 @@ $Cfg += @{
   # el codigo nuevo). El resto de reglas se queda en aviso. Para apagar una,
   # quitala de aqui. Reglas: javadoc-tipo, javadoc-metodo, inyeccion-campo,
   # salida-consola, catch-vacio, envoltorio-new, instanceof-cast,
-  # fecha-antigua, coleccion-antigua.
-  CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new')
-  # Reglas que se exigen aunque la plantilla tampoco las cumpla
-  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo')
+  # fecha-antigua, coleccion-antigua. Las de Spring salen de Sonar way:
+  # constructores-sin-autowired (S6829), autowired-varios (S6818),
+  # inyeccion-estatica (S7178), value-sin-expresion (S6804). Las de estilo
+  # miran todo el batch: estilo-constructor y estilo-logger.
+  CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
+    'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger')
+  # Reglas que se exigen aunque la plantilla tampoco las cumpla (las de estilo no: si la plantilla mezcla estilos, se quedan en aviso)
+  CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -496,7 +500,7 @@ function Get-JobsPorRegex([string]$Raiz) {
     if (($ext -ne '.java' -and $ext -ne '.xml') -or $f.Length -gt 1MB) { continue }
     $t = [System.IO.File]::ReadAllText($f.FullName)
     if ($ext -eq '.xml') { $t = [regex]::Replace($t, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline) }
-    else { $t = $script:RxLexico.Replace($t, [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('/')) { return '' } else { return $m.Value } }) }
+    else { $t = Get-SinComentarios $t }
     foreach ($rx in $Cfg.JobRegex) {
       foreach ($m in [regex]::Matches($t, $rx)) {
         $n = $m.Groups[1].Value
@@ -542,7 +546,17 @@ $RxLexico = New-Object System.Text.RegularExpressions.Regex ('/\*.*?\*/|//[^\n]*
 $RxTipo = '^\s*((?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*)(class|interface|enum|record|@interface)\s+(\w+)'
 $RxMetodoPublico = '^\s*public(?>\s+)(?>(?:(?:static|final|abstract|synchronized|default|native|strictfp)\s+)*)(?!(?:class|interface|enum|record)\b)(?:<[^>]+>\s*)?(?:[\w\.\[\]<>,\?&\s]+?\s+)?(\w+)\s*\('
 $RxMetodoInterfaz = '^(?>\s*)(?>(?:(?:public|abstract|default|static)\s+)*)(?!(?:private|protected|class|interface|enum|record|return|throw|new|if|for|while|switch|else|case)\b)(?:<[^>]+>\s*)?[\w\.\[\]<>,\?&\s]+?\s+(\w+)\s*\('
-$RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inject)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s+(?:(?:private|protected|public|transient|volatile)\s+)*[\w\.\[\]<>,\?\s]+?\s+(\w+)\s*;'
+# Un campo con @Autowired, @Inject o @Value. Grupos: 1 la anotacion, 2 los modificadores y el tipo, 3 el nombre (con su valor inicial, si lo tiene)
+$RxInyeccion = New-Object System.Text.RegularExpressions.Regex '@(Autowired|Inject|Value)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s+((?:(?:private|protected|public|transient|volatile)\s+)*[\w\.\[\]<>,\?\s]+?)\s+(\w+)\s*(?:=[^;]*)?;'
+$RxValorValue = '@Value\s*\(\s*(?:value\s*=\s*)?"((?:\\.|[^"\\])*)"\s*\)'
+# Clases (class) con sus anotaciones y su cuerpo. Una anotacion pegada: @Nombre o @Nombre(...), con parentesis dentro hasta tres niveles
+$RxAnot = '@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?\s+'
+$RxClaseDecl = New-Object System.Text.RegularExpressions.Regex ('(?<anot>(?:' + $RxAnot + ')*)(?:(?:public|protected|private|abstract|final|static|sealed|non-sealed|strictfp)\s+)*(?<![.\w])class\s+(?<nombre>\w+)(?=[^{;]*(?<cuerpo>\{(?:[^{}]|(?<o>\{)|(?<-o>\}))*(?(o)(?!))\}))')
+$RxHoja = New-Object System.Text.RegularExpressions.Regex '\{[^{}]*\}'
+$RxLombokCtor = New-Object System.Text.RegularExpressions.Regex '@(?:[\w.]+\.)?(?:NoArgsConstructor|RequiredArgsConstructor|AllArgsConstructor)\b(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?'
+$RxComponente = '@(?:[\w.]+\.)?(?:Component|Service|Repository|Controller|RestController|Configuration)\b'
+$RxAutowiredOInject = '@(?:[\w.]+\.)?(?:Autowired|Inject)\b'
+$RxAutowiredObligatorio = '@(?:[\w.]+\.)?Autowired\b(?!\s*\(\s*required\s*=\s*false\s*\))'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
 $RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
@@ -594,9 +608,112 @@ function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Det
 
 function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, $Indice).Split("`n").Count }
 
-# Faltas de calidad del codigo de src/main (sin decidir aun si son error o aviso).
-function Get-Calidad($Hechos) {
+# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones y lo que
+# tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01.
+function Get-Clases([string]$Limpio) {
+  $res = New-Object System.Collections.Generic.List[object]
+  $hoja = [string][char]1
+  foreach ($m in $script:RxClaseDecl.Matches($Limpio)) {
+    $top = $m.Groups['cuerpo'].Value
+    $top = $top.Substring(1, $top.Length - 2)
+    do { $antes = $top; $top = $script:RxHoja.Replace($top, $hoja) } while ($top -ne $antes)
+    [void]$res.Add([pscustomobject]@{ Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); Anot = $m.Groups['anot'].Value; Top = $top })
+  }
+  return $res.ToArray()
+}
+
+# Los constructores de una clase: los escritos (con su anotacion y si llevan parametros) y los que genera Lombok (@NoArgsConstructor,
+# @RequiredArgsConstructor, @AllArgsConstructor; su Anot es la propia anotacion, que puede llevar onConstructor_ = @__(@Autowired)).
+# Quedan fuera los que implica @Data, @Value o @Builder de Lombok y los de un record o un enum.
+function Get-Constructores($Clase) {
+  $res = New-Object System.Collections.Generic.List[object]
+  $rx = '(?<![^;\x01])\s*(?<anot>(?:' + $script:RxAnot + ')*)(?:(?:public|protected|private)\s+)?' + [regex]::Escape($Clase.Nombre) + '\s*\((?<params>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*(?:throws\s+[^;\x01(]+)?\x01'
+  foreach ($m in [regex]::Matches($Clase.Top, $rx)) {
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Groups['anot'].Value; Escrito = $true; Params = ($m.Groups['params'].Value.Trim() -ne '') })
+  }
+  foreach ($m in $script:RxLombokCtor.Matches($Clase.Anot)) {
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor') })
+  }
+  return $res.ToArray()
+}
+
+# Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
+function Get-SinComentarios([string]$Texto) {
+  return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
+      param($m)
+      if ($m.Value.StartsWith('/')) { return "`n" * ($m.Value.Split("`n").Count - 1) }
+      return $m.Value
+    })
+}
+
+# Las dos reglas de estilo coherente (miran todo el batch). Hecho: de donde salen las clases contadas. ConLombok y SinLombok: el orden en que
+# se elige el estilo que manda si empatan, segun el pom del migrado tenga Lombok o no.
+$EstiloReglas = @(
+  @{ Regla = 'estilo-constructor'; Hecho = 'Ctor'; Unidad = 'clase'; ConLombok = @('lombok', 'mano'); SinLombok = @('mano', 'lombok') },
+  @{ Regla = 'estilo-logger'; Hecho = 'Logger'; Unidad = 'logger'; ConLombok = @('slf4j', 'factory', 'otro'); SinLombok = @('factory', 'slf4j', 'otro') }
+)
+# De cada estilo: su nombre, como se describe una clase que lo usa y que hay que hacer en otra clase para pasarla a ese estilo
+$EstiloTextos = @{
+  lombok  = @{ Nombre = 'Lombok'; Es = 'Constructor con Lombok'; Pasa = 'Pasala a @RequiredArgsConstructor de Lombok con los campos private final, en el mismo orden.' }
+  mano    = @{ Nombre = 'el constructor a mano'; Es = 'Constructor escrito a mano'; Pasa = 'Escribe el constructor a mano con los campos private final, en el mismo orden, y quita la anotacion de Lombok.' }
+  slf4j   = @{ Nombre = '@Slf4j'; Es = 'Logger con @Slf4j'; Pasa = 'Pasalo a @Slf4j de Lombok (el campo se llama log) y quita el campo del logger.' }
+  factory = @{ Nombre = 'LoggerFactory'; Es = 'Logger con LoggerFactory'; Pasa = 'Pasalo a LoggerFactory.getLogger(...) en un campo private static final y quita @Slf4j.' }
+  otro    = @{ Nombre = 'otro logger (LogManager, java.util.logging...)'; Es = 'Logger con LogManager, java.util.logging u otro'; Pasa = 'Usa el mismo logger que el resto del batch.' }
+}
+
+# Estilo coherente. $Datos trae, por regla (Ctor y Logger), una fila por clase contada (RelRaiz, Linea, Estilo) y $Plantilla las cuentas de la
+# plantilla (estilo -> clases), o $null si lo que se mira es la propia plantilla. Si el migrado mezcla estilos, manda el de la plantilla (si
+# tiene clases que contar) o el que mas usa el migrado; si empatan, Lombok cuando el pom del migrado lo tiene. Cada clase de otro estilo sale
+# en $Out. Devuelve las cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola.
+function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
+  $pom = Get-Pom $Hechos.Raiz
+  $conLombok = [bool]($pom -and $pom.Valido -and ($pom.Deps -contains 'lombok'))
+  $cuentas = @{}
+  $mezcla = @()
+  foreach ($r in $script:EstiloReglas) {
+    $filas = $Datos[$r.Hecho].ToArray()
+    $mias = @{}
+    foreach ($x in $filas) { $mias[$x.Estilo] = 1 + [int]$mias[$x.Estilo] }
+    $cuentas[$r.Hecho] = $mias
+    if ($mias.Count -lt 2) { continue }
+    $base = $mias
+    $enPlantilla = ($Plantilla -and $Plantilla[$r.Hecho].Count -gt 0)
+    if ($enPlantilla) { $base = $Plantilla[$r.Hecho] }
+    $orden = $r.SinLombok
+    if ($conLombok) { $orden = $r.ConLombok }
+    $tope = ($base.Values | Measure-Object -Maximum).Maximum
+    $manda = @($orden | Where-Object { [int]$base[$_] -eq $tope })[0]
+    $n = [int]$mias[$manda]
+    $total = ($mias.Values | Measure-Object -Sum).Sum
+    $donde = @()
+    if ($n -gt 0) { $donde += "en el resto del batch ($n de $total clases)" }
+    if ($enPlantilla) { $donde += 'en la plantilla' }
+    foreach ($x in @($filas | Where-Object { $_.Estilo -ne $manda })) {
+      Add-Cal $Out $x.RelRaiz $x.Linea $r.Regla ($script:EstiloTextos[$x.Estilo].Es + '; ' + ($donde -join ' y ') + ' se usa ' + $script:EstiloTextos[$manda].Nombre + '. ' + $script:EstiloTextos[$manda].Pasa)
+    }
+    $otros = @()
+    foreach ($s in @($orden | Where-Object { $_ -ne $manda -and $mias.ContainsKey($_) })) {
+      $c = [int]$mias[$s]
+      if ($otros.Count -eq 0) {
+        $unidad = $r.Unidad
+        if ($c -ne 1) { $unidad += 's' }
+        $otros += "$c $unidad con " + $script:EstiloTextos[$s].Nombre
+      }
+      else { $otros += "$c con " + $script:EstiloTextos[$s].Nombre }
+    }
+    $mezcla += (($otros -join ' y ') + " frente a $n con " + $script:EstiloTextos[$manda].Nombre)
+  }
+  $linea = ''
+  if ($mezcla.Count -gt 0) { $linea = 'Estilo: ' + ($mezcla -join '; ') }
+  return [pscustomobject]@{ Cuentas = $cuentas; Linea = $linea }
+}
+
+# Faltas de calidad del codigo de src/main (sin decidir aun si son error o aviso). $EstiloPlantilla: las cuentas de estilo de la plantilla
+# (Cuentas de lo que devolvio esta funcion para ella), o $null para la propia plantilla. Devuelve los hallazgos, las cuentas de estilo y la
+# linea de la consola sobre el estilo ('' si no hay mezcla).
+function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   $out = New-Object System.Collections.Generic.List[object]
+  $datos = @{ Ctor = (New-Object System.Collections.Generic.List[object]); Logger = (New-Object System.Collections.Generic.List[object]) }
   foreach ($f in $Hechos.Ficheros) {
     $marcado = Get-Limpio $f.Texto
     $limpio = $marcado.Replace('/*JD*/', '').Replace('/*C*/', '')
@@ -628,8 +745,50 @@ function Get-Calidad($Hechos) {
       $prof += ($l.Split('{').Count - $l.Split('}').Count)
     }
     # Practicas que se ven en el texto
+    # Campos con @Autowired, @Inject o @Value. Uno static no se inyecta (S7178) y no cuenta ademas como inyeccion por campo; un @Value se
+    # lee con sus cadenas (un @Value("...") sin ${...} ni #{...} es una constante, S6804) y solo cuando es de un campo, no de un metodo o parametro.
+    $conCadenas = $null
     foreach ($m in $script:RxInyeccion.Matches($limpio)) {
-      Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'inyeccion-campo' ('@' + $m.Groups[1].Value + " en el campo '" + $m.Groups[2].Value + "': usa inyeccion por constructor con campos private final; sin estado mutable en el componente: si un campo guarda estado entre llamadas, no lo conviertas en final ni lo inicialices en el constructor; dilo")
+      $anot = $m.Groups[1].Value
+      $campo = $m.Groups[3].Value
+      $linea = Get-LineaDe $limpio $m.Index
+      if ($m.Groups[2].Value -cmatch '\bstatic\b') {
+        Add-Cal $out $f.RelRaiz $linea 'inyeccion-estatica' ('@' + $anot + " en el campo '" + $campo + "': Spring no inyecta campos static: queda a null (Sonar S7178). Quita static o la anotacion.")
+      }
+      elseif ($anot -cne 'Value') {
+        Add-Cal $out $f.RelRaiz $linea 'inyeccion-campo' ('@' + $anot + " en el campo '" + $campo + "': usa inyeccion por constructor con campos private final; sin estado mutable en el componente: si un campo guarda estado entre llamadas, no lo conviertas en final ni lo inicialices en el constructor; dilo")
+      }
+      else {
+        if ($null -eq $conCadenas) { $conCadenas = (Get-SinComentarios $f.Texto).Split("`n") }
+        if ($conCadenas[$linea - 1] -cmatch $script:RxValorValue -and $Matches[1] -notmatch '[$#]\{') {
+          Add-Cal $out $f.RelRaiz $linea 'value-sin-expresion' ("@Value sin `${...} ni #{...}: es una constante (Sonar S6804). Si es una propiedad, falta el `${...}.")
+        }
+      }
+    }
+    # Constructores y logger de cada clase (las anidadas cuentan aparte)
+    foreach ($c in @(Get-Clases $limpio)) {
+      $ctores = @(Get-Constructores $c)
+      $componente = ($c.Anot -cmatch $script:RxComponente)
+      # S6829: con varios constructores, Spring necesita que uno lleve @Autowired o @Inject
+      if ($componente -and $ctores.Count -ge 2 -and @($ctores | Where-Object { $_.Anot -cmatch $script:RxAutowiredOInject }).Count -eq 0) {
+        Add-Cal $out $f.RelRaiz $c.Linea 'constructores-sin-autowired' ("$($ctores.Count) constructores y ninguno con @Autowired: Spring no sabe cual usar y el bean puede no crearse (Sonar S6829). Deja un solo constructor (sin @Autowired, sobra) o marca con @Autowired el que debe usar Spring.")
+      }
+      # S6818: solo uno puede llevar @Autowired sin required = false
+      $marcados = @($ctores | Where-Object { $_.Anot -cmatch $script:RxAutowiredObligatorio }).Count
+      if ($marcados -ge 2) { Add-Cal $out $f.RelRaiz $c.Linea 'autowired-varios' "@Autowired en $marcados constructores: solo uno puede llevarlo (Sonar S6818)." }
+      # estilo: las clases con anotacion de componente que reciben dependencias por constructor (Lombok o a mano), y las que declaran un logger
+      if ($componente) {
+        $escritos = @($ctores | Where-Object { $_.Escrito })
+        $estilo = ''
+        if (@($escritos | Where-Object { $_.Params }).Count -gt 0) { $estilo = 'mano' }
+        elseif ($escritos.Count -eq 0 -and @($ctores | Where-Object { $_.Params }).Count -gt 0) { $estilo = 'lombok' }
+        if ($estilo) { [void]$datos.Ctor.Add([pscustomobject]@{ RelRaiz = $f.RelRaiz; Linea = $c.Linea; Estilo = $estilo }) }
+      }
+      $estilo = ''
+      if ($c.Anot -cmatch '@(?:[\w.]+\.)?Slf4j\b') { $estilo = 'slf4j' }
+      elseif ($c.Top -cmatch '\bLoggerFactory\s*\.\s*getLogger\s*\(') { $estilo = 'factory' }
+      elseif ($c.Anot -cmatch '@(?:[\w.]+\.)?(?:Log4j2?|CommonsLog|JBossLog|Flogger|XSlf4j|CustomLog)\b' -or $c.Top -cmatch '\b(?:LogManager|Logger|LogFactory)\s*\.\s*getLog(?:ger)?\s*\(') { $estilo = 'otro' }
+      if ($estilo) { [void]$datos.Logger.Add([pscustomobject]@{ RelRaiz = $f.RelRaiz; Linea = $c.Linea; Estilo = $estilo }) }
     }
     foreach ($m in $script:RxConsola.Matches($limpio)) {
       Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $m.Index) 'salida-consola' 'System.out, System.err o printStackTrace: usa el logger'
@@ -653,7 +812,8 @@ function Get-Calidad($Hechos) {
       Add-Cal $out $f.RelRaiz (Get-LineaDe $limpio $mc.Index) 'coleccion-antigua' ($mc.Value + ': usa StringBuilder, ArrayList o HashMap si no hace falta sincronizar')
     }
   }
-  return $out.ToArray()
+  $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
+  return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }
 
 # Los ficheros de la plantilla fuera de src/ (hasta 2 niveles) que el repo tiene que tener tambien: si es un repo de git, solo los que
@@ -706,11 +866,12 @@ function Get-Calibracion([string]$Raiz) {
   foreach ($f in (@($h.Ficheros) + @($h.Tests))) { foreach ($i in $f.Imports) { if ($i.Fqn.StartsWith('jakarta.')) { $jakarta = $true } } }
   $extra = @(Get-FicherosDePlantilla $Raiz)
   $calReglas = @{}
-  foreach ($q in @(Get-Calidad $h)) { $calReglas[$q.Regla] = $true }
+  $calidad = Get-Calidad $h
+  foreach ($q in $calidad.Hallazgos) { $calReglas[$q.Regla] = $true }
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object); Paquetes = $paquetes
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
-    Calidad = $calReglas; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
+    Calidad = $calReglas; Estilo = $calidad.Estilo; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
     YmlSftp = ($h.Yml -match 'sftp'); SftpYml = (Get-SftpYml $h); Pom = (Get-Pom $Raiz); Extra = $extra
@@ -2146,10 +2307,9 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   if ($ymlSinSftp) {
     # la configuracion tambien cuenta si entra por una clase de src/main/java: un @ConfigurationProperties con prefijo sftp
     # o un @Value con una clave sftp (Spring une SFTP_HOST con sftp.host sin tocar el yml). Sin comentarios, con las cadenas.
-    $sinComent = [System.Text.RegularExpressions.MatchEvaluator] { param($m) if ($m.Value.StartsWith('/')) { return '' } else { return $m.Value } }
     $rxSftpJava = '(?i)@ConfigurationProperties\s*\([^)]*"[^"]*sftp|@Value\s*\(\s*"[^"]*\$\{[^}"]*sftp'
     foreach ($f in @($h.Ficheros | Where-Object { $_.Texto -match '(?i)sftp' })) {
-      if ($script:RxLexico.Replace($f.Texto, $sinComent) -match $rxSftpJava) { $ymlSinSftp = $false; break }
+      if ((Get-SinComentarios $f.Texto) -match $rxSftpJava) { $ymlSinSftp = $false; break }
     }
   }
   if ($ymlSinSftp) {
@@ -2230,7 +2390,11 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   if ($h.Tests.Count -eq 0) { Add-Hallazgo 'tests' 'aviso' 'src/test/java' 0 'no hay tests' }
 
   # ---------- calidad (Javadoc y buenas practicas de Java 21) ----------
-  foreach ($q in @(Get-Calidad $h)) {
+  $estiloPlantilla = $null
+  if ($cal) { $estiloPlantilla = $cal.Estilo }
+  $calidad = Get-Calidad $h $estiloPlantilla
+  $script:LineaEstilo = $calidad.Linea
+  foreach ($q in $calidad.Hallazgos) {
     $sev = 'aviso'; $nota = ''
     if ($Cfg.CalidadErrores -contains $q.Regla) {
       if ($cal -and $cal.Calidad.ContainsKey($q.Regla) -and ($Cfg.CalidadSiempre -notcontains $q.Regla)) { $nota = ' (se queda en aviso: la plantilla tambien lo hace)' }
@@ -2320,6 +2484,7 @@ function Show-Resumen($Hall) {
     if ($e -gt 0) { Aviso $linea } else { Bien $linea }
   }
   if ($Sonar) { Info ('Sonar: ' + @(Get-SonarEstado | Where-Object { $_.Estado -eq 'resuelta' }).Count + ' resueltas aqui. La prueba de verdad es volver a pasar Sonar y relanzar con el xlsx nuevo.') }
+  if ($script:LineaEstilo) { Aviso $script:LineaEstilo }
   Info ('Informe: ' + (Join-Path $Work 'diagnostico.md'))
 }
 
@@ -2339,7 +2504,7 @@ $TextoPaso = @{
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
   cobertura  = 'Escribe o amplia el test de la clase listada hasta cubrir sus lineas sin cubrir, sin tocar nada fuera de src/test/ (el detalle va en el prompt del lote).'
   sonar      = 'Corrige las incidencias de Sonar listadas SIN cambiar el comportamiento ni la API publica (el detalle de lo que se pide va en el prompt del lote).'
-  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. No toques nada mas de esos ficheros.'
+  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. No toques nada mas de esos ficheros.'
 }
 
 # Lo que se le pide al codigo que la IA escribe en cualquier paso.
@@ -2347,12 +2512,13 @@ $TextoCalidad = @(
   'Vale para el codigo NUEVO de este lote y para los metodos que modifiques. No es permiso para refactorizar lo demas.',
   '- Javadoc, en el idioma de los comentarios de la PLANTILLA. Cada clase, interfaz, record o enum publico que crees lleva un Javadoc que dice que es y que papel tiene en su capa (puerto, adaptador, caso de uso...). Cada metodo publico que crees, y todos los de una interfaz, llevan Javadoc: que hace, @param, @return y @throws cuando existan. No hace falta en metodos con @Override, getters, setters ni constructores. Un Javadoc que solo repite el nombre no vale.',
   '- Inyeccion por constructor con campos private final. Nada de @Autowired ni @Inject en campos: inyeccion por un unico constructor, campos final, sin estado mutable en el componente.',
+  '- Un solo constructor por componente de Spring (si hay varios, @Autowired en el que debe usar Spring). @Value solo con ${...} o #{...} y nunca en un campo static. Constructor y logger con el mismo estilo que el resto del batch y la PLANTILLA (Lombok o a mano, @Slf4j o LoggerFactory).',
   '- Para datos inmutables nuevos (valores, DTO, propiedades de configuracion) usa record si la PLANTILLA tambien los usa.',
   '- Usa el logger de la PLANTILLA. Nunca System.out, System.err ni printStackTrace. Ningun catch vacio: registra la excepcion con el logger y sigue como hasta ahora, o explica en un comentario por que se ignora. No la relances ni quites el catch: cambia el comportamiento.',
   '- try-with-resources para todo lo que se cierra. Optional solo como valor de retorno. Colecciones inmutables (List.of, Stream.toList) cuando no se modifican.',
   '- Sintaxis de Java 21 solo donde simplifica codigo que ya estas escribiendo: switch con flechas, instanceof con patron, bloques de texto. var solo si el tipo se ve en la misma linea.',
   '- Fechas nuevas con java.time. No conviertas en este lote las fechas que ya existen: puede cambiar el comportamiento.',
-  'Despues del lote el script vuelve a contar los hallazgos de calidad (Javadoc, inyeccion en campos, System.out, catch vacios). Si tu codigo anade alguno, el lote no pasa.'
+  'Despues del lote el script vuelve a contar los hallazgos de calidad (Javadoc, inyeccion en campos, constructores, estilo, System.out, catch vacios). Si tu codigo anade alguno, el lote no pasa.'
 )
 
 # Un hallazgo en una linea de prompt: '- fichero:linea - detalle' ('(repo)' si no es de un fichero), y ' - motivo: <motivo>' si lo tiene.
@@ -4272,6 +4438,7 @@ $script:CobTope = $false       # la pasada se ha parado en CoberturaClasesMax
 $script:CobExcluidas = @()     # las clases con lineas sin cubrir que CoberturaExcluir no propone
 $script:MedirCobertura = $false
 $script:Cal = $null
+$script:LineaEstilo = ''       # la linea de la consola sobre el estilo del ultimo diagnostico ('' si no hay mezcla)
 if ($PlantillaRoot) {
   if (-not $soloLee) { Info 'Leyendo la plantilla...' }
   $script:Cal = Get-Calibracion $PlantillaRoot
