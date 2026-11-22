@@ -6399,9 +6399,10 @@ $Pruebas['m68 (c2) en el ultimo intento, y con un test guardado, el migrado sin 
 
 $Pruebas['m68 (c3) las tablas BATCH_ y TASK_ que deja el caso vacio del original y no el del migrado no cuentan: el migrado se acepta a la primera, sin aviso'] = {
   $e = Escenario-M68 'm68-c3' ([ordered]@{ cargaJob = @('importe=10.00') })
-  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02,BATCH_JOB_INSTANCE,TASK_EXECUTION:arnes-original;tablas=1/CALENDARIO_02:arnes-migrado'
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02,BATCH_JOB_INSTANCE,task_execution:arnes-original;tablas=1/CALENDARIO_02:arnes-migrado'
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'el caso vacio del original deja la de Spring Batch' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/BATCH_JOB_INSTANCE.csv')) ''
+  Comprueba 'y una TASK_ escrita en minusculas, que tampoco cuenta' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/task_execution.csv')) ''
   Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
   Comprueba 'sin rechazo ni aviso de tablas' ($r.Salida -notmatch 'tablas que si tiene la del test del original') (Cola $r.Salida)
 }
