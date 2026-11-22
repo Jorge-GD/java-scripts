@@ -2262,12 +2262,184 @@ function Get-Normal([string]$Texto, $Dias = $null) {
   return ($t -replace '(?<!\d{4}[-/._]\d{2}[-/._]\d{2}[ Tt]|\d{2}[-/._]\d{2}[-/._]\d{4}[ Tt])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>')
 }
 
-# Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
-# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
-function Get-LineasNormales([string]$Ruta, $Dias = $null) {
-  $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta))) $Dias) -split '\r?\n')
+# El tipo de un contenido ($Bytes, de un fichero o de una entrada con el nombre $Nombre): xlsx (un zip con extension .xlsx o .xlsm), zip (los demas: .zip, .docx, .jar...), gz,
+# pdf, binario (un byte 0 en los primeros 8 KB, o una extension de las que son siempre binarias) o texto. El tipo se decide por los bytes y la extension, no por si se
+# lee bien: un libro roto sigue siendo xlsx y Get-LineasContenido decide que hace con el.
+function Get-TipoContenido([string]$Nombre, [byte[]]$Bytes) {
+  $n = $Bytes.Length
+  if ($n -ge 4 -and $Bytes[0] -eq 0x50 -and $Bytes[1] -eq 0x4B -and (($Bytes[2] -eq 3 -and $Bytes[3] -eq 4) -or ($Bytes[2] -eq 5 -and $Bytes[3] -eq 6))) {
+    if (@('.xlsx', '.xlsm') -contains [System.IO.Path]::GetExtension($Nombre).ToLowerInvariant()) { return 'xlsx' }
+    return 'zip'
+  }
+  if ($n -ge 2 -and $Bytes[0] -eq 0x1F -and $Bytes[1] -eq 0x8B) { return 'gz' }
+  if ($n -ge 5 -and $Latin.GetString($Bytes, 0, 5) -ceq '%PDF-') { return 'pdf' }
+  $binarias = @('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff', '.webp', '.class', '.xls', '.doc', '.ppt', '.7z', '.rar', '.tar', '.bz2', '.xz', '.so', '.dll', '.exe', '.ser', '.mp3', '.mp4', '.wav', '.avi', '.mov', '.woff', '.woff2', '.ttf', '.otf', '.p12', '.pfx', '.jks')
+  if ($binarias -contains [System.IO.Path]::GetExtension($Nombre).ToLowerInvariant()) { return 'binario' }
+  if ([System.Array]::IndexOf($Bytes, [byte]0, 0, [Math]::Min($n, 8192)) -ge 0) { return 'binario' }
+  return 'texto'
+}
+
+# La linea de un binario: binario: <n> bytes, sha256 <hash>. Dos binarios son iguales si sus bytes lo son. Un PDF generado lleva dentro su fecha de creacion y de
+# modificacion y un identificador distinto en cada ejecucion: sin comprimir (los de un PDF antiguo o simple; en un PDF con objetos comprimidos no se ven), /CreationDate,
+# /ModDate, /ID y las fechas y ids del XMP se sustituyen por un valor fijo del mismo largo antes de contar y de sacar el hash.
+function Get-LineaBinaria([byte[]]$Bytes) {
+  $b = $Bytes
+  if ($b.Length -ge 5 -and $Latin.GetString($b, 0, 5) -ceq '%PDF-') {
+    $t = $Latin.GetString($b)
+    $t = [regex]::Replace($t, '/(CreationDate|ModDate)\s*\(D:[^)]*\)', [System.Text.RegularExpressions.MatchEvaluator]{ param($m) '/' + $m.Groups[1].Value + ' (D:' + ('0' * 14) + ')' })
+    $t = [regex]::Replace($t, '/ID\s*\[\s*<[0-9A-Fa-f]*>\s*<[0-9A-Fa-f]*>\s*\]', '/ID [<00><00>]')
+    $t = [regex]::Replace($t, '(<(?:xmp|pdf|xmpMM):(?:CreateDate|ModifyDate|MetadataDate)>)[^<]*', '$1')
+    $t = [regex]::Replace($t, '(?i)uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', 'uuid:00000000-0000-0000-0000-000000000000')
+    $b = $Latin.GetBytes($t)
+  }
+  return ('binario: ' + $b.Length + ' bytes, sha256 ' + (Get-Hash256 $b))
+}
+
+# Un .xlsx o .xlsm leido sin Excel (ECMA-376: xl/workbook.xml con las hojas, xl/_rels/workbook.xml.rels con el fichero de cada una, xl/sharedStrings.xml con los textos y
+# xl/worksheets/*.xml con las celdas <c r= t=> con <v>, <is> o <f>): una linea por celda con valor, '<hoja>!<celda>: <valor>', las hojas en su orden y las celdas en el del fichero.
+# Una formula sale como =<formula> y su ultimo valor (-> valor). Un numero que es una fecha de Excel de uno de los $Dias (sin tener en cuenta la hora) sale <hoy:excel><hora>
+# si lleva fraccion de dia y <hoy:excel> si no, y el resto de valores pasan por Get-Normal; las fechas y estilos de docProps/ y xl/styles.xml no cuentan. Un salto de linea dentro
+# de un valor sale como \n. Lanza una excepcion si no es un libro que se pueda leer.
+function Get-LineasExcel([byte[]]$Bytes, $Dias = $null) {
+  if ($null -eq $Dias) { $Dias = $Hoy }
+  Add-Type -AssemblyName System.IO.Compression
+  $nsR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  $inv = [System.Globalization.CultureInfo]::InvariantCulture
+  $ticks = @($Dias | ForEach-Object { $_.Date.Ticks })
+  $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
+  try {
+    $abre = {
+      param([string]$Parte)
+      $e = $zip.GetEntry($Parte)
+      if ($null -eq $e) { return $null }
+      $cfg = New-Object System.Xml.XmlReaderSettings
+      $cfg.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+      $cfg.XmlResolver = $null
+      $cfg.CloseInput = $true
+      $lector = [System.Xml.XmlReader]::Create($e.Open(), $cfg)
+      try { $d = New-Object System.Xml.XmlDocument; $d.XmlResolver = $null; $d.Load($lector); return $d } finally { $lector.Dispose() }
+    }
+    $texto = {
+      param($Nodo)
+      $s = ''
+      foreach ($h in $Nodo.ChildNodes) {
+        if ($h.LocalName -ceq 't') { $s += $h.InnerText }
+        elseif ($h.LocalName -ceq 'r') { foreach ($t in $h.ChildNodes) { if ($t.LocalName -ceq 't') { $s += $t.InnerText } } }
+      }
+      return $s
+    }
+    $libro = & $abre 'xl/workbook.xml'
+    if ($null -eq $libro) { throw 'no hay xl/workbook.xml' }
+    $base = [datetime]'1899-12-30'
+    foreach ($p in $libro.GetElementsByTagName('workbookPr', '*')) { if (@('1', 'true') -contains $p.GetAttribute('date1904')) { $base = [datetime]'1904-01-01' } }
+    $destinos = @{}
+    $rels = & $abre 'xl/_rels/workbook.xml.rels'
+    if ($rels) { foreach ($n in $rels.GetElementsByTagName('Relationship', '*')) { $destinos[$n.GetAttribute('Id')] = $n.GetAttribute('Target') } }
+    $comp = New-Object 'System.Collections.Generic.List[string]'
+    $ss = & $abre 'xl/sharedStrings.xml'
+    if ($ss) { foreach ($si in $ss.GetElementsByTagName('si', '*')) { $comp.Add((& $texto $si)) } }
+    $lineas = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($h in $libro.GetElementsByTagName('sheet', '*')) {
+      $dest = [string]$destinos[$h.GetAttribute('id', $nsR)]
+      if (-not $dest) { continue }
+      $parte = 'xl/' + $dest
+      if ($dest.StartsWith('/')) { $parte = $dest.TrimStart('/') }
+      $hoja = & $abre $parte
+      if ($null -eq $hoja) { continue }
+      $nombre = $h.GetAttribute('name')
+      foreach ($c in $hoja.GetElementsByTagName('c', '*')) {
+        $tipo = $c.GetAttribute('t')
+        $v = $null; $f = ''; $dentro = $null
+        foreach ($x in $c.ChildNodes) {
+          if ($x.LocalName -ceq 'v') { $v = $x.InnerText } elseif ($x.LocalName -ceq 'f') { $f = $x.InnerText } elseif ($x.LocalName -ceq 'is') { $dentro = & $texto $x }
+        }
+        $valor = $v
+        $i = 0
+        if ($tipo -ceq 's' -and $null -ne $v -and [int]::TryParse($v, [ref]$i) -and $i -ge 0 -and $i -lt $comp.Count) { $valor = $comp[$i] }
+        elseif ($tipo -ceq 'inlineStr') { $valor = $dentro }
+        elseif ($tipo -ceq 'b') { if ($v -ceq '1') { $valor = 'TRUE' } elseif ($v -ceq '0') { $valor = 'FALSE' } }
+        elseif (-not $tipo -or $tipo -ceq 'n') {
+          $num = 0.0
+          if ($null -ne $v -and [double]::TryParse($v, [System.Globalization.NumberStyles]::Float, $inv, [ref]$num) -and $num -ge 1 -and $num -lt 2958466) {
+            $dia = [Math]::Floor($num)
+            if ($ticks -contains $base.AddDays($dia).Ticks) { if ($num -gt $dia) { $valor = '<hoy:excel><hora>' } else { $valor = '<hoy:excel>' } }
+          }
+        }
+        if ($f) { $valor = '=' + $f + $(if ($valor) { ' -> ' + $valor } else { '' }) }
+        if (-not $valor) { continue }
+        $lineas.Add($nombre + '!' + $c.GetAttribute('r') + ': ' + ($valor -replace "\r\n|\r|\n", '\n'))
+      }
+    }
+  } finally { $zip.Dispose() }
+  if ($lineas.Count -eq 0) { return @() }
+  # Una sola pasada de Get-Normal para todas las lineas (sin saltos dentro de una linea, nada cruza de una a otra), en la forma de los ficheros: bytes UTF-8 vistos como Latin-1.
+  return @((Get-Normal ($Latin.GetString($Utf8.GetBytes(($lineas -join "`n")))) $Dias) -split "`n")
+}
+
+# Las lineas de un zip o de un docx, jar...: una por linea de cada entrada (las carpetas no cuentan) con el nombre de la entrada, normalizado, delante, y las entradas en el orden de
+# ese nombre (un zip con las mismas entradas en otro orden es el mismo contenido). Cada entrada se lee segun su tipo (Get-LineasContenido): texto, un libro, otro zip (hasta
+# 3 niveles) o un binario. Una entrada vacia sale como '<nombre>: (vacio)' para que sobre o falte. Lanza una excepcion si no se puede abrir.
+function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0) {
+  Add-Type -AssemblyName System.IO.Compression
+  $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
+  $claves = New-Object 'System.Collections.Generic.List[string]'
+  $trozos = New-Object 'System.Collections.Generic.List[object]'
+  try {
+    foreach ($e in $zip.Entries) {
+      if ($e.FullName.EndsWith('/')) { continue }
+      $ms = New-Object System.IO.MemoryStream
+      $s = $e.Open()
+      try { $s.CopyTo($ms) } finally { $s.Dispose() }
+      $nombre = Get-Normal ($Latin.GetString($Utf8.GetBytes($e.FullName))) $Dias
+      $l = @(Get-LineasContenido $e.FullName $ms.ToArray() $Dias ($Nivel + 1))
+      if ($l.Count -eq 0) { $l = @('(vacio)') }
+      $claves.Add($nombre + [char]0 + $trozos.Count.ToString('D6'))
+      $trozos.Add(@($l | ForEach-Object { $nombre + ': ' + $_ }))
+    }
+  } finally { $zip.Dispose() }
+  $k = $claves.ToArray()
+  $orden = New-Object 'int[]' $k.Length
+  for ($i = 0; $i -lt $k.Length; $i++) { $orden[$i] = $i }
+  [System.Array]::Sort($k, $orden, [System.StringComparer]::Ordinal)
+  $todo = @()
+  foreach ($i in $orden) { $todo += @($trozos[$i]) }
+  return $todo
+}
+
+# Las lineas de un contenido ya leido ($Bytes de un fichero o de una entrada con el nombre $Nombre), segun su tipo (Get-TipoContenido): un libro de Excel, una linea por celda
+# (Get-LineasExcel); un zip o un gz, las de lo que lleva dentro, cada entrada con su nombre (Get-LineasZip; un gz lleva el nombre del fichero sin .gz); un binario (y un
+# libro o un zip que no se pueden abrir), la linea binario: <n> bytes, sha256 <hash> (Get-LineaBinaria); un texto, sus lineas normalizadas (Get-Normal; los saltos \r\n cuentan
+# como \n y el ultimo salto no cuenta como linea; se leen byte a byte, Latin-1: dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este).
+function Get-LineasContenido([string]$Nombre, [byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0) {
+  $tipo = Get-TipoContenido $Nombre $Bytes
+  if ($Nivel -ge 3 -and (@('xlsx', 'zip', 'gz') -contains $tipo)) { return @(Get-LineaBinaria $Bytes) }
+  if ($tipo -ceq 'xlsx') {
+    try { return @(Get-LineasExcel $Bytes $Dias) } catch { $tipo = 'zip' }
+  }
+  if ($tipo -ceq 'zip') {
+    try { return @(Get-LineasZip $Bytes $Dias $Nivel) } catch { return @(Get-LineaBinaria $Bytes) }
+  }
+  if ($tipo -ceq 'gz') {
+    try {
+      $ms = New-Object System.IO.MemoryStream
+      $g = New-Object System.IO.Compression.GZipStream((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.CompressionMode]::Decompress)
+      try { $g.CopyTo($ms) } finally { $g.Dispose() }
+      $dentro = [System.IO.Path]::GetFileName($Nombre) -replace '(?i)\.gz$', ''
+      $l = @(Get-LineasContenido $dentro $ms.ToArray() $Dias ($Nivel + 1))
+      if ($l.Count -eq 0) { $l = @('(vacio)') }
+      $nom = Get-Normal ($Latin.GetString($Utf8.GetBytes($dentro))) $Dias
+      return @($l | ForEach-Object { $nom + ': ' + $_ })
+    } catch { return @(Get-LineaBinaria $Bytes) }
+  }
+  if ($tipo -ceq 'pdf' -or $tipo -ceq 'binario') { return @(Get-LineaBinaria $Bytes) }
+  $l = @((Get-Normal ($Latin.GetString($Bytes)) $Dias) -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   return $l
+}
+
+# Las lineas de un fichero, normalizadas (Get-LineasContenido).
+function Get-LineasNormales([string]$Ruta, $Dias = $null) {
+  return @(Get-LineasContenido $Ruta ([System.IO.File]::ReadAllBytes($Ruta)) $Dias)
 }
 
 # Las lineas $L de una tabla (un .csv de tablas\: campos separados por ';', la primera linea con los nombres de las columnas) con las
@@ -2345,10 +2517,11 @@ function Get-Legible([string]$Linea) {
 }
 
 # Si dos ficheros distintos solo cambian en la codificacion (JEP 400: UTF-8 por defecto desde Java 18) o en el formato
-# de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''.
+# de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''. Un binario, un libro o un zip no son texto: no tienen codificacion ni formato de numeros que mirar.
 function Get-NotaJdk([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   $ba = [System.IO.File]::ReadAllBytes($A)
   $bb = [System.IO.File]::ReadAllBytes($B)
+  if ((Get-TipoContenido $A $ba) -cne 'texto' -or (Get-TipoContenido $B $bb) -cne 'texto') { return '' }
   $limpio = { param([string]$s, $d) ((Get-Normal $s.TrimStart([char]0xFEFF) $d) -replace '\r\n', "`n").TrimEnd("`n") }
   $ua = & $limpio ($Utf8.GetString($ba)) $DiasA
   $ub = & $limpio ($Utf8.GetString($bb)) $DiasB
@@ -2386,8 +2559,14 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
   $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
   if ($A -and $B) { $nota = Get-NotaJdk $A $B $DiasA $DiasB }
-  $nota = (@($notaTabla, $nota) | Where-Object { $_ }) -join '; '
-  return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
+  $original = & $lado $x $A
+  $migrado = & $lado $y $B
+  # Lo que se compara entero (un binario) y un PDF, que lleva dentro su fecha de creacion, lo dicen.
+  $notaBin = ''
+  if ($original -clike 'binario: *' -or $migrado -clike 'binario: *') { $notaBin = 'binario: se compara entero (sha256), no por dentro' }
+  if (($A -match '(?i)\.pdf$' -or $B -match '(?i)\.pdf$') -and $notaBin) { $notaBin += '; un PDF lleva su fecha de creacion dentro: si solo cambia eso, es la fecha de creacion (se ignoran /CreationDate, /ModDate y /ID cuando estan sin comprimir)' }
+  $nota = (@($notaTabla, $nota, $notaBin) | Where-Object { $_ }) -join '; '
+  return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = $original; Migrado = $migrado; Nota = $nota }
 }
 
 # Las diferencias entre lo que dejo un caso en dos carpetas: una por fichero que no coincide (con su ruta relativa).

@@ -1017,6 +1017,9 @@ function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
   return (($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
 }
 
+# Las funciones del script que leen un fichero para compararlo (Get-LineasNormales y lo que decide por su tipo, M73 (c)): las que necesita cualquier prueba que extraiga Compare-Fichero.
+$FnLeer = @('Get-LineasNormales', 'Get-LineasContenido', 'Get-TipoContenido', 'Get-LineasExcel', 'Get-LineasZip', 'Get-LineaBinaria', 'Get-Hash256')
+
 $Pruebas['55 m20b (a, b): una fecha de negocio que no es de hoy y cambia entre el original y el migrado sale distinta; la fecha y hora de hoy con otra hora sale igual'] = {
   $hoy = (Get-Date).ToString('yyyy-MM-dd')
   $e = Nuevo-Escenario 'm20b-fechas' ([ordered]@{ cargaJob = @('importe=10.00 vence=1980-05-12 00:00:00', "importe=10.00 hecho=$hoy 10:00:00") }) 'minimo=5.00' "minimo=5.00`nreescribe=1980-05-12 00:00:00=>1980-05-11 23:00:00`nreescribe=$hoy 10:00:00=>$hoy 11:30:00"
@@ -2558,7 +2561,7 @@ Caso 'fuera-de-tablas' @{ 'ficheros/salida/x.csv' = "ID;NOMBRE`n" } @{}
 Caso 'tablas-no-csv' @{ 'tablas/nota.txt' = "ID;NOMBRE`n" } @{}
 Caso 'vacia-y-otra' @{ $t = "ID;NOMBRE`n"; 'tablas/U.csv' = "ID;NOMBRE`n1;ana`n" } @{}
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -3719,7 +3722,7 @@ $o = Join-Path $Raiz 'cambiante'
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
   $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) {
@@ -4270,7 +4273,7 @@ function Caso([string]$Id, [string]$A, [string]$B) {
 }
 
 '@ + "`n" + $Casos
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
   $r = Lanzar $f @((Join-Path $Dir $Nombre))
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -5202,7 +5205,7 @@ Caso 'sin-ventana' @{ $a = "total 3`n" } @{ $b = "total 3`n" } $null
 'N ' + (Get-Normal 'ficheros/outbox/R_2026_11_20.TXT y 2026_11_20_153045' $caballo)
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -6979,7 +6982,7 @@ function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
 }
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
-  $funciones = @('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado')
+  $funciones = (@('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado'))
   [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $funciones) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
   $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')))
   $v = [ordered]@{}
@@ -7416,17 +7419,18 @@ $Pruebas['m73 (a4) un datos.sql que crea una secuencia, un indice, un esquema y 
 
 # Un script con Get-Normal y lo de comparar que, con el dia 2026-11-22 como el de la ejecucion ($Hoy), por cada 'Caso <id> @{ carpeta/fichero = contenido } @{ ... }' de $Cuerpo (el original
 # y el migrado) escribe una linea 'R <id> <tipo>|<fichero>|<original>|<migrado>|<lineas>|<linea>|<nota>|<clave>' por diferencia (Get-TipoDif), o 'R <id> (ninguna)'. Un contenido que es un
-# [byte[]] se escribe tal cual. Devuelve id -> sus lineas. $Extra son mas funciones del script (las de leer un Excel o un zip, desde M73 (c)).
-function Compara-M73([string]$Nombre, [string]$Cuerpo) {
+# [byte[]] se escribe tal cual: los de $Bin (nombre -> bytes) se escriben aparte y el script los lee con Bin '<nombre>'. Devuelve id -> sus lineas.
+function Compara-M73([string]$Nombre, [string]$Cuerpo, [hashtable]$Bin = @{}) {
   $f = Join-Path $Dir "$Nombre.ps1"
   $cabeza = @'
-param([string]$Raiz)
+param([string]$Raiz, [string]$BinDir)
 $Inv = [System.Globalization.CultureInfo]::InvariantCulture
 $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
 $RutasCopia = @()
 $Hoy = @([datetime]'2026-11-22')
 $Cfg = @{ CompararIgnorar = @('*.log') }
 Add-Type -AssemblyName System.IO.Compression
+function Bin([string]$N) { return , [System.IO.File]::ReadAllBytes((Join-Path $BinDir $N)) }
 function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
   $dirs = @{}
   foreach ($x in @(@('A', $A), @('B', $B))) {
@@ -7447,7 +7451,10 @@ function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
   [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $FnComparaM73) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
-  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')))
+  $bd = Join-Path $Dir ($Nombre + '-bin')
+  [void](New-Item -ItemType Directory -Path $bd -Force)
+  foreach ($k in $Bin.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $bd $k), [byte[]]$Bin[$k]) }
+  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')), $bd)
   $v = [ordered]@{}
   foreach ($l in @($r.Salida -split "`n")) {
     if ($l -cmatch '^R (\S+) (.*)$') { $id = $Matches[1]; if (-not $v.Contains($id)) { $v[$id] = @() }; $v[$id] += $Matches[2].TrimEnd() }
@@ -7455,8 +7462,8 @@ function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
   if ($v.Count -eq 0) { Comprueba "${Nombre}: el script da alguna linea R" $false (Cola $r.Salida) }
   return $v
 }
-# Las funciones del script que necesita Compara-M73; M73 (c) anade las de leer por dentro.
-$FnComparaM73 = @('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado')
+# Las funciones del script que necesita Compara-M73.
+$FnComparaM73 = (@('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado'))
 
 # Get-Normal del dia 2026-11-22 sobre cada texto de $Textos (uno por linea, sin saltos): devuelve lo que sale, en el mismo orden.
 function Normaliza-M73([string]$Nombre, [string[]]$Textos) {
@@ -7588,6 +7595,227 @@ $Pruebas['m73 (b4) una marca de tiempo Unix de hoy en segundos (10 cifras) o en 
   $v = Normaliza-M73 'm73-b4' @($esperado.Keys)
   $i = 0
   foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
+}
+
+# Las lineas (Get-LineasNormales) de un fichero de nombre $Fichero y bytes $Bytes, con el dia 2026-11-22 como el de la ejecucion, como las ensena la consola (Get-Legible).
+function Lineas-M73([string]$Nombre, [string]$Fichero, [byte[]]$Bytes) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Ruta)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)
+'@
+  $cola = 'foreach ($l in @(Get-LineasNormales $Ruta)) { ''L '' + (Get-Legible $l) }'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnComparaM73 + @('Get-Legible'))) + "`n" + $cola))
+  $x = Join-Path $Dir "$Nombre-$Fichero"
+  [System.IO.File]::WriteAllBytes($x, $Bytes)
+  $r = Lanzar $f @($x)
+  return @(@($r.Salida -split "`n") | Where-Object { $_ -cmatch '^L ' } | ForEach-Object { $_.Substring(2).TrimEnd("`r") })
+}
+
+# Un zip (en bytes) con las partes de $Partes (nombre -> texto o [byte[]]), con la fecha de cada entrada fija: los mismos bytes cada vez que se construye.
+function Zip-M73($Partes) {
+  Add-Type -AssemblyName System.IO.Compression
+  $ms = New-Object System.IO.MemoryStream
+  $zip = New-Object System.IO.Compression.ZipArchive($ms, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+  $fijo = New-Object System.DateTimeOffset(2020, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
+  foreach ($k in $Partes.Keys) {
+    $e = $zip.CreateEntry($k)
+    $e.LastWriteTime = $fijo
+    $b = $Partes[$k]
+    if ($b -is [string]) { $b = (New-Object System.Text.UTF8Encoding($false)).GetBytes($b) }
+    if ($b.Length -gt 0) { $s = $e.Open(); $s.Write($b, 0, $b.Length); $s.Dispose() }
+  }
+  $zip.Dispose()
+  return , $ms.ToArray()
+}
+
+# Un .xlsx (en bytes) con el XML minimo: $Creado va en docProps/core.xml y $Estilo en xl/styles.xml (no cuentan). $Hojas: nombre de hoja -> celdas, cada una @(ref, tipo, valor [, cache])
+# con tipo s (cadena compartida), i (cadena en la propia celda), n (numero), b (booleano), f (formula, con su valor en cache).
+function Xlsx-M73([string]$Creado, $Hojas, [string]$Estilo = 'a') {
+  $esc = { param([string]$s) [System.Security.SecurityElement]::Escape($s) }
+  $compartidas = New-Object System.Collections.ArrayList
+  $partes = [ordered]@{}
+  $partes['[Content_Types].xml'] = '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'
+  $partes['_rels/.rels'] = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+  $partes['docProps/core.xml'] = '<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/"><dcterms:created>' + $Creado + '</dcterms:created></cp:coreProperties>'
+  $partes['docProps/app.xml'] = '<?xml version="1.0" encoding="UTF-8"?><Properties><TotalTime>' + $Creado.Length + '</TotalTime></Properties>'
+  $partes['xl/styles.xml'] = '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="' + $Estilo + '"/></font></fonts></styleSheet>'
+  $hojasXml = ''; $rels = ''; $n = 0
+  foreach ($nombre in $Hojas.Keys) {
+    $n++
+    $filas = [ordered]@{}
+    foreach ($c in $Hojas[$nombre]) {
+      $fila = [regex]::Match($c[0], '\d+').Value
+      if (-not $filas.Contains($fila)) { $filas[$fila] = '' }
+      $v = [string]$c[2]
+      switch ($c[1]) {
+        's' { $ix = $compartidas.IndexOf($v); if ($ix -lt 0) { $ix = $compartidas.Add($v) }; $xml = '<c r="' + $c[0] + '" t="s"><v>' + $ix + '</v></c>' }
+        'i' { $xml = '<c r="' + $c[0] + '" t="inlineStr"><is><t>' + (& $esc $v) + '</t></is></c>' }
+        'b' { $xml = '<c r="' + $c[0] + '" t="b"><v>' + $v + '</v></c>' }
+        'f' { $xml = '<c r="' + $c[0] + '"><f>' + (& $esc $v) + '</f><v>' + $c[3] + '</v></c>' }
+        default { $xml = '<c r="' + $c[0] + '"><v>' + $v + '</v></c>' }
+      }
+      $filas[$fila] += $xml
+    }
+    $datos = ''
+    foreach ($f in $filas.Keys) { $datos += '<row r="' + $f + '">' + $filas[$f] + '</row>' }
+    $partes["xl/worksheets/sheet$n.xml"] = '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + $datos + '</sheetData></worksheet>'
+    $hojasXml += '<sheet name="' + (& $esc $nombre) + '" sheetId="' + $n + '" r:id="rId' + $n + '"/>'
+    $rels += '<Relationship Id="rId' + $n + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + $n + '.xml"/>'
+  }
+  $partes['xl/workbook.xml'] = '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + $hojasXml + '</sheets></workbook>'
+  $partes['xl/_rels/workbook.xml.rels'] = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + $rels + '</Relationships>'
+  if ($compartidas.Count -gt 0) {
+    $partes['xl/sharedStrings.xml'] = '<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="' + $compartidas.Count + '" uniqueCount="' + $compartidas.Count + '">' + (($compartidas | ForEach-Object { '<si><t>' + (& $esc $_) + '</t></si>' }) -join '') + '</sst>'
+  }
+  return , (Zip-M73 $partes)
+}
+
+function Sha-M73([byte[]]$Bytes) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { return ((@($sha.ComputeHash($Bytes)) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
+}
+
+# Un .png de mentira de 19 bytes; $Ultimo es su ultimo byte.
+function Png-M73([byte]$Ultimo = 0x80) { return , ([byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xFE, $Ultimo)) }
+
+# Un .gz (en bytes) con el texto $Texto.
+function Gz-M73([string]$Texto) {
+  $ms = New-Object System.IO.MemoryStream
+  $g = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Compress, $true)
+  $b = [System.Text.Encoding]::UTF8.GetBytes($Texto)
+  $g.Write($b, 0, $b.Length); $g.Dispose()
+  return , $ms.ToArray()
+}
+
+# Un PDF de mentira (en bytes) con el texto $Cuerpo y, si $Fecha no es '', su /CreationDate, su /ModDate (de $Fecha) y su /ID (de $Id).
+function Pdf-M73([string]$Fecha, [string]$Id, [string]$Cuerpo) {
+  $info = ''; $trailer = '<< /Root 1 0 R >>'
+  if ($Fecha) { $info = " /CreationDate (D:$Fecha+01'00') /ModDate (D:$Fecha+01'00')"; $trailer = "<< /Root 1 0 R /ID [<$Id><$Id>] >>" }
+  $t = "%PDF-1.4`n1 0 obj << /Producer (acme)$info >> endobj`n2 0 obj << /Length 5 >> stream`n$Cuerpo`nendstream endobj`ntrailer $trailer`n%%EOF`n"
+  return , [System.Text.Encoding]::GetEncoding(28591).GetBytes($t + [string][char]0x80)
+}
+
+# El libro de los tests: dos hojas (Hoja1: texto, numero, texto con la hora de hoy y $Texto en B3; Datos: una cadena con enie y u con tilde, un booleano y una formula).
+function Libro-M73([string]$Texto = 'x', [string]$Hora = '10:26:58', [string]$Estilo = 'a') {
+  $hojas = [ordered]@{
+    Hoja1 = @(@('A1', 's', 'importe'), @('B1', 'n', '10'), @('A2', 's', "generado 2026-11-22 $Hora"), @('B3', 's', $Texto))
+    Datos = @(@('A1', 'i', ([string][char]0xF1 + 'and' + [char]0xFA)), @('B2', 'b', '1'), @('C3', 'f', 'SUM(B1:B1)', '10'))
+  }
+  return , (Xlsx-M73 ('2026-11-22T' + $Hora + 'Z') $hojas $Estilo)
+}
+
+$Pruebas['m73 (c1) dos .xlsx con las mismas celdas y distinto docProps/core.xml, estilos y hora dentro de una celda: iguales; se leen celda a celda (hoja!celda: valor), con las cadenas compartidas, en el orden de las hojas'] = {
+  $a = Libro-M73 'x' '10:26:58' 'a'
+  $b = Libro-M73 'x' '10:31:07' 'b'
+  Comprueba 'los dos .xlsx no son el mismo fichero' ((Sha-M73 $a) -ne (Sha-M73 $b)) ''
+  $v = Compara-M73 'm73-c1' "Caso 'igual' @{ 'ficheros/informe.xlsx' = (Bin 'a') } @{ 'ficheros/informe.xlsx' = (Bin 'b') }" @{ a = $a; b = $b }
+  Igual 'iguales' @('(ninguna)') @($v['igual'])
+  $l = Lineas-M73 'm73-c1l' 'informe.xlsx' $a
+  $esperadas = @('Hoja1!A1: importe', 'Hoja1!B1: 10', 'Hoja1!A2: generado <hoy:yyyy-MM-dd><hora>', 'Hoja1!B3: x', ('Datos!A1: ' + [char]0xF1 + 'and' + [char]0xFA), 'Datos!B2: TRUE', 'Datos!C3: =SUM(B1:B1) -> 10')
+  Igual 'las lineas del libro: hoja!celda: valor, las hojas en orden, la cadena compartida resuelta, la enie y la u con tilde, el booleano y la formula con su valor' ($esperadas -join '|') ($l -join '|')
+}
+
+$Pruebas['m73 (c2) una celda distinta: distinto, con la primera linea distinta Hoja1!B3 en los dos lados; ni lo que sale en la consola ni el JSON llevan bytes que no sean de texto; de punta a punta, igual con otra hora y distinto con otra celda'] = {
+  $a = Libro-M73 'x'
+  $b = Libro-M73 'y' '10:31:07' 'b'
+  $v = Compara-M73 'm73-c2' "Caso 'dif' @{ 'ficheros/informe.xlsx' = (Bin 'a') } @{ 'ficheros/informe.xlsx' = (Bin 'b') }" @{ a = $a; b = $b }
+  Igual 'una diferencia de contenido: la linea 4, Hoja1!B3, en cada lado, sin nota' @('contenido|ficheros/informe.xlsx|Hoja1!B3: x|Hoja1!B3: y|1|4||ficheros/informe.xlsx') @($v['dif'])
+  $e = Escenario-M73 'm73-c2e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes;celda'
+  Igual 'de punta a punta sale con 2 (el Maven falso deja el libro con otra celda en el migrado: un caso distinto)' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)[0]
+  Igual 'con la linea del original: la celda' 'Hoja1!B3: x' "$($d.original)"
+  Igual 'y la del migrado' 'Hoja1!B3: y' "$($d.migrado)"
+  $json = [System.IO.File]::ReadAllText($e.Json)
+  $mal = '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]'
+  Comprueba 'el JSON no lleva bytes de control ni caracteres de reemplazo' ($json -notmatch $mal) ''
+  Comprueba 'la consola tampoco' ($r.Salida -notmatch $mal) (Cola $r.Salida)
+  Comprueba 'y la consola dice la celda' ($r.Salida.Contains('Hoja1!B3')) (Cola $r.Salida)
+  $e = Escenario-M73 'm73-c2f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes'
+  Igual 'dos libros con las mismas celdas y otra hora (en la carpeta, en docProps y en una celda): sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m73 (c3) un numero que es una fecha de Excel de uno de los dias de la ejecucion: con fraccion de hora, <hoy:excel><hora> (otra hora, igual); sin ella, <hoy:excel>; el dia siguiente, no'] = {
+  $serial = ([datetime]'2026-11-22' - [datetime]'1899-12-30').Days
+  $hojas = { param([string]$Fraccion, [int]$Dia) [ordered]@{ Hoja1 = @(@('A1', 'n', "$serial.$Fraccion"), @('A2', 'n', "$serial"), @('A3', 'n', "$Dia"), @('A4', 'n', '0.4351851852'), @('A5', 'n', '1234567')) } }
+  $a = Xlsx-M73 '2026-11-22T10:26:58Z' (& $hojas '4351851852' ($serial + 1))
+  $b = Xlsx-M73 '2026-11-22T10:31:07Z' (& $hojas '4382870370' ($serial + 1))
+  $c = Xlsx-M73 '2026-11-22T10:31:07Z' (& $hojas '4382870370' ($serial + 2))
+  $cuerpo = "Caso 'igual' @{ 'i.xlsx' = (Bin 'a') } @{ 'i.xlsx' = (Bin 'b') }`nCaso 'manana' @{ 'i.xlsx' = (Bin 'a') } @{ 'i.xlsx' = (Bin 'c') }"
+  $v = Compara-M73 'm73-c3' $cuerpo @{ a = $a; b = $b; c = $c }
+  Igual 'la misma fecha con otra hora: igual' @('(ninguna)') @($v['igual'])
+  Igual 'el dia de despues no es de hoy: sale como numero, y distinto' @("contenido|i.xlsx|Hoja1!A3: $($serial + 1)|Hoja1!A3: $($serial + 2)|1|3||i.xlsx") @($v['manana'])
+  $l = Lineas-M73 'm73-c3l' 'i.xlsx' $a
+  Igual 'con fraccion, <hoy:excel><hora>; sin ella, <hoy:excel>; el dia siguiente, otro numero que sigue como esta, y los que no son una fecha de hoy' "Hoja1!A1: <hoy:excel><hora>|Hoja1!A2: <hoy:excel>|Hoja1!A3: $($serial + 1)|Hoja1!A4: 0.4351851852|Hoja1!A5: 1234567" ($l -join '|')
+}
+
+$Pruebas['m73 (c4) un .png (y otro binario, o un fichero con un byte 0): una sola linea binario: <n> bytes, sha256 <hash>; distinto con la nota, igual si los bytes lo son'] = {
+  $a = Png-M73 0x80
+  $b = Png-M73 0x81
+  $n1 = [byte[]](0x61, 0x00, 0x62, 0xFF)
+  $n2 = [byte[]](0x61, 0x00, 0x63, 0xFF)
+  $cuerpo = "Caso 'igual' @{ 'ficheros/logo.png' = (Bin 'a') } @{ 'ficheros/logo.png' = (Bin 'a') }`nCaso 'dif' @{ 'ficheros/logo.png' = (Bin 'a') } @{ 'ficheros/logo.png' = (Bin 'b') }`nCaso 'nul' @{ 'datos.dat' = (Bin 'n1') } @{ 'datos.dat' = (Bin 'n2') }"
+  $v = Compara-M73 'm73-c4' $cuerpo @{ a = $a; b = $b; n1 = $n1; n2 = $n2 }
+  $nota = 'binario: se compara entero (sha256), no por dentro'
+  Igual 'los mismos bytes: igual' @('(ninguna)') @($v['igual'])
+  Igual 'otro byte: una linea binario en cada lado, con su hash, y la nota' @("contenido|ficheros/logo.png|binario: 19 bytes, sha256 $(Sha-M73 $a)|binario: 19 bytes, sha256 $(Sha-M73 $b)|1|1|$nota|ficheros/logo.png") @($v['dif'])
+  Igual 'un fichero con un byte 0 en los primeros 8 KB, aunque su extension no diga nada, tambien es binario' @("contenido|datos.dat|binario: 4 bytes, sha256 $(Sha-M73 $n1)|binario: 4 bytes, sha256 $(Sha-M73 $n2)|1|1|$nota|datos.dat") @($v['nul'])
+  $e = Escenario-M73 'm73-c4e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'png-otro'
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)[0]
+  Igual 'de punta a punta: el caso sale distinto con la linea binario en el JSON' "binario: 19 bytes, sha256 $(Sha-M73 $a)|binario: 19 bytes, sha256 $(Sha-M73 $b)" "$($d.original)|$($d.migrado)"
+  Comprueba 'y la consola no lleva bytes de control' ($r.Salida -notmatch '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]') (Cola $r.Salida)
+  $e = Escenario-M73 'm73-c4f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  [void](Prueba-M73 $e 'png')
+  Igual 'con el mismo .png en los dos lados, igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m73 (c5) un .zip con un .txt que lleva la hora de hoy dentro, una imagen y un .xlsx dentro, y un .gz con un texto: se leen entrada a entrada, con su nombre delante; otra hora, igual; otro contenido, distinto en la linea de esa entrada'] = {
+  $png = Png-M73 0x80
+  $zip = {
+    param([string]$Hora, [string]$Importe = '10', [string]$LibroTexto = 'x')
+    Zip-M73 ([ordered]@{ 'r.txt' = "hecho 2026-11-22 $Hora`nimporte;$Importe`n"; 'logo.png' = $png; 'sub/libro.xlsx' = (Libro-M73 $LibroTexto $Hora); 'sub/' = '' })
+  }
+  $gz = { param([string]$Hora) Gz-M73 "hecho 2026-11-22 $Hora`nimporte;10`n" }
+  $roto = [byte[]](0x50, 0x4B, 0x03, 0x04, 0x01, 0x02)
+  $roto2 = [byte[]](0x50, 0x4B, 0x03, 0x04, 0x01, 0x03)
+  $bin = @{ z1 = (& $zip '10:26:58'); z2 = (& $zip '10:31:07'); z3 = (& $zip '10:31:07' '11'); z4 = (& $zip '10:31:07' '10' 'y'); g1 = (& $gz '10:26:58'); g2 = (& $gz '10:31:07'); r1 = $roto; r2 = $roto2 }
+  $cuerpo = @'
+Caso 'igual' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z2') }
+Caso 'dif' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z3') }
+Caso 'libro' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z4') }
+Caso 'gz' @{ 'r.txt.gz' = (Bin 'g1') } @{ 'r.txt.gz' = (Bin 'g2') }
+Caso 'malo' @{ 'roto.zip' = (Bin 'r1') } @{ 'roto.zip' = (Bin 'r2') }
+'@
+  $v = Compara-M73 'm73-c5' $cuerpo $bin
+  Igual 'el zip con otra hora en el .txt y en el libro de dentro: igual' @('(ninguna)') @($v['igual'])
+  Igual 'otro importe en el .txt: una diferencia, la linea de r.txt (despues de logo.png y la hora), con el nombre de la entrada delante' @('contenido|ficheros/lote.zip|r.txt: importe;10|r.txt: importe;11|1|3||ficheros/lote.zip') @($v['dif'])
+  Igual 'una celda distinta en el libro de dentro: sub/libro.xlsx: Hoja1!B3' @('contenido|ficheros/lote.zip|sub/libro.xlsx: Hoja1!B3: x|sub/libro.xlsx: Hoja1!B3: y|1|7||ficheros/lote.zip') @($v['libro'])
+  Igual 'un .gz con un texto con otra hora: igual' @('(ninguna)') @($v['gz'])
+  Igual 'un .zip roto (no se puede abrir): una linea binario y la nota, no basura' @("contenido|roto.zip|binario: 6 bytes, sha256 $(Sha-M73 $roto)|binario: 6 bytes, sha256 $(Sha-M73 $roto2)|1|1|binario: se compara entero (sha256), no por dentro|roto.zip") @($v['malo'])
+  $l = Lineas-M73 'm73-c5l' 'lote.zip' (& $zip '10:26:58')
+  $esperadas = @(('logo.png: binario: 19 bytes, sha256 ' + (Sha-M73 $png)), 'r.txt: hecho <hoy:yyyy-MM-dd><hora>', 'r.txt: importe;10', 'sub/libro.xlsx: Hoja1!A1: importe')
+  Igual 'las primeras lineas del zip: cada entrada con su nombre delante, la imagen como binario y las entradas en orden de nombre' ($esperadas -join '|') (@($l | Select-Object -First 4) -join '|')
+}
+
+$Pruebas['m73 (c6) un PDF: sin su /CreationDate, /ModDate ni /ID se compara como binario, asi que dos PDF que solo cambian en eso salen iguales; si cambia otra cosa, distinto con la nota de la fecha de creacion'] = {
+  $bin = @{ p1 = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola'); p2 = (Pdf-M73 '20261122103107' 'CC33DD44' 'hola'); p3 = (Pdf-M73 '20261122103107' 'CC33DD44' 'adios') }
+  $cuerpo = "Caso 'igual' @{ 'ficheros/informe.pdf' = (Bin 'p1') } @{ 'ficheros/informe.pdf' = (Bin 'p2') }`nCaso 'dif' @{ 'ficheros/informe.pdf' = (Bin 'p1') } @{ 'ficheros/informe.pdf' = (Bin 'p3') }"
+  $v = Compara-M73 'm73-c6' $cuerpo $bin
+  Igual 'dos PDF que solo cambian en la fecha y el /ID: igual' @('(ninguna)') @($v['igual'])
+  $dif = @($v['dif'])
+  Igual 'con otro cuerpo: una diferencia' 1 $dif.Count
+  Comprueba 'es una linea binario en cada lado' ($dif[0] -cmatch '^contenido\|ficheros/informe\.pdf\|binario: \d+ bytes, sha256 [0-9a-f]{64}\|binario: \d+ bytes, sha256 [0-9a-f]{64}\|1\|1\|') $dif[0]
+  Comprueba 'con la nota que dice que puede ser la fecha de creacion' ($dif[0].Contains('un PDF lleva su fecha de creacion dentro')) $dif[0]
 }
 
 # ================================ LANZADOR ================================
