@@ -175,9 +175,9 @@ function Uno-Malo([string]$Nombre, [hashtable]$Cambios, [string]$ConJson = '') {
 # ================================ PRUEBAS ================================
 $Pruebas = [ordered]@{}
 
-$Pruebas['1 catalogo: las siete reglas, con titulo, que busca y tokens; las tres que ya se miden no estan'] = {
+$Pruebas['1 catalogo: las nueve reglas, con titulo, que busca y tokens; las tres que ya se miden no estan'] = {
   $r = @(Get-ReglasRevision)
-  Igual 'los ids, en orden' 'SB-LISTENER,SB-STEPSCOPE,SB-TRANSACCION,SB-CONTEXTO,BOOT-ENABLEBATCH,J21-INTERNOS,CAND-MUERTA' (($r | ForEach-Object { $_.id }) -join ',')
+  Igual 'los ids, en orden' 'SB-LISTENER,SB-STEPSCOPE,SB-TRANSACCION,SB-CONTEXTO,BOOT-ENABLEBATCH,J21-INTERNOS,CAND-MUERTA,SB-ESTADO,ERR-TRAGADA' (($r | ForEach-Object { $_.id }) -join ',')
   Comprueba 'cada una lleva titulo y que, con texto' (@($r | Where-Object { -not $_.titulo -or -not $_.que }).Count -eq 0)
   Comprueba 'cada una lleva al menos un token' (@($r | Where-Object { @($_.tokens).Count -eq 0 }).Count -eq 0)
   Igual 'los tokens de SB-LISTENER' 'Listener|@Before|@After|@On' ((@($r | Where-Object { $_.id -ceq 'SB-LISTENER' })[0].tokens) -join '|')
@@ -812,6 +812,178 @@ $Pruebas['27 m) hallazgos repetidos: la misma regla en la misma linea de dos fic
   Igual 'una unidad, hecha, con sus dos ficheros' 'hecha|PasoDos,EscritorDos' "$($t[0].estado)|$(Cortos $t[0].entradas.ficheros)"
   $j = Lee-Json $e.Json
   Igual 'revision.json conserva los dos, el del step primero' 'PasoDos:5,EscritorDos:5' ((@($j.hallazgos) | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_.fichero) + ':' + $_.linea }) -join ',')
+}
+
+# ---- (n) M71: dos reglas mas, SB-ESTADO y ERR-TRAGADA ----
+# Un procesador con estado (singleton, sin @StepScope) y un escritor que se traga el error. Dos ficheros sueltos (ninguno lleva new StepBuilder).
+$JavaContador = @'
+package com.acme.recibos;
+
+public class ContadorProcesador implements ItemProcessor<Recibo, Recibo> {
+  private int total = 0;
+  private final List<String> vistos = new ArrayList<>();
+  Map<String, Long> porCliente = new HashMap<>();
+  double suma;
+  LocalDate fecha;
+
+  public Recibo process(Recibo r) {
+    total++;
+    vistos.add(r.getId());
+    porCliente.put(r.getCliente(), 1L);
+    suma += r.getImporte();
+    this.fecha = LocalDate.now();
+    return r;
+  }
+}
+'@
+$JavaTraga = @'
+package com.acme.recibos;
+
+public class TragaEscritor implements ItemWriter<Recibo> {
+  public void write(Chunk<? extends Recibo> items) {
+    for (Recibo r : items) {
+      try {
+        enviar(r);
+      } catch (IOException e) {
+        log.error("no se pudo enviar el recibo", e);
+      }
+    }
+  }
+}
+'@
+$FicherosM71 = @{ ($P + 'ContadorProcesador.java') = $JavaContador; ($P + 'TragaEscritor.java') = $JavaTraga }
+
+# El escenario de comprobacion de M71 con su tarea (la unidad lleva los dos ficheros). Devuelve el escenario y la tarea.
+function Escenario-M71([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre $FicherosM71
+  return [pscustomobject]@{ E = $e; T = (Tarea-De 'paso71' @('ContadorProcesador', 'TragaEscritor')) }
+}
+
+# Un hallazgo de M71 en JSON: regla, fichero (nombre corto), linea y cita.
+function Hallazgo-71([string]$Regla, [string]$Fichero, [int]$Linea, [string]$Cita) {
+  return (Hallazgo @{ regla = $Regla; fichero = ($P + $Fichero + '.java'); linea = $Linea; cita = $Cita; texto = 'Texto de prueba.' })
+}
+
+$Pruebas['28 m71 a) catalogo: nueve reglas; SB-ESTADO y ERR-TRAGADA al final, con titulo, que y tokens'] = {
+  $r = @(Get-ReglasRevision)
+  Igual 'nueve reglas' 9 $r.Count
+  Igual 'las dos nuevas, al final y en este orden' 'SB-ESTADO,ERR-TRAGADA' (($r | Select-Object -Last 2 | ForEach-Object { $_.id }) -join ',')
+  $s = $r[7]
+  $x = $r[8]
+  Igual 'titulo de SB-ESTADO' 'Estado en un bean de un paso sin @StepScope' $s.titulo
+  Igual 'titulo de ERR-TRAGADA' 'Error tragado en un paso' $x.titulo
+  Igual 'los tokens de SB-ESTADO: la declaracion del campo o la linea que lo cambia' 'private |++|+=|.add(|.put(|this.' ($s.tokens -join '|')
+  Igual 'los de ERR-TRAGADA' 'catch' ($x.tokens -join '|')
+  Comprueba 'SB-ESTADO: singleton sin @StepScope ni @JobScope (en la clase o en el @Bean que lo crea)' ($s.que -match '@StepScope' -and $s.que -match '@JobScope' -and $s.que -match 'singleton')
+  Comprueba 'SB-ESTADO: la misma JVM y otros hilos, y el arreglo (@StepScope o ExecutionContext)' ($s.que -match 'misma JVM' -and $s.que -match 'hilos' -and $s.que -match 'ExecutionContext')
+  Comprueba 'SB-ESTADO: no cuentan el constructor, @Value, los loggers ni las constantes' ($s.que -match 'constructor' -and $s.que -match '@Value' -and $s.que -match 'logger' -and $s.que -match 'constantes')
+  Comprueba 'SB-ESTADO: manda buscar donde se crea el bean, aunque sea en otro fichero' ($s.que -match 'otro fichero')
+  Comprueba 'ERR-TRAGADA: no relanza, no usa el skip (faultTolerant, skip, SkipPolicy) y no marca el paso como fallido' ($x.que -match 'relanza' -and $x.que -match 'faultTolerant\(\)' -and $x.que -match 'SkipPolicy' -and $x.que -match 'ExitStatus\.FAILED' -and $x.que -match 'setExitStatus')
+  Comprueba 'ERR-TRAGADA: el job acaba COMPLETED y no cuenta el catch vacio (lo mide el diagnostico)' ($x.que -match 'COMPLETED' -and $x.que -match 'catch vac' -and $x.que -match 'diagn')
+  Comprueba 'ERR-TRAGADA: no cuenta el error que se guarda donde el job lo mira (fichero de KO o ExecutionContext)' ($x.que -match 'KO' -and $x.que -match 'ExecutionContext')
+  Comprueba 'los textos llevan tildes de verdad (no \u00xx sin leer)' (@($r | Where-Object { $_.que -match '\\u[0-9a-fA-F]{4}' -or $_.titulo -match '\\u[0-9a-fA-F]{4}' }).Count -eq 0)
+  Comprueba 'y los ids no se repiten' (@($r | ForEach-Object { $_.id } | Select-Object -Unique).Count -eq 9)
+}
+
+$Pruebas['29 m71 b) ERR-TRAGADA: una cita con catch que sale en su linea vale; una sin catch se descarta con el motivo de los tokens'] = {
+  $x = Escenario-M71 'm71b'
+  $catch = Hallazgo-71 'ERR-TRAGADA' 'TragaEscritor' 8 '} catch (IOException e) {'
+  $r = Veredicto $x.E $x.T (Salida @($catch))
+  Comprueba 'con catch: vale, sin descartes' ($r.Ok -and @($r.Ficha.hallazgos).Count -eq 1 -and @($r.Ficha.descartados).Count -eq 0) $r.Motivo
+  Igual 'la ficha lleva la regla y la linea del catch' 'ERR-TRAGADA|8|True' "$($r.Ficha.hallazgos[0].regla)|$($r.Ficha.hallazgos[0].linea)|$($r.Ficha.hallazgos[0].probado)"
+  $log = Hallazgo-71 'ERR-TRAGADA' 'TragaEscritor' 9 'log.error("no se pudo enviar el recibo", e);'
+  $w = Veredicto $x.E $x.T (Salida @($catch, $log))
+  Comprueba 'una cita real pero sin catch (el log de dentro): vale justo la mitad y descarta esa' ($w.Ok -and @($w.Ficha.hallazgos).Count -eq 1 -and @($w.Ficha.descartados).Count -eq 1) $w.Motivo
+  $d = $w.Ficha.descartados[0]
+  Comprueba 'el motivo habla de los tokens de la regla, con su id y con catch' ($d.motivo -match 'tokens' -and $d.motivo -match 'ERR-TRAGADA' -and $d.motivo.Contains("'catch'")) $d.motivo
+  Igual 'el descartado lleva su regla y su fichero' ('ERR-TRAGADA|' + $P + 'TragaEscritor.java') "$($d.regla)|$($d.fichero)"
+  $solo = Veredicto $x.E $x.T (Salida @($log))
+  Comprueba 'una sola, sin catch: vale (hacen falta 2 para la mitad), sin hallazgos y un descarte' ($solo.Ok -and @($solo.Ficha.hallazgos).Count -eq 0 -and @($solo.Ficha.descartados).Count -eq 1) $solo.Motivo
+  $dos = Veredicto $x.E $x.T (Salida @($log, (Hallazgo-71 'ERR-TRAGADA' 'TragaEscritor' 12 '}')))
+  Comprueba 'dos sin catch: mas de la mitad, invalida, con el motivo del primero' (-not $dos.Ok -and $dos.Motivo -match 'tokens') $dos.Motivo
+  $falsa = Veredicto $x.E $x.T (Salida @($catch, (Hallazgo-71 'ERR-TRAGADA' 'TragaEscritor' 8 'catch (Exception inventada)')))
+  Comprueba 'un catch que no sale en el fichero se descarta por la cita, antes que por los tokens' ($falsa.Ok -and @($falsa.Ficha.descartados).Count -eq 1 -and $falsa.Ficha.descartados[0].motivo -match 'no sale en el fichero') ($falsa.Ficha.descartados[0].motivo)
+}
+
+$Pruebas['30 m71 c) SB-ESTADO: la declaracion del campo y la linea que lo cambia valen (un token cada una); una cita sin token se descarta'] = {
+  $x = Escenario-M71 'm71c'
+  # cada token, con una cita de verdad: (token, linea, cita)
+  $casos = @(
+    @('private ', 4, 'private int total = 0;'),
+    @('private ', 5, 'private final List<String> vistos = new ArrayList<>();'),
+    @('++', 11, 'total++;'),
+    @('.add(', 12, 'vistos.add(r.getId());'),
+    @('.put(', 13, 'porCliente.put(r.getCliente(), 1L);'),
+    @('+=', 14, 'suma += r.getImporte();'),
+    @('this.', 15, 'this.fecha = LocalDate.now();')
+  )
+  foreach ($c in $casos) {
+    $r = Veredicto $x.E $x.T (Salida @((Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' $c[1] $c[2])))
+    Comprueba "token '$($c[0])' en '$($c[2])': vale, sin descartes, en la linea $($c[1])" ($r.Ok -and @($r.Ficha.hallazgos).Count -eq 1 -and @($r.Ficha.descartados).Count -eq 0 -and $r.Ficha.hallazgos[0].linea -eq $c[1]) $r.Motivo
+  }
+  $todos = Veredicto $x.E $x.T (Salida @($casos | Select-Object -First 5 | ForEach-Object { Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' $_[1] $_[2] }))
+  Igual 'cinco a la vez: los cinco valen (el tope por unidad es 5)' 5 @($todos.Ficha.hallazgos).Count
+  # los que no llevan ningun token
+  foreach ($c in @(@(10, 'public Recibo process(Recibo r) {'), @(16, 'return r;'), @(3, 'public class ContadorProcesador implements ItemProcessor<Recibo, Recibo> {'))) {
+    $r = Veredicto $x.E $x.T (Salida @((Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' $c[0] $c[1])))
+    Comprueba "sin token en '$($c[1])': se descarta, con el motivo de los tokens de SB-ESTADO" ($r.Ok -and @($r.Ficha.hallazgos).Count -eq 0 -and @($r.Ficha.descartados).Count -eq 1 -and $r.Ficha.descartados[0].motivo -match 'tokens de la regla SB-ESTADO') ($r.Ficha.descartados | ForEach-Object { $_.motivo })
+  }
+  $buena = Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' 4 'private int total = 0;'
+  $mala = Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' 16 'return r;'
+  $m = Veredicto $x.E $x.T (Salida @($buena, $mala))
+  Comprueba 'una buena y una sin token: vale la mitad, y se queda la buena' ($m.Ok -and @($m.Ficha.hallazgos).Count -eq 1 -and $m.Ficha.hallazgos[0].cita -ceq 'private int total = 0;' -and @($m.Ficha.descartados).Count -eq 1) $m.Motivo
+}
+
+$Pruebas['31 m71 d) huella: una tarea hecha con el catalogo de 7 reglas se vuelve a pedir una vez, y con el de 9 ya no'] = {
+  $e = Nuevo-Escenario 'm71d' $FicherosM71
+  # Una pasada con el catalogo de antes (las 7 primeras): la funcion de aqui tapa a la de revision.ps1 solo dentro de este bloque
+  $orig = ${function:Get-ReglasRevision}
+  $t1 = @(& { function Get-ReglasRevision { return @(& $orig | Select-Object -First 7) }; Pasada $e })
+  Igual 'catalogo de 7: dos unidades, hechas' 'hecha,hecha' (($t1 | ForEach-Object { $_.estado }) -join ',')
+  Igual 'y dos llamadas' 2 (Llamadas-De $e).Count
+  Igual 'revision.json lleva las 7 reglas de entonces' 7 @((Lee-Json $e.Json).reglas).Count
+  $t2 = @(Pasada $e)
+  Igual 'con el catalogo de 9, la misma pasada sin tocar nada: las dos unidades se piden otra vez' 4 (Llamadas-De $e).Count
+  Igual 'y quedan hechas' 'hecha,hecha' (($t2 | ForEach-Object { $_.estado }) -join ',')
+  Comprueba 'con otra huella (la de los ids del catalogo nuevo)' ($t2[0].entradas.huella -cne $t1[0].entradas.huella -and $t2[1].entradas.huella -cne $t1[1].entradas.huella)
+  Igual 'revision.json lleva las 9' 9 @((Lee-Json $e.Json).reglas).Count
+  $t3 = @(Pasada $e)
+  Igual 'otra vez sin cambios: ninguna llamada mas' 4 (Llamadas-De $e).Count
+  Igual 'y la huella no cambia' "$($t2[0].entradas.huella)|$($t2[1].entradas.huella)" "$($t3[0].entradas.huella)|$($t3[1].entradas.huella)"
+}
+
+$Pruebas['32 m71 e) el prompt de una unidad lleva SB-ESTADO y ERR-TRAGADA con su texto y los textos de los que la cita lleva uno'] = {
+  $e = Nuevo-Escenario 'm71e' $FicherosM71
+  $u = @(Get-TareasRevision $e.Dir 'main' $true @() $false)
+  Igual 'dos unidades sueltas' 'revision-ContadorProcesador,revision-TragaEscritor' (($u | ForEach-Object { $_.id }) -join ',')
+  foreach ($t in $u) {
+    $pr = Get-Prompt $t '' ''
+    foreach ($id in @('SB-ESTADO', 'ERR-TRAGADA')) {
+      $r = @(Get-ReglasRevision | Where-Object { $_.id -ceq $id })[0]
+      $tokens = ((@($r.tokens) | ForEach-Object { '`' + $_ + '`' }) -join ', ')
+      Comprueba "$($t.id): lleva $id con su texto y la lista de tokens" ($pr.Contains($id + ': ' + $r.que + ' La cita lleva uno de estos textos: ' + $tokens + '.')) $pr
+    }
+    Comprueba "$($t.id): SB-ESTADO dice @StepScope y ExecutionContext" ($pr -match 'SB-ESTADO: [^\r\n]*@StepScope[^\r\n]*ExecutionContext')
+    Comprueba "$($t.id): ERR-TRAGADA dice faultTolerant() y ExitStatus.FAILED" ($pr -match 'ERR-TRAGADA: [^\r\n]*faultTolerant\(\)[^\r\n]*ExitStatus\.FAILED')
+    Comprueba "$($t.id): ERR-TRAGADA va solo con el token catch" ($pr -match 'ERR-TRAGADA: [^\r\n]*La cita lleva uno de estos textos: `catch`\.')
+    Comprueba "$($t.id): no deja ninguna clave sin sustituir" ($pr -notmatch '\{\{')
+  }
+}
+
+$Pruebas['33 m71 f) de punta a punta: la IA de mentira da un hallazgo de cada regla nueva; revision.json los lleva con su titulo y las 9 reglas'] = {
+  $resp = @{
+    'revision-ContadorProcesador.json' = (Salida @((Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' 4 'private int total = 0;')))
+    'revision-TragaEscritor.json' = (Salida @((Hallazgo-71 'ERR-TRAGADA' 'TragaEscritor' 8 '} catch (IOException e) {')))
+  }
+  $e = Nuevo-Escenario 'm71f' $FicherosM71 $resp
+  $t = @(Pasada $e)
+  Igual 'las dos hechas' 'hecha,hecha' (($t | ForEach-Object { $_.estado }) -join ',')
+  $j = Lee-Json $e.Json
+  Igual 'las reglas de revision.json, las 9, con las dos nuevas al final' 'SB-ESTADO,ERR-TRAGADA' (($j.reglas | Select-Object -Last 2 | ForEach-Object { $_.id }) -join ',')
+  Igual 'nueve en total' 9 @($j.reglas).Count
+  Igual 'dos hallazgos, con el titulo de su regla' 'SB-ESTADO=Estado en un bean de un paso sin @StepScope|ERR-TRAGADA=Error tragado en un paso' ((@($j.hallazgos) | ForEach-Object { $_.regla + '=' + $_.titulo }) -join '|')
+  Igual 'sin descartes' 0 $j.descartados
+  Igual 'la consola' 'Revision por flujos: 2 hechas, 0 atascadas, 0 pendientes; 2 hallazgos (0 descartados por no poder comprobarlos).' (Get-LineaRevision $t)
 }
 
 Invoke-Banco $Pruebas 'tests/probar-revision.ps1'
