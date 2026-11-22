@@ -772,7 +772,7 @@ $Pruebas['c9 (i5) migracion.ps1 -Cierre: una excepcion del repo de configmap avi
 
 # ---- (j) lo que encontro la revision independiente ----
 $Pruebas['c9 (j1) nombres de secretos: se miran todos los trozos de la clave (password, token, credencial, private, apikey); user solo al final o seguido de name; y un valor con credenciales dentro es secreto'] = {
-  foreach ($n in @('spring.security.user.name', 'x.password.value', 'x.password.file', 'ftp.credencial', 'ftp.credential', 'api.token', 'private.key', 'x.apikey', 'x.api-key', 'sftp.user', 'sftp.username', 'db.usuario', 'env.clave-x')) { Comprueba "$n es secreto" (Test-NombreSecretoConfigMap $n) }
+  foreach ($n in @('spring.security.user.name', 'x.password.value', 'x.password.file', 'ftp.credencial', 'ftp.credential', 'api.token', 'private.key', 'x.apikey', 'x.api-key', 'sftp.user', 'sftp.username', 'x.username.y', 'db.usuario', 'env.clave-x')) { Comprueba "$n es secreto" (Test-NombreSecretoConfigMap $n) }
   foreach ($n in @('env.ruta-entrada', 'spring.application.name', 'env.cliente', 'user.home', 'x.users.count', 'env.url-auth', 'max.reintentos', 'lote.pedidos.endpoint')) { Comprueba "$n no es secreto" (-not (Test-NombreSecretoConfigMap $n)) }
   foreach ($v in @('https://svc:Pa55@pedidos.pre.acme.test/api', 'jdbc:oracle:thin:usr/Zx9Secret@host:1521/svc', 'usr/Zx9Secret@host')) { Comprueba "el valor $v lleva credenciales" (Test-ValorSecretoConfigMap $v) }
   foreach ($v in @('https://pedidos.pre.acme.test/api', '/data/pre/entrada', 'https://user@host/path', 'user@acme.test', 'a/b', '5', '')) { Comprueba "el valor '$v' no lleva credenciales" (-not (Test-ValorSecretoConfigMap $v)) }
@@ -896,17 +896,19 @@ $Pruebas['c9 (j8) escrituras fuera de sitio: lo que una ronda cambia fuera de su
   $f['docs/extra-de-la-ia.txt'] = 'extra'
   $f['.plataforma/cd/values.yaml'] = 'basura de pre'
   Plan $e 'configmap-entorno-pre' $f
-  Plan $e $IdFlujo @{ '.github/workflows/cd.yml' = (Adapta-Plataforma '.github/workflows/cd.yml' $ref['.github/workflows/cd.yml']); 'config/pre/variables' = 'basura del workflow' }
+  # props.env va en la segunda ronda (Paralelo es 4: des, pre, pro y el workflow van en la primera): lo de pre ya es de una ronda anterior
+  Plan $e $IdProps @{ '.plataforma/ci/props.env' = (Adapta-Plataforma '.plataforma/ci/props.env' $ref['.plataforma/ci/props.env']); 'config/pre/variables' = 'basura de props' }
   $x = Corre $e
   Comprueba 'el fichero nuevo fuera de sitio se ha borrado' (-not (Existe-Destino $e 'docs/extra-de-la-ia.txt'))
   Comprueba 'el de la ronda siguiente que se escribio antes de tiempo, tambien: el bueno es el de su tarea' ((Lee-Destino $e '.plataforma/cd/values.yaml').Contains('applicationName'))
   Comprueba 'el que existia (config/pre/variables) esta como lo dejo su tarea' ((Lee-Destino $e 'config/pre/variables').Contains('pfx.variables.env.ruta-entrada=/data/pre/entrada'))
   Igual 'las tareas no se invalidan: pre queda hecha' 'hecha' (Tarea-Guardada $e 'configmap-entorno-pre').estado
-  Igual 'y el workflow' 'hecha' (Tarea-Guardada $e $IdFlujo).estado
+  Igual 'y props.env' 'hecha' (Tarea-Guardada $e $IdProps).estado
   $l = @($x.Consola -split "`n" | Where-Object { $_ -match 'fuera de lo suyo' })
   Igual 'una linea de consola por ronda con cambios' 2 $l.Count
   Comprueba 'la primera nombra los ficheros' ($l[0].Contains('docs/extra-de-la-ia.txt')) $x.Consola
   $j = Lee-Json (Join-Path $e.Datos 'configmap.json')
+  Comprueba 'la segunda nombra el de la ronda siguiente' ($l.Count -gt 1 -and $l[1].Contains('config/pre/variables')) $x.Consola
   Comprueba 'configmap.json los apunta' (@($j.fueraDeSitio) -contains 'docs/extra-de-la-ia.txt' -and @($j.fueraDeSitio) -contains 'config/pre/variables') ($j.fueraDeSitio | ConvertTo-Json -Compress)
 }
 
@@ -957,7 +959,7 @@ $Pruebas['c9 (j11) migracion.ps1 -ConfigMap sin estado.json previo: inventario y
   Comprueba 'no pregunta el modelo: usa el guardado' ($r2.Salida -match 'Modelo: modelo-x' -and $r2.Salida -notmatch 'Modelo de Copilot') $r2.Salida
   Igual 'sin llamadas nuevas: la atascada se conserva' $n @(Llamadas-De $e).Count
   $r3 = Migra-C9 $e @('-ConfigMap', '-Reintentar') -SinModelo
-  Igual 'con -Reintentar si vuelve a llamar (dos llamadas mas)' ($n + 2) @(Llamadas-De $e).Count
+  Igual 'con -Reintentar vuelve a llamar a la atascada (dos llamadas mas de variables)' 4 @(Llamadas-De $e | Where-Object { $_.Id -eq 'configmap-variables-1' }).Count
 }
 
 $Pruebas['c9 (j12) PENDIENTE.md sale del estado final: una tarea de entorno atascada o un fichero borrado dejan sus variables pendientes, no con valor puesto'] = {
