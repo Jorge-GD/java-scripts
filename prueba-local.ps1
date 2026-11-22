@@ -1741,7 +1741,7 @@ function Get-SitioRuta([string]$Dir, [string]$Ruta) {
       foreach ($rel in (Sort-Ordinal @($ficheros.Keys | Where-Object { $_ -match '^src/main/resources/(?:.*/)?application[^/]*\.(?:properties|ya?ml)$' }))) {
         $lineas = [System.IO.File]::ReadAllLines($ficheros[$rel])
         for ($n = 0; $n -lt $lineas.Count; $n++) {
-          if ($lineas[$n].IndexOf($forma, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+          if (-not $lineas[$n].ToUpperInvariant().Contains($forma.ToUpperInvariant())) { continue }
           $clave = [regex]::Match($lineas[$n], '^\s*([^=:#\s]+)\s*[=:]').Groups[1].Value
           if ($clave) { return "${rel}:$($n + 1) ($clave)" }
           return "${rel}:$($n + 1)"
