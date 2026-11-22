@@ -7597,6 +7597,15 @@ $Pruebas['m73 (b4) una marca de tiempo Unix de hoy en segundos (10 cifras) o en 
   foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
 }
 
+$Pruebas['m73 (b5) de punta a punta: el original deja informes/<hoy>-10-26-58/resumen.txt y el migrado informes/<hoy>-10-31-07/resumen.txt con lo mismo: el caso sale igual (no distinto, ni una carpeta distinta)'] = {
+  $e = Escenario-M73 'm73-b5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes-txt'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  $hoy = (Get-Date).ToString('yyyy-MM-dd')
+  Comprueba 'el original guardo su carpeta con la hora (si no, esta prueba no prueba nada)' (Test-Path -LiteralPath (Get-Ruta $e.Local "salidas/original/cargaJob/caso-01/ficheros/informes/$hoy-10-26-58/resumen.txt")) ''
+}
+
 # Las lineas (Get-LineasNormales) de un fichero de nombre $Fichero y bytes $Bytes, con el dia 2026-11-22 como el de la ejecucion, como las ensena la consola (Get-Legible).
 function Lineas-M73([string]$Nombre, [string]$Fichero, [byte[]]$Bytes) {
   $f = Join-Path $Dir "$Nombre.ps1"
