@@ -6500,5 +6500,22 @@ $Pruebas['m68 (d5) si el primer caso arranca, los demas se ejecutan aunque algun
   Igual 'el primero sale igual y los otros cuatro, distintos: ninguno sin probar' 'igual,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
 }
 
+$Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo atascada por eso (el motivo lo dice), se usa con el aviso y no recorta nada: se ejecutan los 5 casos y sale la linea de siempre'] = {
+  $e = Escenario-M68d 'm68-d6'
+  $r = Prueba-M48 $e ''
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $antes = (Casos-Mvn $e $e.CopiaMig).Count
+  Cambia-Huella $e 'migrado' 'atascada'
+  $f = Get-Ruta $e.Local 'tareas/arnes-migrado.json'
+  $t = Lee-Json $f
+  $t.motivo = 'Con un caso vacio, el original arranca el job cargaJob (estado=COMPLETED) y con tu test el migrado no: BeanCreationException. Revisa lo que simula el test y las propiedades que le pasa.'
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test guardado se usa, con el aviso' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
