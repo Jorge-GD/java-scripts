@@ -6838,5 +6838,91 @@ $Pruebas['m69 (c2) cuatro jobs cuyo caso vacio de antes acabo EXCEPCION: el prev
   Comprueba 'y la del cuarto no' (-not $p.Contains('el caso vacio de dJob')) (Cola $p)
 }
 
+# --- (d) la causa del caso vacio de antes cuando no hay causas.json (un caso vacio guardado antes de M69) ---
+
+# Deja en registros un registro de Maven del caso vacio del arnes del original (el nombre de Invoke-Maven: mvn-<n>-arnes-original--caso-vacio.log) con las
+# lineas $Lineas, escrito hace $Minutos minutos.
+function Pon-Registro-Vacio-M69($E, [int]$N, [string[]]$Lineas, [int]$Minutos = 0) {
+  $f = Get-Ruta $E.Local "registros/mvn-$N-arnes-original--caso-vacio.log"
+  [System.IO.File]::WriteAllText($f, (($Lineas -join "`n") + "`n"))
+  [System.IO.File]::SetLastWriteTimeUtc($f, [DateTime]::UtcNow.AddMinutes(-$Minutos))
+}
+
+# Deja el caso vacio guardado como lo dejaba M68: sin causas.json y sin ningun registro de Maven del caso vacio del original.
+function Deja-Vacio-De-Antes-M69($E) {
+  $c = Get-Ruta $E.Local 'salidas/vacio/causas.json'
+  if (Test-Path -LiteralPath $c) { Remove-Item -LiteralPath $c }
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local 'registros') -File -Filter 'mvn-*-arnes-original--caso-vacio.log')) { Remove-Item -LiteralPath $f.FullName }
+}
+
+$Pruebas['m69 (d1) un caso vacio FAILED guardado sin causas.json y un registro de Maven con la NoSuchFileException: el primer intento lleva la linea con la causa, y la causa se apunta en causas.json de lo guardado y de lo de antes'] = {
+  $e = Escenario-M69 'm69-d1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso vacio guardado es FAILED' 'FAILED' (Vacio-Estado-M69 $e)
+  Deja-Vacio-De-Antes-M69 $e
+  Pon-Registro-Vacio-M69 $e 7 @('[INFO] Running com.acme.viejo.PruebaLocalTest', "Caused by: $CausaM69", '[INFO] BUILD SUCCESS')
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  $linea = "Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69."
+  Comprueba 'el primer intento lleva la linea de cargaJob, con la causa del registro' ($p.Contains($linea)) (Cola $p)
+  Igual 'lo guardado de antes lleva la causa en su causas.json' $CausaM69 ([string](Lee-Json (Get-Ruta $e.Local 'salidas/vacio-anterior/causas.json')).cargaJob)
+}
+
+$Pruebas['m69 (d2) dos registros del caso vacio: la causa es la del mas reciente por fecha de escritura, no por el numero del nombre'] = {
+  $e = Escenario-M69 'm69-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Deja-Vacio-De-Antes-M69 $e
+  Pon-Registro-Vacio-M69 $e 9 @('Caused by: java.lang.IllegalStateException: de un lanzamiento viejo') 90
+  Pon-Registro-Vacio-M69 $e 2 @("Caused by: $CausaM69") 1
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento lleva la causa del registro mas reciente (el de numero 2)' ($p.Contains("Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69.")) (Cola $p)
+  Comprueba 'y no la del de numero 9' (-not $p.Contains('de un lanzamiento viejo')) (Cola $p)
+}
+
+$Pruebas['m69 (d3) con causas.json manda causas.json aunque haya un registro mas reciente con otra causa'] = {
+  $e = Escenario-M69 'm69-d3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'causas.json lleva la causa' $CausaM69 ([string](Lee-Json (Get-Ruta $e.Local 'salidas/vacio/causas.json')).cargaJob)
+  Pon-Registro-Vacio-M69 $e 50 @('Caused by: java.lang.IllegalStateException: la del registro') 0
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento lleva la causa de causas.json' ($p.Contains("Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69.")) (Cola $p)
+  Comprueba 'y no la del registro' (-not $p.Contains('la del registro')) (Cola $p)
+}
+
+$Pruebas['m69 (d4) la causa de lo guardado antes de M69 se apunta al empezar: el motivo del primer intento rechazado dice la de antes y no la del registro del intento nuevo'] = {
+  $e = Escenario-M69 'm69-d4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $c = Get-Ruta $e.Local 'salidas/vacio/causas.json'
+  Remove-Item -LiteralPath $c
+  $nueva = 'java.lang.IllegalStateException: sin correo'
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=EXCEPCION~M69_CAUSA=$nueva" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $dice = "Arnes del original rechazado: Con tu test, el caso vacio de cargaJob acaba EXCEPCION (BeanCreationException: $nueva) y con el test de antes acababa FAILED ($CausaM69)."
+  Comprueba 'el primer intento se rechaza por pasar de FAILED a EXCEPCION, con la causa de antes (la del registro de antes de empezar)' ($r.Salida.Contains($dice)) (Cola $r.Salida)
+}
+
+$Pruebas['m69 (d5) sin registro de Maven del caso vacio, o con uno sin causa: la linea sale sin causa'] = {
+  foreach ($n in @('sin-registro', 'sin-causa')) {
+    $e = Escenario-M69 "m69-d5-$n" ([ordered]@{ cargaJob = @('importe=10.00') })
+    $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+    Igual "$n : la primera vez sale con 0" 0 $r.Codigo
+    Deja-Vacio-De-Antes-M69 $e
+    if ($n -eq 'sin-causa') { Pon-Registro-Vacio-M69 $e 3 @('[INFO] Running com.acme.viejo.PruebaLocalTest', '[INFO] BUILD SUCCESS') }
+    $r = Prueba-M69 $e '' @('-RehacerOriginal')
+    Igual "$n : con -RehacerOriginal, sale con 0" 0 $r.Codigo
+    $p = Registro-Arnes $e 'original' 1
+    Comprueba "$n : la linea sale como hoy, sin causa" ($p.Contains('Con el test de antes, el caso vacio de cargaJob acababa FAILED.')) (Cola $p)
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

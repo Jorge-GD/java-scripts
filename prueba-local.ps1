@@ -33,7 +33,8 @@ QUE HACE
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
      motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar y una linea por cada job (3 como
-     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes).
+     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes): la de salidas\vacio\causas.json o, en uno guardado antes de M69, la del
+     registro de Maven mas reciente del caso vacio del original (registros\mvn-<n>-arnes-original--caso-vacio.log), que se apunta al empezar (Save-Anterior).
      El test que se escribe otra vez no se borra: pasa a prueba-local\arnes-anterior\<lado> (y el caso vacio del original, a
      salidas\vacio-anterior), pisando el de la vez anterior (Save-Anterior).
      El test del original que se escribe otra vez no puede quedar peor que el de antes con un caso vacio (el estado del job, las tablas y las columnas de
@@ -1243,23 +1244,38 @@ function Get-LineasVacio {
   return $lineas
 }
 
-# La causa con que acabo un job el caso vacio guardado en la carpeta $Carpeta (salidas\vacio o salidas\vacio-anterior), de su causas.json (Save-CausasVacio); '' si no la hay.
+# La causa con que acabo un job el caso vacio guardado en la carpeta $Carpeta (salidas\vacio o salidas\vacio-anterior), de su causas.json (Save-CausasVacio); si la carpeta
+# no tiene causas.json (se guardo antes de M69), la del registro de Maven mas reciente del caso vacio del original (Get-CausaRegistroVacio). '' si no la hay. Con causas.json manda
+# el, aunque no diga nada del job.
 function Get-CausaVacio([string]$Carpeta, [string]$Job) {
   $f = Join-Path $Carpeta 'causas.json'
-  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  if (-not (Test-Path -LiteralPath $f)) { return (Get-CausaRegistroVacio) }
   try { $causas = Read-Json $f } catch { return '' }
   $p = $causas.PSObject.Properties[$Job]
   if ($p) { return [string]$p.Value }
   return ''
 }
 
-# Apunta en salidas\vacio\causas.json la primera linea de la causa de Maven ($Causa) de cada job de $Jobs cuyo caso vacio guardado no acabo COMPLETED: estado.txt dice como
-# acabo y no por que, y el test nuevo se compara con esto (Get-PeorQueAntes) y el primer intento de uno que se escribe otra vez lo sabe (Get-PrevioArnes). Sin ninguno, no escribe nada.
-function Save-CausasVacio([string[]]$Jobs, [string]$Causa) {
+# La causa (primera linea) del registro de Maven mas reciente por fecha de escritura del caso vacio del arnes del original (registros\mvn-<n>-arnes-original--caso-vacio.log: el nombre
+# de Invoke-Maven con 'arnes original, caso vacio'; el contador <n> vuelve a 1 en cada lanzamiento, por eso no vale para ordenarlos), sacada de sus lineas con Get-CausaMaven y sin
+# informes de surefire (un $Desde que ninguno cumple). '' si no hay registro o no dice la causa.
+function Get-CausaRegistroVacio {
+  $carpeta = Join-Ruta $Local 'registros'
+  if (-not (Test-Path -LiteralPath $carpeta)) { return '' }
+  $registro = @(Get-ChildItem -LiteralPath $carpeta -File -Filter 'mvn-*-arnes-original--caso-vacio.log' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+  if ($registro.Count -eq 0) { return '' }
+  $causa = Get-CausaCorta (Get-CausaMaven $carpeta ([DateTime]::MaxValue) @([System.IO.File]::ReadAllLines($registro[0].FullName)))
+  return (($causa -split "`n")[0]).Trim()
+}
+
+# Apunta en $Carpeta\causas.json (salidas\vacio) la primera linea de la causa de Maven ($Causa) de cada job de $Jobs cuyo caso vacio guardado no acabo COMPLETED: estado.txt dice como
+# acabo y no por que, y el test nuevo se compara con esto (Get-PeorQueAntes) y el primer intento de uno que se escribe otra vez lo sabe (Get-PrevioArnes). Lo escribe siempre, aunque
+# vaya vacio: su presencia dice que ya se miro y Get-CausaVacio no busca en los registros, que el test nuevo pisa.
+function Save-CausasVacio([string]$Carpeta, [string[]]$Jobs, [string]$Causa) {
   $causas = [ordered]@{}
   $linea = (($Causa -split "`n")[0]).Trim()
-  if ($linea) { foreach ($j in $Jobs) { if ((Get-RangoEstado (Join-Ruta $Local "salidas/vacio/$j")) -ne 0) { $causas[$j] = $linea } } }
-  if ($causas.Count -gt 0) { Write-Json (Join-Ruta $Local 'salidas/vacio/causas.json') $causas }
+  if ($linea) { foreach ($j in $Jobs) { if ((Get-RangoEstado (Join-Path $Carpeta $j)) -ne 0) { $causas[$j] = $linea } } }
+  Write-Json (Join-Path $Carpeta 'causas.json') $causas
 }
 
 # Las frases de lo que es peor en el caso vacio que ha dejado el test nuevo de la copia $Dir ($Causa: la de su Maven) que en el del test de antes (salidas\vacio-anterior),
@@ -1442,7 +1458,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   if ($esOrig) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
-    Save-CausasVacio $Jobs (Get-CausaCorta $r.Causa)
+    Save-CausasVacio (Join-Ruta $Local 'salidas/vacio') $Jobs (Get-CausaCorta $r.Causa)
   }
   if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Para que lo escriba otra vez con ellas, relanza con -RehacerArnes." }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
@@ -1568,8 +1584,13 @@ function Save-Anterior([string]$Lado) {
     Remove-Carpeta $anterior
     Copy-Carpeta $actual $anterior
     if ($Lado -eq 'original') {
+      # Un caso vacio guardado antes de M69 no tiene causas.json: se apunta ahora, con el registro de Maven que lo dejo (el mas reciente, mientras el test nuevo no ha corrido)
+      $vacio = Join-Ruta $Local 'salidas/vacio'
+      if ((Test-Path -LiteralPath $vacio) -and -not (Test-Path -LiteralPath (Join-Path $vacio 'causas.json'))) {
+        Save-CausasVacio $vacio @(Get-ChildItem -LiteralPath $vacio -Directory | ForEach-Object { $_.Name }) (Get-CausaRegistroVacio)
+      }
       Remove-Carpeta (Join-Ruta $Local 'salidas/vacio-anterior')
-      Copy-Carpeta (Join-Ruta $Local 'salidas/vacio') (Join-Ruta $Local 'salidas/vacio-anterior')
+      Copy-Carpeta $vacio (Join-Ruta $Local 'salidas/vacio-anterior')
     }
     Remove-Carpeta $actual
   }
