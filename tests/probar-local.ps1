@@ -8023,5 +8023,33 @@ $Pruebas['m77 (b3) el original FAILED con la misma causa en todos los casos comp
   Comprueba 'ni lleva la linea de -RehacerArnes del migrado' ($r.Salida -notmatch 'El migrado no arranca el job') (Cola $r.Salida)
 }
 
+$M77Frase = 'Con el test de antes, estos casos acababan mal en el original, que en produccion funciona: al test le falta lo que en produccion prepara el arranque (un bean, una propiedad, una carpeta). Preparalo como los tests de ejemplo, sin tocar src/main.'
+
+$Pruebas['m77 (c1) con un prueba-local.json de antes con el original FAILED o EXCEPCION con la misma causa, el prompt del test del original que se rehace lleva las causas y la frase; el del migrado no'] = {
+  $e = Escenario-M77 'm77-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M77 $e ''
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $e @(@(13, "original:EXCEPCION:$M77Bean"), @(2, "original:FAILED:$M77Fichero"), @(1, 'original:FAILED:java.lang.IllegalStateException: sin correo'), @(2, 'migrado:FAILED:java.lang.IllegalStateException: sin hora'))
+  $r = Prueba-M77 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el prompt del original lleva la frase' ($orig.Contains($M77Frase)) (Cola $orig)
+  Comprueba 'y la causa de los 13 casos, en una linea' ($orig.Contains("- En 13 casos el original acaba EXCEPCION: $M77Bean.")) (Cola $orig)
+  Comprueba 'y la de los 2 FAILED' ($orig.Contains("- En 2 casos el original acaba FAILED: $M77Fichero.")) (Cola $orig)
+  Comprueba 'sin la de un solo caso ni la del migrado' ($orig -notmatch 'sin correo' -and $orig -notmatch 'sin hora') (Cola $orig)
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado no lleva ni las causas ni la frase del original' (-not $mig.Contains('NoSuchBeanDefinitionException') -and -not $mig.Contains('NoSuchFileException') -and -not $mig.Contains('le falta lo que en produccion prepara el arranque (un bean')) (Cola $mig)
+}
+
+$Pruebas['m77 (c2) con el prueba-local.json que escribe un lanzamiento parado (original EXCEPCION en 3 casos), -RehacerOriginal pasa la causa al test nuevo'] = {
+  $e = Escenario-M77 'm77-c2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e 'orig-bean:^cargaJob/caso-'
+  Igual 'el primero sale con 2' 2 $r.Codigo
+  Igual 'el json del primero lleva la clase del fallo del original' 'NoSuchBeanDefinitionException' "$(@((Caso $e 'cargaJob' 'caso-01').fallos)[0].clase)"
+  $r = Prueba-M77 $e '' @('-RehacerOriginal')
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el segundo test del original lleva la causa de los 3 casos' ($orig.Contains("- En 3 casos el original acaba EXCEPCION: $M77Bean.")) (Cola $orig)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

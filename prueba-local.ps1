@@ -255,7 +255,7 @@ $LimiteRuta = 259
 # Un metodo de un test que prepara algo antes de lanzar el job: la anotacion (JUnit 5 o 4; \b: @BeforeTransaction no), otras anotaciones de por medio, los
 # modificadores y el tipo (grupo 1: el nombre del metodo). Lo usa Get-PreparaEjemplos.
 $PatronPrepara = '@(?:BeforeEach|BeforeAll|BeforeClass|Before)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*[\w<>\[\].,?]+\s+(\w+)\s*\('
-# Las causas de lo que fallo en el migrado de antes que lleva el prompt del test del migrado que se escribe otra vez (Get-LineasFalloMigrado): las que tienen
+# Las causas de lo que fallo de antes que lleva el prompt del test que se escribe otra vez (Get-LineasFallo): las que tienen
 # al menos CausasMinimas casos y hasta CausasMaximas, de 200 letras como mucho cada una.
 $CausasMinimas = 2
 $CausasMaximas = 3
@@ -993,24 +993,27 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
 }
 
-# Lo que fallo en el migrado de antes, para el test del migrado que se escribe otra vez: de los casos distintos del prueba-local.json de antes ($Anterior) cuyo
-# migrado acaba FAILED o EXCEPCION y el original no (su 'fallos', Get-Fallos: la causa es la que ensena la consola), las causas con $CausasMinimas casos o mas,
-# agrupadas como los grupos de la consola (Get-CausaNormal), la de mas casos primero y $CausasMaximas como mucho: 'En N casos el migrado acaba FAILED y el original
-# no: <causa>.' (la del primer caso, en 200 letras como mucho). Sin ninguna, @().
-function Get-LineasFalloMigrado {
+# Lo que fallo de antes en un lado, para el test de ese lado que se escribe otra vez: de los casos del prueba-local.json de antes ($Anterior) cuyo $Lado acaba FAILED o
+# EXCEPCION (su 'fallos', Get-FalloLado: la causa es la que ensena la consola), las causas con $CausasMinimas casos o mas, agrupadas como los grupos de la consola
+# (Get-CausaNormal), la de mas casos primero y $CausasMaximas como mucho, la causa del primer caso en 200 letras como mucho. Sin ninguna, @().
+#  - Del migrado: los casos distintos donde el original no falla: 'En N casos el migrado acaba FAILED y el original no: <causa>.'
+#  - Del original: los casos comparados (Test-Ejecutable), falle o no el migrado: 'En N casos el original acaba FAILED: <causa>.' El original funciona en produccion.
+function Get-LineasFallo([string]$Lado) {
   $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-  foreach ($c in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'distinto' })) {
-    $mig = @(@($c.fallos) | Where-Object { $_.lado -ceq 'migrado' -and ($_.estado -ceq 'FAILED' -or $_.estado -ceq 'EXCEPCION') -and $_.causa })
-    if ($mig.Count -eq 0 -or @(@($c.fallos) | Where-Object { $_.lado -ceq 'original' }).Count -gt 0) { continue }
-    $firma = $mig[0].estado + '|' + (Get-CausaNormal ([string]$mig[0].causa) $c.caso)
-    if (-not $por.ContainsKey($firma)) { $por[$firma] = [pscustomobject]@{ casos = 0; estado = $mig[0].estado; causa = [string]$mig[0].causa } }
+  foreach ($c in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'distinto' -or ($Lado -ceq 'original' -and (Test-Ejecutable $_)) })) {
+    $propios = @(@($c.fallos) | Where-Object { $_.lado -ceq $Lado -and ($_.estado -ceq 'FAILED' -or $_.estado -ceq 'EXCEPCION') -and $_.causa })
+    if ($propios.Count -eq 0 -or ($Lado -ceq 'migrado' -and @(@($c.fallos) | Where-Object { $_.lado -ceq 'original' }).Count -gt 0)) { continue }
+    $firma = $propios[0].estado + '|' + (Get-CausaNormal ([string]$propios[0].causa) $c.caso)
+    if (-not $por.ContainsKey($firma)) { $por[$firma] = [pscustomobject]@{ casos = 0; estado = $propios[0].estado; causa = [string]$propios[0].causa } }
     $por[$firma].casos++
   }
+  $y = ''
+  if ($Lado -ceq 'migrado') { $y = ' y el original no' }
   $lineas = @()
   foreach ($g in @(Get-MasRepetidas $por)) {
     $causa = $g.causa
     if ($causa.Length -gt 200) { $causa = $causa.Substring(0, 200) }
-    $lineas += "- En $($g.casos) casos el migrado acaba $($g.estado) y el original no: $causa."
+    $lineas += "- En $($g.casos) casos el $Lado acaba $($g.estado)${y}: $causa."
   }
   return $lineas
 }
@@ -1046,7 +1049,9 @@ function Get-MasRepetidas($Por) {
 #    antes ($Anterior): casi todos esos motivos vienen del test del original.
 #  - para el del original, una linea por cada job (3 como mucho) cuyo caso vacio guardado (salidas\vacio) no acabo COMPLETED, con su estado, la clase de la excepcion
 #    y la primera linea de su causa (Get-LineasVacio): el test nuevo no debe dejarlo peor (Test-ArnesEscrito);
-#  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFalloMigrado), con una
+#  - para el del original, las causas por las que el original acababa FAILED o EXCEPCION en esos casos (Get-LineasFallo 'original'), con una frase encima: el original
+#    funciona en produccion, asi que al test le falta lo que en produccion prepara el arranque (un bean, una propiedad, una carpeta);
+#  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFallo 'migrado'), con una
 #    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
 #    si viene de src/main, es un fallo del migrado y no se tapa;
 #  - para el del migrado, una linea por cada pareja de carpetas (3 como mucho) con 2 casos o mas donde el original dejaba un fichero en una carpeta y el migrado en
@@ -1065,13 +1070,15 @@ function Get-PrevioArnes($T, $Antes) {
       if ($pistas.Count -ge 3) { break }
     }
     if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
+    $lineas = @(Get-LineasFallo 'original')
+    if ($lineas.Count -gt 0) { $partes += 'Con el test de antes, estos casos acababan mal en el original, que en produccion funciona: al test le falta lo que en produccion prepara el arranque (un bean, una propiedad, una carpeta). Preparalo como los tests de ejemplo, sin tocar src/main.' + "`n" + ($lineas -join "`n") }
   }
   if ($T.entradas.repo -eq 'original') {
     $vacio = @(Get-LineasVacio)
     if ($vacio.Count -gt 0) { $partes += (@($vacio) -join "`n") }
   }
   if ($T.entradas.repo -eq 'migrado' -and $Anterior) {
-    $lineas = @(Get-LineasFalloMigrado)
+    $lineas = @(Get-LineasFallo 'migrado')
     if ($lineas.Count -gt 0) { $partes += 'Si viene de una clase de una libreria porque al test le falta algo que en produccion prepara el arranque, preparalo como los tests de ejemplo. Si viene del codigo de src/main, no lo tapes: es un fallo del migrado.' + "`n" + ($lineas -join "`n") }
     $carpetas = @(Get-LineasOtraCarpeta)
     if ($carpetas.Count -gt 0) { $partes += ($carpetas -join "`n") }
