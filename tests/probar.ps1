@@ -7297,5 +7297,19 @@ $Pruebas['m76 (j12) referencia-circular: con dos constructores solo cuenta el qu
   Igual 'con @Autowired en el que pide CtB, sale' 'CtA CtB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
 }
 
+$Pruebas['m76 (j13) referencia-circular: un ciclo a traves de una interfaz que extiende la que se pide (interface Puerto1 extends Puerto0, con o sin genericos) sale'] = {
+  $e = Escenario-M70 'm76-j13' @{
+    Puerto0     = (Java-M76 'Puerto0' 'interface')
+    Puerto1     = (Java-M76 'Puerto1' 'interface' '' ' extends Puerto0')
+    Adap        = (Implementa-M76 'Adap' 'Puerto1' 'Consumidor c')
+    Consumidor  = (Pide-M76 'Consumidor' 'Puerto0 p')
+    PuertoG0    = (Java-M76 'PuertoG0<T>' 'interface')
+    PuertoG1    = (Java-M76 'PuertoG1<T>' 'interface' '' ' extends PuertoG0<T>')
+    AdapG       = (Implementa-M76 'AdapG' 'PuertoG1<String>' 'ConsumidorG c')
+    ConsumidorG = (Pide-M76 'ConsumidorG' 'PuertoG0 p')
+  }
+  Igual 'salen los dos ciclos' 'Adap AdapG Consumidor ConsumidorG' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

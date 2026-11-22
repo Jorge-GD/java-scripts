@@ -658,7 +658,12 @@ function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, 
 # de linea que tenia (asi se sabe la linea de cada cosa: LineaCuerpo es la de la llave que abre la clase).
 $RxGenericos = New-Object System.Text.RegularExpressions.Regex '<[^<>]*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>[^<>]*)*>'
 $RxSupers = New-Object System.Text.RegularExpressions.Regex '\b(?:extends|implements)\s+([\w.,\s]+?)(?=\s*\b(?:implements|extends|permits)\b|\s*$)'
+# Una interfaz que extiende otras (Get-Clases solo lee clases), con el texto ya sin genericos
+$RxInterfazExtiende = New-Object System.Text.RegularExpressions.Regex '(?<![@\w.])interface\s+(?<n>\w+)\s+extends\s+(?<s>[\w.,\s]+?)\s*\{'
 $EvalHoja = [System.Text.RegularExpressions.MatchEvaluator] { param($h) return ([string][char]1) + ("`n" * ($h.Value.Split("`n").Count - 1)) }
+# Los nombres (sin paquete) de una lista de tipos separados por comas.
+function Split-Tipos([string]$Lista) { return @($Lista.Split(',') | ForEach-Object { $_.Trim().Split('.')[-1] } | Where-Object { $_ }) }
+
 function Get-Clases([string]$Limpio) {
   $res = New-Object System.Collections.Generic.List[object]
   foreach ($m in $script:RxClaseDecl.Matches($Limpio)) {
@@ -668,7 +673,7 @@ function Get-Clases([string]$Limpio) {
     $finNombre = $m.Groups['nombre'].Index + $m.Groups['nombre'].Length
     $cabecera = $script:RxGenericos.Replace($Limpio.Substring($finNombre, $m.Groups['cuerpo'].Index - $finNombre), '')
     $supers = @()
-    foreach ($s in $script:RxSupers.Matches($cabecera)) { $supers += @($s.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim().Split('.')[-1] } | Where-Object { $_ }) }
+    foreach ($s in $script:RxSupers.Matches($cabecera)) { $supers += @(Split-Tipos $s.Groups[1].Value) }
     [void]$res.Add([pscustomobject]@{
         Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); LineaCuerpo = (Get-LineaDe $Limpio $m.Groups['cuerpo'].Index)
         Anot = $m.Groups['anot'].Value; Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Top = $top; Supers = $supers
@@ -1214,7 +1219,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null, $Contexto = $null) {
   $tiposProxy = @{}                                              # tipo devuelto por un @Bean con scope de proxy -> sus motivos
   $props = @(Get-PropiedadesConfig $Hechos)                      # las propiedades de los application*.yml y .properties
   $nodos = New-Object System.Collections.Generic.List[object]    # los beans del migrado y lo que piden (referencia-circular)
-  $supersDe = @{}                                                # clase -> sus supertipos
+  $supersDe = @{}                                                # clase o interfaz -> sus supertipos
   $beans = New-Object System.Collections.Generic.List[object]    # los nombres de bean que dan los metodos @Bean (bean-repetido)
   $clasesBean = New-Object System.Collections.Generic.List[object]  # las clases de componente sin nombre explicito, con su nombre de bean
   foreach ($f in $Hechos.Ficheros) {
@@ -1274,6 +1279,8 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null, $Contexto = $null) {
       $cond = ($sinCom -cmatch $script:RxCondicion)
       foreach ($b in @(Get-NombresBean $sinCom)) { [void]$beans.Add([pscustomobject]@{ Nombre = $b.Nombre; Tipo = $b.Tipo; Metodo = $b.Metodo; RelRaiz = $f.RelRaiz; Linea = $b.Linea; Cond = $cond }) }
     }
+    # Un bean que implementa una interfaz da tambien las que esa interfaz extiende (los supertipos de las clases van abajo, en $supersDe)
+    foreach ($i in $script:RxInterfazExtiende.Matches($script:RxGenericos.Replace($limpio, ''))) { $supersDe[$i.Groups['n'].Value] = @(Split-Tipos $i.Groups['s'].Value) }
     # Constructores y logger de cada clase (las anidadas cuentan aparte)
     foreach ($c in @(Get-Clases $limpio)) {
       $ctores = @(Get-Constructores $c)
