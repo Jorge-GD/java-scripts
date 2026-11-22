@@ -834,6 +834,34 @@ $Pruebas['c9 (j4) secretos: el valor cuenta solo como palabra entera: pegado a l
   Igual 'el valor no sale en ningun sitio' 0 (Sale-Valor $e 'Zq81Tx' $x.Consola)
 }
 
+$Pruebas['c9 (j16) secretos: pegado a letras o cifras por un solo lado (aZx9q, Zx9qb) no es una fuga; suelto (Zx9q) si, y se borra'] = {
+  $inv = "ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://pedidos.pre.acme.test/api`nurl.auth=https://auth.pre.acme.test/token`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`nsftp.password=Zx9q`n"
+  # una pasada de pre en la que la IA anade una linea a montajes y otra a recursos
+  $Prueba = {
+    param([string]$Nombre, [string]$Montajes, [string]$Recursos)
+    $e = Nuevo-Escenario $Nombre
+    Escribe $e.Inv 'PRE/app.properties' $inv
+    Planes-Buenos $e
+    $f = Ficheros-Entorno 'pre' (Ficheros-Referencia) $Valores['pre']
+    $f['config/pre/montajes'] += $Montajes
+    $f['config/pre/recursos'] += $Recursos
+    Plan $e 'configmap-entorno-pre' $f
+    $x = Corre $e
+    return [pscustomobject]@{ E = $e; X = $x }
+  }
+  $a = & $Prueba 'j16a' "x=aZx9q`n" "y=Zx9qb`n"
+  Igual 'pegado solo a la izquierda y solo a la derecha: la tarea queda hecha' 'hecha' (Tarea-Guardada $a.E 'configmap-entorno-pre').estado
+  Comprueba 'el fichero con aZx9q no se borra' (Existe-Destino $a.E 'config/pre/montajes')
+  Comprueba 'el fichero con Zx9qb no se borra' (Existe-Destino $a.E 'config/pre/recursos')
+  Comprueba 'no se dice que se haya borrado nada' ($a.X.Consola -notmatch 'Borrado' -and $a.X.Consola -notmatch 'llevaba el valor') $a.X.Consola
+  Comprueba 'ni se marca en PENDIENTE.md' (-not (Pendiente $a.E).Contains('llevaba el valor') -and -not (Pendiente $a.E).Contains('Ficheros borrados por llevar'))
+  $b = & $Prueba 'j16b' "x=Zx9q`n" ''
+  Igual 'control, el valor suelto: la tarea queda atascada' 'atascada' (Tarea-Guardada $b.E 'configmap-entorno-pre').estado
+  Comprueba 'el fichero con Zx9q suelto se ha borrado' (-not (Existe-Destino $b.E 'config/pre/montajes'))
+  Comprueba 'y el motivo dice que llevaba el valor de un secreto, sin darlo' ((Tarea-Guardada $b.E 'configmap-entorno-pre').motivo -match 'llevaba el valor de un secreto' -and -not (Tarea-Guardada $b.E 'configmap-entorno-pre').motivo.Contains('Zx9q'))
+  Igual 'el valor no sale en ningun sitio' 0 (Sale-Valor $b.E 'Zx9q' $b.X.Consola)
+}
+
 $Pruebas['c9 (j5) secretos: un valor con credenciales dentro (esquema://usuario:clave@host, usuario/clave@host) es secreto aunque su nombre no lo diga: no va al prompt y la variable se pide como secreto'] = {
   $e = Nuevo-Escenario 'j5'
   Escribe $e.Inv 'PRE/app.properties' ("ruta.entrada=/data/pre/entrada`nlote.pedidos.endpoint=https://svc:Pa55@pedidos.pre.acme.test/api`nurl.auth=jdbc:oracle:thin:usr/Zx9Secret@host:1521/svc`nurl.auth.clave=$SecretoPre`nmax.reintentos=5`n")
