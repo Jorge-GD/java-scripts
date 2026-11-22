@@ -7214,5 +7214,205 @@ $Pruebas['m67 (c2) una pareja con un solo caso no sale; de las de 2 casos, las p
   Comprueba 'el prompt del migrado no lleva ni el bloque de lo que fallo la otra vez' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
 }
 
+# ===================== M73: lo que hoy da 'distinto' sin serlo (SQL que ya existe, horas en rutas, Excel y binarios) =====================
+# Escenarios con el Copilot de m40 y el Maven de m73 (tests/falsos/m73-mvn.ps1, sobre el de m68; sus banderas, en RESCATE_M73). Los datos son inventados.
+
+function Escenario-M73([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm73-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M68 $Nombre $Casos $aj)
+}
+
+# Lanza con las banderas $Banderas del Maven falso de m73 (RESCATE_M73) y la base de los tests $Tablas (RESCATE_M40, como Prueba-M68).
+function Prueba-M73($E, [string]$Banderas = '', [string]$Tablas = '', [string[]]$A = @()) {
+  $env:RESCATE_M73 = $Banderas
+  try { return (Prueba-M68 $E '' $Tablas $A) }
+  finally { $env:RESCATE_M73 = '' }
+}
+
+# Edit-DatosSql sobre un fichero por cada texto de $Textos (en Latin-1, byte a byte): devuelve, por cada uno, @(el texto que queda en el fichero, 'si' si devuelve los bytes de antes).
+function EditaSql-M73([string]$Nombre, [string[]]$Textos) {
+  $latin = [System.Text.Encoding]::GetEncoding(28591)
+  $d = Join-Path $Dir $Nombre
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  for ($i = 0; $i -lt $Textos.Count; $i++) { [System.IO.File]::WriteAllBytes((Join-Path $d "c$i.sql"), $latin.GetBytes($Textos[$i])) }
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Carpeta)
+$Latin = [System.Text.Encoding]::GetEncoding(28591)
+'@
+  $cuerpo = @'
+foreach ($f in @(Get-ChildItem -LiteralPath $Carpeta -Filter 'c*.sql')) {
+  $antes = Edit-DatosSql $f.FullName
+  $d = ''
+  if ($null -ne $antes) { $d = 'si:' + $Latin.GetString($antes) }
+  [System.IO.File]::WriteAllText($f.FullName + '.antes', $d, $Latin)
+}
+'@
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Edit-DatosSql', 'Get-MascaraSql')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($d)
+  $v = @()
+  for ($i = 0; $i -lt $Textos.Count; $i++) {
+    $ruta = Join-Path $d "c$i.sql"
+    $v += , @($latin.GetString([System.IO.File]::ReadAllBytes($ruta)), [System.IO.File]::ReadAllText($ruta + '.antes', $latin))
+  }
+  return $v
+}
+
+# Comprueba que cada par @(entrada, esperada) de $Pares sale de Edit-DatosSql como se espera y que los bytes de antes se devuelven solo si algo cambio y son los de la entrada.
+function Comprueba-Sql-M73([string]$Nombre, $Pares) {
+  $v = EditaSql-M73 $Nombre @($Pares | ForEach-Object { $_[0] })
+  for ($i = 0; $i -lt $Pares.Count; $i++) {
+    $q = ($Pares[$i][0] -replace "`r", '\r' -replace "`n", '\n')
+    Igual "[$i] $q" $Pares[$i][1] $v[$i][0]
+    $cambia = $Pares[$i][0] -cne $Pares[$i][1]
+    Igual "[$i] devuelve los bytes de antes solo si cambia" $(if ($cambia) { 'si:' + $Pares[$i][0] } else { '' }) $v[$i][1]
+  }
+}
+
+$Pruebas['m73 (a1) CREATE SEQUENCE, CREATE UNIQUE INDEX, CREATE SCHEMA, ADD CONSTRAINT y ADD COLUMN llevan IF NOT EXISTS en lo que se ejecuta: en mayusculas, en minusculas y en varias lineas'] = {
+  $pares = @(
+    @('CREATE SEQUENCE X', 'CREATE SEQUENCE IF NOT EXISTS X'),
+    @('create sequence x start with 1 increment by 50;', 'create sequence IF NOT EXISTS x start with 1 increment by 50;'),
+    @("CREATE`r`n  SEQUENCE`n  BATCH_STEP_EXECUTION_SEQ`n  START WITH 1;", "CREATE`r`n  SEQUENCE`n  IF NOT EXISTS BATCH_STEP_EXECUTION_SEQ`n  START WITH 1;"),
+    @('CREATE UNIQUE INDEX I ON T(C)', 'CREATE UNIQUE INDEX IF NOT EXISTS I ON T(C)'),
+    @('create unique index i on t (c);', 'create unique index IF NOT EXISTS i on t (c);'),
+    @('CREATE INDEX I ON T(C)', 'CREATE INDEX IF NOT EXISTS I ON T(C)'),
+    @('CREATE HASH INDEX I ON T(C)', 'CREATE HASH INDEX IF NOT EXISTS I ON T(C)'),
+    @('CREATE UNIQUE HASH INDEX S.I ON T(C)', 'CREATE UNIQUE HASH INDEX IF NOT EXISTS S.I ON T(C)'),
+    @('CREATE SPATIAL INDEX I ON T(C)', 'CREATE SPATIAL INDEX IF NOT EXISTS I ON T(C)'),
+    @("create`n  unique`n  index`n  i`n  on t(c);", "create`n  unique`n  index`n  IF NOT EXISTS i`n  on t(c);"),
+    @('CREATE SCHEMA S', 'CREATE SCHEMA IF NOT EXISTS S'),
+    @('create schema s authorization sa;', 'create schema IF NOT EXISTS s authorization sa;'),
+    @("CREATE SCHEMA`n  S;", "CREATE SCHEMA`n  IF NOT EXISTS S;"),
+    @('ALTER TABLE T ADD CONSTRAINT K FOREIGN KEY (C) REFERENCES P(ID)', 'ALTER TABLE T ADD CONSTRAINT IF NOT EXISTS K FOREIGN KEY (C) REFERENCES P(ID)'),
+    @('alter table t add constraint k unique (c);', 'alter table t add constraint IF NOT EXISTS k unique (c);'),
+    @("ALTER TABLE T`n  ADD CONSTRAINT`n  K PRIMARY KEY (C)", "ALTER TABLE T`n  ADD CONSTRAINT`n  IF NOT EXISTS K PRIMARY KEY (C)"),
+    @('ALTER TABLE IF EXISTS S.T ADD CONSTRAINT K CHECK (C > 0)', 'ALTER TABLE IF EXISTS S.T ADD CONSTRAINT IF NOT EXISTS K CHECK (C > 0)'),
+    @('ALTER TABLE T ADD COLUMN C INT', 'ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT'),
+    @('alter table s.t add column c varchar(10) not null;', 'alter table s.t add column IF NOT EXISTS c varchar(10) not null;'),
+    @('ALTER TABLE T ADD C INT', 'ALTER TABLE T ADD IF NOT EXISTS C INT'),
+    @("ALTER TABLE T`n  ADD`n  COLUMN`n  C INT;", "ALTER TABLE T`n  ADD`n  COLUMN`n  IF NOT EXISTS C INT;"),
+    @('ALTER TABLE IF EXISTS T ADD COLUMN C INT', 'ALTER TABLE IF EXISTS T ADD COLUMN IF NOT EXISTS C INT'),
+    @('create sequence A; create sequence B; alter table T add column D int;', 'create sequence IF NOT EXISTS A; create sequence IF NOT EXISTS B; alter table T add column IF NOT EXISTS D int;')
+  )
+  Comprueba-Sql-M73 'm73-a1' $pares
+}
+
+$Pruebas['m73 (a1b) el resto de lo que acepta IF NOT EXISTS en las tres gramaticas de H2 (1.4.193, 1.4.200 y 2.x): tablas con modificadores, vistas, roles, usuarios, constantes, dominios, alias, agregados, triggers y tablas enlazadas'] = {
+  $pares = @(
+    @('CREATE TABLE T (ID INT)', 'CREATE TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE CACHED TABLE T (ID INT)', 'CREATE CACHED TABLE IF NOT EXISTS T (ID INT)'),
+    @('create memory table t (id int)', 'create memory table IF NOT EXISTS t (id int)'),
+    @('CREATE GLOBAL TEMPORARY TABLE T (ID INT)', 'CREATE GLOBAL TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE LOCAL TEMPORARY TABLE T (ID INT)', 'CREATE LOCAL TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE TEMP TABLE T (ID INT)', 'CREATE TEMP TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE MEMORY TEMPORARY TABLE T (ID INT)', 'CREATE MEMORY TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @("CREATE FORCE LINKED TABLE T('org.h2.Driver', 'jdbc:h2:mem:x', 'sa', '', 'P')", "CREATE FORCE LINKED TABLE IF NOT EXISTS T('org.h2.Driver', 'jdbc:h2:mem:x', 'sa', '', 'P')"),
+    @('CREATE VIEW V AS SELECT 1 FROM DUAL', 'CREATE VIEW IF NOT EXISTS V AS SELECT 1 FROM DUAL'),
+    @('create force view v as select 1 from dual', 'create force view IF NOT EXISTS v as select 1 from dual'),
+    @('CREATE ROLE R', 'CREATE ROLE IF NOT EXISTS R'),
+    @("CREATE USER U PASSWORD 'p'", "CREATE USER IF NOT EXISTS U PASSWORD 'p'"),
+    @('CREATE CONSTANT K VALUE 1', 'CREATE CONSTANT IF NOT EXISTS K VALUE 1'),
+    @('CREATE DOMAIN D AS INT', 'CREATE DOMAIN IF NOT EXISTS D AS INT'),
+    @('CREATE ALIAS A FOR "com.acme.Util.f"', 'CREATE ALIAS IF NOT EXISTS A FOR "com.acme.Util.f"'),
+    @('CREATE AGGREGATE G FOR "com.acme.Media"', 'CREATE AGGREGATE IF NOT EXISTS G FOR "com.acme.Media"'),
+    @('CREATE TRIGGER TR AFTER INSERT ON T CALL "com.acme.Disparo"', 'CREATE TRIGGER IF NOT EXISTS TR AFTER INSERT ON T CALL "com.acme.Disparo"')
+  )
+  Comprueba-Sql-M73 'm73-a1b' $pares
+}
+
+$Pruebas['m73 (a2) lo que ya lleva IF NOT EXISTS no cambia (ni en mayusculas, minusculas o espacios de mas); tampoco lo que no lo acepta en alguna gramatica ni lo que va en un comentario o un texto; lo demas del fichero queda byte a byte'] = {
+  $enie = [string][char]0xF1 + 'and' + [char]0xFA
+  $pares = @(
+    @('CREATE SEQUENCE IF NOT EXISTS X', 'CREATE SEQUENCE IF NOT EXISTS X'),
+    @('create   index  if  not  exists  i on t(c)', 'create   index  if  not  exists  i on t(c)'),
+    @("CREATE SCHEMA`n  IF NOT EXISTS`n  S", "CREATE SCHEMA`n  IF NOT EXISTS`n  S"),
+    @('ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT', 'ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT'),
+    @('ALTER TABLE T ADD IF NOT EXISTS C INT', 'ALTER TABLE T ADD IF NOT EXISTS C INT'),
+    @('alter table t add constraint  if not exists  k unique (c)', 'alter table t add constraint  if not exists  k unique (c)'),
+    @('CREATE TABLE IF NOT EXISTS T (ID INT)', 'CREATE TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL', 'CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL'),
+    @('CREATE OR REPLACE FORCE VIEW V AS SELECT 1 FROM DUAL', 'CREATE OR REPLACE FORCE VIEW V AS SELECT 1 FROM DUAL'),
+    @('CREATE INDEX ON T(C)', 'CREATE INDEX ON T(C)'),
+    @('create unique index on t(c)', 'create unique index on t(c)'),
+    @('CREATE PRIMARY KEY ON T(C)', 'CREATE PRIMARY KEY ON T(C)'),
+    @('CREATE SCHEMA AUTHORIZATION SA', 'CREATE SCHEMA AUTHORIZATION SA'),
+    @('CREATE MATERIALIZED VIEW V AS SELECT 1 FROM DUAL', 'CREATE MATERIALIZED VIEW V AS SELECT 1 FROM DUAL'),
+    @('ALTER TABLE T ADD PRIMARY KEY (C)', 'ALTER TABLE T ADD PRIMARY KEY (C)'),
+    @('ALTER TABLE T ADD UNIQUE (C)', 'ALTER TABLE T ADD UNIQUE (C)'),
+    @('ALTER TABLE T ADD FOREIGN KEY (C) REFERENCES P(ID)', 'ALTER TABLE T ADD FOREIGN KEY (C) REFERENCES P(ID)'),
+    @('ALTER TABLE T ADD CHECK (C > 0)', 'ALTER TABLE T ADD CHECK (C > 0)'),
+    @('ALTER TABLE T ADD (A INT, B INT)', 'ALTER TABLE T ADD (A INT, B INT)'),
+    @('ALTER TABLE T ADD COLUMN (A INT, B INT)', 'ALTER TABLE T ADD COLUMN (A INT, B INT)'),
+    @('ALTER TABLE T ALTER COLUMN C INT', 'ALTER TABLE T ALTER COLUMN C INT'),
+    @('ALTER TABLE T DROP COLUMN C', 'ALTER TABLE T DROP COLUMN C'),
+    @('-- CREATE SEQUENCE X', '-- CREATE SEQUENCE X'),
+    @("-- no es la de 'ayer'`nCREATE SEQUENCE X", "-- no es la de 'ayer'`nCREATE SEQUENCE IF NOT EXISTS X"),
+    @('/* CREATE TABLE T (ID INT); ALTER TABLE T ADD COLUMN C INT */', '/* CREATE TABLE T (ID INT); ALTER TABLE T ADD COLUMN C INT */'),
+    @("INSERT INTO LOG VALUES ('CREATE SEQUENCE X; ALTER TABLE T ADD COLUMN C INT')", "INSERT INTO LOG VALUES ('CREATE SEQUENCE X; ALTER TABLE T ADD COLUMN C INT')"),
+    @("INSERT INTO LOG VALUES ('it''s: CREATE TABLE T'); CREATE SEQUENCE X", "INSERT INTO LOG VALUES ('it''s: CREATE TABLE T'); CREATE SEQUENCE IF NOT EXISTS X"),
+    @('CREATE ALIAS A AS $$ String f() { return "CREATE SEQUENCE X"; } $$', 'CREATE ALIAS IF NOT EXISTS A AS $$ String f() { return "CREATE SEQUENCE X"; } $$'),
+    @("CREATE /* a */ SEQUENCE /* b */ X", "CREATE /* a */ SEQUENCE /* b */ IF NOT EXISTS X"),
+    @("insert into T values ('$enie')`r`ncreate sequence S;`r`n", "insert into T values ('$enie')`r`ncreate sequence IF NOT EXISTS S;`r`n"),
+    @('', '')
+  )
+  Comprueba-Sql-M73 'm73-a2' $pares
+}
+
+$Pruebas['m73 (a3) un caso hecho de antes cuyo original guardo que una secuencia, un indice, un esquema, una vista, una restriccion o una columna ya existe (en espanol, en ingles o solo con el codigo) se ejecuta otra vez; los demas errores, no'] = {
+  $casos = @(1..16 | ForEach-Object { 'importe=' + $_ + '0.00' })
+  $e = Escenario-M73 'm73-a3' ([ordered]@{ cargaJob = $casos })
+  $r = Prueba-M73 $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $h2 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: '
+  $dicen = @{
+    1  = @($true, ($h2 + 'Sequence "BATCH_STEP_EXECUTION_SEQ" already exists; SQL statement: CREATE SEQUENCE BATCH_STEP_EXECUTION_SEQ [90035-200]'))
+    2  = @($true, ($h2 + 'Sequence "BATCH_STEP_EXECUTION_SEQ" ya existe; Sentencia SQL: CREATE SEQUENCE BATCH_STEP_EXECUTION_SEQ [90035-200]'))
+    3  = @($true, ($h2 + '[90035-200]'))
+    4  = @($true, ($h2 + 'Indice "IX_A" ya existe; Sentencia SQL: CREATE UNIQUE INDEX IX_A ON T_A(ID) [42111-200]'))
+    5  = @($true, ($h2 + 'Index "IX_A" already exists [42111-200]'))
+    6  = @($true, ($h2 + 'Schema "S_A" already exists'))
+    7  = @($true, ($h2 + 'View "V_A" ya existe; Sentencia SQL: CREATE VIEW V_A AS SELECT 1 FROM DUAL'))
+    8  = @($true, ($h2 + 'Constraint "K_A" already exists; SQL statement: ALTER TABLE T_A ADD CONSTRAINT K_A UNIQUE (ID) [90045-200]'))
+    9  = @($true, ($h2 + 'Nombre de columna Duplicada "COL_X"; Sentencia SQL: ALTER TABLE T_A ADD COLUMN COL_X INT [42121-200]'))
+    10 = @($true, ("Failed to execute SQL script statement #1: ALTER TABLE T_A ADD COLUMN COL_X INT; nested exception is " + $h2 + 'Duplicate column name "COL_X" [42121-200]'))
+    11 = @($true, ($h2 + 'Role "R_A" already exists [90069-200]; User "U_A" ya existe [90033-200]; Trigger "TR_A" ya existe [90041-200]; Constant "K" ya existe [90114-200]; Function alias "A" already exists [90076-200]; Domain "D" ya existe [90119-200]'))
+    12 = @($false, ($h2 + 'Duplicate column name "C"; SQL statement: CREATE TABLE T_A (C INT, C INT) [42121-200]'))
+    13 = @($false, ($h2 + 'Tabla "T_A" no encontrada; Sentencia SQL: SELECT * FROM T_A [42102-200]'))
+    14 = @($false, ('Se han tratado 1190035 filas y el codigo 420112 no es un error de H2'))
+    15 = @($false, ('java.lang.NullPointerException'))
+  }
+  foreach ($n in $dicen.Keys) { Escribe $e.Local ('salidas/original/cargaJob/caso-' + $n.ToString('D2') + '/error.txt') ($dicen[$n][1] + "`n") }
+  $r = Prueba-M73 $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas a Copilot' $llamadas (Llamadas $e).Count
+  $esperado = @(1..16 | ForEach-Object { if ($dicen.ContainsKey($_) -and $dicen[$_][0]) { '5' } else { '3' } }) -join ','
+  $despues = @(1..16 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-' + $_.ToString('D2')) }) -join ','
+  Igual 'los once con el error se ejecutan otra vez (original y original-2) y los demas, no' $esperado $despues
+  Comprueba 'la consola dice cuantos' ($r.Salida -match 'Se ejecuta otra vez el original de 11 caso\(s\)') (Cola $r.Salida)
+  Comprueba 'y que es porque su error.txt dice que algo ya existe (no solo una tabla)' ($r.Salida -match 'dice que algo ya existe') (Cola $r.Salida)
+}
+
+$Pruebas['m73 (a4) un datos.sql que crea una secuencia, un indice, un esquema y una columna que la base ya tiene: el caso corre en el original y en el migrado, y lo guardado en casos no cambia'] = {
+  $sql = 'create sequence BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IX_A on T_A(ID); alter table T_A add column COL_X int; create schema S_A; alter table T_A add constraint K_A unique (ID)'
+  $e = Escenario-M73 'm73-a4' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A' 'tablas=1/CALENDARIO_02'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba 'el original no deja error.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  $con = 'cargaJob/caso-01|create sequence IF NOT EXISTS BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IF NOT EXISTS IX_A on T_A(ID); alter table T_A add column IF NOT EXISTS COL_X int; create schema IF NOT EXISTS S_A; alter table T_A add constraint IF NOT EXISTS K_A unique (ID)'
+  Igual 'el original vio las cinco sentencias con IF NOT EXISTS en sus tres ejecuciones' 3 @(Sql-M68 $e $e.CopiaOrig | Where-Object { $_ -ceq $con }).Count
+  Igual 'y el migrado, en la suya' 1 @(Sql-M68 $e $e.CopiaMig | Where-Object { $_ -ceq $con }).Count
+  Igual 'lo guardado en casos no cambia' $sql (Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim()
+  $rel = 'src/test/resources/prueba-local/cargaJob/caso-01/datos.sql'
+  Igual 'ni lo que queda en la copia del original' $sql (Lee $e.CopiaOrig $rel).Trim()
+  Igual 'ni en la copia del migrado' $sql (Lee $e.CopiaMig $rel).Trim()
+  $e = Escenario-M73 'm73-a4b' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A;en' 'tablas=1/CALENDARIO_02'
+  Igual 'con los mensajes de H2 en ingles tambien sale con 0' 0 $r.Codigo
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

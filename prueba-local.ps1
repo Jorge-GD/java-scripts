@@ -57,9 +57,10 @@ QUE HACE
      siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
      de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. El original se
      ejecuta con UTF-8, como en el servidor (sus Maven llevan JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 y, con el, lo que ya hubiera). Para obligar a
-     repetirlo todo, borra prueba-local\salidas. Antes de ejecutar un caso (en el original, en el migrado y al prepararlo), cada CREATE TABLE de su
-     datos.sql pasa a CREATE TABLE IF NOT EXISTS en la copia que se ejecuta (el test ya crea tablas en su base y H2 dice 'ya existe'; lo guardado en
-     casos\ no cambia), y el original de un caso hecho de antes cuyo error.txt guardado dice 'ya existe' se ejecuta otra vez. Cada caso, en su Maven
+     repetirlo todo, borra prueba-local\salidas. Antes de ejecutar un caso (en el original, en el migrado y al prepararlo), cada CREATE de su
+     datos.sql (tabla, secuencia, indice, esquema, vista...) y cada ALTER TABLE ... ADD (columna, restriccion) que acepta IF NOT EXISTS lo lleva en la copia
+     que se ejecuta (el test y Spring Batch ya crean cosas en su base y H2 dice 'ya existe'; lo guardado en casos\ no cambia), y el original de un caso
+     hecho de antes cuyo error.txt guardado dice que algo ya existe se ejecuta otra vez. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
@@ -195,9 +196,15 @@ $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no 
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
-# El error.txt de un caso cuyo datos.sql crea una tabla que ya esta en la base del test: H2 dice 'Tabla "X" ya existe' o 'Table "X" already exists' ([42101-...]).
+# El error.txt de un caso cuyo datos.sql crea algo que ya esta en la base del test (o que Spring Batch crea solo en el migrado): H2 dice 'Tabla "X" ya existe' o
+# 'Sequence "X" already exists' y el codigo ([42101-...], [90035-...]). Lo que dicen los _messages_*.prop de H2 (1.4.193, 1.4.200 y 2.x) y su ErrorCode.java: ya existe
+# o already exists (tabla 42101, indice 42111, usuario 90033, secuencia 90035, vista 90038, trigger 90041, restriccion 90045, rol 90069, alias de funcion y
+# agregado 90076, esquema 90078, constante 90114, dominio 90119) y la columna repetida (42121: 'Duplicate column name' o 'Nombre de columna Duplicada'), que solo
+# cuenta si el error trae un ALTER TABLE (un CREATE TABLE con dos columnas iguales es un error del SQL, no de la base y no se arregla ejecutandolo otra vez).
 # Reset-OriginalesYaExiste lo busca en el error.txt guardado de un original.
-$PatronYaExiste = '(?i)ya existe|already exists|42101'
+$CodigosYaExiste = '(?<!\d)(?:42101|42111|90033|90035|90038|90041|90045|90069|90076|90078|90114|90119)(?!\d)'
+$ColumnaRepetida = '(?:duplicate column name|nombre de columna duplicada|(?<!\d)42121(?!\d))'
+$PatronYaExiste = '(?i)ya existe|already exists|' + $CodigosYaExiste + '|(?s:ALTER\s+TABLE.*' + $ColumnaRepetida + '|' + $ColumnaRepetida + '.*ALTER\s+TABLE)'
 # Lo que dice el motivo de un caso cuyo original no corre porque el test crea mal una tabla (Get-MotivoTablaMal): la cuenta del final de la prueba lo busca.
 # $PatronCreateTabla es el CREATE TABLE que H2 rechaza (grupo s, la sentencia): el error de H2 (Get-PistaArnes y Get-MotivoTablaMal) o ese motivo ya dicho
 # (Get-PistaArnes sobre el prueba-local.json de antes, donde el motivo ya no trae el error).
@@ -576,7 +583,7 @@ function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ 
 # $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
 # una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
 # repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
-# Mientras Maven ejecuta el caso, su datos.sql lleva cada CREATE TABLE con IF NOT EXISTS (Edit-DatosSql); al acabar queda como estaba.
+# Mientras Maven ejecuta el caso, su datos.sql lleva IF NOT EXISTS en cada CREATE y ADD que lo acepta (Edit-DatosSql); al acabar queda como estaba.
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
   Remove-Carpeta $sal
@@ -596,19 +603,53 @@ function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso
   return $r
 }
 
-# Cambia en el datos.sql $Ruta cada CREATE TABLE <tabla> que no lleva IF NOT EXISTS por CREATE TABLE IF NOT EXISTS <tabla> (sin distinguir mayusculas; la gramatica de H2 es
-# CREATE [CACHED | MEMORY] [TEMP | [GLOBAL | LOCAL] TEMPORARY] TABLE [IF NOT EXISTS] <tabla>, h2database.com/html/commands.html#create_table). El test del arnes ya crea tablas en su
-# base (la del calendario en el original; las de Spring Batch en el migrado, que las crea solo) y un datos.sql que las crea otra vez da 'ya existe': el caso no se pudo preparar o
-# sale distinto sin que el batch tenga la culpa. Devuelve los bytes de antes, para dejar el fichero como estaba al acabar el caso (lo guardado en casos\ no cambia), o $null si
-# no hay fichero o no cambia nada. Se lee y se escribe en Latin-1, byte a byte: lo demas del fichero no cambia, sea cual sea su codificacion.
+# Pone IF NOT EXISTS al datos.sql $Ruta en cada CREATE y cada ALTER TABLE ... ADD que lo lleva en las tres gramaticas de H2 (1.4.193, 1.4.200 y 2.x; help.csv de cada
+# etiqueta de h2database/h2database, h2database.com/html/commands.html): CREATE [CACHED | MEMORY] [TEMP | [GLOBAL | LOCAL] TEMPORARY] TABLE, CREATE [FORCE] [[GLOBAL | LOCAL]
+# TEMPORARY] LINKED TABLE, SEQUENCE, [UNIQUE | HASH | SPATIAL] INDEX <nombre>, SCHEMA <nombre>, [FORCE] VIEW, ROLE, USER, CONSTANT, DOMAIN, ALIAS, AGGREGATE, TRIGGER, y
+# ALTER TABLE <tabla> ADD [COLUMN] <columna> y ADD CONSTRAINT <nombre>. No lo lleva (se deja como esta): CREATE OR REPLACE VIEW (con los dos, H2 deja la vista de antes y no la
+# reemplaza), un indice sin nombre, CREATE PRIMARY KEY, CREATE SCHEMA AUTHORIZATION sin nombre y CREATE MATERIALIZED VIEW (solo 2.x), ADD PRIMARY KEY / UNIQUE / FOREIGN KEY /
+# CHECK sin CONSTRAINT <nombre> y ADD ( lista de columnas ) (sin nombre o sin IF NOT EXISTS en la gramatica). El test del arnes ya crea cosas en su base (la del calendario en el
+# original; las de Spring Batch en el migrado, que las crea solo) y un datos.sql que las crea otra vez da 'ya existe': el caso no se pudo preparar o sale distinto sin que el
+# batch tenga la culpa. Lo que va en un comentario (-- o /* */), en un texto ('...' o $$...$$) o entre comillas dobles no se toca (Get-MascaraSql). Lo que ya lleva IF NOT EXISTS,
+# tampoco. Devuelve los bytes de antes, para dejar el fichero como estaba al acabar el caso (lo guardado en casos\ no cambia), o $null si no hay fichero o no cambia nada. Se lee
+# y se escribe en Latin-1, byte a byte: lo demas del fichero no cambia, sea cual sea su codificacion.
 function Edit-DatosSql([string]$Ruta) {
   if (-not (Test-Path -LiteralPath $Ruta -PathType Leaf)) { return $null }
   $bytes = [System.IO.File]::ReadAllBytes($Ruta)
   $texto = $Latin.GetString($bytes)
-  $nuevo = [regex]::Replace($texto, '(?i)\bCREATE\s+TABLE(?>\s+)(?!IF\s+NOT\s+EXISTS\b)', '$&IF NOT EXISTS ')
-  if ($nuevo -ceq $texto) { return $null }
+  $mascara = Get-MascaraSql $texto
+  $ya = '(?!IF\s+NOT\s+EXISTS\b)'
+  $alter = 'ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[^\s;(]+\s+ADD'
+  $patrones = @(
+    ('\bCREATE\s+(?:(?:CACHED|MEMORY)\s+)?(?:(?:TEMP|TEMPORARY|(?:GLOBAL|LOCAL)\s+TEMPORARY)\s+)?TABLE(?>\s+)(?<p>)' + $ya),
+    ('\bCREATE\s+(?:FORCE\s+)?(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMPORARY\s+)?LINKED\s+TABLE(?>\s+)(?<p>)' + $ya),
+    ('\bCREATE\s+(?:(?:UNIQUE|HASH|SPATIAL|NULLS\s+(?:ALL\s+|NOT\s+)?DISTINCT)\s+)*INDEX(?>\s+)(?<p>)' + $ya + '(?!ON\b)'),
+    ('\bCREATE\s+(?:SEQUENCE|SCHEMA|ROLE|USER|CONSTANT|DOMAIN|ALIAS|AGGREGATE|TRIGGER)(?>\s+)(?<p>)' + $ya + '(?!AUTHORIZATION\b)'),
+    ('\bCREATE\s+(?:FORCE\s+)?VIEW(?>\s+)(?<p>)' + $ya),
+    ('\b' + $alter + '(?>\s+)(?:(?>COLUMN\s+)|(?!COLUMN\b))(?<p>)' + $ya + '(?!CONSTRAINT\b|PRIMARY\b|UNIQUE\b|FOREIGN\b|CHECK\b|\()'),
+    ('\b' + $alter + '\s+CONSTRAINT(?>\s+)(?<p>)' + $ya)
+  )
+  $puestos = New-Object System.Collections.Generic.SortedSet[int]
+  foreach ($p in $patrones) { foreach ($m in [regex]::Matches($mascara, $p, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { [void]$puestos.Add($m.Groups['p'].Index) } }
+  if ($puestos.Count -eq 0) { return $null }
+  $nuevo = $texto
+  foreach ($i in @($puestos | Sort-Object -Descending)) { $nuevo = $nuevo.Insert($i, 'IF NOT EXISTS ') }
   [System.IO.File]::WriteAllBytes($Ruta, $Latin.GetBytes($nuevo))
   return , $bytes
+}
+
+# $Texto con lo que no es SQL por dentro tapado, del mismo largo (para buscar sentencias sin leer un comentario o un texto como si fuera una): un comentario (-- hasta el final de la
+# linea, /* */) pasa a espacios; un texto ('...' con '' dentro, $$...$$) o un nombre entre comillas dobles conserva sus delimitadores y lleva x por dentro.
+function Get-MascaraSql([string]$Texto) {
+  $tapa = [System.Text.RegularExpressions.MatchEvaluator] {
+    param($m)
+    $v = $m.Value
+    if ($v.StartsWith('--') -or $v.StartsWith('/*')) { return (' ' * $v.Length) }
+    $d = 1
+    if ($v.StartsWith('$$')) { $d = 2 }
+    return ($v.Substring(0, $d) + ('x' * ($v.Length - 2 * $d)) + $v.Substring($v.Length - $d))
+  }
+  return [regex]::Replace($Texto, '--[^\r\n]*|/\*.*?\*/|''(?:[^'']|'''')*''|"(?:[^"]|"")*"|\$\$.*?\$\$', $tapa, [System.Text.RegularExpressions.RegexOptions]::Singleline)
 }
 
 # Anade las filas de este lanzamiento a datos\prueba-local-tiempos.json (se anade, no se pisa). Un fallo al guardar no para la prueba.
@@ -1804,8 +1845,8 @@ function Reset-CasosExcepcion($Tareas) {
   if ($n -gt 0) { Save-Originales; Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
 }
 
-# Un caso hecho en otro lanzamiento cuyo original guardo un error.txt que dice que una tabla ya existe ($PatronYaExiste: su datos.sql crea una tabla que el test del original
-# ya crea; ahora el script la crea con IF NOT EXISTS, Edit-DatosSql) vuelve a ejecutar su original, sin IA y sin -Rehacer: se quita su entrada de originales.json (un original sin
+# Un caso hecho en otro lanzamiento cuyo original guardo un error.txt que dice que algo ya existe ($PatronYaExiste: su datos.sql crea una tabla, una secuencia, un indice... que el
+# test del original ya crea; ahora el script lo crea con IF NOT EXISTS, Edit-DatosSql) vuelve a ejecutar su original, sin IA y sin -Rehacer: se quita su entrada de originales.json (un original sin
 # estado.txt ya se ejecuta en cada lanzamiento; este trae el estado.txt de un job que corrio igualmente). Los demas casos no se tocan. Dice cuantos son.
 function Reset-OriginalesYaExiste($Tareas) {
   $o = Get-Originales
@@ -1818,7 +1859,7 @@ function Reset-OriginalesYaExiste($Tareas) {
     $o.Remove("$j|$c")
     $n++
   }
-  if ($n -gt 0) { Info "Se ejecuta otra vez el original de $n caso(s) hecho(s) en otro lanzamiento: su error.txt dice que una tabla ya existe (su datos.sql la crea y el test ya la crea)." }
+  if ($n -gt 0) { Info "Se ejecuta otra vez el original de $n caso(s) hecho(s) en otro lanzamiento: su error.txt dice que algo ya existe (una tabla, una secuencia, un indice...: su datos.sql lo crea y la base del test ya lo tiene)." }
 }
 
 # Un caso hecho como no-aplica (sin probar en local: la IA no lo vio correr en el original, por ejemplo por unas tablas que el test no creaba) se decidio con el test
