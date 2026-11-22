@@ -7983,6 +7983,15 @@ $Pruebas['m77 (a3) con 3 FAILED iguales en el original (la ruta de la causa llev
   Igual 'y los 3 en el migrado' 'caso-01,caso-02,caso-03' (Casos-M77 $e 'migrado' 'remesaJob')
 }
 
+$Pruebas['m77 (a4) un original que acaba bien en los 3 primeros casos no se para: el job ejecuta todos sus casos'] = {
+  $e = Escenario-M77 'm77-a4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e ''
+  Igual 'el original ejecuta los 5 casos' 'caso-01,caso-02,caso-03,caso-04,caso-05' (Casos-M77 $e 'original')
+  Igual 'y el migrado, los 5' 'caso-01,caso-02,caso-03,caso-04,caso-05' (Casos-M77 $e 'migrado')
+  Comprueba 'ningun caso sale sin probar' (@(Resultados $e | Where-Object { $_ -ceq 'sin probar en local' }).Count -eq 0) ((Resultados $e) -join ',')
+  Comprueba 'y la consola no dice que deja de ejecutar casos' ($r.Salida -notmatch 'no ejecuto sus demas casos') (Cola $r.Salida)
+}
+
 $M77Orig = "El original no arranca el job cargaJob (NoSuchBeanDefinitionException: $M77Bean). Es el test del original, no el codigo: relanza con -RehacerOriginal."
 $M77Igual = "El original falla igual en todos los casos de cargaJob (FAILED: $M77Fichero). El original funciona en produccion: es su test, no el codigo. Relanza con -RehacerOriginal."
 
