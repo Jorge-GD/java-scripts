@@ -7176,5 +7176,126 @@ $Pruebas['m76 (i6) repositorio-batch: @EnableBatchProcessing(dataSourceRef = "x"
   Igual 'con un DataSource en memoria pero sin dataSourceRef (Batch sigue en dataSource), sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
 }
 
+# Los dos ficheros de un ciclo por constructor entre dos componentes: Pide-M76 de cada uno con lo que pide (para varios pares a la vez).
+function Par-M76([string]$A, [string]$ParamA, [string]$B, [string]$ParamB, [string]$Cabeza = '@Service') {
+  return @{ $A = (Pide-M76 $A $ParamA $Cabeza); $B = (Pide-M76 $B $ParamB $Cabeza) }
+}
+
+$Pruebas['m76 (j1) referencia-circular: un ciclo a traves de List<X>, Optional<X> o Set<? extends X> en el constructor sale (pide los beans del ultimo generico)'] = {
+  $repo = @{}
+  foreach ($par in @(@('LiA', 'List<LiB> bs', 'LiB', 'LiA a'), @('OpA', 'Optional<OpB> b', 'OpB', 'OpA a'), @('SeA', 'Set<? extends SeB> bs', 'SeB', 'SeA a'))) { $repo += Par-M76 $par[0] $par[1] $par[2] $par[3] }
+  $e = Escenario-M70 'm76-j1' $repo
+  Igual 'salen las seis clases' 'LiA LiB OpA OpB SeA SeB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j2) referencia-circular: un ciclo a traves de un supertipo de un supertipo (clase -> clase -> interfaz que se pide) sale'] = {
+  $e = Escenario-M70 'm76-j2' @{
+    Puerto0    = (Java-M76 'Puerto0' 'interface')
+    Base       = (Java-M76 'Base' 'class' '' ' implements Puerto0')
+    Adap       = ((Pide-M76 'Adap' 'Consumidor c' '@Component') -replace 'public class Adap ', 'public class Adap extends Base ')
+    Consumidor = (Pide-M76 'Consumidor' 'Puerto0 p')
+  }
+  Igual 'salen Adap y Consumidor' 'Adap Consumidor' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j3) referencia-circular: un ciclo a traves de implements Puerto<Algo> (interfaz con genericos) sale'] = {
+  $e = Escenario-M70 'm76-j3' @{
+    PuertoG  = (Java-M76 'PuertoG<T>' 'interface')
+    AdapG    = (Implementa-M76 'AdapG' 'PuertoG<String>' 'ClienteG c')
+    ClienteG = (Pide-M76 'ClienteG' 'PuertoG p')
+  }
+  Igual 'salen AdapG y ClienteG' 'AdapG ClienteG' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j4) referencia-circular: un ciclo a traves de un metodo @Autowired (un setter) sale; con @Lazy en el metodo, no'] = {
+  $e = Escenario-M70 'm76-j4' @{
+    SetA = (Clase-M70 'SetA' '@Service' "    @Autowired`n    public void setB(SetB b) {`n    }`n")
+    SetB = (Pide-M76 'SetB' 'SetA a')
+    SetC = (Clase-M70 'SetC' '@Service' "    @Autowired`n    @Lazy`n    public void setD(SetD d) {`n    }`n")
+    SetD = (Pide-M76 'SetD' 'SetC c')
+  }
+  Igual 'salen SetA y SetB, y no SetC ni SetD (con @Lazy)' 'SetA SetB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j5) bean-repetido: el nombre del bean de una clase es el de Introspector.decapitalize: URLLector se queda como esta y Servicio pasa a servicio'] = {
+  $e = Escenario-M70 'm76-j5' @{ URLLector = (Clase-M70 'URLLector' '@Service' ''); Servicio = (Clase-M70 'Servicio' '@Service' '') }
+  $otro = 'com.acme.life.infrastructure.adapters'
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/URLLector.java' (Clase-M70 'URLLector' '@Component' '' $otro)
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Servicio.java' (Clase-M70 'Servicio' '@Component' '' $otro)
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'salen las dos clases en sus dos paquetes' 'Servicio Servicio URLLector URLLector' (Ficheros-M70 $h)
+  Comprueba "el nombre de URLLector es 'URLLector' (las dos primeras en mayuscula)" (@($h | Where-Object { $_.Fichero -like '*URLLector.java' -and $_.Detalle -clike "*el mismo nombre de bean 'URLLector' (*" }).Count -eq 2) (($h | ForEach-Object { $_.Detalle }) -join ' / ')
+  Comprueba "y el de Servicio es 'servicio'" (@($h | Where-Object { $_.Fichero -like '*Servicio.java' -and $_.Detalle -clike "*el mismo nombre de bean 'servicio' (*" }).Count -eq 2) (($h | ForEach-Object { $_.Detalle }) -join ' / ')
+}
+
+$Pruebas['m76 (j6) varios-jobs-sin-nombre: SPRING_BATCH_JOB_NAME como variable de entorno en un script o en el Dockerfile cuenta como nombre'] = {
+  $e = Escenario-M70 'm76-j6' @{
+    Jobs1 = (Beans-M76 'Jobs1' @('@Bean public Job altaJob(JobRepository r) {'))
+    Jobs2 = (Beans-M76 'Jobs2' @('@Bean public Job bajaJob(JobRepository r) {'))
+  }
+  Igual 'sin nombre, sale' 1 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo 'bin/lanza.sh' "#!/bin/sh`nSPRING_BATCH_JOB_NAME=altaJob java -jar batch-life.jar`n"
+  Igual 'con la variable en un script, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo 'bin/lanza.sh') -Force
+  Escribe $e.Repo 'Dockerfile' "FROM eclipse-temurin:21`nENV SPRING_BATCH_JOB_NAME=altaJob`nCMD [`"java`", `"-jar`", `"batch-life.jar`"]`n"
+  Igual 'con ENV en el Dockerfile, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+}
+
+$Pruebas['m76 (j7) referencia-circular: un componente con @StepScope o @JobScope dentro de un ciclo no cuenta (Spring lo crea al empezar el step, no al arrancar)'] = {
+  $repo = Par-M76 'SsA' 'SsB b' 'SsB' 'SsA a'
+  $repo['SsA'] = (Pide-M76 'SsA' 'SsB b' "@Component`n@StepScope")
+  $repo += @{ JsA = (Pide-M76 'JsA' 'JsB b' "@Component`n@JobScope"); JsB = (Pide-M76 'JsB' 'JsA a') }
+  $e = Escenario-M70 'm76-j7' $repo
+  Igual 'no sale ninguno' '' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j8) referencia-circular: un @Bean static no depende de su clase de configuracion; sin static, el ciclo sale'] = {
+  $miembros = { param($mod) "    private final Lector lector;`n`n" + (Ctor-M70 'FabCfg' '' 'Lector lector') + "    @Bean`n    public $mod Lector lector() {`n        return null;`n    }`n" }
+  $e = Escenario-M70 'm76-j8' @{ FabCfg = (Clase-M70 'FabCfg' '@Configuration' (& $miembros 'static')) }
+  Igual 'con static, no sale' '' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/FabCfg.java' (Clase-M70 'FabCfg' '@Configuration' (& $miembros ''))
+  Igual 'sin static, sale' 'FabCfg' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j9) referencia-circular: con @RequiredArgsConstructor un campo final con valor inicial no se pide; sin valor inicial, si'] = {
+  $e = Escenario-M70 'm76-j9' @{
+    RqA = (Clase-M70 'RqA' "@Service`n@RequiredArgsConstructor" "    private final RqB b = new RqB(null);`n")
+    RqB = (Pide-M76 'RqB' 'RqA a')
+    RqD = (Clase-M70 'RqD' "@Service`n@RequiredArgsConstructor" "    private final RqE e;`n")
+    RqE = (Pide-M76 'RqE' 'RqD d')
+  }
+  Igual 'salen RqD y RqE, y no RqA ni RqB' 'RqD RqE' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j10) bean-repetido: dos componentes con el mismo nombre de clase, uno con @Conditional* o @Conditional(...), no salen; sin condicion, si'] = {
+  $e = Escenario-M70 'm76-j10' @{
+    Cond1 = (Clase-M70 'Cond1' "@Service`n@ConditionalOnMissingBean" '')
+    Cond2 = (Clase-M70 'Cond2' "@Service`n@Conditional(MiCondicion.class)" '')
+    Libre = (Clase-M70 'Libre' '@Service' '')
+  }
+  $otro = 'com.acme.life.infrastructure.adapters'
+  foreach ($n in @('Cond1', 'Cond2', 'Libre')) { Escribe $e.Repo "src/main/java/com/acme/life/infrastructure/adapters/$n.java" (Clase-M70 $n '@Component' '' $otro) }
+  Igual 'sale Libre en sus dos paquetes, y no Cond1 ni Cond2' 'Libre Libre' (Ficheros-M70 (Cal-M76 $e 'bean-repetido'))
+}
+
+$Pruebas['m76 (j11) nashorn: getEngineByName("nashorn") dentro de un comentario de linea o de bloque no sale'] = {
+  $e = Escenario-M70 'm76-j11' @{
+    Real   = (Metodo-M76 'Real' 'Object m = manager.getEngineByName("nashorn");')
+    Linea  = (Metodo-M76 'Linea' '// Object m = manager.getEngineByName("nashorn");')
+    Bloque = (Metodo-M76 'Bloque' '/* Object m = manager.getEngineByName("js"); */')
+  }
+  Igual 'sale Real y no los comentarios' 'Real' (Ficheros-M70 (Cal-M76 $e 'nashorn'))
+}
+
+$Pruebas['m76 (j12) referencia-circular: con dos constructores solo cuenta el que lleva @Autowired; los parametros del otro no crean un ciclo'] = {
+  $e = Escenario-M70 'm76-j12' @{
+    CtA = (Clase-M70 'CtA' '@Service' ((Ctor-M70 'CtA' '@Autowired' 'String texto') + (Ctor-M70 'CtA' '' 'CtB b')))
+    CtB = (Pide-M76 'CtB' 'CtA a')
+  }
+  Igual 'con @Autowired en el que no pide CtB, no sale' '' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/CtA.java' (Clase-M70 'CtA' '@Service' ((Ctor-M70 'CtA' '' 'String texto') + (Ctor-M70 'CtA' '@Autowired' 'CtB b')))
+  Igual 'con @Autowired en el que pide CtB, sale' 'CtA CtB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
