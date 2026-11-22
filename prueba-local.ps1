@@ -46,6 +46,14 @@ QUE HACE
      Si con un caso vacio el original arranca un job y el migrado no, el test del migrado se rechaza y, en el ultimo intento, se acepta con un aviso:
      de ese job se ejecuta solo el primer caso y, si acaba EXCEPCION con la misma clase, los demas salen sin probar (no se ejecutan); la linea
      final dice que puede ser el codigo del migrado y que se lo preguntes a Copilot en el repo del migrado, sin aconsejar -RehacerArnes.
+     Si la causa del migrado es un error del codigo (una clase final con proxy, una referencia circular, un bean repetido: $ErroresCodigo, cada uno con su regla del paso
+     de calidad de rescate.ps1), el test no se rechaza (otro intento no lo arregla): se acepta al primer intento con un aviso, tambien uno guardado, y la linea final dice
+     que es el codigo del migrado, con la regla, sin aconsejar -RehacerArnes.
+     Si el original falla igual (la misma causa) en los primeros 3 casos de un job ($CasosParaParar: no arranca, EXCEPCION o FAILED), los demas casos de ese job no se
+     ejecutan ni en el original ni en el migrado y salen sin probar; la linea final dice que es el test del original y aconseja -RehacerOriginal (tambien si falla igual en
+     todos los casos comparados, 2 o mas). Si es una ruta fija fuera del caso (NoSuchFileException...), el test que se escribe otra vez lleva la pista de su propiedad.
+     Si el test de antes dejaba un job asi, no se vuelve a el aunque el nuevo quede peor con un caso vacio: se queda el nuevo y una Info lo dice. prueba-local.json
+     lleva, por cada uno de esos jobs (y los del migrado con error del codigo), 'falloIgual' con el lado, el estado, la clase, la causa, la regla y si se paro.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -193,11 +201,11 @@ $MotivoNoArranca = 'el migrado no arranca el job con este test'
 # Lo que dice un caso que no se ejecuta porque el original de su job falla igual en los primeros $CasosParaParar casos (Invoke-Originales); Get-Resultado lo pone como motivo.
 $MotivoNoArrancaOriginal = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
 # Los errores del CODIGO del migrado que hacen que su job no arranque (Get-ErrorCodigo): otro test no los arregla. Cada uno con el patron de su clase o su causa, la regla del
-# paso de calidad de rescate.ps1 que lo detecta y una frase. Las fuentes (spring-framework, descargadas y citadas en el informe de M77): 'Cannot subclass final class' es el
-# texto de Enhancer (spring-core/.../cglib/proxy/Enhancer.java:653, el que sale cuando CglibAopProxy.java:223 envuelve una clase final); BeanCurrentlyInCreationException
-# (spring-beans/.../BeanCurrentlyInCreationException.java:21-23) dice 'unresolvable circular reference'; BeanDefinitionOverrideException (spring-beans/.../support/
-# BeanDefinitionOverrideException.java:22) y ConflictingBeanDefinitionException (spring-context/.../annotation/ClassPathBeanDefinitionScanner.java:350) son dos beans con el
-# mismo nombre. Una NoSuchBeanDefinitionException o una BeanCreationException sin mas puede ser el test (le falta un bean): no estan.
+# paso de calidad de rescate.ps1 que lo detecta y una frase. Las fuentes (spring-framework, descargadas en fuentes-m77): 'Cannot subclass final class' es el texto de
+# Enhancer (cglib/Enhancer.java:653, y CglibAopProxy.java:221-223 lo envuelve en 'Common causes of this problem include using a final class'); BeanCurrentlyInCreationException
+# (spring-beans/.../BeanCurrentlyInCreationException.java:23-25) dice 'unresolvable circular reference'; BeanDefinitionOverrideException (spring-beans/.../support/
+# BeanDefinitionOverrideException.java:22) y ConflictingBeanDefinitionException (ClassPathBeanDefinitionScanner.java:350 la lanza; su clase, spring-context/.../annotation/
+# ConflictingBeanDefinitionException.java:16) son dos beans con el mismo nombre. Una NoSuchBeanDefinitionException o una BeanCreationException sin mas puede ser el test (le falta un bean): no estan.
 $ErroresCodigo = @(
   [pscustomobject]@{ patron = 'Cannot subclass final class'; regla = 'clase-final-proxy'; frase = 'una clase final que Spring tiene que envolver con un proxy' }
   [pscustomobject]@{ patron = 'BeanCurrentlyInCreationException|unresolvable circular reference'; regla = 'referencia-circular'; frase = 'beans que se necesitan unos a otros en circulo' }
@@ -209,7 +217,7 @@ $CasosParaParar = 3
 # Las clases de excepcion con las que un contexto de Spring no se puede montar (Test-ExcepcionArranque): la jerarquia de BeansException de spring-framework (spring-beans/src/main/java/
 # org/springframework/beans/BeansException.java:23 y las que la heredan, una a una; ConflictingBeanDefinitionException e ImplicitlyAppearedSingletonException heredan de
 # IllegalStateException y NoSuchMessageException de RuntimeException: no entran), ApplicationContextException (spring-context/.../context/ApplicationContextException.java:16, hereda
-# de FatalBeanException) y ConfigurationPropertiesBindException de spring-boot (core/spring-boot/.../context/properties/ConfigurationPropertiesBindException.java:18, hereda de
+# de FatalBeanException) y ConfigurationPropertiesBindException de spring-boot (fuentes-m77/spring-boot/ConfigurationPropertiesBindException.java:18, hereda de
 # BeanCreationException). Una JobParametersInvalidException, una IllegalArgumentException del negocio o un FAILED no estan: un caso puede buscar justo eso.
 $ExcepcionesArranque = @(
   'ApplicationContextException', 'BeanCreationException', 'BeanCreationNotAllowedException', 'BeanCurrentlyInCreationException', 'BeanDefinitionOverrideException',
@@ -1539,7 +1547,7 @@ function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 # ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
 # Un test del original que se escribe otra vez (hay uno de antes en salidas\vacio-anterior: Save-Anterior) tampoco puede dejar el caso vacio peor que el de antes
 # (estado, tablas y columnas: Get-PeorQueAntes) ni sin las columnas que el prueba-local.json de antes decia que no creaba (Get-ColumnasPedidas); en el ultimo intento, si
-# queda peor, no se guarda y se vuelve al de antes ($script:VueltaAlDeAntes; lo hace Invoke-Arneses).
+# queda peor, no se guarda y se vuelve al de antes ($script:VueltaAlDeAntes; lo hace Invoke-Arneses), salvo que el de antes dejara un job sin probar (ver abajo).
 function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $dir = $T.entradas.copia
   $esOrig = ($T.entradas.repo -eq 'original')
@@ -1568,7 +1576,8 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   }
   # Con un caso vacio, el original arranca el job y el migrado no (estado=EXCEPCION): el test del migrado no simula lo que el job necesita, o le pasa
   # mal las propiedades. Como la puerta de las tablas: se rechaza mientras quedan intentos y, en el ultimo o con un test guardado, se acepta con un
-  # aviso (puede ser el codigo del migrado). Uno rechazado antes por esto y aceptado en el ultimo intento se apunta en $script:NoArranca.
+  # aviso (puede ser el codigo del migrado). Uno rechazado antes por esto y aceptado en el ultimo intento se apunta en $script:NoArranca. Si es un error del codigo
+  # (Get-ErrorCodigo), no se rechaza nunca y siempre se apunta (ver abajo).
   if (-not $esOrig) {
     foreach ($j in $Jobs) {
       $estadoOrig = Get-Estado (Join-Ruta $Local "salidas/vacio/$j")
@@ -1606,7 +1615,9 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   }
   # El test del original que se escribe otra vez no puede quedar peor que el de antes (salidas\vacio-anterior: Get-PeorQueAntes) y tiene que crear las columnas que el
   # prueba-local.json de antes decia que le faltaban (Get-ColumnasPedidas). Se rechaza mientras quedan intentos. En el ultimo, si queda peor se vuelve al de antes
-  # ($script:VueltaAlDeAntes: no se guarda nada y Invoke-Arneses lo restaura) y, si solo faltan columnas, se acepta con un aviso. Uno guardado ($SoloAviso) no pasa por
+  # ($script:VueltaAlDeAntes: no se guarda nada y Invoke-Arneses lo restaura; salvo que el de antes dejara algun job sin probar, con el original FAILED o EXCEPCION igual en
+  # todos sus casos en el prueba-local.json de antes: Get-JobsFalloOriginal; entonces se queda el nuevo y una Info lo dice) y, si solo faltan columnas, se acepta con un
+  # aviso. Uno guardado ($SoloAviso) no pasa por
   # aqui. El del migrado tampoco: su caso vacio no se guarda (nada con que compararlo) y las columnas pedidas son las del test del original (las tablas del original
   # ya las pide la puerta de arriba).
   $sinCrear = @()
@@ -1619,8 +1630,13 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
       if ($sinCrear.Count -gt 0) { $frases += "Tu base no crea estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear)." }
       if (($T.intentos + 1) -lt [int]$Cfg.Intentos) { return ($frases -join ' ') }
       if ($peor.Count -gt 0) {
-        $script:VueltaAlDeAntes = "El test nuevo del original quedaba peor que el de antes ($((@($peor) -join ' ').TrimEnd('.'))): sigo con el de antes."
-        return ''
+        # Volver al de antes no arregla un job que con ese test el original no podia probar (Get-JobsFalloOriginal sobre el prueba-local.json de antes): se queda el nuevo.
+        $sinProbar = @(Get-JobsFalloOriginal $Anterior.casos | ForEach-Object { $_.job })
+        if ($sinProbar.Count -eq 0) {
+          $script:VueltaAlDeAntes = "El test nuevo del original quedaba peor que el de antes ($((@($peor) -join ' ').TrimEnd('.'))): sigo con el de antes."
+          return ''
+        }
+        Info "Me quedo con el test nuevo del original: queda peor que el de antes en el caso vacio ($((@($peor) -join ' ').TrimEnd('.'))), pero el de antes dejaba $(if ($sinProbar.Count -eq 1) { 'el job' } else { 'los jobs' }) $($sinProbar -join ', ') sin probar (el original fallaba igual en todos sus casos)."
       }
     }
   }
@@ -2178,7 +2194,8 @@ function Invoke-Casos($Tareas) {
 # Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>. Con $Limpiar
 # en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo). De un job del migrado cuyo test se
 # acepto con el aviso de que no arranca ($script:NoArranca) se ejecuta solo el primer caso: si acaba EXCEPCION con la misma clase que su caso vacio, los demas
-# no se ejecutan y salen sin probar ($script:SinProbar, con $MotivoNoArranca); si arranca, sigue como siempre.
+# no se ejecutan y salen sin probar ($script:SinProbar, con $MotivoNoArranca); si arranca, sigue como siempre. Los casos de un job del original que Invoke-Originales dejo
+# sin probar ($script:SinProbar['original|job|caso'], con $MotivoNoArrancaOriginal) no se ejecutan en ningun lado.
 function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas, [bool]$Limpiar = $true) {
   $dest = Join-Ruta $Local "salidas/$Nombre"
   if ($Limpiar) { Remove-Carpeta $dest }
@@ -3156,7 +3173,9 @@ function Get-JobsMigradoNoArranca($Res, $Grupos) {
 # La tabla por consola, los casos distintos por grupo (Get-Grupos: la cabecera, los casos, lo medido y el detalle de los dos primeros) y, despues, lo que
 # no es igual de los demas, caso a caso. Si un grupo de fallo EXCEPCION cubre todos los casos que se han comparado de un job, lo normal es que sea el
 # test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso. Si el test se
-# escribio varias veces con ese error ($script:NoArranca), la linea dice que puede ser el codigo y no aconseja -RehacerArnes.
+# escribio varias veces con ese error ($script:NoArranca), la linea dice que puede ser el codigo y no aconseja -RehacerArnes. Si es un error del codigo
+# (Get-ErrorCodigo: clase final con proxy, referencia circular, bean repetido), la linea lo dice con su regla del paso de calidad y tampoco aconseja -RehacerArnes.
+# Los jobs cuyo original falla igual en todos sus casos (Get-JobsFalloOriginal) salen aparte, al final (Format-LineaOriginal), y no llevan la linea de -RehacerArnes.
 function Show-Resultado($Res, $PorJob, $Grupos) {
   Info ''
   Info 'Prueba en local: el original frente al migrado, con las mismas entradas'

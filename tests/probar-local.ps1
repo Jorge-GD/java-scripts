@@ -8203,5 +8203,51 @@ $Pruebas['m77 (f2) FileNotFoundException y AccessDeniedException con una ruta ab
   Comprueba 'una causa con una ruta pero de otra clase: sin la pista' (-not $orig.Contains('El original usa la ruta fija')) (Cola $orig)
 }
 
+# --- (g) no se vuelve al test de antes del original si ese dejaba un job que el original no arrancaba ---
+
+# El mismo escenario que m69 (b4): el test nuevo del original deja el caso vacio en FAILED y el de antes lo dejaba COMPLETED. $Anterior lo deja en el prueba-local.json.
+function Vuelta-M77([string]$Nombre, $Casos) {
+  $e = Escenario-M69 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $antes = [pscustomobject]@{ e = $e; original = (Test-Guardado $e 'original'); vacio = (Foto-Carpeta $e 'salidas/vacio') }
+  Anterior-M64 $e $Casos
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $antes | Add-Member -NotePropertyName r -NotePropertyValue (Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal'))
+  return $antes
+}
+
+$Pruebas['m77 (g1) el test de antes dejaba un job con el original FAILED igual en todos sus casos y el nuevo queda peor en el caso vacio: se queda el nuevo y una Info lo dice'] = {
+  $v = Vuelta-M77 'm77-g1' @(, @(2, "original:FAILED:$M77Fichero"))
+  $r = $v.r; $e = $v.e
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'el primer intento se rechaza por peor' ($r.Salida.Contains("Arnes del original rechazado: $PeorM69")) (Cola $r.Salida)
+  $info = "Me quedo con el test nuevo del original: queda peor que el de antes en el caso vacio ($($PeorM69.TrimEnd('.'))), pero el de antes dejaba el job cargaJob sin probar (el original fallaba igual en todos sus casos)."
+  Comprueba 'el ultimo intento: la Info dice que se queda el nuevo y por que' ($r.Salida.Contains($info)) (Cola $r.Salida)
+  Comprueba 'y no dice que se sigue con el de antes' (-not $r.Salida.Contains('sigo con el de antes')) (Cola $r.Salida)
+  Comprueba 'arnes/original es el nuevo' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3') -and (Test-Guardado $e 'original') -ne $v.original) ''
+  Comprueba 'la copia del original tiene el nuevo' ((Lee $e.CopiaOrig 'src/test/java/com/acme/viejo/PruebaLocalTest.java').Contains('M69_VERSION=v3')) ''
+  Comprueba 'salidas/vacio es el del nuevo' ((Foto-Carpeta $e 'salidas/vacio') -ne $v.vacio) ''
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'y su motivo no es el de la vuelta' ([string](Tarea-Arnes $e 'original').motivo -notmatch 'quedaba peor') ''
+}
+
+$Pruebas['m77 (g2) el test de antes no dejaba ningun job asi (solo fallaba el migrado): se vuelve al de antes, como hoy'] = {
+  $v = Vuelta-M77 'm77-g2' @(, @(2, 'migrado:FAILED:java.lang.IllegalStateException: sin correo'))
+  $r = $v.r; $e = $v.e
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $aviso = "El test nuevo del original quedaba peor que el de antes ($($PeorM69.TrimEnd('.'))): sigo con el de antes."
+  Comprueba 'el ultimo intento no se acepta: sale el aviso de que se sigue con el de antes' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Comprueba 'y ninguna Info de que se queda el nuevo' (-not $r.Salida.Contains('Me quedo con el test nuevo del original')) (Cola $r.Salida)
+  Igual 'arnes/original es el de antes, byte a byte' $v.original (Test-Guardado $e 'original')
+  Igual 'salidas/vacio es el de antes, entero' $v.vacio (Foto-Carpeta $e 'salidas/vacio')
+}
+
+$Pruebas['m77 (g3) un solo caso del job con el original FAILED en el prueba-local.json de antes no basta (2 como minimo, como en (b)): se vuelve al de antes'] = {
+  $v = Vuelta-M77 'm77-g3' @(, @(1, "original:FAILED:$M77Fichero"))
+  Comprueba 'sale el aviso de que se sigue con el de antes' ($v.r.Salida.Contains('sigo con el de antes')) (Cola $v.r.Salida)
+  Igual 'arnes/original es el de antes' $v.original (Test-Guardado $v.e 'original')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
