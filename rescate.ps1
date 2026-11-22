@@ -1104,8 +1104,8 @@ function Get-OriginalNoGuarda([string]$Raiz) {
 }
 
 # Repositorio de Batch (fila SBT5-04): el original no guarda las ejecuciones ($Contexto.OriginalNoGuarda) y en el migrado Batch acaba en una base que
-# no es en memoria. Una vez por proyecto, en la clase de arranque (o en el pom). Sin original, nada. Con la plantilla en el mismo caso, aviso (lo
-# pone el diagnostico, porque Cal.Calidad lleva la regla); el texto dice lo que hace la plantilla si lo sabe ($Contexto.Plantilla).
+# no es en memoria. Una vez por proyecto, en la clase de arranque (o en el pom). Sin original, nada. Con la plantilla en el mismo caso, aviso; el
+# texto dice lo que hace la plantilla si lo sabe ($Contexto.Plantilla: Get-RepoBatch de la plantilla).
 function Add-CalRepoBatch($Out, $Hechos, $Props, $Deps, $Contexto) {
   if (-not $Contexto -or -not $Contexto.OriginalNoGuarda) { return }
   $r = Get-RepoBatch $Hechos $Props $Deps
@@ -1114,9 +1114,11 @@ function Add-CalRepoBatch($Out, $Hechos, $Props, $Deps, $Contexto) {
   $app = @($Hechos.Ficheros | Where-Object { $_.Texto -cmatch '@SpringBootApplication' })
   if ($app.Count -gt 0) { $rel = $app[0].RelRaiz; $linea = Get-LineaDe $app[0].Texto $app[0].Texto.IndexOf('@SpringBootApplication') }
   $pl = ''
+  $igual = [bool]($Contexto.Plantilla -and $Contexto.Plantilla.Termina)
   if ($Contexto.Plantilla -and $Contexto.Plantilla.Propia) { $pl = ' La plantilla lo resuelve con ' + $Contexto.Plantilla.Propia + ': copialo.' }
-  elseif ($Contexto.Plantilla) { $pl = ' La plantilla tampoco le da a Batch una base propia; si en pre la resuelve devops de otra forma, deja este aviso.' }
-  Add-Cal $Out $rel $linea 'repositorio-batch' ("El original no guarda las ejecuciones de Batch ($($Contexto.OriginalNoGuarda)) y en el migrado Spring Batch acaba en la base del negocio ($($r.Causa)). Spring Batch 5 quito el repositorio en memoria y Spring Boot 3 usa el DataSource normal: en pre el primer arranque falla porque faltan las tablas BATCH_ (o las crea en la base del negocio si alguien pone spring.batch.jdbc.initialize-schema=always); en local no se ve porque la prueba usa H2. Dale a Batch una base propia en memoria: un DataSource H2 con @BatchDataSource." + $pl)
+  elseif ($igual) { $pl = ' La plantilla tampoco le da a Batch una base propia; si en pre la resuelve devops de otra forma, deja este aviso. (se queda en aviso: la plantilla tambien lo hace)' }
+  elseif ($Contexto.Plantilla) { $pl = ' La plantilla usa la base del negocio en memoria para Batch.' }
+  Add-Cal $Out $rel $linea 'repositorio-batch' ("El original no guarda las ejecuciones de Batch ($($Contexto.OriginalNoGuarda)) y en el migrado Spring Batch acaba en la base del negocio ($($r.Causa)). Spring Batch 5 quito el repositorio en memoria y Spring Boot 3 usa el DataSource normal: en pre el primer arranque falla porque faltan las tablas BATCH_ (o las crea en la base del negocio si alguien pone spring.batch.jdbc.initialize-schema=always); en local no se ve porque la prueba usa H2. Dale a Batch una base propia en memoria: un DataSource H2 con @BatchDataSource." + $pl) $igual
 }
 
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
@@ -1414,8 +1416,7 @@ function Get-Calibracion([string]$Raiz) {
   $pom = Get-Pom $Raiz
   $deps = @()
   if ($pom) { $deps = @($pom.Deps) }
-  $repoBatch = Get-RepoBatch $h @(Get-PropiedadesConfig $h) $deps
-  if ($repoBatch.Termina) { $calReglas['repositorio-batch'] = $true }   # la plantilla tambien lo hace: en el migrado, aviso
+  $repoBatch = Get-RepoBatch $h @(Get-PropiedadesConfig $h) $deps   # no va en Calidad: la plantilla sola no incumple nada (hace falta el original)
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object); Paquetes = $paquetes
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
