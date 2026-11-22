@@ -125,7 +125,7 @@ USO
 
   Repo de configmap (-ConfigMap, solo, sin lectura del original; configmap.ps1): escribe junto al migrado el repo de configmap nuevo, adaptado del repo de configmap de
   referencia (-ConfigMapReferencia, o ConfigMapReferencia de ajustes.json, o se pregunta la primera vez y se guarda). Los valores salen del inventario del original
-  (-Inventario, que se guarda en estado.json); los secretos van solo como referencia y lo que no se sabe queda como <PENDIENTE>. Copiar, dar formato y relacionar el
+  (-Inventario, que se guarda en estado.json y, con el modelo, en datos\configmap.json); los secretos van solo como referencia y lo que no se sabe queda como <PENDIENTE>. Copiar, dar formato y relacionar el
   inventario con las variables del migrado lo hacen tareas de IA que el script comprueba; no hace git init ni commit. Deja PENDIENTE.md en el repo nuevo y
   datos\configmap.json. Un repo que ya existe y no es suyo para sin tocar nada; si es suyo, sus ficheros no cambiados se rehacen solo si cambian sus entradas y los que
   has cambiado a mano se respetan. Tambien se hace al final de -Cierre si se dan -Inventario y la referencia (o ya estan guardados); si no, -Cierre dice como pedirlo.
