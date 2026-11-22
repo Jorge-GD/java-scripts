@@ -156,9 +156,24 @@ Comprueba, por texto, el código de `src/main`:
 | `salida-consola` | error | `System.out`, `System.err`, `printStackTrace`. |
 | `catch-vacio` | error | `catch` sin nada dentro (un comentario que lo explique vale). |
 | `envoltorio-new` | error | `new Integer(...)` y similares. |
+| `constructores-sin-autowired` | error | Un componente de Spring con 2 constructores o más (también los de Lombok) y ninguno con `@Autowired` o `@Inject`: Spring no sabe cuál usar (Sonar S6829). |
+| `autowired-varios` | error | `@Autowired` en más de un constructor sin `required = false` (Sonar S6818). |
+| `inyeccion-estatica` | error | `@Value`, `@Autowired` o `@Inject` en un campo `static`: Spring no lo inyecta (Sonar S7178). |
+| `value-sin-expresion` | error | `@Value("...")` en un campo sin `${...}` ni `#{...}` (Sonar S6804). |
+| `estilo-constructor`, `estilo-logger` | error | El batch mezcla estilos de constructor (Lombok o a mano) o de logger (`@Slf4j`, `LoggerFactory` u otro): salen las clases que no siguen el estilo de la plantilla si usa uno solo; si la plantilla mezcla, el más usado del batch. |
+| `clase-final-proxy` | error | Clase `final` que Spring envuelve con un proxy (`@Repository`, `@Configuration` sin `proxyBeanMethods = false`, `@StepScope`, `@JobScope`, `@Transactional`, `@Async`, `@Validated`, `@Retryable` o de caché, en la clase o en un método, o devuelta por un `@Bean` con `@StepScope` o `@JobScope`): el bean no se crea y el job no arranca. |
+| `metodo-final-proxy` | error | Método `final` con `@Transactional`, `@Async`, `@Retryable` o de caché en una clase que no es `final`: Spring no lo puede interceptar. |
+| `referencia-circular` | error | Ciclo entre beans (constructor, campo o método `@Autowired`, parámetro de `@Bean` o la `@Configuration` que crea el bean). `@Lazy`, `ObjectProvider` y `Provider` lo rompen. Aviso con `spring.main.allow-circular-references: true`. |
+| `bean-repetido` | error | Dos `@Bean` con el mismo nombre, o dos componentes con el mismo nombre de clase y sin nombre explícito. Aviso con `allow-bean-definition-overriding` (los componentes siguen en error). |
+| `enable-batch` | error | `@EnableBatchProcessing` o una clase que extiende `DefaultBatchConfiguration`: la configuración automática de Batch se aparta. Aviso si la plantilla también. |
+| `parametros-v4` | error | `nombre(long\|date\|double\|string)=valor` en scripts, Dockerfile, yml, properties o textos de Java. |
+| `varios-jobs-sin-nombre` | aviso | Más de un `Job` y ninguna `spring.batch.job.name`. |
+| `nashorn`, `comando-sin-partir` | error | `getEngineByName("nashorn")` (o `"js"`) sin un motor aparte en el pom; `SystemCommandTasklet.setCommand("ls -l")` en una sola cadena. |
+| `sql-init-no-embebida` | aviso | `schema.sql` o `data.sql` con una base que no es en memoria y sin `spring.sql.init.mode`. |
+| `repositorio-batch` | error | El original no guarda las ejecuciones (Map, `setDataSource` vacío o H2 en memoria) y el migrado deja Batch en la base del negocio. Aviso si la plantilla también. Necesita el original. |
 | `instanceof-cast`, `fecha-antigua`, `coleccion-antigua` | aviso | Sintaxis y API antiguas. No se arreglan solas: pueden cambiar el comportamiento. |
 
-El Javadoc se exige aunque la plantilla no lo tenga. Las demás reglas bajan a aviso si la plantilla también las incumple.
+El Javadoc, las cuatro reglas de Spring, las de proxy, las de estilo, `referencia-circular`, `bean-repetido`, `parametros-v4`, `nashorn` y `comando-sin-partir` se exigen aunque la plantilla no las cumpla. Las demás reglas bajan a aviso si la plantilla también las incumple.
 Para apagar una regla, quítala de `CalidadErrores` en `.rescate/config.json`.
 Para que `calidad` vaya como `sonar` (la IA solo compila, cada lote pasa los tests ligeros y la suite entera va en un control), pon `"PasosSoloCompila": ["sonar", "calidad"]` y `"PasosTestsElegidos": ["sonar", "calidad"]` en `.rescate/config.json` (el de la copia de rescate, `<migrado>-rescate/.rescate/config.json`, si lo lanza `migracion.ps1`); por defecto solo `sonar`. Mide el paso en `.rescate/intentos.tsv` antes y después.
 
@@ -277,7 +292,7 @@ Lo que tiene que salir lo da el **original** al ejecutarse. La IA solo fabrica l
 2. **Arnés.** Una tarea de IA por copia (las dos a la vez, esfuerzo `high`) escribe `PruebaLocalTest` junto a la clase con `@SpringBootApplication` y, si le hace falta, `src\test\resources\application-prueba-local.yml`. En el original puede añadir dependencias al `pom.xml`, solo con `<scope>test</scope>`. El script comprueba que no toca nada más, que compila, que con un caso vacío cada job deja su `estado.txt` y que respeta `prueba.local.caso`. Si falla, lo repite una vez con el motivo. Si vuelve a fallar, para y da un texto para pegar en Copilot.
 3. **Entradas.** Una tarea de IA por caso (hasta 4 a la vez, esfuerzo `medium`) escribe en la copia del original `src\test\resources\prueba-local\<job>\<caso>\`: `ficheros\<carpeta>\`, `datos.sql` y `parametros.properties`. Si el caso pide cambiar la configuración (encender el correo, otro tope) o lanzar el job dos veces, escribe `no-aplica.txt` y el caso queda **sin probar en local**. El script comprueba que solo escribe en su carpeta y que el caso corre en el original.
 4. **Ejecución, sin IA.** El original dos veces y el migrado una, cada caso en su propio Maven (`mvn test -Dtest=PruebaLocalTest -Dprueba.local.job=<job> -Dprueba.local.caso=<caso>`): una JVM nueva por caso, como cada ejecución en producción. Así lo que el batch guarda en campos `static` (un fichero abierto, un contador) no pasa de un caso al siguiente.
-5. **Comparación.** Por cada caso compara `estado.txt`, `ficheros\`, `tablas\` (una por tabla, filas ordenadas) y `envios\` (lo que habría salido del equipo, simulado). No cuentan las horas, la fecha de hoy ni los saltos de línea `\r\n`.
+5. **Comparación.** Por cada caso compara `estado.txt`, `ficheros\`, `tablas\` (una por tabla, filas ordenadas) y `envios\` (lo que habría salido del equipo, simulado). No cuentan las horas (con cualquier separador), la fecha de hoy, las marcas Unix de hoy ni los saltos de línea `\r\n`. Un Excel se compara celda a celda; un zip o un gz, entrada a entrada; los demás binarios, por su tamaño y su sha256.
 
 | Resultado | Qué quiere decir |
 |---|---|

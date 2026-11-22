@@ -18,20 +18,34 @@ QUE HACE
      que lo traduce: lleva en su prompt la ruta del test del original ya guardado, para simular lo mismo y al mismo nivel.
      El script deshace lo que toque fuera de eso (lo dice) y, del pom.xml, deja el del original con solo las dependencias nuevas
      de la IA, todas con <scope>test</scope>; despues comprueba que compila y que, con un caso vacio, cada job deja su estado.txt
-     y que su base de prueba tiene las tablas que usa el codigo (las de src\main, sacadas con regex: Get-TablasBatch). Un intento sin ellas se
-     rechaza con la tabla y su fichero:linea; el ultimo, o un arnes guardado, se acepta con un aviso: el inventario es aproximado.
+     y que su base de prueba tiene las tablas que usa el codigo (las de src\main, sacadas con regex: Get-TablasBatch) y, en el migrado, las de la base
+     del test del original (las de su caso vacio, sin BATCH_ ni TASK_; su primer intento ya lleva la lista). Un intento sin ellas se
+     rechaza con la tabla y su fichero:linea (o con el nombre de la tabla del original); el ultimo, o un arnes guardado, se acepta con un aviso.
      Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
      Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
      vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
-     se borra y se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
+     se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
      de prueba no crea las tablas del codigo) y, con el, el del migrado. Lo mismo, sin pedirlo, si el guardado se escribio con otra
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
-     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar (Get-PrevioArnes).
+     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar y una linea por cada job (3 como
+     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes): la de salidas\vacio\causas.json o, en uno guardado antes de M69, la del
+     registro de Maven mas reciente del caso vacio del original (registros\mvn-<n>-arnes-original--caso-vacio.log), que se apunta al empezar (Save-Anterior); en el
+     del migrado, las causas de fallo que se repiten y una linea por cada pareja de carpetas (3 como mucho) con 2 casos o mas donde el original y el migrado
+     dejaban un fichero en carpetas distintas.
+     El test que se escribe otra vez no se borra: pasa a prueba-local\arnes-anterior\<lado> (y el caso vacio del original, a
+     salidas\vacio-anterior), pisando el de la vez anterior (Save-Anterior).
+     El test del original que se escribe otra vez no puede quedar peor que el de antes con un caso vacio (el estado del job, las tablas y las columnas de
+     su base): se rechaza con lo que falta y, en el ultimo intento, se vuelve al de antes (con su caso vacio) y el del migrado, si solo se escribia otra vez
+     porque cambiaba el original, tambien; los casos hechos no se ejecutan otra vez. Tampoco puede dejar sin crear las columnas que el prueba-local.json de
+     antes decia que no creaba (en el ultimo intento se acepta con un aviso).
+     Si con un caso vacio el original arranca un job y el migrado no, el test del migrado se rechaza y, en el ultimo intento, se acepta con un aviso:
+     de ese job se ejecuta solo el primer caso y, si acaba EXCEPCION con la misma clase, los demas salen sin probar (no se ejecutan); la linea
+     final dice que puede ser el codigo del migrado y que se lo preguntes a Copilot en el repo del migrado, sin aconsejar -RehacerArnes.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -43,12 +57,16 @@ QUE HACE
      siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
      de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. El original se
      ejecuta con UTF-8, como en el servidor (sus Maven llevan JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 y, con el, lo que ya hubiera). Para obligar a
-     repetirlo todo, borra prueba-local\salidas. Cada caso, en su Maven
+     repetirlo todo, borra prueba-local\salidas. Antes de ejecutar un caso (en el original, en el migrado y al prepararlo), cada CREATE de su
+     datos.sql (tabla, secuencia, indice, esquema, vista...) y cada ALTER TABLE ... ADD (columna, restriccion) que acepta IF NOT EXISTS lo lleva en la copia
+     que se ejecuta (el test y Spring Batch ya crean cosas en su base y H2 dice 'ya existe'; lo guardado en casos\ no cambia), y el original de un caso
+     hecho de antes cuyo error.txt guardado dice que algo ya existe se ejecuta otra vez. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
      acabar, dice cuanto es test y cuanto Maven.
-  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\), sin contar las horas sueltas ni las fechas con hora
+  5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\; no los ficheros de CompararIgnorar, por defecto los .log, el log por job del
+     framework nuevo, ni cuentan como sin guardar si no se pudieron copiar), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
      fecha de hoy (en cada lado, los dias de su propia ejecucion: los de hoy en el migrado y los de cuando se ejecuto el original, que
      puede ser de otro dia; un caso distinto cuyo original es de otro dia se confirma ejecutandolo otra vez; un caso cuyo migrado no deja ni
@@ -59,7 +77,10 @@ QUE HACE
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
      prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
      lanzamiento los escriba otra vez con ese motivo. Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
-     un solo lado es lo mismo que una tabla que no esta.
+     un solo lado es lo mismo que una tabla que no esta. Un fichero que el original deja en una carpeta y el migrado, con el mismo nombre (normalizado), en
+     otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
+     alguna copia del original o, si no, la primera linea distinta (Join-OtraCarpeta). Lo que solo esta en un lado y las tablas\ no se emparejan. Los casos
+     con esa diferencia, aunque el nombre lleve otra fecha, son un solo grupo (la pareja de carpetas) y la consola dice que suele ser el test del migrado.
   6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
      <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
      cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
@@ -73,7 +94,7 @@ QUE HACE
      a medias). Nunca se llama a Copilot, ni al buscar ni al deshacer.
   7. Solo con -Reparar (no se combina con -Desde ni con -Deshacer; hace falta el worktree de rescate, y su carpeta sin cambios
      sin commit): despues de la prueba de siempre, arregla el migrado hasta que los casos distintos salgan iguales. Cada
-     diferencia tiene una clave (el nombre de su fichero, normalizado); se arregla primero la clave con mas casos distintos, y
+     diferencia tiene una clave (el nombre de su fichero, normalizado; la pareja de carpetas, si es otraCarpeta); se arregla primero la clave con mas casos distintos, y
      despues de cada arreglo se recalcula. Una tarea de IA por clave escribe, en la copia del migrado y solo en src\main\, el
      arreglo; el script lo da por bueno si pasa seis puertas, de la mas barata a la mas cara: la llamada acaba bien; la IA no
      dice que no se arregla (.rescate\reparar-no.txt: si la diferencia solo es de lo simulado en local); algo cambia en src\main\
@@ -133,8 +154,8 @@ param(
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
   [switch]$Regresion,         # deja los casos que salen iguales como tests de JUnit (RegresionLocalTest) en la rama de rescate, en un commit
-  [switch]$RehacerArnes,      # borra el test del migrado guardado y lo escribe otra vez con la IA, traduciendo el del original (que no se toca)
-  [switch]$RehacerOriginal,   # borra el test del original guardado y lo escribe otra vez con la IA, y con el el del migrado, que lo traduce
+  [switch]$RehacerArnes,      # escribe otra vez con la IA el test del migrado (el de antes pasa a arnes-anterior), traduciendo el del original (que no se toca)
+  [switch]$RehacerOriginal,   # escribe otra vez con la IA el test del original (el de antes pasa a arnes-anterior), y con el el del migrado, que lo traduce
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -158,6 +179,9 @@ $Cfg += @{
   # Propiedades que saltan plugins que no influyen en el test: Invoke-Job las pasa en cada caso (no en el test-compile, ni en el arnes ni en los
   # tests unitarios). Sin JaCoCo: su argLine lo usa surefire. Vacia la lista (en ajustes.json: "MavenCasoRapido": []) para no saltar ninguno.
   MavenCasoRapido = @('-Dcheckstyle.skip', '-Denforcer.skip', '-Dspotbugs.skip', '-Dpmd.skip', '-Dmaven.javadoc.skip', '-Dmaven.source.skip', '-Dmaven.gitcommitid.skip', '-Dlicense.skip')
+  # Ficheros de la salida de un caso que no se comparan, en ninguno de los dos lados (Test-Ignorado): patrones como -like sobre el nombre del fichero. El framework nuevo
+  # deja un log por job en ficheros\logs\ y el original no: no es salida del batch. Vacia la lista (en ajustes.json: "CompararIgnorar": []) para compararlo todo.
+  CompararIgnorar = @('*.log')
 }
 $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cada copia
 # Una linea de una plantilla cuya clave {{SI_...}} vale esto no sale en el prompt (Invoke-Lote): asi una plantilla lleva dos variantes
@@ -165,12 +189,22 @@ $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cad
 $MarcaNo = '<!--no-->'
 # El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
 $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
+$MotivoNoArranca = 'el migrado no arranca el job con este test'
 # La causa de un lado sin estado.txt cuyo Maven acabo con 0 y sin otra causa (Get-Fallos): el test no encontro la carpeta del caso (arnes\migrado, regla 1).
 $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso (mira si ve su carpeta en src\test\resources\prueba-local)'
 # Lo que dice el motivo de un caso cuyo original no corre porque la base del test no tiene una tabla del codigo (Get-MotivoBase): la cuenta del final de la
 # prueba lo busca. $PatronTablaFalta es el error de H2 de una tabla o una columna que no esta (Get-MotivoBase y Get-PistaArnes).
 $PrefijoSinTabla = 'La base de prueba no tiene la tabla '
 $PatronTablaFalta = '(?i)\b(Table|Tabla|Column|Columna)\s+"([^"]+)"\s+(?:not found|no encontrada)'
+# El error.txt de un caso cuyo datos.sql crea algo que ya esta en la base del test (o que Spring Batch crea solo en el migrado): H2 dice 'Tabla "X" ya existe' o
+# 'Sequence "X" already exists' y el codigo ([42101-...], [90035-...]). Lo que dicen los _messages_*.prop de H2 (1.4.193, 1.4.200 y 2.x) y su ErrorCode.java: ya existe
+# o already exists (tabla 42101, indice 42111, usuario 90033, secuencia 90035, vista 90038, trigger 90041, restriccion 90045, rol 90069, alias de funcion y
+# agregado 90076, esquema 90078, constante 90114, dominio 90119) y la columna repetida (42121: 'Duplicate column name' o 'Nombre de columna Duplicada'), que solo
+# cuenta si el error trae un ALTER TABLE (un CREATE TABLE con dos columnas iguales es un error del SQL, no de la base y no se arregla ejecutandolo otra vez).
+# Reset-OriginalesYaExiste lo busca en el error.txt guardado de un original.
+$CodigosYaExiste = '(?<!\d)(?:42101|42111|90033|90035|90038|90041|90045|90069|90076|90078|90114|90119)(?!\d)'
+$ColumnaRepetida = '(?:duplicate column name|nombre de columna duplicada|(?<!\d)42121(?!\d))'
+$PatronYaExiste = '(?i)ya existe|already exists|' + $CodigosYaExiste + '|(?s:ALTER\s+TABLE.*' + $ColumnaRepetida + '|' + $ColumnaRepetida + '.*ALTER\s+TABLE)'
 # Lo que dice el motivo de un caso cuyo original no corre porque el test crea mal una tabla (Get-MotivoTablaMal): la cuenta del final de la prueba lo busca.
 # $PatronCreateTabla es el CREATE TABLE que H2 rechaza (grupo s, la sentencia): el error de H2 (Get-PistaArnes y Get-MotivoTablaMal) o ese motivo ya dicho
 # (Get-PistaArnes sobre el prueba-local.json de antes, donde el motivo ya no trae el error).
@@ -199,6 +233,15 @@ $Hoy = @()          # las fechas de la ejecucion (Get-Hoy): Get-Resultado las po
 # Windows PowerShell 5.1 no pasa de 260 letras en una ruta (MAX_PATH: 259 y el fin de cadena). La misma regla vale en todos los sistemas, para
 # que se pruebe en Linux y no cambie de una maquina a otra (ver Get-RelSalida).
 $LimiteRuta = 259
+# Un metodo de un test que prepara algo antes de lanzar el job: la anotacion (JUnit 5 o 4; \b: @BeforeTransaction no), otras anotaciones de por medio, los
+# modificadores y el tipo (grupo 1: el nombre del metodo). Lo usa Get-PreparaEjemplos.
+$PatronPrepara = '@(?:BeforeEach|BeforeAll|BeforeClass|Before)\b(?:\s*\([^)]*\))?(?:\s*@\w+(?:\s*\([^)]*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*[\w<>\[\].,?]+\s+(\w+)\s*\('
+# Las causas de lo que fallo en el migrado de antes que lleva el prompt del test del migrado que se escribe otra vez (Get-LineasFalloMigrado): las que tienen
+# al menos CausasMinimas casos y hasta CausasMaximas, de 200 letras como mucho cada una.
+$CausasMinimas = 2
+$CausasMaximas = 3
+# Si se esta en Windows: lo lee Get-RutaLarga (es una variable para que las pruebas lo simulen en Linux).
+$SoWindows = ([System.IO.Path]::DirectorySeparatorChar -eq '\')
 # La version del formato de lo que se guarda en prueba-local\salidas (los nombres de sus ficheros, ver Get-RelSalida): va en la clave del original
 # (Get-ClaveBaseOriginal). Sube cada vez que cambia ese formato: lo guardado con otro se ejecuta otra vez, una vez, y no se compara con lo de ahora.
 $VersionSalidas = 2
@@ -282,10 +325,29 @@ function Remove-Carpeta([string]$Dir) {
   }
 }
 
+# La ruta de origen $Ruta (la completa, FullName) para leer un fichero: en Windows, si pasa de $LimiteRuta letras, con el prefijo \\?\ (o \\?\UNC\ y la ruta sin
+# las dos barras, si es de red), que no tiene el limite de 259 letras de Windows PowerShell 5.1 (y .NET Framework 4.6.2 o posterior lo admite). Con \\?\ Windows no
+# normaliza la ruta: las / pasan a \. Sin cambio si es corta, si ya lleva el prefijo o si no se esta en Windows ($EsWindows, por defecto $SoWindows).
+function Get-RutaLarga([string]$Ruta, [bool]$EsWindows = $SoWindows) {
+  if (-not $EsWindows -or $Ruta.Length -le $LimiteRuta -or $Ruta.StartsWith('\\?\')) { return $Ruta }
+  $r = $Ruta -replace '/', '\'
+  if ($r.StartsWith('\\')) { return '\\?\UNC\' + $r.Substring(2) }
+  return '\\?\' + $r
+}
+
+# Copia $De a $A con .NET: el segundo intento de Copy-Fichero con una ruta larga (File.Copy admite el prefijo \\?\ en .NET Framework 4.6.2 o posterior, pero depende de
+# como arranque el host el manejo de rutas antiguas). Es una funcion para que las pruebas la cambien.
+function Copy-ConDotNet([string]$De, [string]$A) { [System.IO.File]::Copy($De, $A, $true) }
+
+# Copia $De a $A. Con un origen de mas de 259 letras en Windows (Get-RutaLarga) prueba Copy-Item con la ruta con prefijo (el proveedor de ficheros de Windows
+# PowerShell 5.1 suele aceptarla) y, si lanza, Copy-ConDotNet con la misma; si fallan las dos, sale el error de la segunda.
 function Copy-Fichero([string]$De, [string]$A) {
   $d = Split-Path $A -Parent
   if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
-  Copy-Item -LiteralPath $De -Destination $A -Force
+  $origen = Get-RutaLarga $De
+  if ($origen -ceq $De) { Copy-Item -LiteralPath $De -Destination $A -Force; return }
+  try { Copy-Item -LiteralPath $origen -Destination $A -Force -ErrorAction Stop }
+  catch { Copy-ConDotNet $origen $A }
 }
 
 # Copia los ficheros de la carpeta $De (con sus subcarpetas) a $A, pisando los que haya. Sin $De, nada.
@@ -370,10 +432,16 @@ function Copy-Salida([string]$De, [string]$A, [string]$Job, [string]$Donde, $Dia
   return $no
 }
 
-# Lo que no se pudo guardar de un lado de un caso en este lanzamiento (lo de Copy-Salida), o nada.
+# Es $Rel (la ruta de un fichero de la salida de un caso) de los que no se comparan ($Cfg.CompararIgnorar: patrones como -like sobre el nombre del fichero)?
+function Test-Ignorado([string]$Rel) {
+  $nombre = $Rel.Substring($Rel.LastIndexOf('/') + 1)
+  return (@($Cfg.CompararIgnorar | Where-Object { $_ -and $nombre -like $_ }).Count -gt 0)
+}
+
+# Lo que no se pudo guardar de un lado de un caso en este lanzamiento (lo de Copy-Salida), o nada. Un fichero que no se compara (Test-Ignorado) no cuenta.
 function Get-NoGuardados([string]$Nombre, [string]$Job, [string]$Caso) {
   $k = "$Nombre|$Job|$Caso"
-  if ($script:NoGuardados.ContainsKey($k)) { return @($script:NoGuardados[$k]) }
+  if ($script:NoGuardados.ContainsKey($k)) { return @($script:NoGuardados[$k] | Where-Object { -not (Test-Ignorado $_.fichero) }) }
   return @()
 }
 
@@ -515,18 +583,73 @@ function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ 
 # $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
 # una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
 # repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
+# Mientras Maven ejecuta el caso, su datos.sql lleva IF NOT EXISTS en cada CREATE y ADD que lo acepta (Edit-DatosSql); al acabar queda como estaba.
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
   Remove-Carpeta $sal
   $sinRed = -not $script:ConRed.ContainsKey($Dir)
-  $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
-  if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
-    Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
-    Remove-Carpeta $sal
-    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que
-    if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+  $sql = Join-Ruta $Dir "$Casos/$Job/$Caso/datos.sql"
+  $bytes = Edit-DatosSql $sql
+  try {
+    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
+    if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
+      Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
+      Remove-Carpeta $sal
+      $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que
+      if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+    }
   }
+  finally { if ($null -ne $bytes) { [System.IO.File]::WriteAllBytes($sql, $bytes) } }
   return $r
+}
+
+# Pone IF NOT EXISTS al datos.sql $Ruta en cada CREATE y cada ALTER TABLE ... ADD que lo lleva en las tres gramaticas de H2 (1.4.193, 1.4.200 y 2.x; help.csv de cada
+# etiqueta de h2database/h2database, h2database.com/html/commands.html): CREATE [CACHED | MEMORY] [TEMP | [GLOBAL | LOCAL] TEMPORARY] TABLE, CREATE [FORCE] [[GLOBAL | LOCAL]
+# TEMPORARY] LINKED TABLE, SEQUENCE, [UNIQUE | HASH | SPATIAL] INDEX <nombre>, SCHEMA <nombre>, [FORCE] VIEW, ROLE, USER, CONSTANT, DOMAIN, ALIAS, AGGREGATE, TRIGGER, y
+# ALTER TABLE <tabla> ADD [COLUMN] <columna> y ADD CONSTRAINT <nombre>. No lo lleva (se deja como esta): CREATE OR REPLACE VIEW (con los dos, H2 deja la vista de antes y no la
+# reemplaza), un indice sin nombre, CREATE PRIMARY KEY, CREATE SCHEMA AUTHORIZATION sin nombre y CREATE MATERIALIZED VIEW (solo 2.x), ADD PRIMARY KEY / UNIQUE / FOREIGN KEY /
+# CHECK sin CONSTRAINT <nombre> y ADD ( lista de columnas ) (sin nombre o sin IF NOT EXISTS en la gramatica). El test del arnes ya crea cosas en su base (la del calendario en el
+# original; las de Spring Batch en el migrado, que las crea solo) y un datos.sql que las crea otra vez da 'ya existe': el caso no se pudo preparar o sale distinto sin que el
+# batch tenga la culpa. Lo que va en un comentario (-- o /* */), en un texto ('...' o $$...$$) o entre comillas dobles no se toca (Get-MascaraSql). Lo que ya lleva IF NOT EXISTS,
+# tampoco. Devuelve los bytes de antes, para dejar el fichero como estaba al acabar el caso (lo guardado en casos\ no cambia), o $null si no hay fichero o no cambia nada. Se lee
+# y se escribe en Latin-1, byte a byte: lo demas del fichero no cambia, sea cual sea su codificacion.
+function Edit-DatosSql([string]$Ruta) {
+  if (-not (Test-Path -LiteralPath $Ruta -PathType Leaf)) { return $null }
+  $bytes = [System.IO.File]::ReadAllBytes($Ruta)
+  $texto = $Latin.GetString($bytes)
+  $mascara = Get-MascaraSql $texto
+  $ya = '(?!IF\s+NOT\s+EXISTS\b)'
+  $alter = 'ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?[^\s;(]+\s+ADD'
+  $patrones = @(
+    ('\bCREATE\s+(?:(?:CACHED|MEMORY)\s+)?(?:(?:TEMP|TEMPORARY|(?:GLOBAL|LOCAL)\s+TEMPORARY)\s+)?TABLE(?>\s+)(?<p>)' + $ya),
+    ('\bCREATE\s+(?:FORCE\s+)?(?:(?:GLOBAL|LOCAL)\s+)?(?:TEMPORARY\s+)?LINKED\s+TABLE(?>\s+)(?<p>)' + $ya),
+    ('\bCREATE\s+(?:(?:UNIQUE|HASH|SPATIAL|NULLS\s+(?:ALL\s+|NOT\s+)?DISTINCT)\s+)*INDEX(?>\s+)(?<p>)' + $ya + '(?!ON\b)'),
+    ('\bCREATE\s+(?:SEQUENCE|SCHEMA|ROLE|USER|CONSTANT|DOMAIN|ALIAS|AGGREGATE|TRIGGER)(?>\s+)(?<p>)' + $ya + '(?!AUTHORIZATION\b)'),
+    ('\bCREATE\s+(?:FORCE\s+)?VIEW(?>\s+)(?<p>)' + $ya),
+    ('\b' + $alter + '(?>\s+)(?:(?>COLUMN\s+)|(?!COLUMN\b))(?<p>)' + $ya + '(?!CONSTRAINT\b|PRIMARY\b|UNIQUE\b|FOREIGN\b|CHECK\b|\()'),
+    ('\b' + $alter + '\s+CONSTRAINT(?>\s+)(?<p>)' + $ya)
+  )
+  $puestos = New-Object System.Collections.Generic.SortedSet[int]
+  foreach ($p in $patrones) { foreach ($m in [regex]::Matches($mascara, $p, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { [void]$puestos.Add($m.Groups['p'].Index) } }
+  if ($puestos.Count -eq 0) { return $null }
+  $nuevo = $texto
+  foreach ($i in @($puestos | Sort-Object -Descending)) { $nuevo = $nuevo.Insert($i, 'IF NOT EXISTS ') }
+  [System.IO.File]::WriteAllBytes($Ruta, $Latin.GetBytes($nuevo))
+  return , $bytes
+}
+
+# $Texto con lo que no es SQL por dentro tapado, del mismo largo (para buscar sentencias sin leer un comentario o un texto como si fuera una): un comentario (-- hasta el final de la
+# linea, /* */) pasa a espacios; un texto ('...' con '' dentro, $$...$$) o un nombre entre comillas dobles conserva sus delimitadores y lleva x por dentro.
+function Get-MascaraSql([string]$Texto) {
+  $tapa = [System.Text.RegularExpressions.MatchEvaluator] {
+    param($m)
+    $v = $m.Value
+    if ($v.StartsWith('--') -or $v.StartsWith('/*')) { return (' ' * $v.Length) }
+    $d = 1
+    if ($v.StartsWith('$$')) { $d = 2 }
+    return ($v.Substring(0, $d) + ('x' * ($v.Length - 2 * $d)) + $v.Substring($v.Length - $d))
+  }
+  return [regex]::Replace($Texto, '--[^\r\n]*|/\*.*?\*/|''(?:[^'']|'''')*''|"(?:[^"]|"")*"|\$\$.*?\$\$', $tapa, [System.Text.RegularExpressions.RegexOptions]::Singleline)
 }
 
 # Anade las filas de este lanzamiento a datos\prueba-local-tiempos.json (se anade, no se pisa). Un fallo al guardar no para la prueba.
@@ -722,6 +845,23 @@ function Get-Ejemplos([string]$Dir) {
   return @()
 }
 
+# Lo que preparan los tests de ejemplo $Ejemplos (rutas completas) de la copia $Dir antes de lanzar el job: un parrafo con 'fichero:linea (metodo)' de cada
+# metodo con @BeforeEach, @BeforeAll, @Before o @BeforeClass (el fichero relativo a la copia; la linea, la del nombre del metodo; 5 como mucho, en el orden
+# de los ejemplos y del fichero), o '' si no hay ninguno. Va detras de la lista de ejemplos del test del migrado (Get-TareaArnes): el test del original
+# puede ser de una version del framework que no lo necesita y el del migrado, que lo traduce, se queda sin prepararlo.
+function Get-PreparaEjemplos([string[]]$Ejemplos, [string]$Dir) {
+  $metodos = @()
+  foreach ($f in $Ejemplos) {
+    $texto = [System.IO.File]::ReadAllText($f)
+    foreach ($m in [regex]::Matches($texto, $PatronPrepara)) {
+      $nombre = $m.Groups[1]
+      $metodos += ((Get-Rel $Dir $f) + ':' + @($texto.Substring(0, $nombre.Index) -split "`n").Count + ' (' + $nombre.Value + ')')
+    }
+  }
+  if ($metodos.Count -eq 0) { return '' }
+  return 'Estos tests preparan algo antes de lanzar el job: ' + (@($metodos | Select-Object -First 5) -join ', ') + '. El test del original puede ser de otra version del framework y no hacerlo. Si este repositorio lo necesita (por ejemplo, un contexto que en produccion pone el arranque de la aplicacion), haz lo mismo en tu test antes de lanzar cada job. No lo uses para tapar un fallo del codigo de src/main.'
+}
+
 # El hash del test que dejo guardado el arnes de $Repo (prueba-local\arnes\<repo>\<ruta del test>), o '' si no esta.
 function Get-HashGuardado([string]$Repo, [string]$Test) {
   $f = Join-Ruta $Local "arnes/$Repo/$Test"
@@ -753,6 +893,10 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $ejemplos = @(Get-Ejemplos $Dir)
   $lista = '(No hay tests de ejemplo: escribe el test desde cero.)'
   if ($ejemplos.Count -gt 0) { $lista = (@($ejemplos | ForEach-Object { '- ' + $_ }) -join "`n") }
+  if ($TestOriginal) {   # el del migrado: lo que preparan los ejemplos de su copia (no los de la referencia)
+    $prepara = Get-PreparaEjemplos @($ejemplos | Where-Object { -not $PlantillaRoot -or -not $_.StartsWith($PlantillaRoot) }) $Dir
+    if ($prepara) { $lista += "`n`n" + $prepara }
+  }
   $dirs = @()
   if ($PlantillaRoot -and @($ejemplos | Where-Object { $_.StartsWith($PlantillaRoot) }).Count -gt 0) { $dirs = @($PlantillaRoot) }
   $pom = 'no'
@@ -791,12 +935,64 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   return (Test-Guardada $t (Join-Ruta $Local "arnes/$Repo"))
 }
 
+# Lo que fallo en el migrado de antes, para el test del migrado que se escribe otra vez: de los casos distintos del prueba-local.json de antes ($Anterior) cuyo
+# migrado acaba FAILED o EXCEPCION y el original no (su 'fallos', Get-Fallos: la causa es la que ensena la consola), las causas con $CausasMinimas casos o mas,
+# agrupadas como los grupos de la consola (Get-CausaNormal), la de mas casos primero y $CausasMaximas como mucho: 'En N casos el migrado acaba FAILED y el original
+# no: <causa>.' (la del primer caso, en 200 letras como mucho). Sin ninguna, @().
+function Get-LineasFalloMigrado {
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($c in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'distinto' })) {
+    $mig = @(@($c.fallos) | Where-Object { $_.lado -ceq 'migrado' -and ($_.estado -ceq 'FAILED' -or $_.estado -ceq 'EXCEPCION') -and $_.causa })
+    if ($mig.Count -eq 0 -or @(@($c.fallos) | Where-Object { $_.lado -ceq 'original' }).Count -gt 0) { continue }
+    $firma = $mig[0].estado + '|' + (Get-CausaNormal ([string]$mig[0].causa) $c.caso)
+    if (-not $por.ContainsKey($firma)) { $por[$firma] = [pscustomobject]@{ casos = 0; estado = $mig[0].estado; causa = [string]$mig[0].causa } }
+    $por[$firma].casos++
+  }
+  $lineas = @()
+  foreach ($g in @(Get-MasRepetidas $por)) {
+    $causa = $g.causa
+    if ($causa.Length -gt 200) { $causa = $causa.Substring(0, 200) }
+    $lineas += "- En $($g.casos) casos el migrado acaba $($g.estado) y el original no: $causa."
+  }
+  return $lineas
+}
+
+# Lo que el original y el migrado dejaban en carpetas distintas en el migrado de antes, para el test del migrado que se escribe otra vez: de los casos distintos del
+# prueba-local.json de antes ($Anterior) con diferencias otraCarpeta (Join-OtraCarpeta), cada pareja de carpetas (su clave: un caso cuenta una vez por pareja, aunque
+# deje varios ficheros en ella) con $CausasMinimas casos o mas, la de mas casos primero y $CausasMaximas como mucho: 'En N casos el original deja sus ficheros en A
+# y el migrado en B: da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original.' Sin ninguna, @().
+function Get-LineasOtraCarpeta {
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($c in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'distinto' })) {
+    foreach ($d in @(@($c.diferencias) | Where-Object { $_.otraCarpeta } | Group-Object -Property clave -CaseSensitive | ForEach-Object { $_.Group[0] })) {
+      if (-not $por.ContainsKey($d.clave)) { $por[$d.clave] = [pscustomobject]@{ casos = 0; original = (Format-Carpetas $d.carpetasOriginal); migrado = (Format-Carpetas $d.carpetasMigrado) } }
+      $por[$d.clave].casos++
+    }
+  }
+  return @(Get-MasRepetidas $por | ForEach-Object { "- En $($_.casos) casos el original deja sus ficheros en $($_.original) y el migrado en $($_.migrado): da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original." })
+}
+
+# Las entradas de $Por (firma -> objeto con 'casos', cuantos casos) con $CausasMinimas casos o mas: la de mas casos primero, a igualdad por la firma en orden
+# ordinal, y $CausasMaximas como mucho.
+function Get-MasRepetidas($Por) {
+  $orden = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($firma in $Por.Keys) { if ($Por[$firma].casos -ge $CausasMinimas) { $orden[(999999 - $Por[$firma].casos).ToString('D6') + '|' + $firma] = $Por[$firma] } }
+  return @(Sort-Ordinal @($orden.Keys) | Select-Object -First $CausasMaximas | ForEach-Object { $orden[$_] })
+}
+
 # Lo que fallo la otra vez, para el primer intento de un test que se escribe otra vez ($T no esta hecha: se rehace con -RehacerOriginal o -RehacerArnes, se
 # cambio la plantilla, o su tarea de antes quedo atascada y Restore-Tarea no la conserva). $Antes es su tarea del lanzamiento anterior (Get-TareaGuardada, antes
 # de que Get-TareaArnes la pise) o $null. Lleva, en este orden:
 #  - el ultimo motivo de la tarea de antes, si no estaba hecha (el de un test atascado ya lleva las pistas de Get-PistaArnes);
 #  - para el del original, las pistas (Get-PistaArnes sobre cada motivo, sin repetir y 3 como mucho) de los casos 'no se pudo preparar' del prueba-local.json de
 #    antes ($Anterior): casi todos esos motivos vienen del test del original.
+#  - para el del original, una linea por cada job (3 como mucho) cuyo caso vacio guardado (salidas\vacio) no acabo COMPLETED, con su estado, la clase de la excepcion
+#    y la primera linea de su causa (Get-LineasVacio): el test nuevo no debe dejarlo peor (Test-ArnesEscrito);
+#  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFalloMigrado), con una
+#    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
+#    si viene de src/main, es un fallo del migrado y no se tapa;
+#  - para el del migrado, una linea por cada pareja de carpetas (3 como mucho) con 2 casos o mas donde el original dejaba un fichero en una carpeta y el migrado en
+#    otra (otraCarpeta) en ese prueba-local.json (Get-LineasOtraCarpeta): la linea pide dar a las propiedades de carpetas del test los mismos valores que les da el del original.
 # Sin nada de eso es '' y el prompt no cambia. Invoke-Lote lo pone como la correccion del primer intento, por el mismo camino que el motivo de un reintento; la
 # huella (Get-HuellaArnes) no lo lleva: un test que no se rehace no se escribe otra vez por esto. Una tarea que aun no ha llamado a la IA (se dijo que no a
 # la pregunta de llamar a Copilot) conserva el de antes si ahora no hay otro.
@@ -811,6 +1007,16 @@ function Get-PrevioArnes($T, $Antes) {
       if ($pistas.Count -ge 3) { break }
     }
     if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
+  }
+  if ($T.entradas.repo -eq 'original') {
+    $vacio = @(Get-LineasVacio)
+    if ($vacio.Count -gt 0) { $partes += (@($vacio) -join "`n") }
+  }
+  if ($T.entradas.repo -eq 'migrado' -and $Anterior) {
+    $lineas = @(Get-LineasFalloMigrado)
+    if ($lineas.Count -gt 0) { $partes += 'Si viene de una clase de una libreria porque al test le falta algo que en produccion prepara el arranque, preparalo como los tests de ejemplo. Si viene del codigo de src/main, no lo tapes: es un fallo del migrado.' + "`n" + ($lineas -join "`n") }
+    $carpetas = @(Get-LineasOtraCarpeta)
+    if ($carpetas.Count -gt 0) { $partes += ($carpetas -join "`n") }
   }
   if ($partes.Count -gt 0) { return "Lo que fallo la otra vez (de un lanzamiento anterior):`n" + ($partes -join "`n") }
   if ($Antes -and $Antes.estado -eq 'pendiente' -and $Antes.intentos -eq 0 -and $Antes.entradas.PSObject.Properties['previo']) { return [string]$Antes.entradas.previo }
@@ -1040,12 +1246,176 @@ function Get-ListaTablas($Tablas) {
 # Las tablas que usa el codigo de $Dir (Get-TablasBatch) y la base de prueba no tiene: las que no son ningun tablas\<TABLA>.csv de la salida del
 # caso vacio (target\prueba-local\<job>\vacio, ya ejecutado) de ninguno de los $Jobs. El arnes deja uno por cada tabla de su base.
 function Get-TablasFaltan([string]$Dir, [string[]]$Jobs) {
-  $hay = @{}
-  foreach ($j in $Jobs) {
-    $d = Join-Ruta $Dir "target/prueba-local/$j/vacio/tablas"
-    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $hay[$f.BaseName.ToUpperInvariant()] = $true } }
-  }
+  $hay = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $Dir "target/prueba-local/$_/vacio/tablas" })
   return @(Get-TablasBatch $Dir | Where-Object { -not $hay.ContainsKey($_.tabla) })
+}
+
+# Los nombres, en mayusculas, de los <TABLA>.csv de las carpetas $Carpetas (las que existan), como las claves de una tabla hash; el valor es la ruta del .csv.
+function Get-NombresTablas([string[]]$Carpetas) {
+  $n = @{}
+  foreach ($d in $Carpetas) {
+    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $n[$f.BaseName.ToUpperInvariant()] = $f.FullName } }
+  }
+  return $n
+}
+
+# Las columnas de la primera linea (separadas por ';') de un tablas\<TABLA>.csv, sin espacios alrededor ni vacias; @() si no esta.
+function Get-Columnas([string]$Csv) {
+  if (-not (Test-Path -LiteralPath $Csv)) { return @() }
+  $l = @([System.IO.File]::ReadAllLines($Csv))
+  if ($l.Count -eq 0) { return @() }
+  return @($l[0] -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+# Que tan bien acaba el caso vacio de la carpeta de salida $Sal: 0 COMPLETED, 1 otro estado del job (FAILED, STOPPED...), 2 EXCEPCION (el job ni arranca), 3 sin estado.
+function Get-RangoEstado([string]$Sal) {
+  $estado = Get-Estado $Sal
+  if (-not $estado) { return 3 }
+  if ($estado -ceq 'COMPLETED') { return 0 }
+  if ($estado -ceq 'EXCEPCION') { return 2 }
+  return 1
+}
+
+# Como acaba el caso vacio de $Sal: su estado y, si no es COMPLETED, entre parentesis la clase de la excepcion (Get-Excepcion) y la primera linea de la causa
+# ($Causa): 'FAILED (java.nio.file.NoSuchFileException: /datos/salida/RESUMEN.txt)' o 'EXCEPCION (BeanCreationException)'. Sin estado, 'sin estado'.
+function Get-ComoAcaba([string]$Sal, [string]$Causa) {
+  $estado = Get-Estado $Sal
+  if (-not $estado) { return 'sin estado' }
+  $detalle = Get-DetalleVacio $Sal $Causa
+  if ($estado -ceq 'COMPLETED' -or -not $detalle) { return $estado }
+  return "$estado ($detalle)"
+}
+
+# El detalle de un caso vacio que no acabo COMPLETED: la clase de la excepcion si el job ni arranco (Get-Excepcion) y la primera linea de la causa ($Causa), unidas con ': '; '' si no hay ninguna.
+function Get-DetalleVacio([string]$Sal, [string]$Causa) {
+  $partes = @()
+  $clase = Get-Excepcion $Sal
+  if ($clase) { $partes += $clase }
+  $linea = (($Causa -split "`n")[0]).Trim()
+  if ($linea) { $partes += $linea }
+  return ($partes -join ': ')
+}
+
+# Las lineas del previo del original (Get-PrevioArnes) sobre su caso vacio guardado (salidas\vacio): por cada job cuyo caso no acabo COMPLETED (con estado), por orden de
+# nombre y 3 como mucho, 'Con el test de antes, el caso vacio de <job> acababa <estado>: <clase y causa>.' La causa es la de salidas\vacio\causas.json (Save-CausasVacio).
+function Get-LineasVacio {
+  $base = Join-Ruta $Local 'salidas/vacio'
+  $lineas = @()
+  if (-not (Test-Path -LiteralPath $base)) { return $lineas }
+  foreach ($d in @(Sort-Ordinal @(Get-ChildItem -LiteralPath $base -Directory | ForEach-Object { $_.Name }))) {
+    $sal = Join-Path $base $d
+    if ((Get-RangoEstado $sal) -in 0, 3) { continue }
+    $detalle = Get-DetalleVacio $sal (Get-CausaVacio $base $d)
+    $linea = "Con el test de antes, el caso vacio de $d acababa $(Get-Estado $sal)"
+    if ($detalle) { $linea += ": $detalle" }
+    $lineas += "$linea."
+    if ($lineas.Count -ge 3) { break }
+  }
+  return $lineas
+}
+
+# La causa con que acabo un job el caso vacio guardado en la carpeta $Carpeta (salidas\vacio o salidas\vacio-anterior), de su causas.json (Save-CausasVacio); si la carpeta
+# no tiene causas.json (se guardo antes de M69), la del registro de Maven mas reciente del caso vacio del original (Get-CausaRegistroVacio). '' si no la hay. Con causas.json manda
+# el, aunque no diga nada del job.
+function Get-CausaVacio([string]$Carpeta, [string]$Job) {
+  $f = Join-Path $Carpeta 'causas.json'
+  if (-not (Test-Path -LiteralPath $f)) { return (Get-CausaRegistroVacio) }
+  try { $causas = Read-Json $f } catch { return '' }
+  $p = $causas.PSObject.Properties[$Job]
+  if ($p) { return [string]$p.Value }
+  return ''
+}
+
+# La causa (primera linea) del registro de Maven mas reciente por fecha de escritura del caso vacio del arnes del original (registros\mvn-<n>-arnes-original--caso-vacio.log: el nombre
+# de Invoke-Maven con 'arnes original, caso vacio'; el contador <n> vuelve a 1 en cada lanzamiento, por eso no vale para ordenarlos), sacada de sus lineas con Get-CausaMaven y sin
+# informes de surefire (un $Desde que ninguno cumple). '' si no hay registro o no dice la causa.
+function Get-CausaRegistroVacio {
+  $carpeta = Join-Ruta $Local 'registros'
+  if (-not (Test-Path -LiteralPath $carpeta)) { return '' }
+  $registro = @(Get-ChildItem -LiteralPath $carpeta -File -Filter 'mvn-*-arnes-original--caso-vacio.log' | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+  if ($registro.Count -eq 0) { return '' }
+  $causa = Get-CausaCorta (Get-CausaMaven $carpeta ([DateTime]::MaxValue) @([System.IO.File]::ReadAllLines($registro[0].FullName)))
+  return (($causa -split "`n")[0]).Trim()
+}
+
+# Apunta en $Carpeta\causas.json (salidas\vacio) la primera linea de la causa de Maven ($Causa) de cada job de $Jobs cuyo caso vacio guardado no acabo COMPLETED: estado.txt dice como
+# acabo y no por que, y el test nuevo se compara con esto (Get-PeorQueAntes) y el primer intento de uno que se escribe otra vez lo sabe (Get-PrevioArnes). Lo escribe siempre, aunque
+# vaya vacio: su presencia dice que ya se miro y Get-CausaVacio no busca en los registros, que el test nuevo pisa.
+function Save-CausasVacio([string]$Carpeta, [string[]]$Jobs, [string]$Causa) {
+  $causas = [ordered]@{}
+  $linea = (($Causa -split "`n")[0]).Trim()
+  if ($linea) { foreach ($j in $Jobs) { if ((Get-RangoEstado (Join-Path $Carpeta $j)) -ne 0) { $causas[$j] = $linea } } }
+  Write-Json (Join-Path $Carpeta 'causas.json') $causas
+}
+
+# Las frases de lo que es peor en el caso vacio que ha dejado el test nuevo de la copia $Dir ($Causa: la de su Maven) que en el del test de antes (salidas\vacio-anterior),
+# job a job: el estado (Get-RangoEstado: no puede bajar), las tablas que ya no estan (sin BATCH_ ni TASK_, como Get-TablasOriginal) y las columnas de la cabecera
+# de antes que ya no estan en las tablas que siguen (sin distinguir mayusculas). Un job sin caso vacio de antes no cuenta. @() si no es peor en nada.
+function Get-PeorQueAntes([string]$Dir, [string[]]$Jobs, [string]$Causa) {
+  $frases = @()
+  $carpetaAntes = Join-Ruta $Local 'salidas/vacio-anterior'
+  foreach ($j in $Jobs) {
+    $antes = Join-Ruta $carpetaAntes $j
+    if (-not (Test-Path -LiteralPath $antes)) { continue }
+    $ahora = Join-Ruta $Dir "target/prueba-local/$j/vacio"
+    if ((Get-RangoEstado $ahora) -gt (Get-RangoEstado $antes)) {
+      $frases += "Con tu test, el caso vacio de $j acaba $(Get-ComoAcaba $ahora $Causa) y con el test de antes acababa $(Get-ComoAcaba $antes (Get-CausaVacio $carpetaAntes $j))."
+    }
+    $tablasAntes = Get-NombresTablas @(Join-Ruta $antes 'tablas')
+    $tablasAhora = Get-NombresTablas @(Join-Ruta $ahora 'tablas')
+    $habia = @(Sort-Ordinal @($tablasAntes.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' }))
+    $faltan = @($habia | Where-Object { -not $tablasAhora.ContainsKey($_) })
+    if ($faltan.Count -gt 0) { $frases += "En el caso vacio de $j, tu base no tiene estas tablas que si tenia la del test de antes: $($faltan -join ', ')." }
+    foreach ($t in @($habia | Where-Object { $tablasAhora.ContainsKey($_) })) {
+      $siguen = @(Get-Columnas $tablasAhora[$t] | ForEach-Object { $_.ToUpperInvariant() })
+      $sin = @(Get-Columnas $tablasAntes[$t] | Where-Object { $siguen -cnotcontains $_.ToUpperInvariant() })
+      if ($sin.Count -gt 0) { $frases += "En el caso vacio de $j, la tabla $t de tu base ya no tiene estas columnas que si tenia la del test de antes: $($sin -join ', ')." }
+    }
+  }
+  return $frases
+}
+
+# Las columnas que el prueba-local.json de antes ($Anterior) daba como no creadas por el test del original ($PatronColumnaSinCrear en el motivo de sus casos), sin
+# repetir: objetos con nombre ('TABLA.COLUMNA', o solo la columna si el motivo no trae la tabla), tabla ('' si no), columna y sitio (donde la usa el codigo).
+function Get-ColumnasPedidas {
+  $pedidas = @()
+  if (-not $Anterior) { return $pedidas }
+  foreach ($motivo in @(@($Anterior.casos) | ForEach-Object { [string]$_.motivo } | Where-Object { $_ })) {
+    foreach ($m in [regex]::Matches($motivo, $PatronColumnaSinCrear)) {
+      $t = $m.Groups['t'].Value
+      $c = $m.Groups['c'].Value
+      if (@($pedidas | Where-Object { $_.tabla -ieq $t -and $_.columna -ieq $c }).Count -gt 0) { continue }
+      $nombre = $c
+      if ($t) { $nombre = "$t.$c" }
+      $pedidas += [pscustomobject]@{ nombre = $nombre; tabla = $t; columna = $c; sitio = $m.Groups['s'].Value }
+    }
+  }
+  return $pedidas
+}
+
+# De las columnas $Pedidas (Get-ColumnasPedidas), las que no estan en la cabecera de ningun tablas\<TABLA>.csv de las carpetas $Carpetas: el de su tabla si el motivo la dice y,
+# si no, el de cualquiera.
+function Get-ColumnasFaltan([string[]]$Carpetas, $Pedidas) {
+  $tablas = Get-NombresTablas $Carpetas
+  $faltan = @()
+  foreach ($p in @($Pedidas)) {
+    $esta = $false
+    foreach ($k in @($tablas.Keys | Where-Object { -not $p.tabla -or $_ -ceq $p.tabla.ToUpperInvariant() })) {
+      if (@(Get-Columnas $tablas[$k] | Where-Object { $_ -ieq $p.columna }).Count -gt 0) { $esta = $true }
+    }
+    if (-not $esta) { $faltan += $p }
+  }
+  return $faltan
+}
+
+# Las columnas de Get-ColumnasPedidas para un motivo: 'T.C (fichero:linea), U.D (fichero:linea)'.
+function Get-ListaColumnas($Columnas) { return (@($Columnas | ForEach-Object { "$($_.nombre) ($($_.sitio))" }) -join ', ') }
+
+# Las tablas de la base del test del original: las de tablas\ de su caso vacio de cada uno de los $Jobs (salidas\vacio\<job>, las que dejo Test-ArnesEscrito del
+# original), por orden de nombre y sin las de Spring Batch (BATCH_) ni las de Spring Cloud Task (TASK_), que cada lado trae a su manera (Compare-Caso las salta).
+function Get-TablasOriginal([string[]]$Jobs) {
+  $n = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $Local "salidas/vacio/$_/tablas" })
+  return @(Sort-Ordinal @($n.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' }))
 }
 
 # Comprueba el arnes que acaba de escribir la IA en su copia. Antes lo deja en lo que se puede probar: lo que cambio fuera de lo que
@@ -1073,8 +1443,12 @@ function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 
 # '' si el arnes de la copia, ya sin lo de fuera, vale; si no, el motivo: escrito el test, compila y, con un caso vacio por job, cada job
 # deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso) y la base de prueba tiene las
-# tablas que usa el codigo (Get-TablasFaltan). Esa ultima puerta rechaza el intento mientras queden otros, y no el ultimo ni uno guardado
+# tablas que usa el codigo (Get-TablasFaltan) y, en el del migrado, las que tiene la base del test del original (Get-TablasOriginal): la que el codigo arma en
+# tiempo de ejecucion no sale del inventario, pero el original ya la crea. Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
 # ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
+# Un test del original que se escribe otra vez (hay uno de antes en salidas\vacio-anterior: Save-Anterior) tampoco puede dejar el caso vacio peor que el de antes
+# (estado, tablas y columnas: Get-PeorQueAntes) ni sin las columnas que el prueba-local.json de antes decia que no creaba (Get-ColumnasPedidas); en el ultimo intento, si
+# queda peor, no se guarda y se vuelve al de antes ($script:VueltaAlDeAntes; lo hace Invoke-Arneses).
 function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $dir = $T.entradas.copia
   $esOrig = ($T.entradas.repo -eq 'original')
@@ -1103,29 +1477,62 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   }
   # Con un caso vacio, el original arranca el job y el migrado no (estado=EXCEPCION): el test del migrado no simula lo que el job necesita, o le pasa
   # mal las propiedades. Como la puerta de las tablas: se rechaza mientras quedan intentos y, en el ultimo o con un test guardado, se acepta con un
-  # aviso (puede ser el codigo del migrado).
+  # aviso (puede ser el codigo del migrado). Uno rechazado antes por esto y aceptado en el ultimo intento se apunta en $script:NoArranca.
   if (-not $esOrig) {
     foreach ($j in $Jobs) {
       $estadoOrig = Get-Estado (Join-Ruta $Local "salidas/vacio/$j")
       $clase = Get-Excepcion (Join-Ruta $dir "target/prueba-local/$j/vacio")
       if (-not $estadoOrig -or $estadoOrig -ceq 'EXCEPCION' -or -not $clase) { continue }
       $causa = Get-CausaCorta $r.Causa
-      if ($causa) { $clase = "$clase ($causa)" }
-      $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $clase. Revisa lo que simula el test y las propiedades que le pasa."
+      $detalle = $clase
+      if ($causa) { $detalle = "$clase ($causa)" }
+      $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $detalle. Revisa lo que simula el test y las propiedades que le pasa."
       if (-not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) { return $roto }
       Aviso $roto
-      break
+      # Aceptado en el ultimo intento tras rechazarlo por esto (no uno guardado): el job se prueba con un solo caso (Invoke-Salidas) y la consola dice cuantas veces se escribio
+      if (-not $SoloAviso -and $T.motivo.Contains("el original arranca el job $j (estado=")) { $script:NoArranca[$j] = [pscustomobject]@{ clase = $clase; veces = $T.intentos + 1 } }
+    }
+  }
+  $faltanOrig = @()
+  if (-not $esOrig) {
+    $hay = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $dir "target/prueba-local/$_/vacio/tablas" })
+    $faltanOrig = @(Get-TablasOriginal $Jobs | Where-Object { -not $hay.ContainsKey($_) })
+    if ($faltanOrig.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
+      return "La base de tu test no tiene estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Crealas con las mismas columnas que en el test del original."
     }
   }
   $faltan = @(Get-TablasFaltan $dir $Jobs)
   if ($faltan.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
     return "La base de prueba no tiene estas tablas que usa el batch: $(Get-ListaTablas $faltan). Crealas en el paso de la base limpia con las columnas que usa el codigo."
   }
+  # El test del original que se escribe otra vez no puede quedar peor que el de antes (salidas\vacio-anterior: Get-PeorQueAntes) y tiene que crear las columnas que el
+  # prueba-local.json de antes decia que le faltaban (Get-ColumnasPedidas). Se rechaza mientras quedan intentos. En el ultimo, si queda peor se vuelve al de antes
+  # ($script:VueltaAlDeAntes: no se guarda nada y Invoke-Arneses lo restaura) y, si solo faltan columnas, se acepta con un aviso. Uno guardado ($SoloAviso) no pasa por
+  # aqui. El del migrado tampoco: su caso vacio no se guarda (nada con que compararlo) y las columnas pedidas son las del test del original (las tablas del original
+  # ya las pide la puerta de arriba).
+  $sinCrear = @()
+  if ($esOrig -and -not $SoloAviso) {
+    $peor = @()
+    if ($script:Anteriores['original']) { $peor = @(Get-PeorQueAntes $dir $Jobs (Get-CausaCorta $r.Causa)) }
+    $sinCrear = @(Get-ColumnasFaltan @($Jobs | ForEach-Object { Join-Ruta $dir "target/prueba-local/$_/vacio/tablas" }) @(Get-ColumnasPedidas))
+    if ($peor.Count -gt 0 -or $sinCrear.Count -gt 0) {
+      $frases = @($peor)
+      if ($sinCrear.Count -gt 0) { $frases += "Tu base no crea estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear)." }
+      if (($T.intentos + 1) -lt [int]$Cfg.Intentos) { return ($frases -join ' ') }
+      if ($peor.Count -gt 0) {
+        $script:VueltaAlDeAntes = "El test nuevo del original quedaba peor que el de antes ($((@($peor) -join ' ').TrimEnd('.'))): sigo con el de antes."
+        return ''
+      }
+    }
+  }
   if ($esOrig) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
+    Save-CausasVacio (Join-Ruta $Local 'salidas/vacio') $Jobs (Get-CausaCorta $r.Causa)
   }
+  if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Para que lo escriba otra vez con ellas, relanza con -RehacerArnes." }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
+  if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
   return ''
 }
 
@@ -1236,6 +1643,48 @@ function Save-Arnes($T) {
   Save-Copia $dir
 }
 
+# El test de $Lado ('original' o 'migrado') que se va a escribir otra vez no se borra: pasa de prueba-local\arnes\<lado> a prueba-local\arnes-anterior\<lado>,
+# pisando el de la vez anterior, y el del original lleva con el su caso vacio (salidas\vacio pasa a salidas\vacio-anterior: el nuevo lo pisa). Sin un test
+# guardado (un lanzamiento anterior se corto con el de antes ya movido), no se toca nada: sigue el que hubiera. Apunta en $script:Anteriores si hay un test de
+# antes con el que comparar el nuevo (Test-ArnesEscrito) o al que volver (Restore-Anterior).
+function Save-Anterior([string]$Lado) {
+  $actual = Join-Ruta $Local "arnes/$Lado"
+  $anterior = Join-Ruta $Local "arnes-anterior/$Lado"
+  if (Test-Path -LiteralPath $actual) {
+    Remove-Carpeta $anterior
+    Copy-Carpeta $actual $anterior
+    if ($Lado -eq 'original') {
+      # Un caso vacio guardado antes de M69 no tiene causas.json: se apunta ahora, con el registro de Maven que lo dejo (el mas reciente, mientras el test nuevo no ha corrido)
+      $vacio = Join-Ruta $Local 'salidas/vacio'
+      if ((Test-Path -LiteralPath $vacio) -and -not (Test-Path -LiteralPath (Join-Path $vacio 'causas.json'))) {
+        Save-CausasVacio $vacio @(Get-ChildItem -LiteralPath $vacio -Directory | ForEach-Object { $_.Name }) (Get-CausaRegistroVacio)
+      }
+      Remove-Carpeta (Join-Ruta $Local 'salidas/vacio-anterior')
+      Copy-Carpeta $vacio (Join-Ruta $Local 'salidas/vacio-anterior')
+    }
+    Remove-Carpeta $actual
+  }
+  $script:Anteriores[$Lado] = (Test-Path -LiteralPath $anterior)
+}
+
+# Vuelve al test de antes del arnes $T (el del original, cuando el nuevo ha quedado peor: Test-ArnesEscrito): arnes-anterior\<lado> vuelve a arnes\<lado> y a la copia de $T,
+# y salidas\vacio-anterior a salidas\vacio. Se fia del test de antes sin volver a comprobarlo: el nuevo es el que no valia. Lo compilado del nuevo se borra (target\test-classes):
+# el de antes llega con la fecha de cuando se escribio y Maven no veria que hay que compilarlo otra vez.
+function Restore-Anterior($T) {
+  $lado = $T.entradas.repo
+  $dir = $T.entradas.copia
+  Remove-Carpeta (Join-Ruta $Local "arnes/$lado")
+  Copy-Carpeta (Join-Ruta $Local "arnes-anterior/$lado") (Join-Ruta $Local "arnes/$lado")
+  if ($lado -eq 'original') {
+    Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
+    Copy-Carpeta (Join-Ruta $Local 'salidas/vacio-anterior') (Join-Ruta $Local 'salidas/vacio')
+  }
+  Undo-Copia $dir
+  Remove-Carpeta (Join-Ruta $dir 'target/test-classes')
+  Copy-Carpeta (Join-Ruta $Local "arnes/$lado") $dir
+  Save-Copia $dir
+}
+
 # Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
 # otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
 # atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
@@ -1279,15 +1728,27 @@ function Get-MotivoArnes($T, $C, [string[]]$Jobs) {
 }
 
 # Las tareas de arnes pendientes, una detras de otra: primero la del original y, solo cuando esta hecha, la del migrado (que traduce
-# su test: se vuelve a calcular su huella con el test del original que acaba de quedar guardado). Cada una con su comprobacion y,
+# su test: se vuelve a calcular su huella con el test del original que acaba de quedar guardado y su previo lleva las tablas de su base). Cada una con su comprobacion y,
 # si falla, su reintento con el motivo. Si la del original queda atascada, la del migrado no se lanza: lo para el arranque.
 function Invoke-Arneses($Tareas, [string[]]$Jobs) {
   foreach ($repo in @('original', 'migrado')) {
     foreach ($t in @($Tareas | Where-Object { $_.entradas.repo -eq $repo })) {
       if ($repo -eq 'migrado') {
         if ($ArnesOrig.estado -ne 'hecha') { return }
+        # El del original ha vuelto al de antes y el del migrado solo se escribia otra vez porque cambiaba el del original: vuelve tambien al suyo (Use-ArnesGuardado lo
+        # comprueba; si ya no vale, se escribe otra vez como siempre)
+        if ($script:VueltaAlDeAntes -and $script:MigradoPorOriginal -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes-anterior/migrado'))) {
+          Copy-Carpeta (Join-Ruta $Local 'arnes-anterior/migrado') (Join-Ruta $Local 'arnes/migrado')
+          Use-ArnesGuardado $t $Jobs
+          if ($t.estado -eq 'hecha') { continue }
+        }
         $t.entradas.hashOriginal = Get-HashGuardado 'original' $t.entradas.testOriginal
         $t.entradas.huella = Get-HuellaArnes $t.entradas.test $Jobs $t.entradas.hashOriginal
+        # Su primer intento sabe ya que tablas tiene la base del test del original (Test-ArnesEscrito pide las mismas): no se supo hasta que se escribio el del original
+        $tablas = @(Get-TablasOriginal $Jobs)
+        if ($t.intentos -eq 0 -and $tablas.Count -gt 0) {
+          $t.entradas.previo = (@([string]$t.entradas.previo, "La base del test del original tiene estas tablas: $($tablas -join ', '). La base de tu test tiene que tener las mismas, con las mismas columnas.") | Where-Object { $_ }) -join "`n"
+        }
       }
       while ($t.estado -eq 'pendiente') {
         Info "Arnes (el test que ejecuta los casos): $repo..."
@@ -1299,13 +1760,18 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
         $m = Get-MotivoArnes $t $ll[0] $Jobs
         # Una llamada cortada por tiempo que dejo un test que no vale, si queda otro intento: lo escrito se queda para seguir desde ahi
         $sigue = [bool]($m -and $ll[0].Agotado -and ($t.intentos + 1) -lt [int]$Cfg.Intentos -and (Test-Path -LiteralPath (Join-Ruta $t.entradas.copia $t.entradas.test)))
-        if (-not $m) { Save-Arnes $t; $t.entradas.plantilla = Get-HashPlantillaArnes }
+        if (-not $m) {
+          if ($repo -eq 'original' -and $script:VueltaAlDeAntes) { Restore-Anterior $t } else { Save-Arnes $t }
+          $t.entradas.plantilla = Get-HashPlantillaArnes   # tambien al volver al de antes: no se escribe otra vez en cada lanzamiento por la plantilla
+        }
         elseif (-not $sigue) { Undo-Copia $t.entradas.copia }   # con $sigue, lo escrito se queda: Test-Arnes ya ha deshecho lo de fuera
         $t.entradas.prompt.SI_CORTADO = $MarcaNo
         $t.entradas.prompt.SI_DESHECHO = ''
         if ($sigue) { $t.entradas.prompt.SI_CORTADO = ''; $t.entradas.prompt.SI_DESHECHO = $MarcaNo }
         Set-Intento $t $m
-        if ($m) { Aviso "Arnes del $repo rechazado: $(($m -split "`n")[0])" } else { Bien "Arnes del ${repo}: bien." }
+        if ($m) { Aviso "Arnes del $repo rechazado: $(($m -split "`n")[0])" }
+        elseif ($repo -eq 'original' -and $script:VueltaAlDeAntes) { $t.motivo = $script:VueltaAlDeAntes; Save-Tarea $t; Aviso $script:VueltaAlDeAntes }
+        else { Bien "Arnes del ${repo}: bien." }
       }
     }
   }
@@ -1377,6 +1843,23 @@ function Reset-CasosExcepcion($Tareas) {
     $n++
   }
   if ($n -gt 0) { Save-Originales; Info "Se rehacen $n caso(s) hecho(s) en otro lanzamiento: su original no llego a arrancar (estado=EXCEPCION) y nunca se les ha pedido que el job arranque. Se rehacen una vez." }
+}
+
+# Un caso hecho en otro lanzamiento cuyo original guardo un error.txt que dice que algo ya existe ($PatronYaExiste: su datos.sql crea una tabla, una secuencia, un indice... que el
+# test del original ya crea; ahora el script lo crea con IF NOT EXISTS, Edit-DatosSql) vuelve a ejecutar su original, sin IA y sin -Rehacer: se quita su entrada de originales.json (un original sin
+# estado.txt ya se ejecuta en cada lanzamiento; este trae el estado.txt de un job que corrio igualmente). Los demas casos no se tocan. Dice cuantos son.
+function Reset-OriginalesYaExiste($Tareas) {
+  $o = Get-Originales
+  $n = 0
+  foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' })) {
+    $j = $t.entradas.job
+    $c = $t.entradas.caso
+    $dicen = @('original', 'original-2' | Where-Object { $f = Join-Ruta $Local "salidas/$_/$j/$c/error.txt"; (Test-Path -LiteralPath $f) -and [System.IO.File]::ReadAllText($f) -match $PatronYaExiste })
+    if ($dicen.Count -eq 0) { continue }
+    $o.Remove("$j|$c")
+    $n++
+  }
+  if ($n -gt 0) { Info "Se ejecuta otra vez el original de $n caso(s) hecho(s) en otro lanzamiento: su error.txt dice que algo ya existe (una tabla, una secuencia, un indice...: su datos.sql lo crea y la base del test ya lo tiene)." }
 }
 
 # Un caso hecho como no-aplica (sin probar en local: la IA no lo vio correr en el original, por ejemplo por unas tablas que el test no creaba) se decidio con el test
@@ -1465,10 +1948,8 @@ function Get-MotivoBase([string]$Texto, [string]$Job) {
   if (-not $tabla) { return [pscustomobject]@{ Motivo = "La columna $nombre no existe en la base de prueba."; Definitivo = $false } }
   $frase = "La tabla $tabla no tiene la columna $nombre."
   $csv = Join-Ruta $Local "salidas/vacio/$Job/tablas/$tabla.csv"
-  if (Test-Path -LiteralPath $csv) {
-    $cabecera = @([System.IO.File]::ReadAllLines($csv))
-    if ($cabecera.Count -gt 0) { $frase += ' Sus columnas en la base de prueba son: ' + ((@($cabecera[0] -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) -join ', ') + '.' }
-  }
+  $columnas = @(Get-Columnas $csv)
+  if ($columnas.Count -gt 0) { $frase += ' Sus columnas en la base de prueba son: ' + ($columnas -join ', ') + '.' }
   return [pscustomobject]@{ Motivo = $frase; Definitivo = $false }
 }
 
@@ -1541,13 +2022,26 @@ function Invoke-Casos($Tareas) {
 
 # ================================ EJECUCION ================================
 # Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>. Con $Limpiar
-# en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo).
+# en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo). De un job del migrado cuyo test se
+# acepto con el aviso de que no arranca ($script:NoArranca) se ejecuta solo el primer caso: si acaba EXCEPCION con la misma clase que su caso vacio, los demas
+# no se ejecutan y salen sin probar ($script:SinProbar, con $MotivoNoArranca); si arranca, sigue como siempre.
 function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas, [bool]$Limpiar = $true) {
   $dest = Join-Ruta $Local "salidas/$Nombre"
   if ($Limpiar) { Remove-Carpeta $dest }
   foreach ($j in @($Listas | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
     Info "Ejecutando los casos de $j ($Nombre)..."
-    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) { Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $t.entradas.caso }
+    $primero = $true
+    $noArranca = $false
+    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
+      $c = $t.entradas.caso
+      if ($noArranca) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoNoArranca; continue }
+      Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $c
+      if ($primero -and $Nombre -ceq 'migrado' -and $script:NoArranca.ContainsKey($j)) {
+        $noArranca = ((Get-Excepcion (Join-Ruta $Local "salidas/$Nombre/$j/$c")) -ceq $script:NoArranca[$j].clase)
+        if ($noArranca) { Info "El migrado no arranca el job $j con este test ($($script:NoArranca[$j].clase)): no ejecuto sus demas casos." }
+      }
+      $primero = $false
+    }
   }
 }
 
@@ -1733,30 +2227,226 @@ function Get-Hoy([datetime]$Desde, [datetime]$Hasta) {
   return @($dias | Select-Object -Unique)
 }
 
-# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra: la ruta de cada copia (<copia>), las fechas con hora de la
-# ejecucion ($Hoy: la fecha y la hora juntas pasan a <hora>), las horas sueltas (HH:mm:ss y sus fracciones, sin fecha delante: tambien
-# pasan a <hora>) y la fecha de hoy en sus formatos de siempre (cada formato con su marca: un cambio de formato se sigue viendo), con la
-# hora pegada detras (aaaammdd_hhmmss). Una fecha con hora que no es de $Hoy es un dato del negocio y se queda como esta, hora incluida:
-# si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. $Dias son los dias de la ejecucion que dejo ese texto (por defecto,
-# $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
+# Un texto sin lo que cambia de una ejecucion a otra ni de una copia a otra, en el contenido de un fichero y en su ruta (la clave con la que se emparejan los
+# ficheros de los dos lados es la ruta normalizada, Compare-Caso): la ruta de cada copia (<copia>); una marca de tiempo Unix de un dia de la ejecucion (10 cifras en segundos o
+# 13 en milisegundos, en UTC o en hora local: <hora>; un numero de 10 o 13 cifras de otro dia, no); la fecha de hoy en cada formato (<hoy:formato>: cada formato con su marca,
+# un cambio de formato se sigue viendo) y, si lleva detras una hora HH?mm?ss (el separador de las horas, de los minutos y de los segundos, el mismo: - _ . : o ninguno; entre la
+# fecha y la hora, - _ . : T, una coma o un espacio, o nada; con fraccion .123 ,123 -123 o 123 pegada), <hoy:formato><hora> (HH:mm sin segundos tambien, solo con dos puntos);
+# las horas sueltas (HH:mm:ss y sus fracciones, sin una fecha de otro dia delante) pasan a <hora>. Una fecha con hora que no es de $Dias es un dato del negocio y se queda
+# como esta, hora incluida: si el migrado la cambia (otra zona horaria, un dia de mas), sale distinta. Los formatos de fecha no son los de texto (Nov 22, 2026) ni los de dos
+# cifras de anio. $Dias son los dias de la ejecucion que dejo ese texto (por defecto, $Hoy): el original de otro dia se normaliza con los suyos (Get-DiasOriginal).
 function Get-Normal([string]$Texto, $Dias = $null) {
   if ($null -eq $Dias) { $Dias = $Hoy }
   $t = $Texto
   foreach ($r in $RutasCopia) { $t = $t.Replace($r, '<copia>') }
-  foreach ($d in $Dias) { $t = $t -replace ([regex]::Escape($d.ToString('yyyy-MM-dd', $Inv)) + '[ T]\d{2}:\d{2}:\d{2}(\.\d+)?'), '<hora>' }
-  $t = $t -replace '(?<!\d{4}-\d{2}-\d{2}[ T])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>'
-  foreach ($d in $Dias) {
-    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd')) { $t = $t.Replace($d.ToString($f, $Inv), "<hoy:$f>") }
+  $ticks = @($Dias | ForEach-Object { $_.Date.Ticks })
+  $epoca = New-Object System.DateTime 1970, 1, 1, 0, 0, 0, ([System.DateTimeKind]::Utc)
+  $marcas = [regex]::Matches($t, '(?<![\d.])\d{10}(?:\d{3})?(?!\d)')
+  for ($i = $marcas.Count - 1; $i -ge 0; $i--) {
+    $segundos = [double]$marcas[$i].Value
+    if ($marcas[$i].Length -eq 13) { $segundos = [Math]::Floor($segundos / 1000) }
+    $utc = $epoca.AddSeconds($segundos)
+    if ($ticks -contains $utc.Date.Ticks -or $ticks -contains $utc.ToLocalTime().Date.Ticks) { $t = $t.Remove($marcas[$i].Index, $marcas[$i].Length).Insert($marcas[$i].Index, '<hora>') }
   }
-  return ($t -replace '(<hoy:[^>]+>)[_\-T\. ]?\d{6}(\d{3})?(?!\d)', '$1<hora>')
+  $h = '(?:[01]\d|2[0-3])'
+  $m = '[0-5]\d'
+  $hora = '(?:' + $h + '(?<s>[-_.:])' + $m + '\k<s>' + $m + '(?:[.,]\d+|[-_]\d{3}(?!\d))?|' + $h + $m + $m + '(?:\d{3})?(?!\d)|' + $h + ':' + $m + '(?![\d:]))'
+  foreach ($d in $Dias) {
+    foreach ($f in @('yyyy-MM-dd', 'dd/MM/yyyy', 'yyyyMMdd', 'ddMMyyyy', 'yyyy_MM_dd', 'yyyy/MM/dd', 'dd-MM-yyyy', 'dd.MM.yyyy', 'yyyy.MM.dd', 'dd_MM_yyyy', 'MM/dd/yyyy', 'MM-dd-yyyy')) {
+      $fecha = $d.ToString($f, $Inv)
+      if (-not $t.Contains($fecha)) { continue }
+      $t = [regex]::Replace($t, [regex]::Escape($fecha) + '(?:[Tt_\-.:]|,?[ ]+)?' + $hora, "<hoy:$f><hora>")
+      $t = $t.Replace($fecha, "<hoy:$f>")
+    }
+  }
+  return ($t -replace '(?<!\d{4}[-/._]\d{2}[-/._]\d{2}[ Tt]|\d{2}[-/._]\d{2}[-/._]\d{4}[ Tt])\b\d{2}:\d{2}:\d{2}(\.\d+)?\b', '<hora>')
 }
 
-# Las lineas de un fichero, normalizadas (los saltos \r\n cuentan como \n y el ultimo salto no cuenta como linea). Se
-# leen byte a byte (Latin-1): dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este.
-function Get-LineasNormales([string]$Ruta, $Dias = $null) {
-  $l = @((Get-Normal ($Latin.GetString([System.IO.File]::ReadAllBytes($Ruta))) $Dias) -split '\r?\n')
+# El tipo de un contenido ($Bytes, de un fichero o de una entrada con el nombre $Nombre): xlsx (un zip con extension .xlsx o .xlsm), zip (los demas: .zip, .docx, .jar...), gz,
+# pdf, binario (un byte 0 en los primeros 8 KB, o una extension de las que son siempre binarias) o texto. El tipo se decide por los bytes y la extension, no por si se
+# lee bien: un libro roto sigue siendo xlsx y Get-LineasContenido decide que hace con el.
+function Get-TipoContenido([string]$Nombre, [byte[]]$Bytes) {
+  $n = $Bytes.Length
+  if ($n -ge 4 -and $Bytes[0] -eq 0x50 -and $Bytes[1] -eq 0x4B -and (($Bytes[2] -eq 3 -and $Bytes[3] -eq 4) -or ($Bytes[2] -eq 5 -and $Bytes[3] -eq 6))) {
+    if (@('.xlsx', '.xlsm') -contains [System.IO.Path]::GetExtension($Nombre).ToLowerInvariant()) { return 'xlsx' }
+    return 'zip'
+  }
+  if ($n -ge 2 -and $Bytes[0] -eq 0x1F -and $Bytes[1] -eq 0x8B) { return 'gz' }
+  if ($n -ge 5 -and $Latin.GetString($Bytes, 0, 5) -ceq '%PDF-') { return 'pdf' }
+  $binarias = @('.pdf', '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff', '.webp', '.class', '.xls', '.doc', '.ppt', '.7z', '.rar', '.tar', '.bz2', '.xz', '.so', '.dll', '.exe', '.ser', '.mp3', '.mp4', '.wav', '.avi', '.mov', '.woff', '.woff2', '.ttf', '.otf', '.p12', '.pfx', '.jks')
+  if ($binarias -contains [System.IO.Path]::GetExtension($Nombre).ToLowerInvariant()) { return 'binario' }
+  if ([System.Array]::IndexOf($Bytes, [byte]0, 0, [Math]::Min($n, 8192)) -ge 0) { return 'binario' }
+  return 'texto'
+}
+
+# La linea de un binario: binario: <n> bytes, sha256 <hash>. Dos binarios son iguales si sus bytes lo son. Un PDF generado lleva dentro su fecha de creacion y de
+# modificacion y un identificador distinto en cada ejecucion: sin comprimir (los de un PDF antiguo o simple; en un PDF con objetos comprimidos no se ven), /CreationDate,
+# /ModDate, /ID y las fechas y ids del XMP se sustituyen por un valor fijo del mismo largo antes de contar y de sacar el hash (con $Crudo, no).
+function Get-LineaBinaria([byte[]]$Bytes, [bool]$Crudo = $false) {
+  $b = $Bytes
+  if (-not $Crudo -and $b.Length -ge 5 -and $Latin.GetString($b, 0, 5) -ceq '%PDF-') {
+    $t = $Latin.GetString($b)
+    $t = [regex]::Replace($t, '/(CreationDate|ModDate)\s*\(D:[^)]*\)', [System.Text.RegularExpressions.MatchEvaluator]{ param($m) '/' + $m.Groups[1].Value + ' (D:' + ('0' * 14) + ')' })
+    $t = [regex]::Replace($t, '/ID\s*\[\s*<[0-9A-Fa-f]*>\s*<[0-9A-Fa-f]*>\s*\]', '/ID [<00><00>]')
+    $t = [regex]::Replace($t, '(<(?:xmp|pdf|xmpMM):(?:CreateDate|ModifyDate|MetadataDate)>)[^<]*', '$1')
+    $t = [regex]::Replace($t, '(?i)uuid:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', 'uuid:00000000-0000-0000-0000-000000000000')
+    $b = $Latin.GetBytes($t)
+  }
+  return ('binario: ' + $b.Length + ' bytes, sha256 ' + (Get-Hash256 $b))
+}
+
+# Un .xlsx o .xlsm leido sin Excel (ECMA-376: xl/workbook.xml con las hojas, xl/_rels/workbook.xml.rels con el fichero de cada una, xl/sharedStrings.xml con los textos y
+# xl/worksheets/*.xml con las celdas <c r= t=> con <v>, <is> o <f>): una linea por celda con valor, '<hoja>!<celda>: <valor>', las hojas en su orden y las celdas en el del fichero.
+# Una formula sale como =<formula> y su ultimo valor (-> valor). Un numero que es una fecha de Excel de uno de los $Dias (sin tener en cuenta la hora) sale <hoy:excel><hora>
+# si lleva fraccion de dia y <hoy:excel> si no, y el resto de valores pasan por Get-Normal; las fechas y estilos de docProps/ y xl/styles.xml no cuentan. Un salto de linea dentro
+# de un valor sale como \n. Con $Crudo, sin normalizar nada (ni las fechas de Excel ni Get-Normal). Lanza una excepcion si no es un libro que se pueda leer.
+function Get-LineasExcel([byte[]]$Bytes, $Dias = $null, [bool]$Crudo = $false) {
+  if ($null -eq $Dias) { $Dias = $Hoy }
+  Add-Type -AssemblyName System.IO.Compression
+  $nsR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+  $inv = [System.Globalization.CultureInfo]::InvariantCulture
+  $ticks = @($Dias | ForEach-Object { $_.Date.Ticks })
+  $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
+  try {
+    $abre = {
+      param([string]$Parte)
+      $e = $zip.GetEntry($Parte)
+      if ($null -eq $e) { return $null }
+      $cfg = New-Object System.Xml.XmlReaderSettings
+      $cfg.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+      $cfg.XmlResolver = $null
+      $cfg.CloseInput = $true
+      $lector = [System.Xml.XmlReader]::Create($e.Open(), $cfg)
+      try { $d = New-Object System.Xml.XmlDocument; $d.XmlResolver = $null; $d.Load($lector); return $d } finally { $lector.Dispose() }
+    }
+    $texto = {
+      param($Nodo)
+      $s = ''
+      foreach ($h in $Nodo.ChildNodes) {
+        if ($h.LocalName -ceq 't') { $s += $h.InnerText }
+        elseif ($h.LocalName -ceq 'r') { foreach ($t in $h.ChildNodes) { if ($t.LocalName -ceq 't') { $s += $t.InnerText } } }
+      }
+      return $s
+    }
+    $libro = & $abre 'xl/workbook.xml'
+    if ($null -eq $libro) { throw 'no hay xl/workbook.xml' }
+    $base = [datetime]'1899-12-30'
+    foreach ($p in $libro.GetElementsByTagName('workbookPr', '*')) { if (@('1', 'true') -contains $p.GetAttribute('date1904')) { $base = [datetime]'1904-01-01' } }
+    $destinos = @{}
+    $rels = & $abre 'xl/_rels/workbook.xml.rels'
+    if ($rels) { foreach ($n in $rels.GetElementsByTagName('Relationship', '*')) { $destinos[$n.GetAttribute('Id')] = $n.GetAttribute('Target') } }
+    $comp = New-Object 'System.Collections.Generic.List[string]'
+    $ss = & $abre 'xl/sharedStrings.xml'
+    if ($ss) { foreach ($si in $ss.GetElementsByTagName('si', '*')) { $comp.Add((& $texto $si)) } }
+    $lineas = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($h in $libro.GetElementsByTagName('sheet', '*')) {
+      $dest = [string]$destinos[$h.GetAttribute('id', $nsR)]
+      if (-not $dest) { continue }
+      $parte = 'xl/' + $dest
+      if ($dest.StartsWith('/')) { $parte = $dest.TrimStart('/') }
+      $hoja = & $abre $parte
+      if ($null -eq $hoja) { continue }
+      $nombre = $h.GetAttribute('name')
+      foreach ($c in $hoja.GetElementsByTagName('c', '*')) {
+        $tipo = $c.GetAttribute('t')
+        $v = $null; $f = ''; $dentro = $null
+        foreach ($x in $c.ChildNodes) {
+          if ($x.LocalName -ceq 'v') { $v = $x.InnerText } elseif ($x.LocalName -ceq 'f') { $f = $x.InnerText } elseif ($x.LocalName -ceq 'is') { $dentro = & $texto $x }
+        }
+        $valor = $v
+        $i = 0
+        if ($tipo -ceq 's' -and $null -ne $v -and [int]::TryParse($v, [ref]$i) -and $i -ge 0 -and $i -lt $comp.Count) { $valor = $comp[$i] }
+        elseif ($tipo -ceq 'inlineStr') { $valor = $dentro }
+        elseif ($tipo -ceq 'b') { if ($v -ceq '1') { $valor = 'TRUE' } elseif ($v -ceq '0') { $valor = 'FALSE' } }
+        elseif ((-not $tipo -or $tipo -ceq 'n') -and -not $Crudo) {
+          $num = 0.0
+          if ($null -ne $v -and [double]::TryParse($v, [System.Globalization.NumberStyles]::Float, $inv, [ref]$num) -and $num -ge 1 -and $num -lt 2958466) {
+            $dia = [Math]::Floor($num)
+            if ($ticks -contains $base.AddDays($dia).Ticks) { if ($num -gt $dia) { $valor = '<hoy:excel><hora>' } else { $valor = '<hoy:excel>' } }
+          }
+        }
+        if ($f) { $valor = '=' + $f + $(if ($valor) { ' -> ' + $valor } else { '' }) }
+        if (-not $valor) { continue }
+        $lineas.Add($nombre + '!' + $c.GetAttribute('r') + ': ' + ($valor -replace "\r\n|\r|\n", '\n'))
+      }
+    }
+  } finally { $zip.Dispose() }
+  if ($lineas.Count -eq 0) { return @() }
+  # Una sola pasada de Get-Normal para todas las lineas (sin saltos dentro de una linea, nada cruza de una a otra), en la forma de los ficheros: bytes UTF-8 vistos como Latin-1.
+  $todo = $Latin.GetString($Utf8.GetBytes(($lineas -join "`n")))
+  if (-not $Crudo) { $todo = Get-Normal $todo $Dias }
+  return @($todo -split "`n")
+}
+
+# Las lineas de un zip o de un docx, jar...: una por linea de cada entrada (las carpetas no cuentan) con el nombre de la entrada, normalizado, delante, y las entradas en el orden de
+# ese nombre (un zip con las mismas entradas en otro orden es el mismo contenido). Cada entrada se lee segun su tipo (Get-LineasContenido): texto, un libro, otro zip (hasta
+# 3 niveles) o un binario. Una entrada vacia sale como '<nombre>: (vacio)' para que sobre o falte. Con $Crudo, sin normalizar nada. Lanza una excepcion si no se puede abrir.
+function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0, [bool]$Crudo = $false) {
+  Add-Type -AssemblyName System.IO.Compression
+  $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
+  $claves = New-Object 'System.Collections.Generic.List[string]'
+  $trozos = New-Object 'System.Collections.Generic.List[object]'
+  try {
+    foreach ($e in $zip.Entries) {
+      if ($e.FullName.EndsWith('/')) { continue }
+      $ms = New-Object System.IO.MemoryStream
+      $s = $e.Open()
+      try { $s.CopyTo($ms) } finally { $s.Dispose() }
+      $nombre = $Latin.GetString($Utf8.GetBytes($e.FullName))
+      if (-not $Crudo) { $nombre = Get-Normal $nombre $Dias }
+      $l = @(Get-LineasContenido $e.FullName $ms.ToArray() $Dias ($Nivel + 1) $Crudo)
+      if ($l.Count -eq 0) { $l = @('(vacio)') }
+      $claves.Add($nombre + [char]0 + $trozos.Count.ToString('D6'))
+      $trozos.Add(@($l | ForEach-Object { $nombre + ': ' + $_ }))
+    }
+  } finally { $zip.Dispose() }
+  $k = $claves.ToArray()
+  $orden = New-Object 'int[]' $k.Length
+  for ($i = 0; $i -lt $k.Length; $i++) { $orden[$i] = $i }
+  [System.Array]::Sort($k, $orden, [System.StringComparer]::Ordinal)
+  $todo = @()
+  foreach ($i in $orden) { $todo += @($trozos[$i]) }
+  return $todo
+}
+
+# Las lineas de un contenido ya leido ($Bytes de un fichero o de una entrada con el nombre $Nombre), segun su tipo (Get-TipoContenido): un libro de Excel, una linea por celda
+# (Get-LineasExcel); un zip o un gz, las de lo que lleva dentro, cada entrada con su nombre (Get-LineasZip; un gz lleva el nombre del fichero sin .gz); un binario (y un
+# libro o un zip que no se pueden abrir), la linea binario: <n> bytes, sha256 <hash> (Get-LineaBinaria); un texto, sus lineas normalizadas (Get-Normal; los saltos \r\n cuentan
+# como \n y el ultimo salto no cuenta como linea; se leen byte a byte, Latin-1: dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este). Con $Crudo, sin
+# normalizar nada: las mismas lineas tal cual salen (Get-MotivoCambiante, de regresion.ps1, compara las dos para saber si el contenido lleva algo de esta ejecucion).
+function Get-LineasContenido([string]$Nombre, [byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0, [bool]$Crudo = $false) {
+  $tipo = Get-TipoContenido $Nombre $Bytes
+  if ($Nivel -ge 3 -and (@('xlsx', 'zip', 'gz') -contains $tipo)) { return @(Get-LineaBinaria $Bytes $Crudo) }
+  if ($tipo -ceq 'xlsx') {
+    try { return @(Get-LineasExcel $Bytes $Dias $Crudo) } catch { $tipo = 'zip' }
+  }
+  if ($tipo -ceq 'zip') {
+    try { return @(Get-LineasZip $Bytes $Dias $Nivel $Crudo) } catch { return @(Get-LineaBinaria $Bytes $Crudo) }
+  }
+  if ($tipo -ceq 'gz') {
+    try {
+      $ms = New-Object System.IO.MemoryStream
+      $g = New-Object System.IO.Compression.GZipStream((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.CompressionMode]::Decompress)
+      try { $g.CopyTo($ms) } finally { $g.Dispose() }
+      $dentro = [System.IO.Path]::GetFileName($Nombre) -replace '(?i)\.gz$', ''
+      $l = @(Get-LineasContenido $dentro $ms.ToArray() $Dias ($Nivel + 1) $Crudo)
+      if ($l.Count -eq 0) { $l = @('(vacio)') }
+      $nom = $Latin.GetString($Utf8.GetBytes($dentro))
+      if (-not $Crudo) { $nom = Get-Normal $nom $Dias }
+      return @($l | ForEach-Object { $nom + ': ' + $_ })
+    } catch { return @(Get-LineaBinaria $Bytes $Crudo) }
+  }
+  if ($tipo -ceq 'pdf' -or $tipo -ceq 'binario') { return @(Get-LineaBinaria $Bytes $Crudo) }
+  $t = $Latin.GetString($Bytes)
+  if (-not $Crudo) { $t = Get-Normal $t $Dias }
+  $l = @($t -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   return $l
+}
+
+# Las lineas de un fichero, normalizadas (Get-LineasContenido).
+function Get-LineasNormales([string]$Ruta, $Dias = $null) {
+  return @(Get-LineasContenido $Ruta ([System.IO.File]::ReadAllBytes($Ruta)) $Dias)
 }
 
 # Las lineas $L de una tabla (un .csv de tablas\: campos separados por ';', la primera linea con los nombres de las columnas) con las
@@ -1834,10 +2524,11 @@ function Get-Legible([string]$Linea) {
 }
 
 # Si dos ficheros distintos solo cambian en la codificacion (JEP 400: UTF-8 por defecto desde Java 18) o en el formato
-# de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''.
+# de numeros o fechas (JEP 252: datos de CLDR desde Java 9), la nota que lo dice; si no, ''. Un binario, un libro o un zip no son texto: no tienen codificacion ni formato de numeros que mirar.
 function Get-NotaJdk([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
   $ba = [System.IO.File]::ReadAllBytes($A)
   $bb = [System.IO.File]::ReadAllBytes($B)
+  if ((Get-TipoContenido $A $ba) -cne 'texto' -or (Get-TipoContenido $B $bb) -cne 'texto') { return '' }
   $limpio = { param([string]$s, $d) ((Get-Normal $s.TrimStart([char]0xFEFF) $d) -replace '\r\n', "`n").TrimEnd("`n") }
   $ua = & $limpio ($Utf8.GetString($ba)) $DiasA
   $ub = & $limpio ($Utf8.GetString($bb)) $DiasB
@@ -1875,14 +2566,21 @@ function Compare-Fichero([string]$A, [string]$B, [bool]$Tabla = $false, $DiasA =
   $lado = { param($L, [string]$Ruta) if (-not $Ruta) { '(no esta)' } elseif ($primera -lt $L.Count) { Get-Legible ([string]$L[$primera]) } else { '(no hay)' } }
   $nota = ''
   if ($A -and $B) { $nota = Get-NotaJdk $A $B $DiasA $DiasB }
-  $nota = (@($notaTabla, $nota) | Where-Object { $_ }) -join '; '
-  return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = (& $lado $x $A); Migrado = (& $lado $y $B); Nota = $nota }
+  $original = & $lado $x $A
+  $migrado = & $lado $y $B
+  # Lo que se compara entero (un binario) y un PDF, que lleva dentro su fecha de creacion, lo dicen.
+  $notaBin = ''
+  if ($original -clike 'binario: *' -or $migrado -clike 'binario: *') { $notaBin = 'binario: se compara entero (sha256), no por dentro' }
+  if (($A -match '(?i)\.pdf$' -or $B -match '(?i)\.pdf$') -and $notaBin) { $notaBin += '; un PDF lleva su fecha de creacion dentro: si solo cambia eso, es la fecha de creacion (se ignoran /CreationDate, /ModDate y /ID cuando estan sin comprimir)' }
+  $nota = (@($notaTabla, $nota, $notaBin) | Where-Object { $_ }) -join '; '
+  return [pscustomobject]@{ Lineas = [Math]::Max($n, 1); Linea = ($primera + 1); Original = $original; Migrado = $migrado; Nota = $nota }
 }
 
 # Las diferencias entre lo que dejo un caso en dos carpetas: una por fichero que no coincide (con su ruta relativa).
 # Los ficheros se emparejan por la ruta normalizada (un nombre con la fecha de hoy vale en los dos lados), distinguiendo
 # mayusculas. No se comparan tablas\BATCH_*.csv ni tablas\TASK_*.csv (en ninguno de los dos lados): son tablas del framework (Spring Batch,
-# Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Los demas
+# Spring Cloud Task), no del batch, y cada lado las deja a su manera (el migrado trae las de Spring Cloud Task, el original no). Tampoco los ficheros
+# de $Cfg.CompararIgnorar (Test-Ignorado: por defecto los .log, el log por job del framework nuevo). Los demas
 # .csv de tablas\ se comparan sin orden de columnas ni de filas (Resolve-ParTablas), y uno que esta en un solo lado y no tiene ninguna fila
 # de datos no es una diferencia. $DiasA y $DiasB son los dias de la ejecucion de cada lado (por defecto, $Hoy): un original de otro dia no
 # lleva las fechas de hoy. Cada diferencia lleva su clave (Get-Normal de la ruta, con los dias de su lado): la de las diferencias de un mismo
@@ -1893,15 +2591,29 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
     if (-not (Test-Path -LiteralPath $lado[1])) { continue }
     foreach ($f in @(Get-ChildItem -LiteralPath $lado[1] -Recurse -File)) {
       $rel = Get-Rel $lado[1] $f.FullName
-      if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$') { continue }
+      if ($rel -cmatch '^tablas/(BATCH|TASK)_[^/]*\.csv$' -or (Test-Ignorado $rel)) { continue }
       $k = Get-Normal $rel $lado[2]
-      if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = ''; B = ''; Rel = $rel } }
-      $pares[$k][$lado[0]] = $f.FullName
+      if (-not $pares.ContainsKey($k)) { $pares[$k] = @{ A = (New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)); B = (New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)) } }
+      $pares[$k][$lado[0]][$rel] = $f.FullName
+    }
+  }
+  # Dos ficheros de un lado con la misma clave y otra ruta (la carpeta con la hora de dos ejecuciones del job) se emparejan, por orden de ruta, con los del otro lado.
+  $emparejados = @()
+  foreach ($k in @($pares.Keys | Sort-Object)) {
+    $ra = [string[]]@($pares[$k].A.Keys)
+    $rb = [string[]]@($pares[$k].B.Keys)
+    [System.Array]::Sort($ra, [System.StringComparer]::Ordinal)
+    [System.Array]::Sort($rb, [System.StringComparer]::Ordinal)
+    for ($i = 0; $i -lt [Math]::Max($ra.Count, $rb.Count); $i++) {
+      $p = @{ Clave = $k; A = ''; B = ''; Rel = '' }
+      if ($i -lt $ra.Count) { $p.A = $pares[$k].A[$ra[$i]]; $p.Rel = $ra[$i] }
+      if ($i -lt $rb.Count) { $p.B = $pares[$k].B[$rb[$i]]; if (-not $p.Rel) { $p.Rel = $rb[$i] } }
+      $emparejados += , $p
     }
   }
   $dif = @()
-  foreach ($k in @($pares.Keys | Sort-Object)) {
-    $p = $pares[$k]
+  foreach ($p in $emparejados) {
+    $k = $p.Clave
     $tabla = ($p.Rel -cmatch '^tablas/.+\.csv$')
     # Una tabla en un solo lado sin ninguna fila de datos (vacia, solo la cabecera o lineas en blanco) es como una tabla que no esta.
     if ($tabla -and -not ($p.A -and $p.B) -and @(Get-LineasNormales ($p.A + $p.B) | Where-Object { $_.Trim() }).Count -le 1) { continue }
@@ -1909,6 +2621,79 @@ function Compare-Caso([string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
     if ($c) { $dif += [ordered]@{ fichero = $p.Rel; clave = $k; lineas = $c.Lineas; linea = $c.Linea; original = $c.Original; migrado = $c.Migrado; nota = $c.Nota } }
   }
   return $dif
+}
+
+# El tipo de una diferencia de Compare-Caso (o de las que cambian Get-Resultado y Join-OtraCarpeta): noGuardado, otraCarpeta, falta (no esta en el migrado), sobra
+# (solo esta en el migrado) o contenido.
+function Get-TipoDif($D) {
+  if ($D.noGuardado) { return 'noGuardado' }
+  if ($D.otraCarpeta) { return 'otraCarpeta' }
+  if ($D.migrado -ceq '(no esta)') { return 'falta' }
+  if ($D.original -ceq '(no esta)') { return 'sobra' }
+  return 'contenido'
+}
+
+# Una lista de carpetas en una frase: 'A', 'A y B' o 'A, B y C'.
+function Format-Carpetas($Carpetas) {
+  $l = @($Carpetas)
+  if ($l.Count -le 1) { return ($l -join '') }
+  return ((@($l | Select-Object -First ($l.Count - 1)) -join ', ') + ' y ' + $l[$l.Count - 1])
+}
+
+# Las diferencias $Dif de un caso (Compare-Caso) con un fichero que cada lado deja en otra carpeta como una sola. Si el original deja un fichero en una carpeta y el
+# migrado, con el mismo nombre (normalizado, como su clave), en otra, Compare-Caso da una diferencia suelta por cada copia (falta en el migrado, sobra en el original) y
+# la causa es una: la carpeta. Las faltas y las sobras de ese nombre pasan a una sola, de tipo otraCarpeta (New-DifOtraCarpeta), en el sitio de la primera. Un nombre que solo
+# esta en un lado, un fichero de tablas\ y un fichero con el mismo nombre en la misma carpeta (se compara como siempre) quedan como estaban. $A es la salida del caso en el
+# original y $B en el migrado, con sus dias ($DiasA y $DiasB, como en Compare-Caso).
+function Join-OtraCarpeta($Dif, [string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
+  # El nombre normalizado de una falta o una sobra que puede estar en otra carpeta (no las de tablas\); '' si no
+  $nombreDe = {
+    param($d)
+    if (@('falta', 'sobra') -cnotcontains (Get-TipoDif $d) -or $d.fichero -cmatch '^tablas/') { return '' }
+    return $d.clave.Substring($d.clave.LastIndexOf('/') + 1)
+  }
+  $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
+  foreach ($d in @($Dif)) {
+    $n = & $nombreDe $d
+    if (-not $n) { continue }
+    if (-not $por.ContainsKey($n)) { $por[$n] = @{ falta = @(); sobra = @() } }
+    $por[$n][(Get-TipoDif $d)] += $d
+  }
+  $res = @()
+  $hechos = @{}
+  foreach ($d in @($Dif)) {
+    $n = & $nombreDe $d
+    if (-not $n -or @($por[$n].falta).Count -eq 0 -or @($por[$n].sobra).Count -eq 0) { $res += $d; continue }
+    if ($hechos.ContainsKey($n)) { continue }
+    $hechos[$n] = $true
+    $res += New-DifOtraCarpeta $por[$n].falta $por[$n].sobra $A $B $DiasA $DiasB
+  }
+  return $res
+}
+
+# La diferencia de un fichero que el original deja en las carpetas de $Faltas (sus diferencias de falta en el migrado) y el migrado en las de $Sobras (de sobra): fichero (el
+# nombre), carpetasOriginal y carpetasMigrado (las de la clave de cada una, en orden ordinal; (raiz) si es la de la salida del caso), original y migrado ('en <carpetas>'), y por
+# clave la pareja de carpetas, que comparten los casos con la misma pareja aunque su nombre lleve otra fecha. Su nota dice si el contenido es igual al de alguna copia del
+# original (la primera) o, si no, la primera linea distinta del primer par (Compare-Fichero); lineas y linea, las de esa comparacion o 1.
+function New-DifOtraCarpeta($Faltas, $Sobras, [string]$A, [string]$B, $DiasA = $null, $DiasB = $null) {
+  $carpeta = { param($d) $i = $d.clave.LastIndexOf('/'); if ($i -lt 0) { '(raiz)' } else { $d.clave.Substring(0, $i) } }
+  $deOrig = @(Sort-Ordinal @(@($Faltas) | ForEach-Object { & $carpeta $_ } | Select-Object -Unique))
+  $deMig = @(Sort-Ordinal @(@($Sobras) | ForEach-Object { & $carpeta $_ } | Select-Object -Unique))
+  $cmp = @(foreach ($f in @($Faltas)) { foreach ($s in @($Sobras)) { [pscustomobject]@{ De = $f.fichero; C = (Compare-Fichero (Join-Ruta $A $f.fichero) (Join-Ruta $B $s.fichero) $false $DiasA $DiasB) } } })
+  $lineas = 1; $linea = 1
+  $igual = @($cmp | Where-Object { $null -eq $_.C })[0]
+  if ($igual) { $nota = "el contenido es igual al de $($igual.De), del original" }
+  else {
+    $c = $cmp[0].C
+    $lineas = $c.Lineas; $linea = $c.Linea
+    $nota = "el contenido es distinto: la primera linea distinta, la $($c.Linea): original [$($c.Original)]; migrado [$($c.Migrado)]"
+    if ($c.Nota) { $nota += " ($($c.Nota))" }
+  }
+  $nombre = $Faltas[0].fichero.Substring($Faltas[0].fichero.LastIndexOf('/') + 1)
+  return [ordered]@{
+    fichero = $nombre; clave = ($deOrig -join ',') + ' -> ' + ($deMig -join ','); lineas = $lineas; linea = $linea; original = 'en ' + (Format-Carpetas $deOrig); migrado = 'en ' + (Format-Carpetas $deMig)
+    nota = $nota; otraCarpeta = $true; carpetasOriginal = $deOrig; carpetasMigrado = $deMig
+  }
 }
 
 # Lo que no se pudo guardar de un caso en sus lados (original, original-2 y $Nombre, el migrado; Copy-Salida): uno por fichero (por su ruta
@@ -1936,7 +2721,8 @@ function Get-SinGuardar([string]$Nombre, [string]$Job, [string]$Caso) {
 # Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
 # 'fallos' dice, de original y migrado, cual acaba FAILED, EXCEPCION o sin estado.txt y por que (Get-Fallos). Un caso con un fichero que no se
-# pudo guardar sale distinto, con ese fichero entre las diferencias (noGuardado).
+# pudo guardar sale distinto, con ese fichero entre las diferencias (noGuardado). Un caso que no se ejecuto en el migrado porque su job no arranca con
+# su test (Invoke-Salidas) sale sin probar en local.
 # $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde). Lo del original
 # se normaliza con los dias de su ejecucion (Get-DiasOriginal: puede ser de otro dia) y lo del migrado, con los de hoy.
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
@@ -1958,6 +2744,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
     return $o
   }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
+  if ($script:SinProbar.ContainsKey("$Nombre|$j|$c")) { $o.resultado = 'sin probar en local'; $o.motivo = $script:SinProbar["$Nombre|$j|$c"]; return $o }
   $o.fallos = @(Get-Fallos $Nombre $j $c)
   $diasOrig = Get-DiasOriginal $j $c
   $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c") $diasOrig $diasOrig)
@@ -1971,6 +2758,8 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
     $d = @($sg | ForEach-Object { [ordered]@{ fichero = $_.fichero; clave = $_.clave; lineas = 1; linea = 1; original = $_.original; migrado = $_.migrado; nota = ''; noGuardado = $true } }) + @($d | Where-Object { $destinos -notcontains $_.clave })
     $o.motivo = ($o.motivo + " No se han podido guardar $($sg.Count) fichero(s) de salidas: el caso no se da por igual.").Trim()
   }
+  # Un fichero que el original deja en una carpeta y el migrado en otra es una sola diferencia (despues de lo que no se pudo guardar: esas faltas no son de verdad)
+  $d = @(Join-OtraCarpeta $d $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") $diasOrig)
   if ($d.Count -gt 0) {
     $o.resultado = 'distinto'; $o.diferencias = $d
     # Un migrado que no ha dejado ni estado.txt no ha corrido el caso: la consola lo dice antes de las diferencias, que son todas (no esta)
@@ -2007,7 +2796,8 @@ function Get-CausaNormal([string]$Causa, [string]$Caso) {
 # ordinal). Cada uno: numero, tipo, firma, casos ('job/caso', por job y caso), descripcion (la cabecera de la consola, sin 'Grupo <n>: ') y hechos (vacio).
 # - De fallo: el migrado acaba FAILED, EXCEPCION o sin estado.txt y el original no. Firma 'fallo|<estado>|<causa normalizada>' (Get-CausaNormal).
 # - De fichero: los demas. Firma 'fichero|' y la lista ordenada de '<clave>:<tipo>' de sus diferencias; el tipo es falta (no esta en el migrado), sobra
-#   (solo esta en el migrado), noGuardado o contenido.
+#   (solo esta en el migrado), noGuardado, otraCarpeta (un fichero que cada lado deja en otra carpeta, Join-OtraCarpeta: su clave es la pareja de carpetas
+#   y no el nombre, que lleva la fecha del caso, y su cabecera dice las carpetas de cada lado) o contenido.
 function Get-Grupos($Res) {
   $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
   foreach ($r in @($Res | Where-Object { $_.resultado -eq 'distinto' })) {
@@ -2021,9 +2811,7 @@ function Get-Grupos($Res) {
     else {
       $tipo = 'fichero'
       foreach ($d in @($r.diferencias)) {
-        $t = 'contenido'
-        if ($d.noGuardado) { $t = 'noGuardado' } elseif ($d.migrado -ceq '(no esta)') { $t = 'falta' } elseif ($d.original -ceq '(no esta)') { $t = 'sobra' }
-        $ent[$d.clave + ':' + $t] = $d.fichero
+        $ent[$d.clave + ':' + (Get-TipoDif $d)] = $d
       }
       $firma = 'fichero|' + ((Sort-Ordinal @($ent.Keys)) -join '|')
     }
@@ -2040,7 +2828,9 @@ function Get-Grupos($Res) {
     if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0] -ConRegistro) }
     else {
       $lista = @(Sort-Ordinal @($m[0].ent.Keys))
-      $desc = "$cuantos, en $($m[0].ent[$lista[0]]): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1)
+      $primera = $m[0].ent[$lista[0]]
+      if ($primera.otraCarpeta) { $desc = "$cuantos, el migrado deja sus ficheros en $(Format-Carpetas $primera.carpetasMigrado) y el original en $(Format-Carpetas $primera.carpetasOriginal)" }
+      else { $desc = "$cuantos, en $($primera.fichero): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1) }
       if ($lista.Count -eq 2) { $desc += ' y 1 fichero mas' }
       if ($lista.Count -gt 2) { $desc += " y $($lista.Count - 1) ficheros mas" }
     }
@@ -2132,7 +2922,8 @@ function Add-Hechos($Grupos, $Res, [string]$Codigo, [string]$Hash) {
 
 # La tabla por consola, los casos distintos por grupo (Get-Grupos: la cabecera, los casos, lo medido y el detalle de los dos primeros) y, despues, lo que
 # no es igual de los demas, caso a caso. Si un grupo de fallo EXCEPCION cubre todos los casos que se han comparado de un job, lo normal es que sea el
-# test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso.
+# test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso. Si el test se
+# escribio varias veces con ese error ($script:NoArranca), la linea dice que puede ser el codigo y no aconseja -RehacerArnes.
 function Show-Resultado($Res, $PorJob, $Grupos) {
   Info ''
   Info 'Prueba en local: el original frente al migrado, con las mismas entradas'
@@ -2148,6 +2939,7 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
     if ($lista.Count -gt 10) { $texto += " y $($lista.Count - 10) mas" }
     Info "    casos: $texto"
     foreach ($h in @($g.hechos)) { Info "    medido: $h" }
+    if ($g.firma -cmatch ':otraCarpeta(\||$)') { Aviso '    Suele ser el test del migrado, que da a su propiedad de carpeta otro valor: relanza con -RehacerArnes. Si no, mira la propiedad en el application.yml del migrado o un cambio del codigo.' }
     if ($g.firma -cmatch '^fallo\|EXCEPCION\|') {
       foreach ($j in @($miembros | ForEach-Object { $_.job } | Select-Object -Unique)) {
         $casos = @($Res | Where-Object { $_.job -ceq $j -and @('igual', 'distinto', 'no determinista') -contains $_.resultado })
@@ -2156,7 +2948,8 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
         $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
         $detalle = $clase
         if ($causa) { $detalle = "${clase}: $causa" }
-        Aviso "    El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes."
+        if ($script:NoArranca.ContainsKey($j)) { Aviso "    El migrado no arranca el job $j ($detalle). El test ya se escribio $($script:NoArranca[$j].veces) veces con este error: puede ser el codigo del migrado. Pregunta a Copilot, en el repo del migrado, si el job arrancaria igual fuera del test." }
+        else { Aviso "    El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes." }
       }
     }
     foreach ($r in @($miembros | Select-Object -First 2)) {
@@ -2165,6 +2958,7 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
       foreach ($f in @($r.fallos)) { Aviso "      $(Format-Fallo $f -ConRegistro)" }
       foreach ($d in @($r.diferencias | Select-Object -First 3)) {
         if ($d.noGuardado) { Info "      $($d.fichero): original: $($d.original); migrado: $($d.migrado)"; continue }
+        if ($d.otraCarpeta) { Info "      $($d.fichero): el original lo deja $($d.original); el migrado, $($d.migrado)"; if ($d.nota) { Aviso "        ($($d.nota))" }; continue }
         Info "      $($d.fichero): lineas distintas: $($d.lineas); la primera, la $($d.linea):"
         Info "        original: $($d.original)"
         Info "        migrado:  $($d.migrado)"
@@ -2918,6 +3712,8 @@ $script:Racha = 0
 $script:Mavens = 0
 $script:Maven = @{}
 $script:NoGuardados = @{}   # por (lado|job|caso): los ficheros que no se pudieron guardar en salidas (Copy-Salida)
+$script:NoArranca = @{}   # por job: su test del migrado se rechazo porque con el caso vacio el migrado no arranca y el original si, y se acepto en el ultimo intento (clase, veces escrito)
+$script:SinProbar = @{}   # por (lado|job|caso): el motivo de un caso que no se ha ejecutado porque su job no arranca con ese test (Invoke-Salidas)
 $script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sale una sola vez
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
 $script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
@@ -2927,6 +3723,9 @@ $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repeti
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 $script:Arbol = $null   # el arbol de dependencias del migrado (Get-ArbolDependencias), la primera vez que un grupo lo pide
 $script:Anterior = Get-JsonPrueba   # el prueba-local.json de antes de este lanzamiento: Save-Resultado lo pisa y Add-Hechos lo compara
+$script:VueltaAlDeAntes = ''   # el aviso de que el test nuevo del original quedaba peor y se vuelve al de antes (Test-ArnesEscrito); '' si no
+$script:MigradoPorOriginal = $false   # el test del migrado se escribe otra vez solo porque cambia el del original, no porque se pida (-RehacerArnes): si el del original vuelve al de antes, vuelve tambien el suyo
+$script:Anteriores = @{}   # por lado (original, migrado): hay un test de antes en arnes-anterior con el que comparar el que se escribe otra vez en este lanzamiento (Save-Anterior)
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -2976,13 +3775,16 @@ try {
       if (-not $rehacer.migrado -and $x[0] -eq 'migrado') { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.' }
       $rehacer[$x[0]] = $true
     }
-    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
+    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado pasa a arnes-anterior tras la pregunta
     if ($rehacer[$x[0]]) { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
     elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     # Si el del original no queda hecho (la plantilla, o ya no vale en este commit), se escribe otra vez y el del migrado guardado tambien: lo
     # traduce (Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Sin migrado guardado no hay que dejar de fiarse de nada:
     # su tarea sigue por su intento y su motivo, como hoy.
-    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) { $rehacer.migrado = $true }
+    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) {
+      $script:MigradoPorOriginal = -not $rehacer.migrado
+      $rehacer.migrado = $true
+    }
     if ($t.estado -ne 'hecha') {   # el que se va a escribir sabe, en su primer intento, lo que fallo antes (Get-PrevioArnes)
       $t.entradas | Add-Member -NotePropertyName previo -NotePropertyValue (Get-PrevioArnes $t $antes) -Force
       Save-Tarea $t
@@ -3000,16 +3802,17 @@ try {
     $tareasCasos += @(Get-TareasCasos $p $jm)
   }
   Reset-CasosExcepcion $tareasCasos
+  Reset-OriginalesYaExiste $tareasCasos
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
-  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Remove-Carpeta (Join-Ruta $Local "arnes/$repo") } }
+  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Save-Anterior $repo } }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   $escribeOriginal = ($ArnesOrig.estado -ne 'hecha')
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
   if ($ArnesOrig.estado -ne 'hecha') { Show-Atascado $ArnesOrig; exit 1 }
-  Reset-CasosSinProbar $tareasCasos $escribeOriginal
+  Reset-CasosSinProbar $tareasCasos ($escribeOriginal -and -not $script:VueltaAlDeAntes)
   if ($ArnesMig.estado -ne 'hecha') { Show-Atascado $ArnesMig; Aviso 'Sigo con el original: los casos quedan hechos para el proximo lanzamiento.' }
   foreach ($t in @($tareasCasos | Where-Object { $_.estado -eq 'hecha' })) {
     $guardado = Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)"

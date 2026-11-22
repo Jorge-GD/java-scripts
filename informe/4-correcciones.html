@@ -29,7 +29,7 @@
 {{{GRUPOS}}}
 {{{SINPROB}}}
 {{{SUELTOS}}}
-{{{VARIABLES}}}
+{{{VARIABLES}}}{{{PROPIEDADES}}}
 {{{JUNTADO}}}
 <section class="panel" id="codigo" aria-labelledby="t-codigo">
   <h2 id="t-codigo">Dónde está el código</h2>
@@ -39,6 +39,24 @@
 {{CIERRE}}   # júntalo con tu rama por fast-forward, después de las puertas (o sube la rama y abre un PR)
 git -C "{{MIGRADO}}" worktree remove "{{WORKTREE}}"   # borrar el worktree después de juntar con -Cierre (la rama se conserva)</pre>
 </section><!--FIN-->
+<!--TROZO propiedades-arreglo--><section class="panel" id="propiedades-arreglo" aria-labelledby="t-propiedades-arreglo">
+  <h2 id="t-propiedades-arreglo">Propiedades que se han añadido al yml</h2>
+  <p>{{{ETIQUETA}}}</p>
+  {{{CUERPO}}}
+  <p>Lo que sigue faltando está en el área Propiedades de la <a href="2-problemas.html#g-propiedades">página 2</a>.</p>
+</section><!--FIN-->
+<!--TROZO propiedades-hecha--><p>La corrección ha puesto en el <code>application.yml</code> del migrado estas claves del original, con el commit <code>{{COMMIT}}</code>:</p>
+  <ul class="pg-l">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO propiedades-clave-->    <li><code>{{CLAVE}}</code> <code>{{FICHERO}}</code></li><!--FIN-->
+<!--TROZO propiedades-ninguna--><p>No se ha añadido ninguna clave: las que faltaban no se aplican al migrado.</p><!--FIN-->
+<!--TROZO propiedades-atascada--><p>La corrección de propiedades se ha atascado y no se ha añadido ninguna clave: {{MOTIVO}}</p><!--FIN-->
+<!--TROZO propiedades-noaplica--><p>No aplican (la IA las dejó fuera y dijo por qué):</p>
+  <ul class="pg-l">
+{{{ITEMS}}}
+  </ul><!--FIN-->
+<!--TROZO propiedades-noaplica-item-->    <li><code>{{CLAVE}}</code> {{MOTIVO}}</li><!--FIN-->
 <!--TROZO variables-nuevas--><section class="panel" id="variables-nuevas" aria-labelledby="t-variables">
   <h2 id="t-variables">Lo que necesita ahora para arrancar</h2>
   <p>{{{ETIQUETA}}}</p>

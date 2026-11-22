@@ -6,8 +6,9 @@ comun.ps1, tareas.ps1 y practicas.ps1 (Get-JavaFiles, Get-Rel, Join-Ruta, Invoke
 Restore-Tarea, Set-CitasProbadas, Test-LineaCita, Get-JavaSinComentarios, Get-ArgumentosLlamada). Solo ASCII: los textos con tilde van como \uXXXX.
 Vale para Windows PowerShell 5.1 y para PowerShell 7. Es un tipo de tarea mas del motor de tareas.ps1: 'revision-flujo' (plantilla tareas\revision-flujo.md).
 
-  Get-ReglasRevision        el catalogo: { id, titulo, que, tokens }. Solo las reglas que nada mas mide: SB-FACTORIAS, J21-FORMATO y
-                            J21-SECURITYMANAGER no estan porque ya salen del diagnostico (rescate.ps1) o de las buenas practicas (practicas.ps1).
+  Get-ReglasRevision        el catalogo: { id, titulo, que, tokens }. Solo las reglas que nada mas mide: SB-FACTORIAS, J21-FORMATO,
+                            J21-SECURITYMANAGER y BOOT-ENABLEBATCH no estan porque ya salen del diagnostico (rescate.ps1, enable-batch) o de las
+                            buenas practicas (practicas.ps1).
   Get-UnidadesRevision      las unidades { id, tipo (step o fichero), nombre, ficheros, sinResolver }, en orden estable.
   Get-TareasRevision        las tareas revision-flujo (con huella: una tarea hecha con la misma huella no se vuelve a pedir).
   Test-Revision             la comprobacion de lo que escribe Copilot (la llama Test-Salida de tareas.ps1).
@@ -34,7 +35,8 @@ $Cfg += @{
 # ============================== CATALOGO ==============================
 # Cada regla: id, titulo, lo que busca (una sola linea: va tal cual al prompt) y los textos de los que la cita lleva al menos uno. Los textos con
 # tilde llevan \uXXXX y salen por [regex]::Unescape (sin barras inversas que no sean esas). Fuentes: referencia de Spring Batch (late binding),
-# guia de migracion de Spring Batch 5.0, guia de Spring Boot 3.0, JEP 403.
+# guia de migracion de Spring Batch 5.0, JEP 403; SB-ESTADO: Sonar S3749 (miembros de un singleton de Spring), Step Scope e
+# ItemStream de Spring Batch; ERR-TRAGADA: Configuring Skip Logic de Spring Batch. Un catch vacio no es de ERR-TRAGADA: ya lo mide rescate.ps1 (catch-vacio). @EnableBatchProcessing tampoco: lo mide rescate.ps1 (enable-batch).
 function Get-ReglasRevision {
   $r = @(
     @('SB-LISTENER', 'Listener que nadie registra',
@@ -49,15 +51,18 @@ function Get-ReglasRevision {
     @('SB-CONTEXTO', 'Objeto no serializable en el ExecutionContext',
       'Guarda en el ExecutionContext (put) un objeto que no es Serializable. Desde Spring Batch 5 el serializador por defecto es el de Java: un objeto que no es Serializable hace fallar el guardado del contexto.',
       @('put')),
-    @('BOOT-ENABLEBATCH', '@EnableBatchProcessing apaga la configuraci\u00f3n autom\u00e1tica',
-      '@EnableBatchProcessing, o una clase que extiende DefaultBatchConfiguration: en Spring Boot 3 la configuraci\u00f3n autom\u00e1tica de Batch se aparta, as\u00ed que no lanza el job al arrancar ni crea las tablas BATCH_.',
-      @('EnableBatchProcessing', 'DefaultBatchConfiguration')),
     @('J21-INTERNOS', 'Acceso a internos del JDK',
       'setAccessible(true) sobre clases del JDK, o uso de APIs internas sun.* o com.sun.*: desde Java 17 el JDK cierra sus internos (JEP 403) y lanza InaccessibleObjectException.',
       @('setAccessible', 'sun.')),
     @('CAND-MUERTA', 'Clase candidata a c\u00f3digo muerto',
       'Solo en las candidatas de la unidad (las que se te dan arriba): una clase que nadie usa, ni por su nombre en la configuraci\u00f3n (.xml, .yml, .properties) ni por reflexi\u00f3n. Antes de dar el hallazgo, busca su nombre en todo el repositorio; si lo encuentras, no es hallazgo.',
-      @('class ', 'interface ', 'enum ', 'record '))
+      @('class ', 'interface ', 'enum ', 'record ')),
+    @('SB-ESTADO', 'Estado en un bean de un paso sin @StepScope',
+      'Un lector, procesador, escritor, tasklet o listener que es un bean singleton (ni la clase ni el @Bean que lo crea llevan @StepScope o @JobScope) y guarda en un campo un valor que cambia durante la ejecuci\u00f3n: un contador, una lista o un mapa al que se a\u00f1ade, el fichero o el writer abierto, una fecha del proceso. Ese valor pasa a la siguiente ejecuci\u00f3n del job en la misma JVM y a otros hilos, y la prueba en local no lo ve porque cada caso arranca una JVM nueva. El campo puede ser final si lo que guarda se modifica (una lista final a la que se a\u00f1ade). No cuentan los campos que solo se asignan en el constructor o con @Value, ni los loggers, ni las constantes. Antes de dar el hallazgo, busca d\u00f3nde se crea el bean: si su @Bean o su clase llevan @StepScope o @JobScope, aunque sea en otro fichero, no es hallazgo. Arreglo: @StepScope en el bean, o el valor en el ExecutionContext. La cita es la declaraci\u00f3n del campo o la l\u00ednea que lo cambia.',
+      @('private ', '++', '+=', '.add(', '.put(', 'this.')),
+    @('ERR-TRAGADA', 'Error tragado en un paso',
+      'Un catch en un lector, procesador, escritor, tasklet o listener que registra el error, o lo ignora con un cuerpo que no lo trata (un return null, un continue, un contador), y sigue: no relanza, no usa el skip de Spring Batch (faultTolerant(), skip, SkipPolicy) y no marca el paso como fallido (ExitStatus.FAILED, setStatus, setExitStatus). El job acaba COMPLETED aunque se pierdan registros o no se escriba un fichero. No cuenta un catch vac\u00edo (ya lo mide el diagn\u00f3stico), ni uno que guarda el error donde el job lo mira despu\u00e9s (un fichero de KO o el ExecutionContext, si el c\u00f3digo lo comprueba). Arreglo: relanzar, o declarar el skip si el negocio lo permite. La cita es la l\u00ednea del catch.',
+      @('catch'))
   )
   return @($r | ForEach-Object { [pscustomobject]@{ id = $_[0]; titulo = [regex]::Unescape($_[1]); que = [regex]::Unescape($_[2]); tokens = @($_[3]) } })
 }

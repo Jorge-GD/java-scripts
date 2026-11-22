@@ -1017,6 +1017,9 @@ function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
   return (($fs | ForEach-Object { $_.Extent.Text }) -join "`n")
 }
 
+# Las funciones del script que leen un fichero para compararlo (Get-LineasNormales y lo que decide por su tipo, M73 (c)): las que necesita cualquier prueba que extraiga Compare-Fichero.
+$FnLeer = @('Get-LineasNormales', 'Get-LineasContenido', 'Get-TipoContenido', 'Get-LineasExcel', 'Get-LineasZip', 'Get-LineaBinaria', 'Get-Hash256')
+
 $Pruebas['55 m20b (a, b): una fecha de negocio que no es de hoy y cambia entre el original y el migrado sale distinta; la fecha y hora de hoy con otra hora sale igual'] = {
   $hoy = (Get-Date).ToString('yyyy-MM-dd')
   $e = Nuevo-Escenario 'm20b-fechas' ([ordered]@{ cargaJob = @('importe=10.00 vence=1980-05-12 00:00:00', "importe=10.00 hecho=$hoy 10:00:00") }) 'minimo=5.00' "minimo=5.00`nreescribe=1980-05-12 00:00:00=>1980-05-11 23:00:00`nreescribe=$hoy 10:00:00=>$hoy 11:30:00"
@@ -1065,8 +1068,8 @@ $Hoy = @(Get-Hoy $inicio ($inicio.AddHours(1)))
   Comprueba 'los dias de la ejecucion llevan el local y el UTC' ($v['HOY'] -and $v['HOY'].Contains($v['LOC']) -and $v['HOY'].Contains($v['UTC'])) (Cola $r.Salida)
   if ($v['OFFSET'] -and [double]$v['OFFSET'] -ne 0) { Comprueba 'con otra hora que UTC son dos dias distintos' ($v['LOC'] -ne $v['UTC'] -and @($v['HOY'] -split ',').Count -eq 2) "$($v['LOC']) $($v['UTC']) $($v['HOY'])" }
   else { Write-Host '  (esta maquina va en UTC: no se ve la diferencia entre el dia local y el UTC)' }
-  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hora>' $v['N1']
-  Igual 'con T y fraccion, tambien' 'x <hora>' $v['N2']
+  Igual 'una fecha y hora UTC de otro dia que el local, pero de la ejecucion, sale igual que una local' 'x <hoy:yyyy-MM-dd><hora>' $v['N1']
+  Igual 'con T y fraccion, tambien' 'x <hoy:yyyy-MM-dd><hora>' $v['N2']
   Igual 'una fecha de negocio con hora no se toca' 'x 1980-05-12 00:00:00' $v['N3']
   Igual 'ni otra de hace dias' 'x 2026-11-16 23:45:00' $v['N4']
   Igual 'las horas sueltas se siguen tapando' 'a <hora> b' $v['N5']
@@ -2558,7 +2561,7 @@ Caso 'fuera-de-tablas' @{ 'ficheros/salida/x.csv' = "ID;NOMBRE`n" } @{}
 Caso 'tablas-no-csv' @{ 'tablas/nota.txt' = "ID;NOMBRE`n" } @{}
 Caso 'vacia-y-otra' @{ $t = "ID;NOMBRE`n"; 'tablas/U.csv' = "ID;NOMBRE`n1;ana`n" } @{}
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -3347,7 +3350,7 @@ class Logs {
 
 $Pruebas['m40 (b) arnes nuevo cuyo caso vacio no deja la tabla del codigo: el primer intento se rechaza con la tabla y su sitio; el segundo, que la deja, se acepta'] = {
   $e = Escenario-M40 'm40-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M40 $e 'tablas=2/T_A:arnes-original'
+  $r = Prueba-M40 $e 'tablas=2/T_A:arnes-original;tablas=1/T_A:arnes-migrado'
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'dos llamadas al arnes del original' 2 (Llamadas-Arnes $e 'original').Count
   $p = Registro-Arnes $e 'original' 2
@@ -3719,7 +3722,7 @@ $o = Join-Path $Raiz 'cambiante'
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
   $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) {
@@ -4149,7 +4152,7 @@ $Pruebas['m48 (e4) caso vacio: el test que dejo una llamada pasada de tiempo y d
 
 $Pruebas['m48 (f) si el migrado acaba EXCEPCION en todos los casos de un job y el original no: sale la linea de -RehacerArnes; no sale si falla un solo caso ni si el original tambien acaba EXCEPCION'] = {
   $e = Escenario-M48 'm48-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/caso-;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'la linea de cargaJob, con la clase y la causa' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
   Igual 'solo una linea de esas' 1 @([regex]::Matches($r.Salida, 'El migrado no arranca el job')).Count
@@ -4270,7 +4273,7 @@ function Caso([string]$Id, [string]$A, [string]$B) {
 }
 
 '@ + "`n" + $Casos
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false); $Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)' + "`n" + $cuerpo))
   $r = Lanzar $f @((Join-Path $Dir $Nombre))
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) (.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -4414,7 +4417,7 @@ Prueba 'vacia' ''
   Igual 'es ruta C:\... y C:/... (unidad), /a/b, y file:' 'En <ruta> y <ruta> y <ruta> y <ruta>' $v['ruta-ejemplos']
   Igual 'la ruta de la copia (<copia>) con lo que sigue, una sola ruta' 'No existe <ruta>' $v['copia']
   Igual '@ y hexadecimal, a @<id>; un correo no' 'Bean@<id> no es Bean@<id> ni ana@acme.com' $v['hex']
-  Igual 'fechas y horas como Get-Normal: la de hoy con hora y la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
+  Igual 'fechas y horas como Get-Normal: la de hoy con hora, a <hoy:formato><hora>; la hora suelta, a <hora>; otra fecha, sus numeros' 'En <hoy:yyyy-MM-dd><hora> y a las <hora> y el <n>-<n>-<n>' $v['fechas']
   Igual 'sin nada que cambiar, igual' 'java.lang.IllegalStateException: sin correo' $v['sin-nada']
   Igual 'la causa de un TypeNotPresentException no cambia' 'java.lang.TypeNotPresentException: Type org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext not present' $v['clase']
   Igual 'recortada a 200 letras' (('x' * 200)) $v['larga']
@@ -4451,7 +4454,7 @@ $res = @(
 )
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'cinco grupos' 5 $g.Count
@@ -4474,7 +4477,7 @@ function Caso-M([string]$Caso, [string]$Causa) {
 $res = @((Caso-M 'caso-01' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'), (Caso-M 'caso-02' 'java.lang.NoClassDefFoundError: org/x/a/ClaseB'), (Caso-M 'caso-03' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'))
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'dos grupos' 2 $g.Count
@@ -4571,7 +4574,7 @@ $Pruebas['m50 (e) datos/prueba-local-grupos.jsonl: una linea por grupo y lanzami
 
 $Pruebas['m50 (f) la linea de -RehacerArnes sale dentro del bloque del grupo, una vez por job cuyo migrado no arranca en ningun caso, con el mismo texto de siempre'] = {
   $e = Escenario-M48 'm50-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/caso-;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
   Igual 'sale con 2' 2 $r.Codigo
   $linea = 'El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.'
   Comprueba 'la linea de cargaJob, igual que antes' ($r.Salida.Contains($linea)) (Cola $r.Salida)
@@ -5087,7 +5090,7 @@ $Pruebas['m56 (b) un arnes del original sin una tabla del inventario: el aviso, 
   Igual 'el aviso con -RehacerOriginal, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
   $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
   Igual 'con el arnes guardado, el mismo aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
-  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original' @('-RehacerOriginal')
+  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original;tablas=1/T_A:arnes-migrado' @('-RehacerOriginal')
   Igual 'con -RehacerOriginal y la tabla en el test nuevo, sale con 0' 0 $r.Codigo
   Comprueba 'el test guardado lleva la tabla' ((Test-Guardado $e 'original').Contains('BASE_TABLAS=T_A')) ''
   Comprueba 'y ya no avisa' ($r.Salida -notmatch 'sigue sin estas tablas') (Cola $r.Salida)
@@ -5202,7 +5205,7 @@ Caso 'sin-ventana' @{ $a = "total 3`n" } @{ $b = "total 3`n" } $null
 'N ' + (Get-Normal 'ficheros/outbox/R_2026_11_20.TXT y 2026_11_20_153045' $caballo)
 '@
   $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Compare-Caso', 'Compare-Fichero', 'Get-LineasNormales', 'Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk')) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script (@('Compare-Caso', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk'))) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $cuerpo))
   $r = Lanzar $f @($raizCmp)
   $v = @{}
   foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^R (\S+) ?(.*)$') { $v[$Matches[1]] = $Matches[2].TrimEnd() } }
@@ -5841,6 +5844,2070 @@ $Pruebas['m62 (f) una columna que solo aparece dentro de otras palabras del codi
   Comprueba 'el motivo es el de siempre' ($m.Contains('La tabla T_A no tiene la columna ZONA.') -and -not $m.Contains('El test del original no crea la columna')) $m
   Igual 'dos llamadas para el caso: hay reintento' 2 @(Llamadas-Casos $e).Count
   Comprueba 'no sale la linea de aviso de la columna' (-not $r.Salida.Contains('no crea una columna que usa el codigo')) (Cola $r.Salida)
+}
+
+# ===================== M63: un fichero de salida con la ruta de origen larga =====================
+# Estas pruebas lanzan, en un .ps1 con solo las funciones de la copia de salidas, Get-RutaLarga, Copy-Fichero y Copy-Salida. Linux admite rutas de mas de 259 letras,
+# asi que lo de Windows se simula con $SoWindows (la plataforma que lee Get-RutaLarga) o con su segundo parametro; que el prefijo \\?\ funcione en Windows
+# 5.1 (.NET Framework 4.6.2 o posterior) no se puede probar aqui.
+
+# Lanza $Cuerpo con las funciones de la copia de salidas y una linea 'K valor' por cada Salida; devuelve las lineas por su clave K.
+function Lanza-M63([string]$Nombre, [string]$Cuerpo) {
+  $f = Join-Path $Dir "m63-$Nombre.ps1"
+  $pre = @'
+$ErrorActionPreference = 'Stop'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @(); $Hoy = @()
+$LimiteRuta = 259
+$Local = 'x' * 50
+$SoWindows = $false
+$script:AvisoCarpetaCorta = $false
+$hoy = [datetime]'2026-11-21'
+function Salida([string]$K, $V) { if ($null -eq $V) { $V = '(null)' }; $K + ' ' + $V }
+'@
+  $raizPs = Split-Path -Parent $Script
+  $texto = 'param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-RutaLarga', 'Copy-ConDotNet', 'Copy-Fichero', 'Copy-Salida', 'Get-RelSalida', 'Get-LargoRuta', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" +
+    (Texto-De-Funciones (Join-Path $raizPs 'tareas.ps1') @('Get-Hash8')) + "`n" + (Texto-De-Funciones (Join-Path $raizPs 'comun.ps1') @('Join-Ruta', 'Get-Rel', 'Aviso')) + "`n" + $pre + "`n" + $Cuerpo
+  [System.IO.File]::WriteAllText($f, $texto)
+  $r = Lanzar $f @($Dir)
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`r?`n")) { if ($l -match '^([A-Z][0-9]?) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  return [pscustomobject]@{ R = $r; V = $v }
+}
+
+$Pruebas['m63 (a) la ruta de origen con prefijo: en Windows, una de mas de 259 letras lleva \\?\ (y \\?\UNC\ si es de red, con las / en \); una corta, la de 259 y las que ya lo llevan, no; fuera de Windows, ninguna'] = {
+  $x = Lanza-M63 'a' @'
+$largo = 'C:\Trabajo\' + ('a' * 289)
+Salida 'A' ((Get-RutaLarga $largo $true) -ceq ('\\?\' + $largo))
+Salida 'B' ((Get-RutaLarga ('C:\Trabajo\' + ('a' * 189)) $true) -ceq ('C:\Trabajo\' + ('a' * 189)))
+Salida 'C' ((Get-RutaLarga ('\\servidor\recurso\' + ('a' * 281)) $true) -ceq ('\\?\UNC\servidor\recurso\' + ('a' * 281)))
+Salida 'D' ((Get-RutaLarga $largo $false) -ceq $largo)
+Salida 'E' ((Get-RutaLarga ('C:\' + ('a' * 256)) $true) -ceq ('C:\' + ('a' * 256)))
+Salida 'F' ((Get-RutaLarga ('C:\' + ('a' * 257)) $true) -ceq ('\\?\C:\' + ('a' * 257)))
+Salida 'G' ((Get-RutaLarga ('C:/Trabajo/' + ('a' * 289)) $true) -ceq ('\\?\C:\Trabajo\' + ('a' * 289)))
+Salida 'H' ((Get-RutaLarga ('\\?\' + $largo) $true) -ceq ('\\?\' + $largo))
+$SoWindows = $true
+Salida 'I' ((Get-RutaLarga $largo) -ceq ('\\?\' + $largo))
+$SoWindows = $false
+Salida 'J' ((Get-RutaLarga $largo) -ceq $largo)
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: 300 letras en Windows: \\?\ y la ruta' 'True' $x.V['A']
+  Igual 'B: una de 200 letras, tal cual' 'True' $x.V['B']
+  Igual 'C: una de red lleva \\?\UNC\ y la ruta sin las dos barras' 'True' $x.V['C']
+  Igual 'D: en un sistema que no es Windows, tal cual' 'True' $x.V['D']
+  Igual 'E: una de 259 letras (el limite), tal cual' 'True' $x.V['E']
+  Igual 'F: una de 260 letras ya lleva el prefijo' 'True' $x.V['F']
+  Igual 'G: las / se cambian por \ (con \\?\ Windows no las normaliza)' 'True' $x.V['G']
+  Igual 'H: una que ya lleva el prefijo no lleva otro' 'True' $x.V['H']
+  Igual 'I: sin segundo parametro, lee $SoWindows: en Windows lleva el prefijo' 'True' $x.V['I']
+  Igual 'J: y fuera de Windows, no' 'True' $x.V['J']
+}
+
+$Pruebas['m63 (b) Copy-Salida con un origen de mas de 260 letras de verdad (en Linux): copia el fichero y no hay nada sin guardar; con Windows simulado lo lee con el prefijo (y un origen corto, sin el)'] = {
+  $x = Lanza-M63 'b' @'
+$de = Join-Path $Raiz ('m63-origen/' + ('o' * 100) + '/' + ('p' * 100) + '/' + ('q' * 60))
+New-Item -ItemType Directory -Path (Join-Path $de 'ficheros/logs') -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $de 'ficheros/logs/dato.txt'), 'hola')
+$f = @(Get-ChildItem -LiteralPath $de -Recurse -File)[0].FullName
+Salida 'A' ($f.Length -gt 260)
+$no = @(Copy-Salida $de (Join-Path $Raiz 'm63-destino') 'cargaJob' 'caso' @($hoy))
+Salida 'B' $no.Count
+Salida 'C' ([System.IO.File]::ReadAllText((Join-Path $Raiz 'm63-destino/ficheros/logs/dato.txt')))
+$SoWindows = $true
+$no = @(Copy-Salida $de (Join-Path $Raiz 'm63-destino2') 'cargaJob' 'caso' @($hoy))
+Salida 'D' $no.Count
+Salida 'E' ($no.Count -gt 0 -and $no[0].motivo.Contains('\\?\'))
+Salida 'F' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-destino2/ficheros/logs/dato.txt'))
+$corto = Join-Path $Raiz 'm63-corto'
+New-Item -ItemType Directory -Path $corto -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $corto 'dato.txt'), 'hola')
+$no = @(Copy-Salida $corto (Join-Path $Raiz 'm63-destino3') 'cargaJob' 'caso' @($hoy))
+Salida 'G' $no.Count
+Salida 'H' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-destino3/dato.txt'))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: la ruta del fichero de origen pasa de 260 letras' 'True' $x.V['A']
+  Igual 'B: Copy-Salida no deja nada sin guardar' 0 $x.V['B']
+  Igual 'C: y el fichero copiado tiene su contenido' 'hola' $x.V['C']
+  Igual 'D: con Windows simulado, el origen largo se lee con \\?\ (que en Linux no existe): un fichero sin guardar' 1 $x.V['D']
+  Igual 'E: y su motivo dice la ruta con el prefijo' 'True' $x.V['E']
+  Igual 'F: sin copiar' 'False' $x.V['F']
+  Igual 'G: un origen corto con Windows simulado no se toca: nada sin guardar' 0 $x.V['G']
+  Igual 'H: y se copia' 'True' $x.V['H']
+}
+
+$Pruebas['m63 (c) un origen que no existe sigue dando el motivo de siempre (el de Copy-Item), y con una ruta larga y Windows simulado tampoco se copia en silencio'] = {
+  $x = Lanza-M63 'c' @'
+$sin = Join-Path $Raiz 'm63-sin/no-existe.txt'
+$m1 = ''; $m2 = ''
+try { Copy-Fichero $sin (Join-Path $Raiz 'm63-x/no.txt') } catch { $m1 = $_.Exception.Message }
+try { Copy-Item -LiteralPath $sin -Destination (Join-Path $Raiz 'm63-x/no.txt') -Force } catch { $m2 = $_.Exception.Message }
+Salida 'A' ($m1 -ne '')
+Salida 'B' ($m1 -ceq $m2)
+$SoWindows = $true
+$m3 = ''
+try { Copy-Fichero (Join-Path $Raiz ('m63-sin/' + ('z' * 100) + '/' + ('y' * 100) + '/' + ('x' * 60) + '.txt')) (Join-Path $Raiz 'm63-x/no2.txt') } catch { $m3 = $_.Exception.Message }
+Salida 'C' ($m3 -ne '')
+Salida 'D' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-x/no2.txt'))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: con un origen corto que no existe, Copy-Fichero falla' 'True' $x.V['A']
+  Igual 'B: con el mismo mensaje que Copy-Item (el motivo de hoy)' 'True' $x.V['B']
+  Igual 'C: con un origen largo que no existe y Windows simulado, falla tambien' 'True' $x.V['C']
+  Igual 'D: y no deja ningun fichero' 'False' $x.V['D']
+}
+
+$Pruebas['m63 (d) con un origen largo en Windows, Copy-Fichero prueba primero Copy-Item con la ruta con \\?\ y, si falla, .NET con la misma ruta; si el primero copia no llega al segundo, y uno corto no pasa por .NET'] = {
+  $x = Lanza-M63 'd' @'
+$SoWindows = $true
+$de = Join-Path $Raiz ('m63-d/' + ('o' * 100) + '/' + ('p' * 100) + '/' + ('q' * 60) + '.txt')
+New-Item -ItemType Directory -Path (Split-Path $de -Parent) -Force | Out-Null
+[System.IO.File]::WriteAllText($de, 'hola')
+$corto = Join-Path $Raiz 'm63-d/corto.txt'
+[System.IO.File]::WriteAllText($corto, 'hola')
+$script:Llamadas = @()
+$script:ItemFalla = $true
+function Copy-Item {
+  param([string]$LiteralPath, [string]$Destination, [switch]$Force, $ErrorAction)
+  $script:Llamadas += 'item:' + $LiteralPath
+  if ($script:ItemFalla) { throw 'Copy-Item falla' }
+  Microsoft.PowerShell.Management\Copy-Item -LiteralPath $de -Destination $Destination -Force
+}
+function Copy-ConDotNet {
+  param([string]$Origen, [string]$A)
+  $script:Llamadas += 'net:' + $Origen
+  [System.IO.File]::Copy($de, $A, $true)
+}
+$larga = Get-RutaLarga $de $true
+Copy-Fichero $de (Join-Path $Raiz 'm63-d/destino1.txt')
+Salida 'A' (($script:Llamadas -join '|') -ceq ('item:' + $larga + '|net:' + $larga))
+Salida 'B' ([System.IO.File]::ReadAllText((Join-Path $Raiz 'm63-d/destino1.txt')))
+$script:Llamadas = @(); $script:ItemFalla = $false
+Copy-Fichero $de (Join-Path $Raiz 'm63-d/destino2.txt')
+Salida 'C' (($script:Llamadas -join '|') -ceq ('item:' + $larga))
+Salida 'D' ([System.IO.File]::ReadAllText((Join-Path $Raiz 'm63-d/destino2.txt')))
+$script:Llamadas = @(); $script:ItemFalla = $true
+$ok = $true
+try { Copy-Fichero $corto (Join-Path $Raiz 'm63-d/destino3.txt') } catch { $ok = $false }
+Salida 'E' (($script:Llamadas -join '|') -ceq ('item:' + $corto))
+Salida 'F' (-not $ok)
+$script:Llamadas = @(); $script:ItemFalla = $false
+Copy-Fichero $corto (Join-Path $Raiz 'm63-d/destino4.txt')
+Salida 'G' (($script:Llamadas -join '|') -ceq ('item:' + $corto))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: si Copy-Item falla, prueba .NET con la misma ruta con prefijo, despues de Copy-Item' 'True' $x.V['A']
+  Igual 'B: y el fichero se copia' 'hola' $x.V['B']
+  Igual 'C: si Copy-Item copia, no llega a .NET' 'True' $x.V['C']
+  Igual 'D: y el fichero se copia' 'hola' $x.V['D']
+  Igual 'E: un origen corto va solo con Copy-Item y su ruta, sin prefijo' 'True' $x.V['E']
+  Igual 'F: y si falla, falla (no hay segundo intento)' 'True' $x.V['F']
+  Igual 'G: y si copia, se copia una sola vez' 'True' $x.V['G']
+}
+
+$Pruebas['m63 (e) con un origen largo en Windows y las dos copias fallando, Copy-Salida deja el fichero sin guardar con el motivo del ultimo error (el de .NET)'] = {
+  $x = Lanza-M63 'e' @'
+$SoWindows = $true
+$de = Join-Path $Raiz ('m63-e/' + ('o' * 100) + '/' + ('p' * 100) + '/' + ('q' * 60))
+New-Item -ItemType Directory -Path $de -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $de 'dato.txt'), 'hola')
+function Copy-Item { param([string]$LiteralPath, [string]$Destination, [switch]$Force, $ErrorAction) throw 'Copy-Item falla' }
+function Copy-ConDotNet { param([string]$De, [string]$A) throw 'File.Copy falla' }
+$no = @(Copy-Salida $de (Join-Path $Raiz 'm63-e/destino') 'cargaJob' 'caso' @($hoy))
+Salida 'A' $no.Count
+Salida 'B' $no[0].motivo
+Salida 'C' $no[0].fichero
+Salida 'D' (Test-Path -LiteralPath (Join-Path $Raiz 'm63-e/destino/dato.txt'))
+'@
+  Igual 'el script de la prueba sale con 0' 0 $x.R.Codigo
+  Igual 'A: un fichero sin guardar' 1 $x.V['A']
+  Igual 'B: con el mensaje del ultimo error, el de .NET' 'File.Copy falla' $x.V['B']
+  Igual 'C: el del fichero' 'dato.txt' $x.V['C']
+  Igual 'D: sin copiar' 'False' $x.V['D']
+}
+
+# ===================== M64: el test del migrado prepara lo que preparan los tests del repo =====================
+# Escenario-M64 es el de M61 con tests de ejemplo (@SpringBootTest, @SpringBatchTest) en las copias:
+#   migrado (rescate): CargaIT.java con un @BeforeEach en la linea 8 (preparaContexto) y OtraIT.java con un @Before en la 7 (inicia)
+#   original: ViejoIT.java con un @BeforeEach en la linea 7 (preparaViejo)
+# Con $SinPrepara los del migrado no tienen ningun metodo de preparacion (SinIT.java) y hay ademas un UnitTest.java con @BeforeEach pero sin arrancar el batch.
+
+$M64Cabecera = 'Estos tests preparan algo antes de lanzar el job: '
+$M64Fin = 'El test del original puede ser de otra version del framework y no hacerlo. Si este repositorio lo necesita (por ejemplo, un contexto que en produccion pone el arranque de la aplicacion), haz lo mismo en tu test antes de lanzar cada job. No lo uses para tapar un fallo del codigo de src/main.'
+$M64Frase = 'Si viene de una clase de una libreria porque al test le falta algo que en produccion prepara el arranque, preparalo como los tests de ejemplo. Si viene del codigo de src/main, no lo tapes: es un fallo del migrado.'
+$M64Npe = 'java.lang.NullPointerException: Cannot invoke "com.acme.marco.traza.ContextoTraza.aConstructor()" because "contexto" is null'
+$M64Otra = 'java.lang.IllegalStateException: Failed to load ApplicationContext'
+$M64Ruta = 'src/test/java/com/acme/nuevo/'
+
+function Escenario-M64([string]$Nombre, $Casos, [switch]$SinPrepara) {
+  $e = Escenario-M61 $Nombre $Casos
+  if ($SinPrepara) {
+    Escribe $e.Wt ($M64Ruta + 'SinIT.java') "package com.acme.nuevo;`n`n@SpringBootTest`npublic class SinIT {`n  @Test`n  void arranca() {}`n}`n"
+    Escribe $e.Wt ($M64Ruta + 'UnitTest.java') "package com.acme.nuevo;`n`npublic class UnitTest {`n  @BeforeEach`n  void inicia() {}`n}`n"
+  }
+  else {
+    Escribe $e.Wt ($M64Ruta + 'CargaIT.java') "package com.acme.nuevo;`n`n@SpringBootTest`npublic class CargaIT {`n  @Autowired JobLauncherTestUtils utils;`n`n  @BeforeEach`n  void preparaContexto() {`n    HolderTraza.actual().put(`"contextoTraza`", new ContextoTraza());`n  }`n}`n"
+    Escribe $e.Wt ($M64Ruta + 'OtraIT.java') "package com.acme.nuevo;`n`n@RunWith(SpringRunner.class)`n@SpringBatchTest`npublic class OtraIT {`n  @Before`n  public void inicia() throws Exception {`n  }`n}`n"
+  }
+  [void](GitEn $e.Wt @('add', 'src/test'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'tests de ejemplo'))
+  Escribe $e.Legacy 'src/test/java/com/acme/viejo/ViejoIT.java' "package com.acme.viejo;`n`n@SpringBootTest`npublic class ViejoIT {`n  @Autowired JobLauncherTestUtils utils;`n  @BeforeEach`n  void preparaViejo() {`n  }`n}`n"
+  [void](GitEn $e.Legacy @('add', 'src/test'))
+  [void](GitEn $e.Legacy @('commit', '-q', '-m', 'test de ejemplo'))
+  return $e
+}
+
+# Un caso del prueba-local.json de antes: distinto, con los fallos que se digan ('migrado:FAILED:causa' u 'original:FAILED:causa', separados por ;).
+function Caso-M64([string]$N, [string]$Fallos, [string]$Resultado = 'distinto') {
+  $f = @()
+  foreach ($x in @($Fallos -split ';' | Where-Object { $_ })) { $l, $est, $causa = $x -split ':', 3; $f += [ordered]@{ lado = $l; estado = $est; causa = $causa; registro = '' } }
+  return [ordered]@{ job = 'cargaJob'; caso = $N; titulo = ''; resultado = $Resultado; motivo = ''; diferencias = @(); fallos = $f }
+}
+
+# Deja en el prueba-local.json de $E los casos de $Grupos: lista de (cuantos, fallos de cada caso y, si no es 'distinto', su resultado).
+function Anterior-M64($E, $Grupos) {
+  $o = Lee-Json $E.Json
+  $casos = @()
+  $n = 0
+  foreach ($g in $Grupos) { $res = 'distinto'; if ($g.Count -gt 2) { $res = $g[2] }; for ($i = 0; $i -lt $g[0]; $i++) { $n++; $casos += , (Caso-M64 ('caso-' + $n.ToString('D2')) $g[1] $res) } }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+}
+
+$Pruebas['m64 (a) el migrado con tests de ejemplo que preparan algo (@BeforeEach, @Before): su prompt lleva el parrafo con fichero:linea y metodo de cada uno despues de la lista; el original no; la huella no cambia'] = {
+  $e = Escenario-M64 'm64-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $lista = "${M64Ruta}CargaIT.java:8 (preparaContexto), ${M64Ruta}OtraIT.java:7 (inicia)"
+  $parrafo = $M64Cabecera + $lista + '. ' + $M64Fin
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lleva el parrafo entero con sus dos metodos' ($mig.Contains($parrafo)) (Cola $mig)
+  Comprueba 'y el texto de la plantilla sigue despues de una linea en blanco' ($mig.Contains($parrafo + "`n`nPueden ser de otra")) (Cola $mig)
+  $lineas = @($mig -split "`n")
+  $iUltimo = [array]::IndexOf($lineas, ($lineas | Where-Object { $_ -like '- *OtraIT.java' } | Select-Object -First 1))
+  Comprueba 'va despues de la lista de ejemplos y una linea en blanco' ($iUltimo -ge 0 -and $lineas[$iUltimo + 1] -ceq '' -and $lineas[$iUltimo + 2].StartsWith($M64Cabecera)) (Cola $mig)
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'el prompt del original, con su propio @BeforeEach en un ejemplo, no lleva el parrafo' (-not $orig.Contains('Estos tests preparan') -and $orig.Contains('ViejoIT.java')) (Cola $orig)
+  $huella = (Tarea-Arnes $e 'migrado').entradas.huella
+  $llamadas = @(Llamadas-Arnes $e 'migrado').Count
+  [void](GitEn $e.Wt @('rm', '-q', "${M64Ruta}CargaIT.java", "${M64Ruta}OtraIT.java"))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'sin ejemplos'))
+  $r = Prueba $e
+  Igual 'sin los ejemplos sale con 0' 0 $r.Codigo
+  Igual 'la huella del migrado es la misma que con el parrafo' $huella (Tarea-Arnes $e 'migrado').entradas.huella
+  Igual 'y no se escribe otra vez (ninguna llamada nueva)' $llamadas @(Llamadas-Arnes $e 'migrado').Count
+}
+
+$Pruebas['m64 (a2) un ejemplo con seis metodos de preparacion (@BeforeAll, @BeforeClass, con otra anotacion de por medio, @Before, @BeforeEach) y un @Test: el parrafo nombra los cinco primeros, con su linea'] = {
+  $e = Nuevo-Escenario 'm64-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm61-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  Escribe $e.Wt ($M64Ruta + 'MuchosIT.java') "package com.acme.nuevo;`n`n@SpringBootTest`npublic class MuchosIT {`n  @BeforeAll`n  static void uno() {}`n  @BeforeClass`n  public static void dos() {}`n  @BeforeEach`n  @SuppressWarnings(`"unused`")`n  protected void tres() {}`n  @Before`n  public void cuatro() {}`n  @BeforeEach`n  void cinco() {}`n  @BeforeEach`n  void seis() {}`n  @Test`n  void noPrepara() {}`n}`n"
+  [void](GitEn $e.Wt @('add', 'src/test'))
+  [void](GitEn $e.Wt @('commit', '-q', '-m', 'tests de ejemplo'))
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $f = "${M64Ruta}MuchosIT.java"
+  $lista = "$f`:6 (uno), $f`:8 (dos), $f`:11 (tres), $f`:13 (cuatro), $f`:15 (cinco)"
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el parrafo nombra los cinco primeros, en orden' ($mig.Contains($M64Cabecera + $lista + '. ')) (Cola $mig)
+  Comprueba 'ni el sexto (seis) ni el @Test (noPrepara)' (-not $mig.Contains('seis') -and -not $mig.Contains('noPrepara')) (Cola $mig)
+}
+
+$Pruebas['m64 (b) sin metodos de preparacion en los ejemplos de la copia (o con ellos solo en un test que no arranca el batch o en la referencia): EJEMPLOS sale como hoy, sin el parrafo'] = {
+  $e = Escenario-M64 'm64-b1' ([ordered]@{ cargaJob = @('importe=10.00') }) -SinPrepara
+  $r = Prueba $e
+  Igual 'sin metodos de preparacion sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lista el ejemplo' ($mig.Contains("${M64Ruta}SinIT.java")) (Cola $mig)
+  Comprueba 'y no lleva el parrafo (el @BeforeEach de UnitTest, que no arranca el batch, no cuenta)' (-not $mig.Contains('Estos tests preparan') -and -not $mig.Contains('UnitTest.java')) (Cola $mig)
+  Comprueba 'y la lista acaba como hoy: una linea en blanco y el texto de la plantilla' ($mig.Contains("${M64Ruta}SinIT.java`n`nPueden ser de otra")) (Cola $mig)
+  $e = Nuevo-Escenario 'm64-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $ref = Join-Path $e.Raiz 'referencia'
+  Escribe $ref 'src/test/java/com/ref/RefIT.java' "package com.ref;`n`n@SpringBootTest`npublic class RefIT {`n  @BeforeEach`n  void preparaRef() {`n  }`n}`n"
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm61-mvn.ps1'); SegundosPorLlamada = 60; Plantilla = $ref }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba $e
+  Igual 'con un ejemplo solo en la referencia sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lista el ejemplo de la referencia' ($mig.Contains('RefIT.java')) (Cola $mig)
+  Comprueba 'y no lleva el parrafo (solo cuentan los ejemplos de la copia)' (-not $mig.Contains('Estos tests preparan') -and -not $mig.Contains('preparaRef')) (Cola $mig)
+}
+
+$Pruebas['m64 (c) el prueba-local.json de antes con 13 casos del migrado FAILED con una NPE (y el original bien) y otros 2 con otra causa, con -RehacerArnes: el primer intento del migrado lleva la frase y las dos lineas, la de 13 primero'] = {
+  $e = Escenario-M64 'm64-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $solo = 'java.lang.ArithmeticException: / by zero'
+  $sin = 'el job no ha dejado estado.txt'
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"), @(1, "migrado:FAILED:$solo"), @(2, "migrado:sin estado.txt:$sin"))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $l13 = "En 13 casos el migrado acaba FAILED y el original no: $M64Npe."
+  $l2 = "En 2 casos el migrado acaba FAILED y el original no: $M64Otra."
+  Comprueba 'el primer intento del migrado lleva el bloque de lo que fallo la otra vez' ($mig.Contains($M61Bloque)) (Cola $mig)
+  Comprueba 'con la linea de los 13 casos de la NPE' ($mig.Contains($l13)) (Cola $mig)
+  Comprueba 'y la de los 2 de la otra causa' ($mig.Contains($l2)) (Cola $mig)
+  Comprueba 'la frase de encima de las lineas, una sola vez' ($mig.Contains($M64Frase + "`n") -and [regex]::Matches($mig, [regex]::Escape($M64Frase)).Count -eq 1 -and $mig.IndexOf($M64Frase) -lt $mig.IndexOf($l13)) (Cola $mig)
+  Comprueba 'la de 13 va antes que la de 2' ($mig.IndexOf($l13) -lt $mig.IndexOf($l2)) (Cola $mig)
+  Comprueba 'un caso solo con otra causa y dos que no dejan estado.txt no dan linea: son dos lineas' ([regex]::Matches($mig, 'En \d+ casos el migrado acaba').Count -eq 2 -and -not $mig.Contains($solo) -and -not $mig.Contains($sin)) (Cola $mig)
+  Comprueba 'la tarea del migrado guarda el bloque en entradas.previo (no en la huella)' ([string](Tarea-Arnes $e 'migrado').entradas.previo -match [regex]::Escape($l13)) ''
+}
+
+$Pruebas['m64 (c2) con -RehacerOriginal (que arrastra al migrado) y ese mismo prueba-local.json: el primer intento del original no lleva ni la frase ni las lineas (son del migrado) y el del migrado si'] = {
+  $e = Escenario-M64 'm64-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"))
+  $deAntes = @(Llamadas-Arnes $e 'original').Count
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 0' 0 $r.Codigo
+  Comprueba 'el original se escribe otra vez (una llamada nueva como minimo)' (@(Llamadas-Arnes $e 'original').Count -gt $deAntes) ''
+  $orig = Registro-Arnes $e 'original' 1
+  Comprueba 'su primer prompt es el de ahora (lleva su ejemplo ViejoIT.java)' ($orig.Contains('ViejoIT.java')) (Cola $orig)
+  Comprueba 'y no lleva ni la frase ni las lineas del migrado' (-not $orig.Contains($M64Frase) -and -not $orig.Contains('el migrado acaba')) (Cola $orig)
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el del migrado, que se escribe otra vez traduciendo el nuevo, lleva la linea de los 13 casos' ($mig.Contains("En 13 casos el migrado acaba FAILED y el original no: $M64Npe.")) (Cola $mig)
+}
+
+$Pruebas['m64 (d) una causa con un solo caso no sale; si los dos lados acaban FAILED o el migrado no deja estado.txt el caso no cuenta; EXCEPCION cuenta con su estado; solo las tres causas de mas casos'] = {
+  $e = Escenario-M64 'm64-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $solo = 'java.lang.ArithmeticException: / by zero'
+  $ambos = 'java.lang.IllegalArgumentException: los dos lados'
+  $sin = 'sin estado.txt del migrado'
+  $exc = 'java.lang.ClassNotFoundException: com.acme.Falta'
+  $c3 = 'java.lang.RuntimeException: tercera'
+  $c4 = 'java.lang.RuntimeException: cuarta'
+  $noDistinto = 'java.lang.IllegalStateException: de un caso que no sale distinto'
+  Anterior-M64 $e @(@(1, "migrado:FAILED:$solo"), @(2, "migrado:FAILED:$ambos;original:FAILED:$ambos"), @(2, "migrado:sin estado.txt:$sin"), @(5, "migrado:EXCEPCION:$exc"), @(3, "migrado:FAILED:$c3"), @(2, "migrado:FAILED:$c4"), @(2, "migrado:FAILED:$M64Otra"), @(4, "migrado:FAILED:$noDistinto", 'no se pudo preparar'), @(2, 'migrado:FAILED:'))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'la causa de 5 casos sale con su estado (EXCEPCION)' ($mig.Contains("En 5 casos el migrado acaba EXCEPCION y el original no: $exc.")) (Cola $mig)
+  Comprueba 'la de 3 casos tambien' ($mig.Contains("En 3 casos el migrado acaba FAILED y el original no: $c3.")) (Cola $mig)
+  Comprueba 'de las de 2 casos, la primera por orden de firma (IllegalStateException va antes que RuntimeException) y nada mas: tres lineas en total' ([regex]::Matches($mig, 'En \d+ casos el migrado acaba').Count -eq 3 -and $mig.Contains("En 2 casos el migrado acaba FAILED y el original no: $M64Otra.")) (Cola $mig)
+  Comprueba 'la de un solo caso no sale' (-not $mig.Contains($solo)) (Cola $mig)
+  Comprueba 'la de los dos lados FAILED no sale' (-not $mig.Contains($ambos)) (Cola $mig)
+  Comprueba 'la de sin estado.txt no sale' (-not $mig.Contains($sin)) (Cola $mig)
+  Comprueba 'la cuarta causa (2 casos, despues de la otra por orden) no sale' (-not $mig.Contains($c4)) (Cola $mig)
+  Comprueba 'la de casos que no salen distintos (no se pudo preparar) no sale' (-not $mig.Contains($noDistinto)) (Cola $mig)
+  Comprueba 'ni la de casos sin causa (la linea acabaria en dos puntos y un punto)' (-not $mig.Contains('y el original no: .')) (Cola $mig)
+}
+
+$Pruebas['m64 (d2) la causa del migrado se corta en 200 letras y las causas que solo cambian en un numero o en el nombre del caso son una'] = {
+  $e = Escenario-M64 'm64-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $larga = 'java.lang.IllegalStateException: ' + ('x' * 300)
+  $o = Lee-Json $e.Json
+  $casos = @()
+  foreach ($n in 1..3) { $casos += , (Caso-M64 ('caso-0' + $n) "migrado:FAILED:no hay filas para el id 1$n en caso-0$n") }
+  foreach ($n in 4..5) { $casos += , (Caso-M64 ('caso-0' + $n) "migrado:FAILED:$larga") }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($e.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  Comprueba 'las tres causas que solo cambian en el numero y el caso son una de 3 casos' ($mig.Contains('En 3 casos el migrado acaba FAILED y el original no: no hay filas para el id 1')) (Cola $mig)
+  Comprueba 'la larga sale cortada a 200 letras' ($mig.Contains('En 2 casos el migrado acaba FAILED y el original no: ' + $larga.Substring(0, 200) + '.') -and -not $mig.Contains($larga.Substring(0, 201))) (Cola $mig)
+}
+
+$Pruebas['m64 (e) un lanzamiento sin -RehacerArnes con ese mismo prueba-local.json: ni llamadas ni prompt nuevo ni nada guardado'] = {
+  $e = Escenario-M64 'm64-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $huellas = @((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ','
+  Anterior-M64 $e @(@(13, "migrado:FAILED:$M64Npe"), @(2, "migrado:FAILED:$M64Otra"))
+  $r = Prueba $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas' $llamadas (Llamadas $e).Count
+  Comprueba 'el prompt del migrado no lleva ni el bloque ni la frase' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque) -and -not (Registro-Arnes $e 'migrado' 1).Contains($M64Frase)) ''
+  Comprueba 'la tarea del migrado no guarda nada de antes' ([string](Tarea-Arnes $e 'migrado').entradas.previo -eq '') ''
+  Igual 'la huella de los dos tests es la misma' $huellas (@((Tarea-Arnes $e 'original').entradas.huella, (Tarea-Arnes $e 'migrado').entradas.huella) -join ',')
+}
+
+# ===================== M68: menos ruido y puertas mas finas en la prueba en local =====================
+# Escenarios con el Copilot de m40 y el Maven de m68 (tests/falsos/m68-mvn.ps1; sus banderas, en RESCATE_M68). RESCATE_M40 = 'tablas=1/CALENDARIO_02' deja esa
+# tabla en la base de prueba de los dos tests desde su primera llamada (m40-copilot.ps1).
+
+function Escenario-M68([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm40-copilot.ps1'); MvnExe = (Join-Path $falsos 'm68-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza con las banderas $Banderas del Maven falso, la base de los tests $Tablas ('tablas=<n>/<T_A,T_B>' de m40-copilot.ps1) y las variables de entorno $Env (nombre -> valor).
+function Prueba-M68($E, [string]$Banderas = '', [string]$Tablas = '', [string[]]$A = @(), [hashtable]$Env = @{}) {
+  $env:RESCATE_M68 = $Banderas
+  $env:RESCATE_M40 = $Tablas
+  foreach ($k in $Env.Keys) { Set-Item -Path "env:$k" -Value ([string]$Env[$k]) }
+  try { return (Prueba $E $A) }
+  finally {
+    $env:RESCATE_M68 = ''
+    $env:RESCATE_M40 = ''
+    foreach ($k in $Env.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+  }
+}
+
+# El datos.sql que vio cada ejecucion de un caso en la copia $Copia (m68-sql.log), como 'job/caso|sql', en orden.
+function Sql-M68($E, [string]$Copia) {
+  $f = Join-Path $E.Llamadas 'm68-sql.log'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Where-Object { $_.StartsWith($Copia + '|') } | ForEach-Object { $_.Substring($Copia.Length + 1) })
+}
+
+$SqlM68 = 'create table CALENDARIO_02 (ID int)'
+
+$Pruebas['m68 (a1) un datos.sql que crea una tabla que el test ya crea (CALENDARIO_02): el caso corre en el original y en el migrado sin ya existe, y lo guardado en casos no cambia'] = {
+  $e = Escenario-M68 'm68-a1' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $SqlM68") })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba 'el original deja estado.txt y no deja error.txt' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/estado.txt')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  $con = 'cargaJob/caso-01|create table IF NOT EXISTS CALENDARIO_02 (ID int)'
+  Igual 'el original vio IF NOT EXISTS en sus tres ejecuciones (la que prepara el caso y las dos de comparar)' 3 @(Sql-M68 $e $e.CopiaOrig | Where-Object { $_ -ceq $con }).Count
+  Igual 'y el migrado, en la suya' 1 @(Sql-M68 $e $e.CopiaMig | Where-Object { $_ -ceq $con }).Count
+  Igual 'ninguna ejecucion vio el datos.sql sin cambiar' 0 @(@(Sql-M68 $e $e.CopiaOrig) + @(Sql-M68 $e $e.CopiaMig) | Where-Object { $_ -ceq "cargaJob/caso-01|$SqlM68" }).Count
+  $rel = 'src/test/resources/prueba-local/cargaJob/caso-01/datos.sql'
+  Igual 'lo guardado en casos no cambia' $SqlM68 (Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim()
+  Igual 'ni lo que queda en la copia del original' $SqlM68 (Lee $e.CopiaOrig $rel).Trim()
+  Igual 'ni en la copia del migrado' $SqlM68 (Lee $e.CopiaMig $rel).Trim()
+}
+
+$Pruebas['m68 (a2) un CREATE TABLE que ya lleva IF NOT EXISTS no se toca (en mayusculas, en minusculas, con espacios de mas), el que no lo lleva si aunque vaya despues en la misma linea, y lo demas del fichero queda byte a byte'] = {
+  $enie = "insert into T_C values ('" + [char]0xF1 + 'and' + [char]0xFA + "')"
+  $sql = "create table IF NOT EXISTS T_A (ID int); CREATE   TABLE  if  not  exists  T_B (ID int); Create Table T_C (ID int); $enie"
+  $e = Escenario-M68 'm68-a2' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M68 $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $visto = @(Sql-M68 $e $e.CopiaMig)
+  Igual 'el migrado vio solo el tercero cambiado, y la enie y la u con tilde enteras' "cargaJob/caso-01|create table IF NOT EXISTS T_A (ID int); CREATE   TABLE  if  not  exists  T_B (ID int); Create Table IF NOT EXISTS T_C (ID int); $enie" ($visto -join '|')
+  Igual 'ninguno queda doble' 0 @($visto | Where-Object { $_ -match '(?i)IF NOT EXISTS\s+IF NOT EXISTS' }).Count
+  Igual 'lo guardado en casos no cambia' $sql ((Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim())
+}
+
+$Pruebas['m68 (a3) un caso hecho de antes cuyo original guardo ya existe, already exists o 42101 se ejecuta otra vez, sin -Rehacer y sin llamar a Copilot; los demas, no'] = {
+  $e = Escenario-M68 'm68-a3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') })
+  $r = Prueba-M68 $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $antes = @(1..5 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'cada caso se ejecuto 3 veces en el original (prepararlo y dos de comparar)' '3,3,3,3,3' $antes
+  $dicen = @{
+    1 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Tabla "CALENDARIO_02" ya existe; Sentencia SQL: CREATE TABLE CALENDARIO_02 (ID INT) [42101-200]'
+    2 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CALENDARIO_02" already exists; SQL statement: CREATE TABLE CALENDARIO_02 (ID INT)'
+    3 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: [42101-200]'
+    5 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: Tabla "CALENDARIO_02" ya existe'
+  }
+  foreach ($n in $dicen.Keys) { Escribe $e.Local "salidas/original/cargaJob/caso-0$n/error.txt" ($dicen[$n] + "`n") }
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-05/estado.txt')   # el 5 tiene la forma de siempre: sin estado.txt, solo el error
+  $r = Prueba-M68 $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas a Copilot' $llamadas (Llamadas $e).Count
+  $despues = @(1..5 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'los cuatro con el error se ejecutan otra vez (original y original-2) y el otro, no' '5,5,5,3,5' $despues
+  Comprueba 'la consola dice cuantos' ($r.Salida -match 'Se ejecuta otra vez el original de 4 caso\(s\)') (Cola $r.Salida)
+  Comprueba 'el error.txt guardado de antes ya no esta' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  Igual 'los cinco salen iguales' 'igual,igual,igual,igual,igual' ((Resultados $e) -join ',')
+  $r = Prueba-M68 $e
+  Comprueba 'un tercer lanzamiento ya no ejecuta ninguno otra vez' ($r.Salida -match 'Original: se reutilizan las salidas de 5 caso\(s\) y se ejecutan 0\.' -and $r.Salida -notmatch 'Se ejecuta otra vez el original') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (b1) un .log que solo deja el migrado (el log por job del framework nuevo): los casos salen iguales, y el log queda guardado'] = {
+  $e = Escenario-M68 'm68-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M68 $e 'logs'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'los dos logs del migrado estan en salidas' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/ficheros/logs/job-cargaJob-a1b2c3.log')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/ficheros/logs/jobs/cargaJob/ejecucion.log'))) ''
+  Comprueba 'y el original no los tiene' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/ficheros/logs'))) ''
+}
+
+$Pruebas['m68 (b2) un .txt que solo deja el migrado sigue saliendo distinto, aunque deje tambien sus logs: la unica diferencia es el .txt'] = {
+  $e = Escenario-M68 'm68-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e 'logs;txt'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'con una sola diferencia: el .txt' 'ficheros/extra.txt' (@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { $_.fichero }) -join ',')
+}
+
+$Pruebas['m68 (b3) con CompararIgnorar vacio (en ajustes.json), el .log vuelve a contar: el caso sale distinto con los dos logs'] = {
+  $e = Escenario-M68 'm68-b3' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CompararIgnorar = @() }
+  $r = Prueba-M68 $e 'logs'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'con los dos logs entre las diferencias' 'ficheros/logs/job-cargaJob-a1b2c3.log,ficheros/logs/jobs/cargaJob/ejecucion.log' ((@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { $_.fichero }) | Sort-Object { $_ }) -join ',')
+}
+
+$Pruebas['m68 (b4) un .log que no cabe en salidas ni con nombre corto no cuenta como fichero sin guardar (la consola si lo dice): el caso sale igual y el siguiente lanzamiento reutiliza el original'] = {
+  $e = Escenario-M68 'm68-b4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e 'sin-sitio'
+  Comprueba 'la consola dice que el log no se pudo guardar' ($r.Salida -match 'dato\.log: no se ha podido guardar') (Cola $r.Salida)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Igual 'sin ninguna diferencia' 0 @((Caso $e 'cargaJob' 'caso-01').diferencias).Count
+  $r = Prueba-M68 $e
+  Comprueba 'el siguiente lanzamiento reutiliza el original' ($r.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (b5) los patrones de CompararIgnorar casan con el nombre del fichero, no con su ruta: con job-*.log, el log por job que solo deja el migrado no cuenta y otro .log (ejecucion.log) si'] = {
+  $e = Escenario-M68 'm68-b5' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CompararIgnorar = @('job-*.log') }
+  $r = Prueba-M68 $e 'logs'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  Igual 'con una sola diferencia: el otro .log' 'ficheros/logs/jobs/cargaJob/ejecucion.log' (@((Caso $e 'cargaJob' 'caso-01').diferencias | ForEach-Object { $_.fichero }) -join ',')
+}
+
+# --- (c) la base del test del migrado tiene las tablas de la base del test del original ---
+# 'tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1 pone esa base en el test del arnes que casa desde su llamada n; el caso vacio de cada lado deja un tablas\<T>.csv por tabla.
+
+$MotivoTablas68 = 'La base de tu test no tiene estas tablas que si tiene la del test del original: CALENDARIO_02. Crealas con las mismas columnas que en el test del original.'
+
+$Pruebas['m68 (c1) el caso vacio del original deja CALENDARIO_02 y el del migrado no: el primer intento del migrado se rechaza con el motivo y la tabla, y el segundo, que la crea, se acepta'] = {
+  $e = Escenario-M68 'm68-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02:arnes-original;tablas=2/CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del migrado con el motivo' ($r.Salida.Contains("Arnes del migrado rechazado: $MotivoTablas68")) (Cola $r.Salida)
+  Igual 'hay dos llamadas del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'migrado' 2).Contains($MotivoTablas68)) (Cola (Registro-Arnes $e 'migrado' 2))
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'el segundo se acepta sin aviso de tablas' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -notmatch 'sigue sin estas tablas') (Cola $r.Salida)
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m68 (c2) en el ultimo intento, y con un test guardado, el migrado sin esa tabla se acepta con un aviso y los casos se ejecutan'] = {
+  $e = Escenario-M68 'm68-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02:arnes-original;tablas=9/CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el primer intento se rechaza' 1 @([regex]::Matches($r.Salida, [regex]::Escape("Arnes del migrado rechazado: $MotivoTablas68"))).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  $aviso = 'La base de tu test sigue sin estas tablas que si tiene la del test del original: CALENDARIO_02.'
+  Comprueba 'con el aviso' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Igual 'la tarea queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  $n = @(Llamadas $e).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M68 $e '' 'tablas=9/CALENDARIO_02:arnes-migrado'
+  Igual 'con el test guardado sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'y avisa de la tabla' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+}
+
+$Pruebas['m68 (c3) las tablas BATCH_ y TASK_ que deja el caso vacio del original y no el del migrado no cuentan: el migrado se acepta a la primera, sin aviso'] = {
+  $e = Escenario-M68 'm68-c3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02,BATCH_JOB_INSTANCE,task_execution:arnes-original;tablas=1/CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el caso vacio del original deja la de Spring Batch' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/BATCH_JOB_INSTANCE.csv')) ''
+  Comprueba 'y una TASK_ escrita en minusculas, que tampoco cuenta' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/task_execution.csv')) ''
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de tablas' ($r.Salida -notmatch 'tablas que si tiene la del test del original') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (c4) el primer intento del migrado ya lleva la lista de tablas de la base del test del original en su prompt, el del original no, y la huella no cambia'] = {
+  $e = Escenario-M68 'm68-c4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/T_B,CALENDARIO_02,BATCH_JOB_INSTANCE:arnes-original;tablas=1/T_B,CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  $lista = 'La base del test del original tiene estas tablas: CALENDARIO_02, T_B.'
+  $p = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del primer intento del migrado lleva la lista, sin las de Spring Batch' ($p.Contains($lista)) (Cola $p)
+  Comprueba 'el del original no' (-not (Registro-Arnes $e 'original' 1).Contains('La base del test del original tiene estas tablas')) ''
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  $n = @(Llamadas $e).Count
+  $r = Prueba-M68 $e '' 'tablas=1/T_B,CALENDARIO_02,BATCH_JOB_INSTANCE:arnes-original;tablas=1/T_B,CALENDARIO_02:arnes-migrado'
+  Igual 'el segundo lanzamiento no escribe ningun test otra vez' $n @(Llamadas $e).Count
+}
+
+$Pruebas['m68 (c5) los nombres de las tablas se comparan sin distinguir mayusculas, como Get-TablasFaltan: calendario_02 en el migrado es CALENDARIO_02 del original'] = {
+  $e = Escenario-M68 'm68-c5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02:arnes-original;tablas=1/calendario_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de tablas' ($r.Salida -notmatch 'tablas que si tiene la del test del original') (Cola $r.Salida)
+}
+
+# --- (d) un job que no arranca con el test aceptado no se ejecuta en todos sus casos ---
+# Estos escenarios usan el Maven de m48 (excepcion-mig: el migrado acaba EXCEPCION en el caso vacio y en los casos; el original, no) o el de m68-excepcion.ps1 (lo mismo,
+# con otra clase de excepcion en los casos). Con Intentos = 2 (por defecto), el primer test se rechaza por el caso vacio y el segundo se acepta con el aviso.
+
+function Escenario-M68d([string]$Nombre, [switch]$OtraClase) {
+  $mas = @{}
+  if ($OtraClase) { $mas.MvnExe = (Join-Path $falsos 'm68-excepcion.ps1') }
+  return (Escenario-M48 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) $mas)
+}
+
+$Pruebas['m68 (d1) el test del migrado se acepta en el ultimo intento con el aviso de que no arranca: se ejecuta un caso, los otros 4 salen sin probar con su motivo y la linea final dice que puede ser el codigo'] = {
+  $e = Escenario-M68d 'm68-d1'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el primer intento del test se rechaza' 1 @([regex]::Matches($r.Salida, 'Arnes del migrado rechazado: Con un caso vacio, el original arranca el job cargaJob')).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'el migrado ejecuta un solo caso' 1 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'el primero sale distinto y los otros cuatro, sin probar en local' 'distinto,sin probar en local,sin probar en local,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  Igual 'con su motivo' 'el migrado no arranca el job con este test' (Caso $e 'cargaJob' 'caso-05').motivo
+  Comprueba 'la consola lo dice por caso' ($r.Salida -match 'sin probar en local: cargaJob/caso-05 \(Caso 5 de cargaJob\)\. el migrado no arranca el job con este test') (Cola $r.Salida)
+  $linea = 'El migrado no arranca el job cargaJob (BeanCreationException: java.lang.IllegalStateException: sin correo). El test ya se escribio 2 veces con este error: puede ser el codigo del migrado. Pregunta a Copilot, en el repo del migrado, si el job arrancaria igual fuera del test.'
+  Igual 'una sola linea final, la nueva' 1 @([regex]::Matches($r.Salida, 'El migrado no arranca el job cargaJob \(')).Count
+  Comprueba 'y la consola dice, al ejecutar, que no lanza los demas casos' ($r.Salida.Contains('El migrado no arranca el job cargaJob con este test (BeanCreationException): no ejecuto sus demas casos.')) (Cola $r.Salida)
+  Comprueba 'con el detalle, las veces y el consejo' ($r.Salida.Contains($linea)) (Cola $r.Salida)
+  Comprueba 'sin el consejo de -RehacerArnes' ($r.Salida -notmatch 'relanza con -RehacerArnes') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (d2) sin ese rechazo (un test guardado de otro lanzamiento, que se usa con el aviso) se ejecutan los 5 casos y sale la linea de siempre, con -RehacerArnes'] = {
+  $e = Escenario-M68d 'm68-d2'
+  $r = Prueba-M48 $e ''
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $antes = (Casos-Mvn $e $e.CopiaMig).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test guardado se usa, con el aviso del caso vacio' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob \(estado=COMPLETED\) y con tu test el migrado no: BeanCreationException \(java\.lang\.IllegalStateException: sin correo\)\.') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Igual 'los cinco salen distintos' 'distinto,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Comprueba 'la linea de siempre' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Comprueba 'y ni rastro de la nueva' ($r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (d3) si el primer caso acaba EXCEPCION con otra clase que la del caso vacio, no se salta ninguno: se ejecutan los 5 casos'] = {
+  $e = Escenario-M68d 'm68-d3' -OtraClase
+  $env:RESCATE_M68 = 'otra-clase'
+  try { $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/' }
+  finally { $env:RESCATE_M68 = '' }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test se acepta con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'ninguno sin probar' 0 @(Resultados $e | Where-Object { $_ -eq 'sin probar en local' }).Count
+}
+
+$Pruebas['m68 (d4) un test que se acepta sin haberse rechazado por eso (con Intentos = 1 el primer intento es el ultimo) no recorta nada: se ejecutan los 5 casos y sale la linea de siempre'] = {
+  $e = Escenario-M48 'm68-d4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test se acepta a la primera, con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'los cinco salen distintos' 'distinto,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (d5) si el primer caso arranca, los demas se ejecutan aunque alguno acabe EXCEPCION con la misma clase: solo se mira el primero'] = {
+  $e = Escenario-M68d 'm68-d5'
+  $r = Prueba-M48 $e 'vacio-excepcion-mig:/vacio;excepcion-mig:^cargaJob/caso-0[2-5]' @() '' @{ M48_VACIOS = 9 }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test se acepta con el aviso del caso vacio' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'el primero sale igual y los otros cuatro, distintos: ninguno sin probar' 'igual,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo cortada tras un intento rechazado por eso (el motivo lo dice), se usa con el aviso y no recorta nada: se ejecutan los 5 casos y sale la linea de siempre'] = {
+  $e = Escenario-M68d 'm68-d6'
+  $r = Prueba-M48 $e ''
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $antes = (Casos-Mvn $e $e.CopiaMig).Count
+  $f = Get-Ruta $e.Local 'tareas/arnes-migrado.json'
+  $t = Lee-Json $f
+  $t.estado = 'pendiente'; $t.intentos = 1
+  $t.motivo = 'Con un caso vacio, el original arranca el job cargaJob (estado=COMPLETED) y con tu test el migrado no: BeanCreationException. Revisa lo que simula el test y las propiedades que le pasa.'
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test guardado se usa, con el aviso' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
+}
+
+# ===================== M69: un test que se escribe otra vez no puede quedar peor que el de antes =====================
+# Escenarios con el Copilot de m69 (tests/falsos/m69-copilot.ps1) y el Maven de m69 (m69-mvn.ps1), que hacen lo de m40 y, con RESCATE_M69 (guiones separados por ';'
+# '<regex sobre el id de la tarea>@<n>@<marca>~<marca>'), dejan en el test del arnes que casa, en su llamada n (contando las de todos los lanzamientos), una linea
+# '// <marca>' por marca: M69_VERSION=<x> (solo hace distinto el test), M69_VACIO=<estado>[:<regex sobre el job>] (el estado del caso vacio: COMPLETED, FAILED,
+# EXCEPCION...), M69_CAUSA=<texto> (la causa que dice Maven), M69_TABLAS=T_A:ID|NOMBRE,T_B:ID (las tablas, con sus columnas, que deja el caso vacio).
+
+function Escenario-M69([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm69-copilot.ps1'); MvnExe = (Join-Path $falsos 'm69-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza con los guiones $Guiones de m69-copilot.ps1 (RESCATE_M69) y la base de los tests $Tablas ('tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1).
+function Prueba-M69($E, [string]$Guiones = '', [string[]]$A = @(), [string]$Tablas = '', [string]$Guion = '') {
+  $env:RESCATE_M69 = $Guiones
+  $env:RESCATE_M40 = $Tablas
+  try { return (Prueba $E $A $Guion) }
+  finally { $env:RESCATE_M69 = ''; $env:RESCATE_M40 = '' }
+}
+
+# El test que dejo guardado, en arnes-anterior, el arnes del $Repo ('original' o 'migrado'), o '' si no hay.
+function Test-Anterior($E, [string]$Repo) {
+  $paquete = 'viejo'
+  if ($Repo -eq 'migrado') { $paquete = 'nuevo' }
+  $f = Get-Ruta $E.Local "arnes-anterior/$Repo/src/test/java/com/acme/$paquete/PruebaLocalTest.java"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return [System.IO.File]::ReadAllText($f)
+}
+
+# Los ficheros de una carpeta de prueba-local, con su contenido, para comparar dos carpetas: 'ruta relativa=contenido' en orden y separados por '|'.
+function Foto-Carpeta($E, [string]$Rel) {
+  $d = Get-Ruta $E.Local $Rel
+  if (-not (Test-Path -LiteralPath $d)) { return '(no existe)' }
+  $base = (Resolve-Path -LiteralPath $d).Path
+  return ((@(Get-ChildItem -LiteralPath $d -Recurse -File | ForEach-Object { $_.FullName.Substring($base.Length).Replace('\', '/') + '=' + ([System.IO.File]::ReadAllText($_.FullName) -replace "\s+", ' ') }) | Sort-Object { $_ }) -join '|')
+}
+
+$V2 = 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2'
+
+$Pruebas['m69 (a1) con -RehacerOriginal, el test del original y el del migrado de antes acaban en arnes-anterior y salidas/vacio en salidas/vacio-anterior; sin -Rehacer..., nada se mueve'] = {
+  $e = Escenario-M69 'm69-a1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e $V2
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  Comprueba 'el caso vacio guardado lleva algo' ($v1 -match 'cargaJob/estado.txt=estado=COMPLETED') $v1
+  Comprueba 'aun no hay arnes-anterior ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  $r = Prueba-M69 $e $V2
+  Igual 'sin -Rehacer, sale con 0' 0 $r.Codigo
+  Comprueba 'sin -Rehacer no se mueve nada: ni arnes-anterior ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  Igual 'y los tests guardados son los mismos' "$o1|$m1" ((Test-Guardado $e 'original') + '|' + (Test-Guardado $e 'migrado'))
+  $r = Prueba-M69 $e $V2 @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/original es el test de antes' $o1 (Test-Anterior $e 'original')
+  Igual 'arnes-anterior/migrado es el de antes del migrado (se escribe otra vez por el original)' $m1 (Test-Anterior $e 'migrado')
+  Comprueba 'el del original guardado ahora es el nuevo (con su marca)' ((Test-Guardado $e 'original').Contains('M69_VERSION=v2') -and (Test-Guardado $e 'original') -ne $o1) ''
+  Comprueba 'y el del migrado' ((Test-Guardado $e 'migrado').Contains('M69_VERSION=v2') -and (Test-Guardado $e 'migrado') -ne $m1) ''
+  Igual 'salidas/vacio-anterior es el caso vacio de antes, entero' $v1 (Foto-Carpeta $e 'salidas/vacio-anterior')
+}
+
+$Pruebas['m69 (a2) con -RehacerArnes solo el del migrado va a arnes-anterior: el del original y salidas/vacio no se tocan'] = {
+  $e = Escenario-M69 'm69-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e $V2
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  $r = Prueba-M69 $e $V2 @('-RehacerArnes')
+  Igual 'con -RehacerArnes, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/migrado es el de antes' $m1 (Test-Anterior $e 'migrado')
+  Comprueba 'el del migrado guardado es el nuevo' ((Test-Guardado $e 'migrado').Contains('M69_VERSION=v2')) ''
+  Igual 'arnes-anterior/original no existe' '' (Test-Anterior $e 'original')
+  Comprueba 'ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  Igual 'el del original guardado no cambia' $o1 (Test-Guardado $e 'original')
+  Igual 'ni salidas/vacio' $v1 (Foto-Carpeta $e 'salidas/vacio')
+}
+
+$Pruebas['m69 (a3) un test guardado con la plantilla de otro lanzamiento (se escribe otra vez sin que nadie lo pida) tambien pasa a arnes-anterior; un tercer -RehacerOriginal pisa el de antes'] = {
+  $e = Escenario-M69 'm69-a3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'
+  Deja-Tarea-M37 $e 'original' $null 'aaaaaaaa'
+  Deja-Tarea-M37 $e 'migrado' $null 'bbbbbbbb'
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3'
+  Igual 'con la plantilla vieja, sale con 0' 0 $r.Codigo
+  Comprueba 'dice que escribe otra vez los dos' ($r.Salida.Contains($AvisoM37b)) (Cola $r.Salida)
+  Igual 'arnes-anterior/original es el de la primera vez' $o1 (Test-Anterior $e 'original')
+  $o2 = Test-Guardado $e 'original'
+  Comprueba 'y el guardado es el nuevo' ($o2.Contains('M69_VERSION=v2')) ''
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/original es ahora el de la segunda vez: pisa el de antes' $o2 (Test-Anterior $e 'original')
+  Comprueba 'y el guardado es el de la tercera' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+}
+
+# --- (b) el test nuevo del original no puede quedar peor que el de antes, y tiene que crear las columnas pedidas ---
+
+$CausaM69 = 'java.nio.file.NoSuchFileException: /datos/salida/RESUMEN.txt'
+$PeorM69 = "Con tu test, el caso vacio de cargaJob acaba FAILED ($CausaM69) y con el test de antes acababa COMPLETED."
+$TablasM69 = 'M69_TABLAS=T_A:ID|NOMBRE,T_B:ID'
+$SitioM69 = 'src/main/java/com/acme/viejo/Recibos.java:42'
+$MotivoColumnaM69 = "El test del original no crea la columna RECIBOS.IMPORTE_NETO (la usa $SitioM69)."
+
+# Deja en el prueba-local.json de antes (el $Anterior del siguiente lanzamiento) un caso que no se pudo preparar con este motivo.
+function Pone-Motivo-M69($E, [string]$Motivo) {
+  $j = Lee-Json $E.Json
+  $j.casos[0].resultado = 'no se pudo preparar'
+  $j.casos[0].motivo = $Motivo
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $j -Depth 10))
+}
+
+# El estado del caso vacio guardado (salidas/vacio) del job $Job: la linea estado= de su estado.txt.
+function Vacio-Estado-M69($E, [string]$Carpeta = 'salidas/vacio', [string]$Job = 'cargaJob') {
+  $f = Get-Ruta $E.Local "$Carpeta/$Job/estado.txt"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return ([regex]::Match([System.IO.File]::ReadAllText($f), '(?m)^estado=(\S+)').Groups[1].Value)
+}
+
+$Pruebas['m69 (b1) el caso vacio de antes es COMPLETED y el nuevo FAILED con una NoSuchFileException: el primer intento se rechaza con el motivo, el estado y la causa; el segundo, COMPLETED, se acepta'] = {
+  $e = Escenario-M69 'm69-b1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=FAILED~M69_CAUSA=$CausaM69;arnes-original@3@M69_VERSION=v3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'el original lleva tres llamadas en total: la primera vez y dos ahora' 3 (Llamadas-Arnes $e 'original').Count
+  Comprueba 'la consola rechaza el primer intento con el motivo, el estado y la causa' ($r.Salida.Contains("Arnes del original rechazado: $PeorM69")) (Cola $r.Salida)
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'original' 2).Contains($PeorM69)) (Cola (Registro-Arnes $e 'original' 2))
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el test guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+  Igual 'el caso vacio guardado es COMPLETED' 'COMPLETED' (Vacio-Estado-M69 $e)
+  Igual 'arnes-anterior es el de la primera vez' $o1 (Test-Anterior $e 'original')
+  Comprueba 'no se vuelve al de antes' ($r.Salida -notmatch 'sigo con el de antes') (Cola $r.Salida)
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m69 (b2) al nuevo le falta una tabla que antes estaba, o una columna de una tabla que antes estaba: se rechaza con lo que falta y el segundo intento, completo, se acepta'] = {
+  $e = Escenario-M69 'm69-b2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@$TablasM69;arnes-migrado@1@$TablasM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'el caso vacio guardado lleva las dos tablas' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/T_B.csv'))) ''
+  # el intento 1 pierde T_B; el 2 completo (con una columna de mas, que no cuenta)
+  $g = "arnes-original@2@M69_TABLAS=T_A:ID|NOMBRE;arnes-original@3@M69_TABLAS=T_A:ID|NOMBRE|EXTRA,T_B:ID;arnes-migrado@2@$TablasM69;arnes-migrado@3@$TablasM69"
+  $r = Prueba-M69 $e $g @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero por la tabla que falta' ($r.Salida.Contains('Arnes del original rechazado: En el caso vacio de cargaJob, tu base no tiene estas tablas que si tenia la del test de antes: T_B.')) (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el segundo' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv').Contains('EXTRA')) ''
+  # otra vez: el intento 1 pierde una columna de T_A (NOMBRE); el 2 la trae
+  $g = "arnes-original@4@M69_TABLAS=T_A:ID,T_B:ID;arnes-original@5@$TablasM69;arnes-migrado@3@$TablasM69;arnes-migrado@4@$TablasM69"
+  $r = Prueba-M69 $e $g @('-RehacerOriginal')
+  Igual 'la segunda vez, sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero por la columna que falta' ($r.Salida.Contains('Arnes del original rechazado: En el caso vacio de cargaJob, la tabla T_A de tu base ya no tiene estas columnas que si tenia la del test de antes: NOMBRE, EXTRA.')) (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m69 (b3) el prueba-local.json de antes dice que el test no crea RECIBOS.IMPORTE_NETO: sin ella en tablas/RECIBOS.csv se rechaza el primer intento, con ella se acepta; sin la tabla en el motivo vale en cualquier tabla'] = {
+  $e = Escenario-M69 'm69-b3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-migrado@1@M69_TABLAS=RECIBOS:ID|NOMBRE'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e $MotivoColumnaM69
+  $conColumna = 'M69_TABLAS=RECIBOS:ID|NOMBRE|IMPORTE_NETO'
+  $g = "arnes-original@2@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-original@3@$conColumna;arnes-migrado@2@$conColumna;arnes-migrado@3@$conColumna"
+  $r = Prueba-M69 $e $g @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero sin la columna, con su sitio' ($r.Salida.Contains("Arnes del original rechazado: Tu base no crea estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69).")) (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado lleva la columna' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/RECIBOS.csv').Contains('IMPORTE_NETO')) ''
+  Comprueba 'no hay aviso de columnas sin crear' ($r.Salida -notmatch 'sigue sin crear') (Cola $r.Salida)
+  # la columna esta en otra tabla: el motivo sin tabla la acepta; el motivo con la tabla RECIBOS, no
+  $e = Escenario-M69 'm69-b3b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e
+  Igual 'sin tabla: la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e "El test del original no crea la columna IMPORTE_NETO (la usa $SitioM69)."
+  $r = Prueba-M69 $e 'arnes-original@2@M69_TABLAS=OTRA:ID|IMPORTE_NETO' @('-RehacerOriginal')
+  Igual 'sin tabla: sale con 0' 0 $r.Codigo
+  Igual 'sin tabla: la tarea del original queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'sin tabla: ni rechazo ni aviso' ($r.Salida -notmatch 'sigue sin crear|Tu base no crea') (Cola $r.Salida)
+}
+
+$Pruebas['m69 (b4) en el ultimo intento sigue FAILED y antes era COMPLETED: se vuelve al de antes (la copia, arnes/original y salidas/vacio), sale el aviso y ningun caso hecho se ejecuta otra vez; el del migrado tambien vuelve'] = {
+  $e = Escenario-M69 'm69-b4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  $antes = @(1..2 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'cada caso se ejecuto 3 veces en el original' '3,3' $antes
+  $llamadas = (Llamadas $e).Count
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $r = Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'dos llamadas nuevas: las dos del original, ninguna del migrado' ($llamadas + 2) (Llamadas $e).Count
+  Comprueba 'el primer intento se rechaza' ($r.Salida.Contains("Arnes del original rechazado: $PeorM69")) (Cola $r.Salida)
+  $aviso = "El test nuevo del original quedaba peor que el de antes ($($PeorM69.TrimEnd('.'))): sigo con el de antes."
+  Comprueba 'el ultimo intento no se acepta: sale el aviso de que se sigue con el de antes' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Igual 'arnes/original es el de antes, byte a byte' $o1 (Test-Guardado $e 'original')
+  Igual 'la copia del original tiene el de antes' $o1 (Lee $e.CopiaOrig 'src/test/java/com/acme/viejo/PruebaLocalTest.java')
+  Igual 'salidas/vacio es el de antes, entero' $v1 (Foto-Carpeta $e 'salidas/vacio')
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'y guarda el motivo' ([string](Tarea-Arnes $e 'original').motivo -match 'quedaba peor que el de antes') ''
+  Igual 'el del migrado guardado es el de antes (no se rehizo: solo cambiaba el original)' $m1 (Test-Guardado $e 'migrado')
+  Comprueba 'la consola dice que el del migrado sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+  $despues = @(1..2 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-0' + $_) }) -join ','
+  Igual 'ningun caso se ejecuta otra vez en el original' $antes $despues
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m69 (b5) en el ultimo intento no queda peor pero le falta la columna pedida: se acepta con un aviso, y el test nuevo se queda'] = {
+  $e = Escenario-M69 'm69-b5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-migrado@1@M69_TABLAS=RECIBOS:ID|NOMBRE'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e $MotivoColumnaM69
+  $sin = 'M69_TABLAS=RECIBOS:ID|NOMBRE'
+  $r = Prueba-M69 $e "arnes-original@2@$sin~M69_VERSION=v2;arnes-original@3@$sin~M69_VERSION=v3;arnes-migrado@2@$sin;arnes-migrado@3@$sin" @('-RehacerOriginal')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'se rechaza el primero' ($r.Salida.Contains("Arnes del original rechazado: Tu base no crea estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69).")) (Cola $r.Salida)
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del original: bien\.') (Cola $r.Salida)
+  $aviso = "La base de tu test sigue sin crear estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal."
+  Comprueba 'con el aviso' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Comprueba 'no se vuelve al de antes' ($r.Salida -notmatch 'sigo con el de antes') (Cola $r.Salida)
+  Comprueba 'el test guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m69 (b6) antes era FAILED y el nuevo es FAILED: no se rechaza por el estado; pasar de FAILED a EXCEPCION si es peor, a STOPPED no'] = {
+  $e = Escenario-M69 'm69-b6' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso vacio guardado es FAILED' 'FAILED' (Vacio-Estado-M69 $e)
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v2" @('-RehacerOriginal')
+  Igual 'FAILED a FAILED: sale con 0' 0 $r.Codigo
+  Igual 'se acepta a la primera' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'sin rechazo ni vuelta atras' ($r.Salida -notmatch 'rechazado: Con tu test|sigo con el de antes') (Cola $r.Salida)
+  Comprueba 'el guardado es el nuevo' ((Test-Guardado $e 'original').Contains('M69_VERSION=v2')) ''
+  $r = Prueba-M69 $e 'arnes-original@3@M69_VACIO=EXCEPCION;arnes-original@4@M69_VACIO=STOPPED~M69_VERSION=v4' @('-RehacerOriginal')
+  Igual 'de FAILED a EXCEPCION y a STOPPED: sale con 0' 0 $r.Codigo
+  Comprueba 'EXCEPCION es peor que FAILED: se rechaza, con la clase y lo que acababa antes (y su causa)' ($r.Salida.Contains("Arnes del original rechazado: Con tu test, el caso vacio de cargaJob acaba EXCEPCION (BeanCreationException) y con el test de antes acababa FAILED ($CausaM69).")) (Cola $r.Salida)
+  Igual 'STOPPED no es peor que FAILED: hecha tras dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v4')) ''
+}
+
+$Pruebas['m69 (b7) un test guardado de otro lanzamiento que no se rehace no pasa por estas puertas: aunque le falte la columna pedida, se usa sin rechazo ni aviso'] = {
+  $e = Escenario-M69 'm69-b7' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_TABLAS=RECIBOS:ID|NOMBRE;arnes-migrado@1@M69_TABLAS=RECIBOS:ID|NOMBRE'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Pone-Motivo-M69 $e $MotivoColumnaM69
+  Cambia-Huella $e 'original'
+  $n = @(Llamadas $e).Count
+  $r = Prueba-M69 $e ''
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del original: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'sin aviso ni rechazo de columnas' ($r.Salida -notmatch 'sigue sin crear|Tu base no crea') (Cola $r.Salida)
+}
+
+$Pruebas['m69 (b8) las columnas se comparan sin distinguir mayusculas: el test nuevo con id y nombre en minusculas, donde antes estaba ID y NOMBRE, se acepta en el primer intento'] = {
+  $e = Escenario-M69 'm69-b8' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@$TablasM69;arnes-migrado@1@$TablasM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $minus = 'M69_TABLAS=T_A:id|nombre,T_B:id'
+  $r = Prueba-M69 $e "arnes-original@2@$minus;arnes-migrado@2@$TablasM69" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'no se rechaza nada' ($r.Salida -notmatch 'Arnes del original rechazado') (Cola $r.Salida)
+  Igual 'la tarea del original queda hecha, con un intento' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'el guardado es el nuevo, en minusculas' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv') -cmatch 'nombre') ''
+}
+
+$Pruebas['m69 (b9) tras volver al de antes, un caso no-aplica de antes de M59 (sin hash del arnes) no se prepara otra vez: el test del original no ha cambiado'] = {
+  $e = Escenario-M69 'm69-b9' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M69 $e '' @() '' 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso 1 queda sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  Pon-Hash-M59 $e 'caso-cargaJob-01' $null
+  $mal = "M69_VACIO=FAILED~M69_CAUSA=$CausaM69~M69_VERSION=v"
+  $r = Prueba-M69 $e "arnes-original@2@${mal}2;arnes-original@3@${mal}3" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Comprueba 'se vuelve al de antes' ($r.Salida.Contains('sigo con el de antes')) (Cola $r.Salida)
+  Igual 'el caso no-aplica no llama a la IA otra vez' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Comprueba 'y la consola no dice nada de prepararlo otra vez' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+  Igual 'sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+# --- (c) el primer intento del original ya sabe lo que fallo en el caso vacio de antes ---
+
+$Pruebas['m69 (c1) el previo del primer intento del original lleva una linea del caso vacio de antes que no acabo COMPLETED, con su causa; el job que si acabo no lleva ninguna; la huella no cambia'] = {
+  $e = Escenario-M69 'm69-c1' ([ordered]@{ cargaJob = @('importe=10.00'); otroJob = @('importe=20.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED:cargaJob~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'el primer intento de la primera vez no lleva nada del caso vacio de antes' (-not (Registro-Arnes $e 'original' 1).Contains('Con el test de antes')) ''
+  Igual 'el caso vacio guardado es FAILED en cargaJob y COMPLETED en otroJob' 'FAILED,COMPLETED' ((Vacio-Estado-M69 $e) + ',' + (Vacio-Estado-M69 $e 'salidas/vacio' 'otroJob'))
+  $huella = (Tarea-Arnes $e 'original').entradas.huella
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  $linea = "Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69."
+  Comprueba 'el primer intento lleva la linea de cargaJob, con su causa' ($p.Contains($linea)) (Cola $p)
+  Comprueba 'y ninguna de otroJob, que acabo COMPLETED' (-not $p.Contains('el caso vacio de otroJob')) (Cola $p)
+  Comprueba 'dentro del bloque de lo que fallo la otra vez' ($p.Contains('Lo que fallo la otra vez (de un lanzamiento anterior):')) (Cola $p)
+  Igual 'la huella de la tarea no cambia' $huella (Tarea-Arnes $e 'original').entradas.huella
+  Comprueba 'el primer intento del migrado no lleva la linea' (-not (Registro-Arnes $e 'migrado' 1).Contains('Con el test de antes')) ''
+}
+
+$Pruebas['m69 (c2) cuatro jobs cuyo caso vacio de antes acabo EXCEPCION: el previo lleva tres lineas, las de los tres primeros jobs, con la clase y la causa'] = {
+  $e = Escenario-M69 'm69-c2' ([ordered]@{ aJob = @('importe=10.00'); bJob = @('importe=20.00'); cJob = @('importe=30.00'); dJob = @('importe=40.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=EXCEPCION~M69_CAUSA=java.lang.IllegalStateException: sin correo"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Igual 'tres lineas, no cuatro' 3 ([regex]::Matches($p, 'Con el test de antes, el caso vacio de')).Count
+  foreach ($j in @('aJob', 'bJob', 'cJob')) {
+    Comprueba "la de $j, con la clase y la causa" ($p.Contains("Con el test de antes, el caso vacio de $j acababa EXCEPCION: BeanCreationException: java.lang.IllegalStateException: sin correo.")) (Cola $p)
+  }
+  Comprueba 'y la del cuarto no' (-not $p.Contains('el caso vacio de dJob')) (Cola $p)
+}
+
+# --- (d) la causa del caso vacio de antes cuando no hay causas.json (un caso vacio guardado antes de M69) ---
+
+# Deja en registros un registro de Maven del caso vacio del arnes del original (el nombre de Invoke-Maven: mvn-<n>-arnes-original--caso-vacio.log) con las
+# lineas $Lineas, escrito hace $Minutos minutos.
+function Pon-Registro-Vacio-M69($E, [int]$N, [string[]]$Lineas, [int]$Minutos = 0) {
+  $f = Get-Ruta $E.Local "registros/mvn-$N-arnes-original--caso-vacio.log"
+  [System.IO.File]::WriteAllText($f, (($Lineas -join "`n") + "`n"))
+  [System.IO.File]::SetLastWriteTimeUtc($f, [DateTime]::UtcNow.AddMinutes(-$Minutos))
+}
+
+# Deja el caso vacio guardado como lo dejaba M68: sin causas.json y sin ningun registro de Maven del caso vacio del original.
+function Deja-Vacio-De-Antes-M69($E) {
+  $c = Get-Ruta $E.Local 'salidas/vacio/causas.json'
+  if (Test-Path -LiteralPath $c) { Remove-Item -LiteralPath $c }
+  foreach ($f in @(Get-ChildItem -LiteralPath (Get-Ruta $E.Local 'registros') -File -Filter 'mvn-*-arnes-original--caso-vacio.log')) { Remove-Item -LiteralPath $f.FullName }
+}
+
+$Pruebas['m69 (d1) un caso vacio FAILED guardado sin causas.json y un registro de Maven con la NoSuchFileException: el primer intento lleva la linea con la causa, y la causa se apunta en causas.json de lo guardado y de lo de antes'] = {
+  $e = Escenario-M69 'm69-d1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'el caso vacio guardado es FAILED' 'FAILED' (Vacio-Estado-M69 $e)
+  Deja-Vacio-De-Antes-M69 $e
+  Pon-Registro-Vacio-M69 $e 7 @('[INFO] Running com.acme.viejo.PruebaLocalTest', "Caused by: $CausaM69", '[INFO] BUILD SUCCESS')
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  $linea = "Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69."
+  Comprueba 'el primer intento lleva la linea de cargaJob, con la causa del registro' ($p.Contains($linea)) (Cola $p)
+  Igual 'lo guardado de antes lleva la causa en su causas.json' $CausaM69 ([string](Lee-Json (Get-Ruta $e.Local 'salidas/vacio-anterior/causas.json')).cargaJob)
+}
+
+$Pruebas['m69 (d2) dos registros del caso vacio: la causa es la del mas reciente por fecha de escritura, no por el numero del nombre'] = {
+  $e = Escenario-M69 'm69-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Deja-Vacio-De-Antes-M69 $e
+  Pon-Registro-Vacio-M69 $e 9 @('Caused by: java.lang.IllegalStateException: de un lanzamiento viejo') 90
+  Pon-Registro-Vacio-M69 $e 2 @("Caused by: $CausaM69") 1
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento lleva la causa del registro mas reciente (el de numero 2)' ($p.Contains("Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69.")) (Cola $p)
+  Comprueba 'y no la del de numero 9' (-not $p.Contains('de un lanzamiento viejo')) (Cola $p)
+}
+
+$Pruebas['m69 (d3) con causas.json manda causas.json aunque haya un registro mas reciente con otra causa'] = {
+  $e = Escenario-M69 'm69-d3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Igual 'causas.json lleva la causa' $CausaM69 ([string](Lee-Json (Get-Ruta $e.Local 'salidas/vacio/causas.json')).cargaJob)
+  Pon-Registro-Vacio-M69 $e 50 @('Caused by: java.lang.IllegalStateException: la del registro') 0
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Comprueba 'el primer intento lleva la causa de causas.json' ($p.Contains("Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69.")) (Cola $p)
+  Comprueba 'y no la del registro' (-not $p.Contains('la del registro')) (Cola $p)
+}
+
+$Pruebas['m69 (d4) la causa de lo guardado antes de M69 se apunta al empezar: el motivo del primer intento rechazado dice la de antes y no la del registro del intento nuevo'] = {
+  $e = Escenario-M69 'm69-d4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $c = Get-Ruta $e.Local 'salidas/vacio/causas.json'
+  Remove-Item -LiteralPath $c
+  $nueva = 'java.lang.IllegalStateException: sin correo'
+  $r = Prueba-M69 $e "arnes-original@2@M69_VACIO=EXCEPCION~M69_CAUSA=$nueva" @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $dice = "Arnes del original rechazado: Con tu test, el caso vacio de cargaJob acaba EXCEPCION (BeanCreationException: $nueva) y con el test de antes acababa FAILED ($CausaM69)."
+  Comprueba 'el primer intento se rechaza por pasar de FAILED a EXCEPCION, con la causa de antes (la del registro de antes de empezar)' ($r.Salida.Contains($dice)) (Cola $r.Salida)
+}
+
+$Pruebas['m69 (d5) sin registro de Maven del caso vacio, o con uno sin causa: la linea sale sin causa'] = {
+  foreach ($n in @('sin-registro', 'sin-causa')) {
+    $e = Escenario-M69 "m69-d5-$n" ([ordered]@{ cargaJob = @('importe=10.00') })
+    $r = Prueba-M69 $e 'arnes-original@1@M69_VACIO=FAILED'
+    Igual "$n : la primera vez sale con 0" 0 $r.Codigo
+    Deja-Vacio-De-Antes-M69 $e
+    if ($n -eq 'sin-causa') { Pon-Registro-Vacio-M69 $e 3 @('[INFO] Running com.acme.viejo.PruebaLocalTest', '[INFO] BUILD SUCCESS') }
+    $r = Prueba-M69 $e '' @('-RehacerOriginal')
+    Igual "$n : con -RehacerOriginal, sale con 0" 0 $r.Codigo
+    $p = Registro-Arnes $e 'original' 1
+    Comprueba "$n : la linea sale como hoy, sin causa" ($p.Contains('Con el test de antes, el caso vacio de cargaJob acababa FAILED.')) (Cola $p)
+  }
+}
+
+# ===================== M67: el mismo fichero en otra carpeta es una sola diferencia, y una sola causa =====================
+# Escenarios con el Maven de m67 (tests/falsos/m67-mvn.ps1, sobre el de m25): el original deja CIERRE_2024_06_<n>.txt en trabajo/enviados y en ficheros/enviados y el
+# migrado, que lleva minimo=5.01 en src/main/resources/regla.txt, en ficheros/salida; el 'arreglo' de m25-copilot.ps1 (reparar-arregla) lo deja como el original.
+# Las banderas de RESCATE_M67 (misma, contenido, log, suelto) cambian lo que deja cada lado.
+
+$OrigM67 = 'en ficheros/enviados y trabajo/enviados'
+$MigM67 = 'en ficheros/salida'
+$ClaveM67 = 'ficheros/enviados,trabajo/enviados -> ficheros/salida'
+$AyudaM67 = 'Suele ser el test del migrado, que da a su propiedad de carpeta otro valor: relanza con -RehacerArnes. Si no, mira la propiedad en el application.yml del migrado o un cambio del codigo.'
+
+function Escenario-M67([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm67-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes $aj)
+}
+
+# Lanza con las banderas $Banderas del Maven falso (RESCATE_M67) y el guion $Guion del Copilot falso.
+function Prueba-M67($E, [string]$Banderas = '', [string[]]$A = @(), [string]$Guion = '') {
+  $env:RESCATE_M67 = $Banderas
+  try { return (Prueba $E $A $Guion) }
+  finally { $env:RESCATE_M67 = '' }
+}
+
+function Difs-M67($E, [string]$Caso) { return @((Caso $E 'cargaJob' $Caso).diferencias | Where-Object { $_ }) }
+
+# Un script con lo de Compare-Caso y Join-OtraCarpeta que, por cada 'Caso <id> @{ carpeta/fichero = contenido } @{ ... }' de $Cuerpo (el original y el migrado), escribe una linea
+# 'R <id> <tipo>|<fichero>|<original>|<migrado>|<lineas>|<linea>|<nota>|<clave>' por diferencia. Devuelve id -> sus lineas.
+function Compara-M67([string]$Nombre, [string]$Cuerpo) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Raiz)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @()
+$Cfg = @{ CompararIgnorar = @('*.log') }
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
+  $dirs = @{}
+  foreach ($x in @(@('A', $A), @('B', $B))) {
+    $d = Join-Path (Join-Path $Raiz $Id) $x[0]
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    foreach ($k in $x[1].Keys) {
+      $p = Join-Path $d $k
+      [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      [System.IO.File]::WriteAllText($p, $x[1][$k])
+    }
+    $dirs[$x[0]] = $d
+  }
+  $dif = @(Compare-Caso $dirs.A $dirs.B)
+  $dif = @(Join-OtraCarpeta $dif $dirs.A $dirs.B)
+  foreach ($d in $dif) { 'R ' + $Id + ' ' + (Get-TipoDif $d) + '|' + $d.fichero + '|' + $d.original + '|' + $d.migrado + '|' + $d.lineas + '|' + $d.linea + '|' + $d.nota + '|' + $d.clave }
+  if ($dif.Count -eq 0) { 'R ' + $Id + ' (ninguna)' }
+}
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  $funciones = (@('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado'))
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $funciones) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
+  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')))
+  $v = [ordered]@{}
+  foreach ($l in @($r.Salida -split "`n")) {
+    if ($l -cmatch '^R (\S+) (.*)$') { $id = $Matches[1]; if (-not $v.Contains($id)) { $v[$id] = @() }; $v[$id] += $Matches[2].TrimEnd() }
+  }
+  return $v
+}
+
+$Pruebas['m67 (a1) tres casos con otra fecha en el nombre, el original con el fichero en dos carpetas y el migrado en otra: una sola diferencia por caso, con las carpetas de los dos lados, y la consola lo dice'] = {
+  $e = Escenario-M67 'm67-a1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M67 $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'los tres casos salen distintos' 'distinto,distinto,distinto' ((Resultados $e) -join ',')
+  foreach ($n in 1..3) {
+    $d = @(Difs-M67 $e "caso-0$n")
+    Igual "caso-0${n}: una sola diferencia" 1 $d.Count
+    Igual "caso-0${n}: el nombre del caso, el tipo nuevo y lo que dice cada lado" "CIERRE_2024_06_0$n.txt|True|$OrigM67|$MigM67" ($d[0].fichero + '|' + $d[0].otraCarpeta + '|' + $d[0].original + '|' + $d[0].migrado)
+    Igual "caso-0${n}: las carpetas de cada lado, en una lista" 'ficheros/enviados,trabajo/enviados|ficheros/salida' ((@($d[0].carpetasOriginal) -join ',') + '|' + (@($d[0].carpetasMigrado) -join ','))
+    Igual "caso-0${n}: la clave es la pareja de carpetas" $ClaveM67 $d[0].clave
+  }
+  Comprueba 'la consola dice las carpetas de cada lado del primer caso' ($r.Salida.Contains("CIERRE_2024_06_01.txt: el original lo deja $OrigM67; el migrado, $MigM67")) (Cola $r.Salida)
+  Comprueba 'y no dice (no esta)' ($r.Salida -notmatch '\(no esta\)') (Cola $r.Salida)
+}
+
+$Pruebas['m67 (a2) el contenido: igual al de alguno del original, se dice (y a cual); distinto, sale la primera linea distinta, con sus lineas'] = {
+  $cuerpo = @'
+Caso 'igual' @{ 'ficheros/enviados/X_01.txt' = "a`nb`n"; 'trabajo/enviados/X_01.txt' = "a`nb`n" } @{ 'ficheros/salida/X_01.txt' = "a`nb`n" }
+Caso 'distinto' @{ 'ficheros/enviados/X_01.txt' = "a`nb`nc`n" } @{ 'ficheros/salida/X_01.txt' = "a`nz`nz`n" }
+Caso 'solo-el-segundo' @{ 'ficheros/enviados/X_01.txt' = "a`nb`n"; 'trabajo/enviados/X_01.txt' = "a`nc`n" } @{ 'ficheros/salida/X_01.txt' = "a`nc`n" }
+Caso 'fechas' @{ 'ficheros/enviados/X_01.txt' = "a`n"; 'ficheros/enviados/X_02.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n"; 'ficheros/salida/X_02.txt' = "b`n" }
+Caso 'raiz' @{ 'X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n" }
+'@
+  $v = Compara-M67 'm67-a2' $cuerpo
+  $igual = 'el contenido es igual al de'
+  Igual 'igual: una linea, con las dos carpetas del original y la primera con el mismo contenido' @("otraCarpeta|X_01.txt|en ficheros/enviados y trabajo/enviados|en ficheros/salida|1|1|$igual ficheros/enviados/X_01.txt, del original|ficheros/enviados,trabajo/enviados -> ficheros/salida") @($v['igual'])
+  Igual 'distinto: la primera linea distinta, la 2, y cuantas son (2)' @('otraCarpeta|X_01.txt|en ficheros/enviados|en ficheros/salida|2|2|el contenido es distinto: la primera linea distinta, la 2: original [b]; migrado [z]|ficheros/enviados -> ficheros/salida') @($v['distinto'])
+  Igual 'igual al del original de la otra carpeta: dice cual' @("otraCarpeta|X_01.txt|en ficheros/enviados y trabajo/enviados|en ficheros/salida|1|1|$igual trabajo/enviados/X_01.txt, del original|ficheros/enviados,trabajo/enviados -> ficheros/salida") @($v['solo-el-segundo'])
+  Igual 'fechas: un nombre por diferencia, la misma clave, y cada uno con su contenido' @("otraCarpeta|X_01.txt|en ficheros/enviados|en ficheros/salida|1|1|$igual ficheros/enviados/X_01.txt, del original|ficheros/enviados -> ficheros/salida", 'otraCarpeta|X_02.txt|en ficheros/enviados|en ficheros/salida|1|1|el contenido es distinto: la primera linea distinta, la 1: original [a]; migrado [b]|ficheros/enviados -> ficheros/salida') @($v['fechas'])
+  Igual 'un fichero en la raiz del caso: (raiz)' @("otraCarpeta|X_01.txt|en (raiz)|en ficheros/salida|1|1|$igual X_01.txt, del original|(raiz) -> ficheros/salida") @($v['raiz'])
+}
+
+$Pruebas['m67 (a3) el mismo nombre en la misma carpeta se compara como hoy: contenido distinto es una diferencia de contenido, y solo la copia de otra carpeta sin pareja sigue siendo (no esta)'] = {
+  $cuerpo = @'
+Caso 'misma' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "b`n" }
+Caso 'iguales' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n" }
+Caso 'misma-y-otra' @{ 'ficheros/salida/X_01.txt' = "a`n"; 'trabajo/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "b`n" }
+Caso 'misma-y-otra-en-el-migrado' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{ 'ficheros/salida/X_01.txt' = "a`n"; 'trabajo/X_01.txt' = "a`n" }
+'@
+  $v = Compara-M67 'm67-a3' $cuerpo
+  Igual 'la misma carpeta, otro contenido: contenido, con la linea de cada lado y la clave del fichero' @('contenido|ficheros/salida/X_01.txt|a|b|1|1||ficheros/salida/X_01.txt') @($v['misma'])
+  Igual 'la misma carpeta, igual: ninguna' @('(ninguna)') @($v['iguales'])
+  Igual 'la misma y otra solo en el original: la de la misma carpeta, de contenido; la otra, falta, como hoy' @('contenido|ficheros/salida/X_01.txt|a|b|1|1||ficheros/salida/X_01.txt', 'falta|trabajo/X_01.txt|a|(no esta)|1|1||trabajo/X_01.txt') @($v['misma-y-otra'])
+  Igual 'la misma y otra solo en el migrado: sobra, como hoy' @('sobra|trabajo/X_01.txt|(no esta)|a|1|1||trabajo/X_01.txt') @($v['misma-y-otra-en-el-migrado'])
+}
+
+$Pruebas['m67 (a4) un fichero que solo esta en un lado, sin otro con el mismo nombre en el otro, sigue saliendo (no esta); las tablas no se emparejan; con un .log tampoco'] = {
+  $cuerpo = @'
+Caso 'solo-original' @{ 'ficheros/salida/X_01.txt' = "a`n" } @{}
+Caso 'solo-migrado' @{} @{ 'ficheros/salida/X_01.txt' = "a`n" }
+Caso 'otros-nombres' @{ 'ficheros/enviados/X_01.txt' = "a`n" } @{ 'ficheros/salida/Y_01.txt' = "a`n" }
+Caso 'dos-copias-solo-original' @{ 'ficheros/enviados/X_01.txt' = "a`n"; 'trabajo/enviados/X_01.txt' = "a`n" } @{}
+Caso 'tablas' @{ 'tablas/T.csv' = "ID;NOMBRE`n1;ana`n" } @{ 'otra/T.csv' = "ID;NOMBRE`n1;ana`n" }
+Caso 'logs' @{ 'trabajo/enviados/X_01.log' = "a`n" } @{ 'ficheros/salida/X_01.log' = "a`n" }
+'@
+  $v = Compara-M67 'm67-a4' $cuerpo
+  Igual 'solo en el original: falta' @('falta|ficheros/salida/X_01.txt|a|(no esta)|1|1||ficheros/salida/X_01.txt') @($v['solo-original'])
+  Igual 'solo en el migrado: sobra' @('sobra|ficheros/salida/X_01.txt|(no esta)|a|1|1||ficheros/salida/X_01.txt') @($v['solo-migrado'])
+  Igual 'otro nombre en cada lado: una falta y una sobra, sueltas' @('falta|ficheros/enviados/X_01.txt|a|(no esta)|1|1||ficheros/enviados/X_01.txt', 'sobra|ficheros/salida/Y_01.txt|(no esta)|a|1|1||ficheros/salida/Y_01.txt') @($v['otros-nombres'])
+  Igual 'dos copias solo en el original: dos faltas' @('falta|ficheros/enviados/X_01.txt|a|(no esta)|1|1||ficheros/enviados/X_01.txt', 'falta|trabajo/enviados/X_01.txt|a|(no esta)|1|1||trabajo/enviados/X_01.txt') @($v['dos-copias-solo-original'])
+  Igual 'una tabla en otra carpeta no se empareja' @('sobra|otra/T.csv|(no esta)|ID;NOMBRE|2|1||otra/T.csv', 'falta|tablas/T.csv|ID;NOMBRE|(no esta)|2|1||tablas/T.csv') @($v['tablas'])
+  Igual 'un .log (CompararIgnorar) no entra en la comparacion: ninguna' @('(ninguna)') @($v['logs'])
+}
+
+$Pruebas['m67 (a5) un .log que cada lado deja en otra carpeta, con CompararIgnorar por defecto: los casos salen iguales; con la lista vacia, salen distintos (una sola diferencia por caso)'] = {
+  $e = Escenario-M67 'm67-a5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M67 $e 'log'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Igual 'sin ninguna diferencia' 0 (Difs-M67 $e 'caso-01').Count
+  $e = Escenario-M67 'm67-a5b' ([ordered]@{ cargaJob = @('importe=10.00') }) @{ CompararIgnorar = @() }
+  $r = Prueba-M67 $e 'log'
+  Igual 'con CompararIgnorar vacio, sale con 2' 2 $r.Codigo
+  $d = @(Difs-M67 $e 'caso-01')
+  Igual 'con una sola diferencia, la del .log movido' 'CIERRE_2024_06_01.log|True' ($d[0].fichero + '|' + $d[0].otraCarpeta)
+  Igual 'y es la unica' 1 $d.Count
+}
+
+$Pruebas['m67 (b1) los tres casos de (a1): un solo grupo de 3 casos con la pareja de carpetas en su firma, la cabecera con las carpetas de los dos lados y la linea de ayuda, una vez; un grupo de contenido no lleva la ayuda'] = {
+  $e = Escenario-M67 'm67-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M67 $e
+  $j = Lee-Json $e.Json
+  $g = @($j.grupos)
+  Igual 'un grupo' 1 $g.Count
+  Igual 'de fichero, con la pareja de carpetas y no el nombre en la firma' "fichero|${ClaveM67}:otraCarpeta" $g[0].firma
+  Igual 'de los tres casos' 'cargaJob/caso-01,cargaJob/caso-02,cargaJob/caso-03' (@($g[0].casos) -join ',')
+  Igual 'con la cabecera de las carpetas de cada lado' '3 casos distintos, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y trabajo/enviados' $g[0].descripcion
+  Igual 'cada caso apunta a su grupo' '1,1,1' (@($j.casos | ForEach-Object { $_.grupo }) -join ',')
+  Comprueba 'la consola dice el grupo' ($r.Salida.Contains("Grupo 1: $($g[0].descripcion)")) (Cola $r.Salida)
+  Igual 'y la linea de ayuda, una sola vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($AyudaM67))).Count
+  $e = Escenario-M67 'm67-b1b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M67 $e 'misma;contenido'
+  Igual 'con el mismo fichero en la misma carpeta y otro contenido, sale con 2' 2 $r.Codigo
+  Igual 'un grupo, de contenido' 'fichero|ficheros/salida/CIERRE_2024_06_01.txt:contenido' @((Lee-Json $e.Json).grupos)[0].firma
+  Comprueba 'sin la linea de ayuda de carpetas' (-not $r.Salida.Contains('Suele ser el test del migrado')) (Cola $r.Salida)
+}
+
+$Pruebas['m67 (b2) prueba-local.json guarda el tipo nuevo; -Reparar con un caso asi: una clave (la pareja de carpetas) para los tres casos, una llamada, un commit y los tres iguales; con reparar-no, no se arregla y sin commit'] = {
+  $e = Escenario-M67 'm67-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $wt0 = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba-M67 $e '' @('-Reparar') 'reparar-arregla'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Igual 'una sola llamada para arreglar' 1 (Llamadas-Reparar $e).Count
+  Igual 'un commit nuevo en la rama de rescate' 1 (GitEn $e.Wt @('rev-list', '--count', "$wt0..HEAD"))
+  $rep = @(Reparaciones $e)
+  Igual 'una reparacion, arreglada, con la pareja de carpetas por clave y los tres casos' "1|arreglado|$ClaveM67|3" "$($rep.Count)|$($rep[0].resultado)|$($rep[0].clave)|$($rep[0].casos)"
+  $p = @(Registros-Reparar $e 1)[0]
+  Comprueba 'el prompt dice el fichero y las carpetas de cada lado' ($p.Contains('CIERRE_2024_06_01.txt') -and $p.Contains($OrigM67) -and $p.Contains($MigM67)) $p
+  $e = Escenario-M67 'm67-b2b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $antes = Estado-Git $e.Wt
+  $r = Prueba-M67 $e '' @('-Reparar') 'reparar-no'
+  Igual 'con reparar-no, sale con 2' 2 $r.Codigo
+  Igual 'sin commit nuevo' $antes (Estado-Git $e.Wt)
+  $rep = @(Reparaciones $e)
+  Igual 'la clave queda no se arregla, y es la pareja de carpetas' "no se arregla|$ClaveM67" "$($rep[0].resultado)|$($rep[0].clave)"
+  $json = [System.IO.File]::ReadAllText($e.Json)
+  Comprueba 'el json lleva el tipo nuevo' ($json -match '"otraCarpeta":\s*true') ''
+}
+
+$Pruebas['m67 (b3) Get-Grupos con otraCarpeta: la misma pareja de carpetas con nombres distintos es un grupo; otra pareja, otro; la cabecera dice las carpetas y, con mas ficheros, cuantos mas'] = {
+  $f = Join-Path $Dir 'm67-grupos.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @()
+function Dif([string]$Fichero, [string]$Clave, [string]$Orig, [string]$Mig, [string[]]$CarpetasOrig = $null, [string[]]$CarpetasMig = $null) {
+  $d = [ordered]@{ fichero = $Fichero; clave = $Clave; lineas = 1; linea = 1; original = $Orig; migrado = $Mig; nota = '' }
+  if ($CarpetasOrig) { $d.otraCarpeta = $true; $d.carpetasOriginal = $CarpetasOrig; $d.carpetasMigrado = $CarpetasMig }
+  return $d
+}
+function Caso-M([string]$Caso, $Dif) { [ordered]@{ job = 'cargaJob'; caso = $Caso; titulo = 't'; resultado = 'distinto'; motivo = ''; diferencias = @($Dif); fallos = @() } }
+$par = 'ficheros/enviados -> ficheros/salida'
+$res = @(
+  (Caso-M 'caso-01' @((Dif 'CIERRE_2024_06_01.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')))),
+  (Caso-M 'caso-02' @((Dif 'CIERRE_2024_06_02.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')))),
+  (Caso-M 'caso-03' @((Dif 'CIERRE_2024_06_03.txt' 'ficheros/enviados,trabajo/enviados -> ficheros/salida' 'en ficheros/enviados y trabajo/enviados' 'en ficheros/salida' @('ficheros/enviados', 'trabajo/enviados') @('ficheros/salida')))),
+  (Caso-M 'caso-04' @((Dif 'CIERRE_2024_06_04.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')), (Dif 'otro.txt' 'ficheros/salida/otro.txt' 'x' 'y'))),
+  (Caso-M 'caso-05' @((Dif 'CIERRE_2024_06_05.txt' $par 'en ficheros/enviados' 'en ficheros/salida' @('ficheros/enviados') @('ficheros/salida')), (Dif 'CIERRE_X.txt' 'a -> b' 'en a' 'en b' @('a') @('b'))))
+)
+foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  Igual 'cuatro grupos' 4 $g.Count
+  Igual '1: la misma pareja con nombres de otra fecha: 2 casos' "1 ## fichero|ficheros/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-01,cargaJob/caso-02 ## 2 casos distintos, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados" $g[0]
+  Igual '2: una pareja a -> b (la primera en orden ordinal) y otra: la cabecera es de la primera y cuenta el fichero mas' '2 ## fichero|a -> b:otraCarpeta|ficheros/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-05 ## 1 caso distinto, el migrado deja sus ficheros en b y el original en a y 1 fichero mas' $g[1]
+  Igual '3: la misma pareja que el 1 y ademas un fichero de contenido: otro grupo, con la cabecera de la pareja y el fichero mas' '3 ## fichero|ficheros/enviados -> ficheros/salida:otraCarpeta|ficheros/salida/otro.txt:contenido ## cargaJob/caso-04 ## 1 caso distinto, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y 1 fichero mas' $g[2]
+  Igual '4: otra pareja de carpetas, con dos del original' '4 ## fichero|ficheros/enviados,trabajo/enviados -> ficheros/salida:otraCarpeta ## cargaJob/caso-03 ## 1 caso distinto, el migrado deja sus ficheros en ficheros/salida y el original en ficheros/enviados y trabajo/enviados' $g[3]
+}
+
+# Una linea de lo que el prueba-local.json de antes decia de las carpetas: 'En N casos el original deja sus ficheros en A y el migrado en B: ...'
+function Linea-M67([int]$N, [string]$Original, [string]$Migrado) {
+  return "- En $N casos el original deja sus ficheros en $Original y el migrado en ${Migrado}: da a las propiedades de carpetas del test del migrado los mismos valores que les da el test del original."
+}
+
+# Deja en el prueba-local.json de $E los casos de $Parejas: lista de (cuantos casos, carpetas del original, carpetas del migrado y, si se pone, 'dos': el primer
+# caso lleva ademas otro fichero de la misma pareja). Cada caso sale distinto, con su diferencia otraCarpeta.
+function Anterior-M67($E, $Parejas) {
+  $o = Lee-Json $E.Json
+  $casos = @()
+  $n = 0
+  foreach ($p in $Parejas) {
+    for ($i = 0; $i -lt $p[0]; $i++) {
+      $n++
+      $dif = @()
+      foreach ($nombre in @("CIERRE_2024_06_$n.txt") + @(if ($i -eq 0 -and $p.Count -gt 3) { "OTRO_2024_06_$n.txt" })) {
+        $dif += , [ordered]@{ fichero = $nombre; clave = (@($p[1]) -join ',') + ' -> ' + (@($p[2]) -join ','); lineas = 1; linea = 1; original = 'en ' + (@($p[1]) -join ' y '); migrado = 'en ' + (@($p[2]) -join ' y '); nota = ''; otraCarpeta = $true; carpetasOriginal = @($p[1]); carpetasMigrado = @($p[2]) }
+      }
+      $casos += , [ordered]@{ job = 'cargaJob'; caso = ('caso-' + $n.ToString('D2')); titulo = ''; resultado = 'distinto'; motivo = ''; diferencias = $dif; fallos = @() }
+    }
+  }
+  $o.casos = $casos
+  [System.IO.File]::WriteAllText($E.Json, (ConvertTo-Json -InputObject $o -Depth 20))
+}
+
+$Pruebas['m67 (c1) el prueba-local.json de antes con 3 casos de la misma pareja de carpetas (uno con dos ficheros de ella): sin -RehacerArnes, ni llamadas ni prompt nuevo; con -RehacerArnes, el primer intento del migrado lleva la linea, una vez, con 3 casos, y la huella no cambia'] = {
+  $e = Escenario-M64 'm67-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $huella = (Tarea-Arnes $e 'migrado').entradas.huella
+  Anterior-M67 $e @(, @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida'), 'dos'))
+  $llamadas = @(Llamadas-Arnes $e 'migrado').Count
+  $r = Prueba $e
+  Igual 'sin -RehacerArnes sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas del migrado' $llamadas @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'y el prompt de antes no lleva la linea' (-not (Registro-Arnes $e 'migrado' 1).Contains('el original deja sus ficheros')) ''
+  Anterior-M67 $e @(, @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida'), 'dos'))   # el lanzamiento de arriba lo ha pisado
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $linea = Linea-M67 3 'ficheros/enviados y trabajo/enviados' 'ficheros/salida'
+  Comprueba 'el primer intento del migrado lleva la linea de los 3 casos (el caso con dos ficheros de la pareja cuenta una vez)' ($mig.Contains($linea)) (Cola $mig)
+  Comprueba 'dentro del bloque de lo que fallo la otra vez, una sola vez' ($mig.Contains($M61Bloque) -and [regex]::Matches($mig, 'el original deja sus ficheros').Count -eq 1) (Cola $mig)
+  Comprueba 'sin la frase de las causas de fallo (no hay ninguna)' (-not $mig.Contains($M64Frase)) (Cola $mig)
+  Comprueba 'el del original no la lleva' (-not (Registro-Arnes $e 'original' 1).Contains('el original deja sus ficheros')) ''
+  Comprueba 'la tarea del migrado guarda la linea en entradas.previo' ([string](Tarea-Arnes $e 'migrado').entradas.previo -match [regex]::Escape($linea)) ''
+  Igual 'la huella del migrado no cambia' $huella (Tarea-Arnes $e 'migrado').entradas.huella
+}
+
+$Pruebas['m67 (c2) una pareja con un solo caso no sale; de las de 2 casos, las primeras por orden de firma, 3 lineas como mucho y la de mas casos primero; las carpetas se dicen con y; sin ninguna pareja repetida, el prompt no cambia'] = {
+  $e = Escenario-M64 'm67-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  Anterior-M67 $e @(@(1, @('g'), @('h')), @(2, @('e'), @('f')), @(2, @('c'), @('d')), @(3, @('ficheros/enviados', 'trabajo/enviados'), @('ficheros/salida')), @(2, @('a'), @('b')))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  $mig = Registro-Arnes $e 'migrado' 1
+  $l3 = Linea-M67 3 'ficheros/enviados y trabajo/enviados' 'ficheros/salida'
+  $lab = Linea-M67 2 'a' 'b'
+  $lcd = Linea-M67 2 'c' 'd'
+  Comprueba 'la de 3 casos' ($mig.Contains($l3)) (Cola $mig)
+  Comprueba 'las de 2 casos, a -> b y c -> d, por orden de firma' ($mig.Contains($lab) -and $mig.Contains($lcd) -and $mig.IndexOf($lab) -lt $mig.IndexOf($lcd)) (Cola $mig)
+  Comprueba 'la de mas casos va antes' ($mig.IndexOf($l3) -lt $mig.IndexOf($lab)) (Cola $mig)
+  Comprueba 'tres lineas en total: la tercera pareja de 2 casos (e -> f) y la de un caso (g -> h) no salen' ([regex]::Matches($mig, 'el original deja sus ficheros').Count -eq 3 -and -not $mig.Contains('en e y el migrado') -and -not $mig.Contains('en g y el migrado')) (Cola $mig)
+  $e = Escenario-M64 'm67-c2b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Anterior-M67 $e @(@(1, @('a'), @('b')), @(1, @('c'), @('d')))
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con dos parejas de un solo caso sale con 0' 0 $r.Codigo
+  Comprueba 'el prompt del migrado no lleva ni el bloque de lo que fallo la otra vez' (-not (Registro-Arnes $e 'migrado' 1).Contains($M61Bloque)) ''
+}
+
+# ===================== M73: lo que hoy da 'distinto' sin serlo (SQL que ya existe, horas en rutas, Excel y binarios) =====================
+# Escenarios con el Copilot de m40 y el Maven de m73 (tests/falsos/m73-mvn.ps1, sobre el de m68; sus banderas, en RESCATE_M73). Los datos son inventados.
+
+function Escenario-M73([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm73-mvn.ps1') }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  return (Escenario-M68 $Nombre $Casos $aj)
+}
+
+# Lanza con las banderas $Banderas del Maven falso de m73 (RESCATE_M73) y la base de los tests $Tablas (RESCATE_M40, como Prueba-M68).
+function Prueba-M73($E, [string]$Banderas = '', [string]$Tablas = '', [string[]]$A = @()) {
+  $env:RESCATE_M73 = $Banderas
+  try { return (Prueba-M68 $E '' $Tablas $A) }
+  finally { $env:RESCATE_M73 = '' }
+}
+
+# Edit-DatosSql sobre un fichero por cada texto de $Textos (en Latin-1, byte a byte): devuelve, por cada uno, @(el texto que queda en el fichero, 'si' si devuelve los bytes de antes).
+function EditaSql-M73([string]$Nombre, [string[]]$Textos) {
+  $latin = [System.Text.Encoding]::GetEncoding(28591)
+  $d = Join-Path $Dir $Nombre
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  for ($i = 0; $i -lt $Textos.Count; $i++) { [System.IO.File]::WriteAllBytes((Join-Path $d "c$i.sql"), $latin.GetBytes($Textos[$i])) }
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Carpeta)
+$Latin = [System.Text.Encoding]::GetEncoding(28591)
+'@
+  $cuerpo = @'
+foreach ($f in @(Get-ChildItem -LiteralPath $Carpeta -Filter 'c*.sql')) {
+  $antes = Edit-DatosSql $f.FullName
+  $d = ''
+  if ($null -ne $antes) { $d = 'si:' + $Latin.GetString($antes) }
+  [System.IO.File]::WriteAllText($f.FullName + '.antes', $d, $Latin)
+}
+'@
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Edit-DatosSql', 'Get-MascaraSql')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($d)
+  $v = @()
+  for ($i = 0; $i -lt $Textos.Count; $i++) {
+    $ruta = Join-Path $d "c$i.sql"
+    $v += , @($latin.GetString([System.IO.File]::ReadAllBytes($ruta)), [System.IO.File]::ReadAllText($ruta + '.antes', $latin))
+  }
+  return $v
+}
+
+# Comprueba que cada par @(entrada, esperada) de $Pares sale de Edit-DatosSql como se espera y que los bytes de antes se devuelven solo si algo cambio y son los de la entrada.
+function Comprueba-Sql-M73([string]$Nombre, $Pares) {
+  $v = EditaSql-M73 $Nombre @($Pares | ForEach-Object { $_[0] })
+  for ($i = 0; $i -lt $Pares.Count; $i++) {
+    $q = ($Pares[$i][0] -replace "`r", '\r' -replace "`n", '\n')
+    Igual "[$i] $q" $Pares[$i][1] $v[$i][0]
+    $cambia = $Pares[$i][0] -cne $Pares[$i][1]
+    Igual "[$i] devuelve los bytes de antes solo si cambia" $(if ($cambia) { 'si:' + $Pares[$i][0] } else { '' }) $v[$i][1]
+  }
+}
+
+$Pruebas['m73 (a1) CREATE SEQUENCE, CREATE UNIQUE INDEX, CREATE SCHEMA, ADD CONSTRAINT y ADD COLUMN llevan IF NOT EXISTS en lo que se ejecuta: en mayusculas, en minusculas y en varias lineas'] = {
+  $pares = @(
+    @('CREATE SEQUENCE X', 'CREATE SEQUENCE IF NOT EXISTS X'),
+    @('create sequence x start with 1 increment by 50;', 'create sequence IF NOT EXISTS x start with 1 increment by 50;'),
+    @("CREATE`r`n  SEQUENCE`n  BATCH_STEP_EXECUTION_SEQ`n  START WITH 1;", "CREATE`r`n  SEQUENCE`n  IF NOT EXISTS BATCH_STEP_EXECUTION_SEQ`n  START WITH 1;"),
+    @('CREATE UNIQUE INDEX I ON T(C)', 'CREATE UNIQUE INDEX IF NOT EXISTS I ON T(C)'),
+    @('create unique index i on t (c);', 'create unique index IF NOT EXISTS i on t (c);'),
+    @('CREATE INDEX I ON T(C)', 'CREATE INDEX IF NOT EXISTS I ON T(C)'),
+    @('CREATE HASH INDEX I ON T(C)', 'CREATE HASH INDEX IF NOT EXISTS I ON T(C)'),
+    @('CREATE UNIQUE HASH INDEX S.I ON T(C)', 'CREATE UNIQUE HASH INDEX IF NOT EXISTS S.I ON T(C)'),
+    @('CREATE SPATIAL INDEX I ON T(C)', 'CREATE SPATIAL INDEX IF NOT EXISTS I ON T(C)'),
+    @("create`n  unique`n  index`n  i`n  on t(c);", "create`n  unique`n  index`n  IF NOT EXISTS i`n  on t(c);"),
+    @('CREATE SCHEMA S', 'CREATE SCHEMA IF NOT EXISTS S'),
+    @('create schema s authorization sa;', 'create schema IF NOT EXISTS s authorization sa;'),
+    @("CREATE SCHEMA`n  S;", "CREATE SCHEMA`n  IF NOT EXISTS S;"),
+    @('ALTER TABLE T ADD CONSTRAINT K FOREIGN KEY (C) REFERENCES P(ID)', 'ALTER TABLE T ADD CONSTRAINT IF NOT EXISTS K FOREIGN KEY (C) REFERENCES P(ID)'),
+    @('alter table t add constraint k unique (c);', 'alter table t add constraint IF NOT EXISTS k unique (c);'),
+    @("ALTER TABLE T`n  ADD CONSTRAINT`n  K PRIMARY KEY (C)", "ALTER TABLE T`n  ADD CONSTRAINT`n  IF NOT EXISTS K PRIMARY KEY (C)"),
+    @('ALTER TABLE IF EXISTS S.T ADD CONSTRAINT K CHECK (C > 0)', 'ALTER TABLE IF EXISTS S.T ADD CONSTRAINT IF NOT EXISTS K CHECK (C > 0)'),
+    @('ALTER TABLE T ADD COLUMN C INT', 'ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT'),
+    @('alter table s.t add column c varchar(10) not null;', 'alter table s.t add column IF NOT EXISTS c varchar(10) not null;'),
+    @('ALTER TABLE T ADD C INT', 'ALTER TABLE T ADD IF NOT EXISTS C INT'),
+    @("ALTER TABLE T`n  ADD`n  COLUMN`n  C INT;", "ALTER TABLE T`n  ADD`n  COLUMN`n  IF NOT EXISTS C INT;"),
+    @('ALTER TABLE IF EXISTS T ADD COLUMN C INT', 'ALTER TABLE IF EXISTS T ADD COLUMN IF NOT EXISTS C INT'),
+    @('create sequence A; create sequence B; alter table T add column D int;', 'create sequence IF NOT EXISTS A; create sequence IF NOT EXISTS B; alter table T add column IF NOT EXISTS D int;')
+  )
+  Comprueba-Sql-M73 'm73-a1' $pares
+}
+
+$Pruebas['m73 (a1b) el resto de lo que acepta IF NOT EXISTS en las tres gramaticas de H2 (1.4.193, 1.4.200 y 2.x): tablas con modificadores, vistas, roles, usuarios, constantes, dominios, alias, agregados, triggers y tablas enlazadas'] = {
+  $pares = @(
+    @('CREATE TABLE T (ID INT)', 'CREATE TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE CACHED TABLE T (ID INT)', 'CREATE CACHED TABLE IF NOT EXISTS T (ID INT)'),
+    @('create memory table t (id int)', 'create memory table IF NOT EXISTS t (id int)'),
+    @('CREATE GLOBAL TEMPORARY TABLE T (ID INT)', 'CREATE GLOBAL TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE LOCAL TEMPORARY TABLE T (ID INT)', 'CREATE LOCAL TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE TEMP TABLE T (ID INT)', 'CREATE TEMP TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE MEMORY TEMPORARY TABLE T (ID INT)', 'CREATE MEMORY TEMPORARY TABLE IF NOT EXISTS T (ID INT)'),
+    @("CREATE FORCE LINKED TABLE T('org.h2.Driver', 'jdbc:h2:mem:x', 'sa', '', 'P')", "CREATE FORCE LINKED TABLE IF NOT EXISTS T('org.h2.Driver', 'jdbc:h2:mem:x', 'sa', '', 'P')"),
+    @('CREATE VIEW V AS SELECT 1 FROM DUAL', 'CREATE VIEW IF NOT EXISTS V AS SELECT 1 FROM DUAL'),
+    @('create force view v as select 1 from dual', 'create force view IF NOT EXISTS v as select 1 from dual'),
+    @('CREATE ROLE R', 'CREATE ROLE IF NOT EXISTS R'),
+    @("CREATE USER U PASSWORD 'p'", "CREATE USER IF NOT EXISTS U PASSWORD 'p'"),
+    @('CREATE CONSTANT K VALUE 1', 'CREATE CONSTANT IF NOT EXISTS K VALUE 1'),
+    @('CREATE DOMAIN D AS INT', 'CREATE DOMAIN IF NOT EXISTS D AS INT'),
+    @('CREATE ALIAS A FOR "com.acme.Util.f"', 'CREATE ALIAS IF NOT EXISTS A FOR "com.acme.Util.f"'),
+    @('CREATE AGGREGATE G FOR "com.acme.Media"', 'CREATE AGGREGATE IF NOT EXISTS G FOR "com.acme.Media"'),
+    @('CREATE TRIGGER TR AFTER INSERT ON T CALL "com.acme.Disparo"', 'CREATE TRIGGER IF NOT EXISTS TR AFTER INSERT ON T CALL "com.acme.Disparo"')
+  )
+  Comprueba-Sql-M73 'm73-a1b' $pares
+}
+
+$Pruebas['m73 (a2) lo que ya lleva IF NOT EXISTS no cambia (ni en mayusculas, minusculas o espacios de mas); tampoco lo que no lo acepta en alguna gramatica ni lo que va en un comentario o un texto; lo demas del fichero queda byte a byte'] = {
+  $enie = [string][char]0xF1 + 'and' + [char]0xFA
+  $pares = @(
+    @('CREATE SEQUENCE IF NOT EXISTS X', 'CREATE SEQUENCE IF NOT EXISTS X'),
+    @('create   index  if  not  exists  i on t(c)', 'create   index  if  not  exists  i on t(c)'),
+    @("CREATE SCHEMA`n  IF NOT EXISTS`n  S", "CREATE SCHEMA`n  IF NOT EXISTS`n  S"),
+    @('ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT', 'ALTER TABLE T ADD COLUMN IF NOT EXISTS C INT'),
+    @('ALTER TABLE T ADD IF NOT EXISTS C INT', 'ALTER TABLE T ADD IF NOT EXISTS C INT'),
+    @('alter table t add constraint  if not exists  k unique (c)', 'alter table t add constraint  if not exists  k unique (c)'),
+    @('CREATE TABLE IF NOT EXISTS T (ID INT)', 'CREATE TABLE IF NOT EXISTS T (ID INT)'),
+    @('CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL', 'CREATE OR REPLACE VIEW V AS SELECT 1 FROM DUAL'),
+    @('CREATE OR REPLACE FORCE VIEW V AS SELECT 1 FROM DUAL', 'CREATE OR REPLACE FORCE VIEW V AS SELECT 1 FROM DUAL'),
+    @('CREATE INDEX ON T(C)', 'CREATE INDEX ON T(C)'),
+    @('create unique index on t(c)', 'create unique index on t(c)'),
+    @('CREATE PRIMARY KEY ON T(C)', 'CREATE PRIMARY KEY ON T(C)'),
+    @('CREATE SCHEMA AUTHORIZATION SA', 'CREATE SCHEMA AUTHORIZATION SA'),
+    @('CREATE MATERIALIZED VIEW V AS SELECT 1 FROM DUAL', 'CREATE MATERIALIZED VIEW V AS SELECT 1 FROM DUAL'),
+    @('ALTER TABLE T ADD PRIMARY KEY (C)', 'ALTER TABLE T ADD PRIMARY KEY (C)'),
+    @('ALTER TABLE T ADD UNIQUE (C)', 'ALTER TABLE T ADD UNIQUE (C)'),
+    @('ALTER TABLE T ADD FOREIGN KEY (C) REFERENCES P(ID)', 'ALTER TABLE T ADD FOREIGN KEY (C) REFERENCES P(ID)'),
+    @('ALTER TABLE T ADD CHECK (C > 0)', 'ALTER TABLE T ADD CHECK (C > 0)'),
+    @('ALTER TABLE T ADD (A INT, B INT)', 'ALTER TABLE T ADD (A INT, B INT)'),
+    @('ALTER TABLE T ADD COLUMN (A INT, B INT)', 'ALTER TABLE T ADD COLUMN (A INT, B INT)'),
+    @('ALTER TABLE T ALTER COLUMN C INT', 'ALTER TABLE T ALTER COLUMN C INT'),
+    @('ALTER TABLE T DROP COLUMN C', 'ALTER TABLE T DROP COLUMN C'),
+    @('-- CREATE SEQUENCE X', '-- CREATE SEQUENCE X'),
+    @("-- no es la de 'ayer'`nCREATE SEQUENCE X", "-- no es la de 'ayer'`nCREATE SEQUENCE IF NOT EXISTS X"),
+    @('/* CREATE TABLE T (ID INT); ALTER TABLE T ADD COLUMN C INT */', '/* CREATE TABLE T (ID INT); ALTER TABLE T ADD COLUMN C INT */'),
+    @("INSERT INTO LOG VALUES ('CREATE SEQUENCE X; ALTER TABLE T ADD COLUMN C INT')", "INSERT INTO LOG VALUES ('CREATE SEQUENCE X; ALTER TABLE T ADD COLUMN C INT')"),
+    @("INSERT INTO LOG VALUES ('it''s: CREATE TABLE T'); CREATE SEQUENCE X", "INSERT INTO LOG VALUES ('it''s: CREATE TABLE T'); CREATE SEQUENCE IF NOT EXISTS X"),
+    @('CREATE ALIAS A AS $$ String f() { return "CREATE SEQUENCE X"; } $$', 'CREATE ALIAS IF NOT EXISTS A AS $$ String f() { return "CREATE SEQUENCE X"; } $$'),
+    @("CREATE /* a */ SEQUENCE /* b */ X", "CREATE /* a */ SEQUENCE /* b */ IF NOT EXISTS X"),
+    @("insert into T values ('$enie')`r`ncreate sequence S;`r`n", "insert into T values ('$enie')`r`ncreate sequence IF NOT EXISTS S;`r`n"),
+    @('', '')
+  )
+  Comprueba-Sql-M73 'm73-a2' $pares
+}
+
+$Pruebas['m73 (a3) un caso hecho de antes cuyo original guardo que una secuencia, un indice, un esquema, una vista, una restriccion o una columna ya existe (en espanol, en ingles o solo con el codigo) se ejecuta otra vez; los demas errores, no'] = {
+  $casos = @(1..16 | ForEach-Object { 'importe=' + $_ + '0.00' })
+  $e = Escenario-M73 'm73-a3' ([ordered]@{ cargaJob = $casos })
+  $r = Prueba-M73 $e
+  Igual 'el primer lanzamiento sale con 0' 0 $r.Codigo
+  $llamadas = (Llamadas $e).Count
+  $h2 = 'org.h2.jdbc.JdbcSQLSyntaxErrorException: '
+  $dicen = @{
+    1  = @($true, ($h2 + 'Sequence "BATCH_STEP_EXECUTION_SEQ" already exists; SQL statement: CREATE SEQUENCE BATCH_STEP_EXECUTION_SEQ [90035-200]'))
+    2  = @($true, ($h2 + 'Sequence "BATCH_STEP_EXECUTION_SEQ" ya existe; Sentencia SQL: CREATE SEQUENCE BATCH_STEP_EXECUTION_SEQ [90035-200]'))
+    3  = @($true, ($h2 + '[90035-200]'))
+    4  = @($true, ($h2 + 'Indice "IX_A" ya existe; Sentencia SQL: CREATE UNIQUE INDEX IX_A ON T_A(ID) [42111-200]'))
+    5  = @($true, ($h2 + 'Index "IX_A" already exists [42111-200]'))
+    6  = @($true, ($h2 + 'Schema "S_A" already exists'))
+    7  = @($true, ($h2 + 'View "V_A" ya existe; Sentencia SQL: CREATE VIEW V_A AS SELECT 1 FROM DUAL'))
+    8  = @($true, ($h2 + 'Constraint "K_A" already exists; SQL statement: ALTER TABLE T_A ADD CONSTRAINT K_A UNIQUE (ID) [90045-200]'))
+    9  = @($true, ($h2 + 'Nombre de columna Duplicada "COL_X"; Sentencia SQL: ALTER TABLE T_A ADD COLUMN COL_X INT [42121-200]'))
+    10 = @($true, ("Failed to execute SQL script statement #1: ALTER TABLE T_A ADD COLUMN COL_X INT; nested exception is " + $h2 + 'Duplicate column name "COL_X" [42121-200]'))
+    11 = @($true, ($h2 + 'Role "R_A" already exists [90069-200]; User "U_A" ya existe [90033-200]; Trigger "TR_A" ya existe [90041-200]; Constant "K" ya existe [90114-200]; Function alias "A" already exists [90076-200]; Domain "D" ya existe [90119-200]'))
+    12 = @($false, ($h2 + 'Duplicate column name "C"; SQL statement: CREATE TABLE T_A (C INT, C INT) [42121-200]'))
+    13 = @($false, ($h2 + 'Tabla "T_A" no encontrada; Sentencia SQL: SELECT * FROM T_A [42102-200]'))
+    14 = @($false, ('Se han tratado 1190035 filas y el codigo 420112 no es un error de H2'))
+    15 = @($false, ('java.lang.NullPointerException'))
+  }
+  foreach ($n in $dicen.Keys) { Escribe $e.Local ('salidas/original/cargaJob/caso-' + $n.ToString('D2') + '/error.txt') ($dicen[$n][1] + "`n") }
+  $r = Prueba-M73 $e
+  Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas nuevas a Copilot' $llamadas (Llamadas $e).Count
+  $esperado = @(1..16 | ForEach-Object { if ($dicen.ContainsKey($_) -and $dicen[$_][0]) { '5' } else { '3' } }) -join ','
+  $despues = @(1..16 | ForEach-Object { Orig-Mvn $e 'cargaJob' ('caso-' + $_.ToString('D2')) }) -join ','
+  Igual 'los once con el error se ejecutan otra vez (original y original-2) y los demas, no' $esperado $despues
+  Comprueba 'la consola dice cuantos' ($r.Salida -match 'Se ejecuta otra vez el original de 11 caso\(s\)') (Cola $r.Salida)
+  Comprueba 'y que es porque su error.txt dice que algo ya existe (no solo una tabla)' ($r.Salida -match 'dice que algo ya existe') (Cola $r.Salida)
+}
+
+$Pruebas['m73 (a3b) $PatronYaExiste: cada codigo de H2 de algo que ya existe se reconoce por si solo, y la columna repetida solo con un ALTER TABLE'] = {
+  $texto = [System.IO.File]::ReadAllText($Script)
+  foreach ($v in @('CodigosYaExiste', 'ColumnaRepetida', 'PatronYaExiste')) {
+    $l = [regex]::Match($texto, '(?m)^\$' + $v + ' = .*$')
+    Comprueba "$v esta definido en una linea" $l.Success ''
+    Invoke-Expression $l.Value
+  }
+  foreach ($c in @(42101, 42111, 90033, 90035, 90038, 90041, 90045, 90069, 90076, 90078, 90114, 90119)) { Comprueba "el codigo $c, solo" ("[$c-200]" -match $PatronYaExiste) '' }
+  Comprueba 'ya existe, solo' ('Tabla "T" ya existe' -match $PatronYaExiste) ''
+  Comprueba 'already exists, solo' ('Table "T" already exists' -match $PatronYaExiste) ''
+  Comprueba 'un codigo pegado a otras cifras no cuenta' (-not ('1190035 y 420112' -match $PatronYaExiste)) ''
+  foreach ($c in @('Duplicate column name "C"', 'Nombre de columna Duplicada "C"', '[42121-200]')) {
+    Comprueba "con ALTER TABLE: $c" (("ALTER TABLE T ADD COLUMN C INT; $c") -match $PatronYaExiste) ''
+    Comprueba "sin ALTER TABLE: $c" (-not (("CREATE TABLE T (C INT, C INT); $c") -match $PatronYaExiste)) ''
+  }
+}
+
+$Pruebas['m73 (a4) un datos.sql que crea una secuencia, un indice, un esquema y una columna que la base ya tiene: el caso corre en el original y en el migrado, y lo guardado en casos no cambia'] = {
+  $sql = 'create sequence BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IX_A on T_A(ID); alter table T_A add column COL_X int; create schema S_A; alter table T_A add constraint K_A unique (ID)'
+  $e = Escenario-M73 'm73-a4' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A' 'tablas=1/CALENDARIO_02'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  Comprueba 'el original no deja error.txt' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/error.txt'))) ''
+  $con = 'cargaJob/caso-01|create sequence IF NOT EXISTS BATCH_STEP_EXECUTION_SEQ start with 1; create unique index IF NOT EXISTS IX_A on T_A(ID); alter table T_A add column IF NOT EXISTS COL_X int; create schema IF NOT EXISTS S_A; alter table T_A add constraint IF NOT EXISTS K_A unique (ID)'
+  Igual 'el original vio las cinco sentencias con IF NOT EXISTS en sus tres ejecuciones' 3 @(Sql-M68 $e $e.CopiaOrig | Where-Object { $_ -ceq $con }).Count
+  Igual 'y el migrado, en la suya' 1 @(Sql-M68 $e $e.CopiaMig | Where-Object { $_ -ceq $con }).Count
+  Igual 'lo guardado en casos no cambia' $sql (Lee $e.Local 'casos/cargaJob/caso-01/datos.sql').Trim()
+  $rel = 'src/test/resources/prueba-local/cargaJob/caso-01/datos.sql'
+  Igual 'ni lo que queda en la copia del original' $sql (Lee $e.CopiaOrig $rel).Trim()
+  Igual 'ni en la copia del migrado' $sql (Lee $e.CopiaMig $rel).Trim()
+  $e = Escenario-M73 'm73-a4b' ([ordered]@{ cargaJob = @("importe=10.00 | SQL $sql") })
+  $r = Prueba-M73 $e 'ya=BATCH_STEP_EXECUTION_SEQ,IX_A,COL_X,S_A,K_A;en' 'tablas=1/CALENDARIO_02'
+  Igual 'con los mensajes de H2 en ingles tambien sale con 0' 0 $r.Codigo
+}
+
+# Un script con Get-Normal y lo de comparar que, con el dia 2026-11-22 como el de la ejecucion ($Hoy), por cada 'Caso <id> @{ carpeta/fichero = contenido } @{ ... }' de $Cuerpo (el original
+# y el migrado) escribe una linea 'R <id> <tipo>|<fichero>|<original>|<migrado>|<lineas>|<linea>|<nota>|<clave>' por diferencia (Get-TipoDif), o 'R <id> (ninguna)'. Un contenido que es un
+# [byte[]] se escribe tal cual: los de $Bin (nombre -> bytes) se escriben aparte y el script los lee con Bin '<nombre>'. Devuelve id -> sus lineas.
+function Compara-M73([string]$Nombre, [string]$Cuerpo, [hashtable]$Bin = @{}) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Raiz, [string]$BinDir)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Cfg = @{ CompararIgnorar = @('*.log') }
+Add-Type -AssemblyName System.IO.Compression
+function Bin([string]$N) { return , [System.IO.File]::ReadAllBytes((Join-Path $BinDir $N)) }
+function Caso([string]$Id, [hashtable]$A, [hashtable]$B) {
+  $dirs = @{}
+  foreach ($x in @(@('A', $A), @('B', $B))) {
+    $d = Join-Path (Join-Path $Raiz $Id) $x[0]
+    [void](New-Item -ItemType Directory -Path $d -Force)
+    foreach ($k in $x[1].Keys) {
+      $p = Join-Path $d $k
+      [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+      if ($x[1][$k] -is [byte[]]) { [System.IO.File]::WriteAllBytes($p, $x[1][$k]) } else { [System.IO.File]::WriteAllText($p, $x[1][$k]) }
+    }
+    $dirs[$x[0]] = $d
+  }
+  $dif = @(Compare-Caso $dirs.A $dirs.B)
+  $dif = @(Join-OtraCarpeta $dif $dirs.A $dirs.B)
+  foreach ($d in $dif) { 'R ' + $Id + ' ' + (Get-TipoDif $d) + '|' + $d.fichero + '|' + $d.original + '|' + $d.migrado + '|' + $d.lineas + '|' + $d.linea + '|' + $d.nota + '|' + $d.clave }
+  if ($dif.Count -eq 0) { 'R ' + $Id + ' (ninguna)' }
+}
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script $FnComparaM73) + "`n" + (Texto-De-Funciones $comun @('Get-Rel', 'Join-Ruta')) + "`n" + '$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)' + "`n" + $Cuerpo))
+  $bd = Join-Path $Dir ($Nombre + '-bin')
+  [void](New-Item -ItemType Directory -Path $bd -Force)
+  foreach ($k in $Bin.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $bd $k), [byte[]]$Bin[$k]) }
+  $r = Lanzar $f @((Join-Path $Dir ($Nombre + '-dirs')), $bd)
+  $v = [ordered]@{}
+  foreach ($l in @($r.Salida -split "`n")) {
+    if ($l -cmatch '^R (\S+) (.*)$') { $id = $Matches[1]; if (-not $v.Contains($id)) { $v[$id] = @() }; $v[$id] += $Matches[2].TrimEnd() }
+  }
+  if ($v.Count -eq 0) { Comprueba "${Nombre}: el script da alguna linea R" $false (Cola $r.Salida) }
+  return $v
+}
+# Las funciones del script que necesita Compara-M73.
+$FnComparaM73 = (@('Compare-Caso', 'Join-OtraCarpeta', 'New-DifOtraCarpeta', 'Get-TipoDif', 'Format-Carpetas', 'Compare-Fichero') + $FnLeer + @('Sort-Tabla', 'Resolve-ParTablas', 'Sort-Ordinal', 'Get-Normal', 'Get-Legible', 'Get-NotaJdk', 'Test-Ignorado'))
+
+# Get-Normal del dia 2026-11-22 sobre cada texto de $Textos (uno por linea, sin saltos): devuelve lo que sale, en el mismo orden.
+function Normaliza-M73([string]$Nombre, [string[]]$Textos) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Entrada)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+'@
+  $cuerpo = @'
+foreach ($l in [System.IO.File]::ReadAllLines($Entrada)) { 'N ' + (Get-Normal $l) }
+'@
+  $en = Join-Path $Dir "$Nombre.txt"
+  [System.IO.File]::WriteAllLines($en, $Textos)
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Get-Normal')) + "`n" + $cuerpo))
+  $r = Lanzar $f @($en)
+  return @(@($r.Salida -split "`n") | Where-Object { $_ -cmatch '^N ' } | ForEach-Object { $_.Substring(2).TrimEnd("`r") })
+}
+
+$Pruebas['m73 (b1) la misma fecha de hoy con hora en una carpeta del original y del migrado, con otra hora cada uno (informes/<hoy>-10-26-58/ y informes/<hoy>-10-31-07/): se emparejan por su clave y, con el mismo contenido, salen iguales; con otro, distintos'] = {
+  $cuerpo = @'
+Caso 'igual' @{ 'informes/2026-11-22-10-26-58/resumen.txt' = "importe;10`n" } @{ 'informes/2026-11-22-10-31-07/resumen.txt' = "importe;10`n" }
+Caso 'distinto' @{ 'informes/2026-11-22-10-26-58/resumen.txt' = "importe;10`n" } @{ 'informes/2026-11-22-10-31-07/resumen.txt' = "importe;11`n" }
+Caso 'dos-ejecuciones' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "b`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n"; 'informes/2026-11-22-10-31-09/r.txt' = "b`n" }
+Caso 'dos-una-distinta' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "b`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n"; 'informes/2026-11-22-10-31-09/r.txt' = "c`n" }
+Caso 'dos-y-una' @{ 'informes/2026-11-22-10-26-58/r.txt' = "a`n"; 'informes/2026-11-22-10-27-00/r.txt' = "a`n" } @{ 'informes/2026-11-22-10-31-07/r.txt' = "a`n" }
+'@
+  $v = Compara-M73 'm73-b1' $cuerpo
+  Igual 'el mismo contenido en las dos carpetas con hora: ninguna diferencia' @('(ninguna)') @($v['igual'])
+  Igual 'otro contenido: una de contenido, con la ruta del original y la clave normalizada' @('contenido|informes/2026-11-22-10-26-58/resumen.txt|importe;10|importe;11|1|1||informes/<hoy:yyyy-MM-dd><hora>/resumen.txt') @($v['distinto'])
+  Igual 'dos carpetas con hora en cada lado: se emparejan por orden y salen iguales' @('(ninguna)') @($v['dos-ejecuciones'])
+  Igual 'dos carpetas con hora en cada lado y la segunda distinta: una sola diferencia, la de la segunda' @('contenido|informes/2026-11-22-10-27-00/r.txt|b|c|1|1||informes/<hoy:yyyy-MM-dd><hora>/r.txt') @($v['dos-una-distinta'])
+  Igual 'dos en el original y una en el migrado: la que sobra en el original, falta' @('falta|informes/2026-11-22-10-27-00/r.txt|a|(no esta)|1|1||informes/<hoy:yyyy-MM-dd><hora>/r.txt') @($v['dos-y-una'])
+}
+
+$Pruebas['m73 (b2) la hora de hoy con cualquier separador (-, _, ., :, T, espacio, coma o nada), con o sin milisegundos y en cualquier formato de fecha de hoy, pasa a la marca del formato y <hora>'] = {
+  $esperado = [ordered]@{
+    '2026-11-22 10:26:58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T10:26:58.123'     = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T10:26:58,123456'  = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22-10-26-58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22_10-26-58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22_10_26_58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22.10.26.58'         = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22-10-26-58-123'     = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22T102658'           = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22 102658123'        = '<hoy:yyyy-MM-dd><hora>'
+    '2026-11-22 10:26'            = '<hoy:yyyy-MM-dd><hora>'
+    '20261122_102658'             = '<hoy:yyyyMMdd><hora>'
+    '20261122102658'              = '<hoy:yyyyMMdd><hora>'
+    '20261122102658123'           = '<hoy:yyyyMMdd><hora>'
+    '20261122T10:26:58'           = '<hoy:yyyyMMdd><hora>'
+    '22/11/2026 10:26:58'         = '<hoy:dd/MM/yyyy><hora>'
+    '22/11/2026, 10:26:58'        = '<hoy:dd/MM/yyyy><hora>'
+    '22/11/2026-10-26-58'         = '<hoy:dd/MM/yyyy><hora>'
+    '22112026_102658'             = '<hoy:ddMMyyyy><hora>'
+    '2026_11_22-10_26_58'         = '<hoy:yyyy_MM_dd><hora>'
+    '2026/11/22 10:26:58'         = '<hoy:yyyy/MM/dd><hora>'
+    '22-11-2026 10:26:58'         = '<hoy:dd-MM-yyyy><hora>'
+    '22-11-2026_10-26-58'         = '<hoy:dd-MM-yyyy><hora>'
+    '22.11.2026 10.26.58'         = '<hoy:dd.MM.yyyy><hora>'
+    '22.11.2026 10:26:58'         = '<hoy:dd.MM.yyyy><hora>'
+    '2026.11.22 10:26:58'         = '<hoy:yyyy.MM.dd><hora>'
+    '22_11_2026-10_26_58'         = '<hoy:dd_MM_yyyy><hora>'
+    '11/22/2026 10:26:58'         = '<hoy:MM/dd/yyyy><hora>'
+    '11-22-2026 10:26:58'         = '<hoy:MM-dd-yyyy><hora>'
+    'informes/2026-11-22-10-26-58/resumen.xlsx' = 'informes/<hoy:yyyy-MM-dd><hora>/resumen.xlsx'
+    'informes_20261122_102658.csv' = 'informes_<hoy:yyyyMMdd><hora>.csv'
+    'en 2026-11-22 y en 22/11/2026' = 'en <hoy:yyyy-MM-dd> y en <hoy:dd/MM/yyyy>'
+    'a las 10:26:58 y a las 10:26:58.123' = 'a las <hora> y a las <hora>'
+    'dos: 2026-11-22 10:26:58 y 2026-11-22 10:31:07' = 'dos: <hoy:yyyy-MM-dd><hora> y <hoy:yyyy-MM-dd><hora>'
+  }
+  $v = Normaliza-M73 'm73-b2' @($esperado.Keys)
+  $i = 0
+  foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
+  # Dos horas distintas del mismo dia dan el mismo texto: es lo que hace que el original y el migrado salgan iguales.
+  $dos = Normaliza-M73 'm73-b2b' @('informes/2026-11-22-10-26-58/resumen.xlsx', 'informes/2026-11-22-10-31-07/resumen.xlsx', 'r_20261122_102658.txt', 'r_20261122_103107.txt')
+  Igual 'dos horas, la misma ruta normalizada' $dos[0] $dos[1]
+  Igual 'dos horas sin separador, el mismo nombre normalizado' $dos[2] $dos[3]
+}
+
+$Pruebas['m73 (b3) lo que no es de la ejecucion sigue como esta: una fecha de otro dia con hora (en cualquier formato), una hora sin fecha ni dos puntos, un numero de 6 cifras y una fecha de hoy que no es fecha'] = {
+  $quedan = @(
+    '1980-05-12 00:00:00',
+    '2026-11-21 10:26:58',
+    '2026-11-21T10:26:58.123',
+    '12/05/1980 10:00:00',
+    '21/11/2026 10:26:58',
+    '12-05-1980 10:00:00',
+    '2026-11-21-10-26-58',
+    '20261121_102658',
+    'a las 10-26-58 y las 10.26.58',
+    'importe 102658 y 10:26',
+    'id=220000 y 2026-13-22 y 2026-11-2',
+    'Nov 22, 2026 y 22-nov-2026 y 22/11/26'
+  )
+  $v = Normaliza-M73 'm73-b3' $quedan
+  for ($i = 0; $i -lt $quedan.Count; $i++) { Igual $quedan[$i] $quedan[$i] $v[$i] }
+  $mez = @(Normaliza-M73 'm73-b3m' @('hecho 2026-11-22 10-26.58'))
+  Igual 'una hora con dos separadores distintos no es una hora: la fecha pasa a su marca y lo demas se queda' 'hecho <hoy:yyyy-MM-dd> 10-26.58' $mez[0]
+  $cuerpo = @'
+Caso 'negocio' @{ 'a.txt' = "vence 1980-05-12 00:00:00`n" } @{ 'a.txt' = "vence 1980-05-11 23:00:00`n" }
+Caso 'negocio-igual' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" }
+Caso 'negocio-otro-formato' @{ 'a.txt' = "vence 12/05/1980 10:00:00`n" } @{ 'a.txt' = "vence 12/05/1980 11:00:00`n" }
+Caso 'hoy' @{ 'a.txt' = "hecho 2026-11-22 10:26:58`n" } @{ 'a.txt' = "hecho 2026-11-22 10:31:07`n" }
+'@
+  $c = Compara-M73 'm73-b3c' $cuerpo
+  Igual 'una fecha de negocio con hora que cambia: contenido' @('contenido|a.txt|vence 1980-05-12 00:00:00|vence 1980-05-11 23:00:00|1|1||a.txt') @($c['negocio'])
+  Igual 'la misma, igual' @('(ninguna)') @($c['negocio-igual'])
+  Igual 'una fecha de negocio dd/MM/yyyy con hora que cambia: contenido' @('contenido|a.txt|vence 12/05/1980 10:00:00|vence 12/05/1980 11:00:00|1|1||a.txt') @($c['negocio-otro-formato'])
+  Igual 'la de hoy con otra hora: igual' @('(ninguna)') @($c['hoy'])
+}
+
+$Pruebas['m73 (b4) una marca de tiempo Unix de hoy en segundos (10 cifras) o en milisegundos (13) pasa a <hora>; un numero de 10 o 13 cifras fuera de los dias de la ejecucion, no'] = {
+  $esperado = [ordered]@{
+    'ts=1795348800'                = 'ts=<hora>'
+    'ts=1795348800123'             = 'ts=<hora>'
+    'a 1795348800 y 1795348800999 b' = 'a <hora> y <hora> b'
+    '{"t":1795348800,"u":1795348800123}' = '{"t":<hora>,"u":<hora>}'
+    'ayer 1795262400'              = 'ayer 1795262400'
+    'ayer 1795262400123'           = 'ayer 1795262400123'
+    'manana 1795435200'            = 'manana 1795435200'
+    'de hace anos 1700000000'      = 'de hace anos 1700000000'
+    'una cuenta 1234567890'        = 'una cuenta 1234567890'
+    'un numero 1795348800123456'   = 'un numero 1795348800123456'
+    'once 17953488001'             = 'once 17953488001'
+    'decimal 1.1795348800'         = 'decimal 1.1795348800'
+    'de 9 cifras 179534880'        = 'de 9 cifras 179534880'
+  }
+  $v = Normaliza-M73 'm73-b4' @($esperado.Keys)
+  $i = 0
+  foreach ($k in $esperado.Keys) { Igual $k $esperado[$k] $v[$i]; $i++ }
+}
+
+$Pruebas['m73 (b5) de punta a punta: el original deja informes/<hoy>-10-26-58/resumen.txt y el migrado informes/<hoy>-10-31-07/resumen.txt con lo mismo: el caso sale igual (no distinto, ni una carpeta distinta)'] = {
+  $e = Escenario-M73 'm73-b5' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes-txt'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  $hoy = (Get-Date).ToString('yyyy-MM-dd')
+  Comprueba 'el original guardo su carpeta con la hora (si no, esta prueba no prueba nada)' (Test-Path -LiteralPath (Get-Ruta $e.Local "salidas/original/cargaJob/caso-01/ficheros/informes/$hoy-10-26-58/resumen.txt")) ''
+}
+
+# Las lineas (Get-LineasNormales) de un fichero de nombre $Fichero y bytes $Bytes, con el dia 2026-11-22 como el de la ejecucion, como las ensena la consola (Get-Legible).
+function Lineas-M73([string]$Nombre, [string]$Fichero, [byte[]]$Bytes) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+param([string]$Ruta)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$Utf8Estricto = New-Object System.Text.UTF8Encoding($false, $true)
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)
+'@
+  $cola = 'foreach ($l in @(Get-LineasNormales $Ruta)) { ''L '' + (Get-Legible $l) }'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnComparaM73 + @('Get-Legible'))) + "`n" + $cola))
+  $x = Join-Path $Dir "$Nombre-$Fichero"
+  [System.IO.File]::WriteAllBytes($x, $Bytes)
+  $r = Lanzar $f @($x)
+  return @(@($r.Salida -split "`n") | Where-Object { $_ -cmatch '^L ' } | ForEach-Object { $_.Substring(2).TrimEnd("`r") })
+}
+
+# Un zip (en bytes) con las partes de $Partes (nombre -> texto o [byte[]]), con la fecha de cada entrada fija: los mismos bytes cada vez que se construye.
+function Zip-M73($Partes) {
+  Add-Type -AssemblyName System.IO.Compression
+  $ms = New-Object System.IO.MemoryStream
+  $zip = New-Object System.IO.Compression.ZipArchive($ms, [System.IO.Compression.ZipArchiveMode]::Create, $true)
+  $fijo = New-Object System.DateTimeOffset(2020, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
+  foreach ($k in $Partes.Keys) {
+    $e = $zip.CreateEntry($k)
+    $e.LastWriteTime = $fijo
+    $b = $Partes[$k]
+    if ($b -is [string]) { $b = (New-Object System.Text.UTF8Encoding($false)).GetBytes($b) }
+    if ($b.Length -gt 0) { $s = $e.Open(); $s.Write($b, 0, $b.Length); $s.Dispose() }
+  }
+  $zip.Dispose()
+  return , $ms.ToArray()
+}
+
+# Un .xlsx (en bytes) con el XML minimo: $Creado va en docProps/core.xml y $Estilo en xl/styles.xml (no cuentan). $Hojas: nombre de hoja -> celdas, cada una @(ref, tipo, valor [, cache])
+# con tipo s (cadena compartida), i (cadena en la propia celda), n (numero), b (booleano), f (formula, con su valor en cache).
+function Xlsx-M73([string]$Creado, $Hojas, [string]$Estilo = 'a') {
+  $esc = { param([string]$s) [System.Security.SecurityElement]::Escape($s) }
+  $compartidas = New-Object System.Collections.ArrayList
+  $partes = [ordered]@{}
+  $partes['[Content_Types].xml'] = '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'
+  $partes['_rels/.rels'] = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+  $partes['docProps/core.xml'] = '<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/"><dcterms:created>' + $Creado + '</dcterms:created></cp:coreProperties>'
+  $partes['docProps/app.xml'] = '<?xml version="1.0" encoding="UTF-8"?><Properties><TotalTime>' + $Creado.Length + '</TotalTime></Properties>'
+  $partes['xl/styles.xml'] = '<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><name val="' + $Estilo + '"/></font></fonts></styleSheet>'
+  $hojasXml = ''; $rels = ''; $n = 0
+  foreach ($nombre in $Hojas.Keys) {
+    $n++
+    $filas = [ordered]@{}
+    foreach ($c in $Hojas[$nombre]) {
+      $fila = [regex]::Match($c[0], '\d+').Value
+      if (-not $filas.Contains($fila)) { $filas[$fila] = '' }
+      $v = [string]$c[2]
+      switch ($c[1]) {
+        's' { $ix = $compartidas.IndexOf($v); if ($ix -lt 0) { $ix = $compartidas.Add($v) }; $xml = '<c r="' + $c[0] + '" t="s"><v>' + $ix + '</v></c>' }
+        'i' { $xml = '<c r="' + $c[0] + '" t="inlineStr"><is><t>' + (& $esc $v) + '</t></is></c>' }
+        'b' { $xml = '<c r="' + $c[0] + '" t="b"><v>' + $v + '</v></c>' }
+        'f' { $xml = '<c r="' + $c[0] + '"><f>' + (& $esc $v) + '</f><v>' + $c[3] + '</v></c>' }
+        default { $xml = '<c r="' + $c[0] + '"><v>' + $v + '</v></c>' }
+      }
+      $filas[$fila] += $xml
+    }
+    $datos = ''
+    foreach ($f in $filas.Keys) { $datos += '<row r="' + $f + '">' + $filas[$f] + '</row>' }
+    $partes["xl/worksheets/sheet$n.xml"] = '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + $datos + '</sheetData></worksheet>'
+    $hojasXml += '<sheet name="' + (& $esc $nombre) + '" sheetId="' + $n + '" r:id="rId' + $n + '"/>'
+    $rels += '<Relationship Id="rId' + $n + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet' + $n + '.xml"/>'
+  }
+  $partes['xl/workbook.xml'] = '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' + $hojasXml + '</sheets></workbook>'
+  $partes['xl/_rels/workbook.xml.rels'] = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' + $rels + '</Relationships>'
+  if ($compartidas.Count -gt 0) {
+    $partes['xl/sharedStrings.xml'] = '<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="' + $compartidas.Count + '" uniqueCount="' + $compartidas.Count + '">' + (($compartidas | ForEach-Object { '<si><t>' + (& $esc $_) + '</t></si>' }) -join '') + '</sst>'
+  }
+  return , (Zip-M73 $partes)
+}
+
+function Sha-M73([byte[]]$Bytes) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { return ((@($sha.ComputeHash($Bytes)) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
+}
+
+# Un .png de mentira de 19 bytes; $Ultimo es su ultimo byte.
+function Png-M73([byte]$Ultimo = 0x80) { return , ([byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xFE, $Ultimo)) }
+
+# Un .gz (en bytes) con el texto $Texto.
+function Gz-M73([string]$Texto) {
+  $ms = New-Object System.IO.MemoryStream
+  $g = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Compress, $true)
+  $b = [System.Text.Encoding]::UTF8.GetBytes($Texto)
+  $g.Write($b, 0, $b.Length); $g.Dispose()
+  return , $ms.ToArray()
+}
+
+# Un PDF de mentira (en bytes) con el texto $Cuerpo y, si $Fecha no es '', su /CreationDate, su /ModDate (de $Fecha) y su /ID (de $Id).
+function Pdf-M73([string]$Fecha, [string]$Id, [string]$Cuerpo) {
+  $info = ''; $trailer = '<< /Root 1 0 R >>'
+  if ($Fecha) { $info = " /CreationDate (D:$Fecha+01'00') /ModDate (D:$Fecha+01'00')"; $trailer = "<< /Root 1 0 R /ID [<$Id><$Id>] >>" }
+  $t = "%PDF-1.4`n1 0 obj << /Producer (acme)$info >> endobj`n2 0 obj << /Length 5 >> stream`n$Cuerpo`nendstream endobj`ntrailer $trailer`n%%EOF`n"
+  return , [System.Text.Encoding]::GetEncoding(28591).GetBytes($t + [string][char]0x80)
+}
+
+# El libro de los tests: dos hojas (Hoja1: texto, numero, texto con la hora de hoy y $Texto en B3; Datos: una cadena con enie y u con tilde, un booleano y una formula).
+function Libro-M73([string]$Texto = 'x', [string]$Hora = '10:26:58', [string]$Estilo = 'a') {
+  $hojas = [ordered]@{
+    Hoja1 = @(@('A1', 's', 'importe'), @('B1', 'n', '10'), @('A2', 's', "generado 2026-11-22 $Hora"), @('B3', 's', $Texto))
+    Datos = @(@('A1', 'i', ([string][char]0xF1 + 'and' + [char]0xFA)), @('B2', 'b', '1'), @('C3', 'f', 'SUM(B1:B1)', '10'))
+  }
+  return , (Xlsx-M73 ('2026-11-22T' + $Hora + 'Z') $hojas $Estilo)
+}
+
+$Pruebas['m73 (c1) dos .xlsx con las mismas celdas y distinto docProps/core.xml, estilos y hora dentro de una celda: iguales; se leen celda a celda (hoja!celda: valor), con las cadenas compartidas, en el orden de las hojas'] = {
+  $a = Libro-M73 'x' '10:26:58' 'a'
+  $b = Libro-M73 'x' '10:31:07' 'b'
+  Comprueba 'los dos .xlsx no son el mismo fichero' ((Sha-M73 $a) -ne (Sha-M73 $b)) ''
+  $v = Compara-M73 'm73-c1' "Caso 'igual' @{ 'ficheros/informe.xlsx' = (Bin 'a') } @{ 'ficheros/informe.xlsx' = (Bin 'b') }" @{ a = $a; b = $b }
+  Igual 'iguales' @('(ninguna)') @($v['igual'])
+  $l = Lineas-M73 'm73-c1l' 'informe.xlsx' $a
+  $esperadas = @('Hoja1!A1: importe', 'Hoja1!B1: 10', 'Hoja1!A2: generado <hoy:yyyy-MM-dd><hora>', 'Hoja1!B3: x', ('Datos!A1: ' + [char]0xF1 + 'and' + [char]0xFA), 'Datos!B2: TRUE', 'Datos!C3: =SUM(B1:B1) -> 10')
+  Igual 'las lineas del libro: hoja!celda: valor, las hojas en orden, la cadena compartida resuelta, la enie y la u con tilde, el booleano y la formula con su valor' ($esperadas -join '|') ($l -join '|')
+}
+
+$Pruebas['m73 (c2) una celda distinta: distinto, con la primera linea distinta Hoja1!B3 en los dos lados; ni lo que sale en la consola ni el JSON llevan bytes que no sean de texto; de punta a punta, igual con otra hora y distinto con otra celda'] = {
+  $a = Libro-M73 'x'
+  $b = Libro-M73 'y' '10:31:07' 'b'
+  $v = Compara-M73 'm73-c2' "Caso 'dif' @{ 'ficheros/informe.xlsx' = (Bin 'a') } @{ 'ficheros/informe.xlsx' = (Bin 'b') }" @{ a = $a; b = $b }
+  Igual 'una diferencia de contenido: la linea 4, Hoja1!B3, en cada lado, sin nota' @('contenido|ficheros/informe.xlsx|Hoja1!B3: x|Hoja1!B3: y|1|4||ficheros/informe.xlsx') @($v['dif'])
+  $e = Escenario-M73 'm73-c2e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes;celda'
+  Igual 'de punta a punta sale con 2 (el Maven falso deja el libro con otra celda en el migrado: un caso distinto)' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  $d = @($c.diferencias)[0]
+  Igual 'con la linea del original: la celda' 'Hoja1!B3: x' "$($d.original)"
+  Igual 'y la del migrado' 'Hoja1!B3: y' "$($d.migrado)"
+  $json = [System.IO.File]::ReadAllText($e.Json)
+  $mal = '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]'
+  Comprueba 'el JSON no lleva bytes de control ni caracteres de reemplazo' ($json -notmatch $mal) ''
+  Comprueba 'la consola tampoco' ($r.Salida -notmatch $mal) (Cola $r.Salida)
+  Comprueba 'y la consola dice la celda' ($r.Salida.Contains('Hoja1!B3')) (Cola $r.Salida)
+  $e = Escenario-M73 'm73-c2f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'informes'
+  Igual 'dos libros con las mismas celdas y otra hora (en la carpeta, en docProps y en una celda): sale con 0' 0 $r.Codigo
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m73 (c3) un numero que es una fecha de Excel de uno de los dias de la ejecucion: con fraccion de hora, <hoy:excel><hora> (otra hora, igual); sin ella, <hoy:excel>; el dia siguiente, no'] = {
+  $serial = ([datetime]'2026-11-22' - [datetime]'1899-12-30').Days
+  $hojas = { param([string]$Fraccion, [int]$Dia) [ordered]@{ Hoja1 = @(@('A1', 'n', "$serial.$Fraccion"), @('A2', 'n', "$serial"), @('A3', 'n', "$Dia"), @('A4', 'n', '0.4351851852'), @('A5', 'n', '1234567')) } }
+  $a = Xlsx-M73 '2026-11-22T10:26:58Z' (& $hojas '4351851852' ($serial + 1))
+  $b = Xlsx-M73 '2026-11-22T10:31:07Z' (& $hojas '4382870370' ($serial + 1))
+  $c = Xlsx-M73 '2026-11-22T10:31:07Z' (& $hojas '4382870370' ($serial + 2))
+  $cuerpo = "Caso 'igual' @{ 'i.xlsx' = (Bin 'a') } @{ 'i.xlsx' = (Bin 'b') }`nCaso 'manana' @{ 'i.xlsx' = (Bin 'a') } @{ 'i.xlsx' = (Bin 'c') }"
+  $v = Compara-M73 'm73-c3' $cuerpo @{ a = $a; b = $b; c = $c }
+  Igual 'la misma fecha con otra hora: igual' @('(ninguna)') @($v['igual'])
+  Igual 'el dia de despues no es de hoy: sale como numero, y distinto' @("contenido|i.xlsx|Hoja1!A3: $($serial + 1)|Hoja1!A3: $($serial + 2)|1|3||i.xlsx") @($v['manana'])
+  $l = Lineas-M73 'm73-c3l' 'i.xlsx' $a
+  Igual 'con fraccion, <hoy:excel><hora>; sin ella, <hoy:excel>; el dia siguiente, otro numero que sigue como esta, y los que no son una fecha de hoy' "Hoja1!A1: <hoy:excel><hora>|Hoja1!A2: <hoy:excel>|Hoja1!A3: $($serial + 1)|Hoja1!A4: 0.4351851852|Hoja1!A5: 1234567" ($l -join '|')
+}
+
+$Pruebas['m73 (c4) un .png (y otro binario, o un fichero con un byte 0): una sola linea binario: <n> bytes, sha256 <hash>; distinto con la nota, igual si los bytes lo son'] = {
+  $a = Png-M73 0x80
+  $b = Png-M73 0x81
+  $n1 = [byte[]](0x61, 0x00, 0x62, 0xFF)
+  $n2 = [byte[]](0x61, 0x00, 0x63, 0xFF)
+  $cuerpo = "Caso 'igual' @{ 'ficheros/logo.png' = (Bin 'a') } @{ 'ficheros/logo.png' = (Bin 'a') }`nCaso 'dif' @{ 'ficheros/logo.png' = (Bin 'a') } @{ 'ficheros/logo.png' = (Bin 'b') }`nCaso 'nul' @{ 'datos.dat' = (Bin 'n1') } @{ 'datos.dat' = (Bin 'n2') }"
+  $v = Compara-M73 'm73-c4' $cuerpo @{ a = $a; b = $b; n1 = $n1; n2 = $n2 }
+  $nota = 'binario: se compara entero (sha256), no por dentro'
+  Igual 'los mismos bytes: igual' @('(ninguna)') @($v['igual'])
+  Igual 'otro byte: una linea binario en cada lado, con su hash, y la nota' @("contenido|ficheros/logo.png|binario: 19 bytes, sha256 $(Sha-M73 $a)|binario: 19 bytes, sha256 $(Sha-M73 $b)|1|1|$nota|ficheros/logo.png") @($v['dif'])
+  Igual 'un fichero con un byte 0 en los primeros 8 KB, aunque su extension no diga nada, tambien es binario' @("contenido|datos.dat|binario: 4 bytes, sha256 $(Sha-M73 $n1)|binario: 4 bytes, sha256 $(Sha-M73 $n2)|1|1|$nota|datos.dat") @($v['nul'])
+  $e = Escenario-M73 'm73-c4e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M73 $e 'png-otro'
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)[0]
+  Igual 'de punta a punta: el caso sale distinto con la linea binario en el JSON' "binario: 19 bytes, sha256 $(Sha-M73 $a)|binario: 19 bytes, sha256 $(Sha-M73 $b)" "$($d.original)|$($d.migrado)"
+  Comprueba 'y la consola no lleva bytes de control' ($r.Salida -notmatch '[\x00-\x08\x0B\x0C\x0E-\x1F\uFFFD]') (Cola $r.Salida)
+  $e = Escenario-M73 'm73-c4f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  [void](Prueba-M73 $e 'png')
+  Igual 'con el mismo .png en los dos lados, igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m73 (c5) un .zip con un .txt que lleva la hora de hoy dentro, una imagen y un .xlsx dentro, y un .gz con un texto: se leen entrada a entrada, con su nombre delante; otra hora, igual; otro contenido, distinto en la linea de esa entrada'] = {
+  $png = Png-M73 0x80
+  $zip = {
+    param([string]$Hora, [string]$Importe = '10', [string]$LibroTexto = 'x')
+    Zip-M73 ([ordered]@{ 'r.txt' = "hecho 2026-11-22 $Hora`nimporte;$Importe`n"; 'logo.png' = $png; 'sub/libro.xlsx' = (Libro-M73 $LibroTexto $Hora); 'sub/' = '' })
+  }
+  $gz = { param([string]$Hora) Gz-M73 "hecho 2026-11-22 $Hora`nimporte;10`n" }
+  $roto = [byte[]](0x50, 0x4B, 0x03, 0x04, 0x01, 0x02)
+  $roto2 = [byte[]](0x50, 0x4B, 0x03, 0x04, 0x01, 0x03)
+  $bin = @{ z1 = (& $zip '10:26:58'); z2 = (& $zip '10:31:07'); z3 = (& $zip '10:31:07' '11'); z4 = (& $zip '10:31:07' '10' 'y'); g1 = (& $gz '10:26:58'); g2 = (& $gz '10:31:07'); r1 = $roto; r2 = $roto2 }
+  $cuerpo = @'
+Caso 'igual' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z2') }
+Caso 'dif' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z3') }
+Caso 'libro' @{ 'ficheros/lote.zip' = (Bin 'z1') } @{ 'ficheros/lote.zip' = (Bin 'z4') }
+Caso 'gz' @{ 'r.txt.gz' = (Bin 'g1') } @{ 'r.txt.gz' = (Bin 'g2') }
+Caso 'malo' @{ 'roto.zip' = (Bin 'r1') } @{ 'roto.zip' = (Bin 'r2') }
+'@
+  $v = Compara-M73 'm73-c5' $cuerpo $bin
+  Igual 'el zip con otra hora en el .txt y en el libro de dentro: igual' @('(ninguna)') @($v['igual'])
+  Igual 'otro importe en el .txt: una diferencia, la linea de r.txt (despues de logo.png y la hora), con el nombre de la entrada delante' @('contenido|ficheros/lote.zip|r.txt: importe;10|r.txt: importe;11|1|3||ficheros/lote.zip') @($v['dif'])
+  Igual 'una celda distinta en el libro de dentro: sub/libro.xlsx: Hoja1!B3' @('contenido|ficheros/lote.zip|sub/libro.xlsx: Hoja1!B3: x|sub/libro.xlsx: Hoja1!B3: y|1|7||ficheros/lote.zip') @($v['libro'])
+  Igual 'un .gz con un texto con otra hora: igual' @('(ninguna)') @($v['gz'])
+  Igual 'un .zip roto (no se puede abrir): una linea binario y la nota, no basura' @("contenido|roto.zip|binario: 6 bytes, sha256 $(Sha-M73 $roto)|binario: 6 bytes, sha256 $(Sha-M73 $roto2)|1|1|binario: se compara entero (sha256), no por dentro|roto.zip") @($v['malo'])
+  $l = Lineas-M73 'm73-c5l' 'lote.zip' (& $zip '10:26:58')
+  $esperadas = @(('logo.png: binario: 19 bytes, sha256 ' + (Sha-M73 $png)), 'r.txt: hecho <hoy:yyyy-MM-dd><hora>', 'r.txt: importe;10', 'sub/libro.xlsx: Hoja1!A1: importe')
+  Igual 'las primeras lineas del zip: cada entrada con su nombre delante, la imagen como binario y las entradas en orden de nombre' ($esperadas -join '|') (@($l | Select-Object -First 4) -join '|')
+}
+
+$Pruebas['m73 (c6) un PDF: sin su /CreationDate, /ModDate ni /ID se compara como binario, asi que dos PDF que solo cambian en eso salen iguales; si cambia otra cosa, distinto con la nota de la fecha de creacion'] = {
+  $bin = @{ p1 = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola'); p2 = (Pdf-M73 '20261122103107' 'CC33DD44' 'hola'); p3 = (Pdf-M73 '20261122103107' 'CC33DD44' 'adios') }
+  $cuerpo = "Caso 'igual' @{ 'ficheros/informe.pdf' = (Bin 'p1') } @{ 'ficheros/informe.pdf' = (Bin 'p2') }`nCaso 'dif' @{ 'ficheros/informe.pdf' = (Bin 'p1') } @{ 'ficheros/informe.pdf' = (Bin 'p3') }"
+  $v = Compara-M73 'm73-c6' $cuerpo $bin
+  Igual 'dos PDF que solo cambian en la fecha y el /ID: igual' @('(ninguna)') @($v['igual'])
+  $dif = @($v['dif'])
+  Igual 'con otro cuerpo: una diferencia' 1 $dif.Count
+  Comprueba 'es una linea binario en cada lado' ($dif[0] -cmatch '^contenido\|ficheros/informe\.pdf\|binario: \d+ bytes, sha256 [0-9a-f]{64}\|binario: \d+ bytes, sha256 [0-9a-f]{64}\|1\|1\|') $dif[0]
+  Comprueba 'con la nota que dice que puede ser la fecha de creacion' ($dif[0].Contains('un PDF lleva su fecha de creacion dentro')) $dif[0]
+}
+
+$Pruebas['m73 (d2) Get-MotivoCambiante: un .xlsx con la fecha de hoy en una celda, un .zip o un .gz con la hora de hoy en un texto y un PDF con su fecha de creacion no valen como test fijo (el motivo de siempre); sin fechas (o con la fecha solo en docProps) valen, y un .png tambien'] = {
+  $serial = ([datetime]'2026-11-22' - [datetime]'1899-12-30').Days
+  $png = Png-M73 0x80
+  $ficheros = [ordered]@{
+    'con-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(@('A1', 's', 'importe'), @('A2', 'n', "$serial.5")) }))
+    'texto-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(, @('A1', 's', 'generado 2026-11-22 10:26:58')) }))
+    'sin-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(@('A1', 's', 'importe'), @('A2', 'n', '15')) }))
+    'con-zip.zip' = (Zip-M73 ([ordered]@{ 'r.txt' = "hecho 2026-11-22 10:26:58`n"; 'logo.png' = $png }))
+    'nombre-zip.zip' = (Zip-M73 ([ordered]@{ 'r_20261122.txt' = "importe;10`n" }))
+    'sin-zip.zip' = (Zip-M73 ([ordered]@{ 'r.txt' = "importe;10`n"; 'logo.png' = $png }))
+    'con-gz.txt.gz' = (Gz-M73 "hecho 2026-11-22 10:26:58`n")
+    'sin-gz.txt.gz' = (Gz-M73 "importe;10`n")
+    'con-pdf.pdf' = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola')
+    'sin-pdf.pdf' = (Pdf-M73 '' '' 'hola')
+    'pdf-otro-dia.pdf' = (Pdf-M73 '20200101120000' 'CC33DD44' 'hola')
+    'zip-en-zip.zip' = (Zip-M73 ([ordered]@{ 'dentro.zip' = (Zip-M73 ([ordered]@{ 'informe-2026-11-22.txt' = "importe;10`n" })) }))
+    'sin-zip-en-zip.zip' = (Zip-M73 ([ordered]@{ 'dentro.zip' = (Zip-M73 ([ordered]@{ 'informe.txt' = "importe;10`n" })) }))
+    'logo.png' = $png
+  }
+  $d = Join-Path $Dir 'm73-d2-ficheros'
+  if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  foreach ($k in $ficheros.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $d $k), [byte[]]$ficheros[$k]) }
+  $f = Join-Path $Dir 'm73-d2.ps1'
+  $cabeza = @'
+param([string]$Raiz)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)
+'@
+  $cola = 'foreach ($n in @(Get-ChildItem -LiteralPath $Raiz -File | ForEach-Object { $_.Name })) { ''M '' + $n + '' ['' + (Get-MotivoCambiante $Raiz @($n)) + '']'' }'
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnLeer + @('Get-Normal', 'Test-NombreCorto'))) + "`n" + (Texto-De-Funciones $comun @('Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + $cola))
+  $r = Lanzar $f @($d)
+  $m = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^M (\S+) \[(.*)\]$') { $m[$Matches[1]] = $Matches[2] } }
+  $motivo = 'lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion.'
+  foreach ($k in @('con-excel.xlsx', 'texto-excel.xlsx', 'con-zip.zip', 'nombre-zip.zip', 'con-gz.txt.gz', 'con-pdf.pdf', 'pdf-otro-dia.pdf', 'zip-en-zip.zip')) { Igual "$k no vale como test fijo, con el motivo de siempre" "$k $motivo" $m[$k] }
+  foreach ($k in @('sin-excel.xlsx', 'sin-zip.zip', 'sin-gz.txt.gz', 'sin-pdf.pdf', 'sin-zip-en-zip.zip', 'logo.png')) { Igual "$k vale" '' $m[$k] }
+}
+
+$Pruebas['m73 (c7) cada tipo, por su lado: una extension de binario sin ningun byte 0 es binario; un .xlsx que es un zip sin libro se lee como zip; un .gz sale con el nombre de dentro; una entrada vacia se dice; un zip dentro de un zip dentro de un zip dentro de un zip se queda en un binario'] = {
+  $bin = '^binario: \d+ bytes, sha256 [0-9a-f]{64}$'
+  $texto = [System.Text.Encoding]::GetEncoding(28591).GetBytes('no es un jpeg de verdad')
+  $l = @(Lineas-M73 'm73-c7a' 'logo.jpg' $texto)
+  Comprueba 'un .jpg sin byte 0: una linea binario' ($l.Count -eq 1 -and $l[0] -cmatch $bin) ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7b' 'logo.txt' $texto)
+  Igual 'los mismos bytes en un .txt: el texto' 'no es un jpeg de verdad' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7c' 'raro.xlsx' (Zip-M73 ([ordered]@{ 'r.txt' = "importe;10`n" })))
+  Igual 'un .xlsx que es un zip sin libro: sus entradas' 'r.txt: importe;10' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7d' 'datos.txt.gz' (Gz-M73 "a;b`n"))
+  Igual 'un .gz: el nombre de dentro (el del fichero sin .gz) y su linea' 'm73-c7d-datos.txt: a;b' ($l -join '|')
+  $l = @(Lineas-M73 'm73-c7e' 'vacia.zip' (Zip-M73 ([ordered]@{ 'r.txt' = 'x'; 'vacio.txt' = '' })))
+  Igual 'una entrada vacia sale como (vacio), con las entradas en orden de nombre' 'r.txt: x|vacio.txt: (vacio)' ($l -join '|')
+  $tres = Zip-M73 ([ordered]@{ 'l1.zip' = (Zip-M73 ([ordered]@{ 'l2.zip' = (Zip-M73 ([ordered]@{ 'a.txt' = 'x' })) })) })
+  $l = @(Lineas-M73 'm73-c7f' 'tres.zip' $tres)
+  Igual 'dos zips dentro: se leen hasta el texto' 'l1.zip: l2.zip: a.txt: x' ($l -join '|')
+  $cuatro = Zip-M73 ([ordered]@{ 'l1.zip' = (Zip-M73 ([ordered]@{ 'l2.zip' = (Zip-M73 ([ordered]@{ 'l3.zip' = (Zip-M73 ([ordered]@{ 'a.txt' = 'x' })) })) })) })
+  $l = @(Lineas-M73 'm73-c7g' 'cuatro.zip' $cuatro)
+  Comprueba 'tres zips dentro: el tercero ya es un binario' ($l.Count -eq 1 -and $l[0] -cmatch ('^l1\.zip: l2\.zip: l3\.zip: ' + $bin.TrimStart('^'))) ($l -join '|')
 }
 
 # ================================ LANZADOR ================================

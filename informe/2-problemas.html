@@ -3,7 +3,7 @@
   <p class="lede"><code>{{MIGRADO}}</code> comparado con la referencia <code>{{PLANTILLA}}</code>. Primero las áreas con errores.</p>
 </header>
 
-{{{DIAGNOSTICO}}}{{{PROPIEDADES}}}
+{{{DIAGNOSTICO}}}{{{PROPIEDADES}}}{{{REVISION}}}
 <!--TROZO titulo-problemas-->Problemas del batch migrado {{BATCH}}<!--FIN-->
 <!--TROZO diagnostico--><section class="panel" id="estado-build" aria-labelledby="t-build">
   <h2 id="t-build">Compilación y tests</h2>
@@ -54,6 +54,30 @@
 <!--TROZO arregla-paridad-->Migrar el job del original que falta, con el mismo nombre.<!--FIN-->
 <!--TROZO arregla-e2e-->Escribir una prueba de extremo a extremo por job que lo lance de principio a fin y compruebe su salida.<!--FIN-->
 <!--TROZO arregla-tests-->Hacer que los tests pasen: adaptarlos a la nueva estructura o corregir el fallo real de la migración.<!--FIN-->
+<!--TROZO revision--><section class="panel" id="revision" aria-labelledby="t-revision">
+  <h2 id="t-revision">Revisión por flujos</h2>
+  <p>{{{ETIQUETA}}}</p>
+  <p>La IA ha leído el código del migrado por flujos (un step con sus piezas, o un fichero suelto) buscando fallos que el build no ve. Solo lee: no cambia nada. Cada hallazgo lleva la cita literal del código, comprobada por el script; los que no se pudieron comprobar están descartados.</p>
+  {{{TODO}}}
+  <div class="cifras">
+    <p><b>{{UNIDADES}}</b>unidades</p>
+    <p><b>{{HECHAS}}</b>hechas</p>
+    {{{CIFRA_ATASCADAS}}}
+    <p><b>{{HALLAZGOS}}</b>hallazgos</p>
+    <p><b>{{DESCARTADOS}}</b>descartados</p>
+  </div>
+  {{{AVISO}}}
+  {{{NADA}}}
+</section><!--FIN-->
+<!--TROZO revision-cifra-atascadas--><p><b>{{N}}</b>atascadas</p><!--FIN-->
+<!--TROZO revision-cifra-atascadas-mal--><p class="cif-mal"><b>{{N}}</b>atascadas</p><!--FIN-->
+<!--TROZO revision-todo--><p>Se ha revisado todo el código (<code>-RevisarTodo</code>), no solo lo que cambió.</p><!--FIN-->
+<!--TROZO revision-atascadas--><p>Unidades atascadas: {{N}}. La IA no dio un resultado válido en ellas. Al relanzar se conservan sin repetir; para volver a intentarlas, relanza el mismo comando con <code>-Reintentar</code>.</p><!--FIN-->
+<!--TROZO revision-nada--><p>La revisión no ha encontrado nada en {{N}} unidades.</p><!--FIN-->
+<!--TROZO revision-nada-una--><p>La revisión no ha encontrado nada en 1 unidad.</p><!--FIN-->
+<!--TROZO cuenta-hallazgo-uno-->1 hallazgo<!--FIN-->
+<!--TROZO cuenta-hallazgo-otros-->{{N}} hallazgos<!--FIN-->
+<!--TROZO fila-hallazgo-->    <li class="fila s-aviso">{{{MARCA}}}<code class="d">{{DONDE}}</code><span class="q">{{TEXTO}}<span class="cita">{{CITA}}</span></span></li><!--FIN-->
 <!--TROZO area-propiedades-->Propiedades<!--FIN-->
 <!--TROZO arregla-propiedades-->Poner cada clave que falta en el <code>application.yml</code> del migrado (o en una variable de entorno), con el nombre nuevo de Spring Boot 3 si lo ha cambiado, y quitar las que ya no existen.<!--FIN-->
 <!--TROZO prop-sin-renombres--><p class="pg-como"><b>No se pudo medir</b> qué claves renombra Spring Boot 3 ({{MOTIVO}}): una clave que falte con otro nombre sale aquí como «falta», no como renombrada.</p><!--FIN-->

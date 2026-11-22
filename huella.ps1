@@ -1,7 +1,7 @@
 <#
 huella.ps1 - La huella de lo compilado (BP-3): la prueba de que un arreglo automatico no cambia lo que hace el programa.
 Se compila antes y despues, y se compara todo target\classes con 'javap -v -p' sin lo que no cambia el comportamiento. Es el port a PowerShell
-de la huella v2 de la propuesta de buenas practicas (el prototipo e7-huella.py, 22 de 22 en E7). No se ejecuta solo: solo funciones. Se carga
+de la huella v2 de la propuesta de buenas practicas (el prototipo e7-huella.py, 22 de 22 en E7). No se ejecuta solo: solo funciones y su $Cfg. Se carga
 con '. (Join-Path $PSScriptRoot 'huella.ps1')' despues de comun.ps1, que pone $Utf8, Invoke-Proceso, Get-Rel y Join-Ruta. Todavia no lo carga
 ningun script. Solo ASCII. Vale para Windows PowerShell 5.1 y para PowerShell 7.
 
@@ -26,7 +26,17 @@ parametros, LocalVariableTypeTable, SourceFile, la marca lombok.Generated, el 'f
 javap imprime: no es un formato canonico y cambia entre versiones del JDK. Antes y despues, siempre el mismo JDK.
 La salida de javap se pide en UTF-8 (-J-Dstdout.encoding=UTF-8) y se lee como UTF-8: sin eso, un literal con tilde saldria con '?' y dos literales
 distintos parecerian iguales.
+Los ficheros de $Cfg.HuellaIgnorar (rutas relativas a target\classes) no entran en la tabla: ni se miden ni cuentan como 'solo antes' o 'solo despues'.
 #>
+
+# ============================ CONFIGURACION ============================
+$Cfg += @{
+  # Ficheros de target/classes que la huella no mira, por su ruta con '/'. META-INF/spring-configuration-metadata.json lo genera
+  # spring-boot-configuration-processor al compilar y solo lo lee la ayuda del IDE (el autocompletado de application.properties): Spring no lo lee
+  # para enlazar las propiedades. Con Lombok cambian el orden y las descripciones aunque las clases salgan iguales, y esa diferencia atascaba la
+  # tarea de una clase @ConfigurationProperties. META-INF/additional-spring-configuration-metadata.json lo escribe la persona: ese si cuenta.
+  HuellaIgnorar = @('META-INF/spring-configuration-metadata.json')
+}
 
 # Parte $T en lo que hay antes y despues de $Sep, como partition (la primera) y rpartition (la ultima, con $Ultima) de Python: si no esta, partition
 # da (todo, nada) y rpartition da (nada, todo).
@@ -263,6 +273,7 @@ function Get-HuellaTabla([string]$Carpeta, [string]$Javap) {
   $clases = New-Object System.Collections.ArrayList
   foreach ($f in @(Get-ChildItem -LiteralPath $base -Recurse -File -Force)) {
     $rel = Get-Rel $base $f.FullName
+    if (@($Cfg.HuellaIgnorar) -ccontains $rel) { continue }
     if ($rel -cmatch '\.class$') { [void]$clases.Add($rel) }
     else { $tabla[$rel] = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
   }

@@ -651,5 +651,33 @@ $Pruebas['m48 (g) un caso con un fichero de nombre corto no se commitea como tes
   Comprueba 'la consola dice que lo quita' ($r.Salida -match 'quitado: cargaJob/caso-01: ') (Cola $r.Salida)
 }
 
+# ============================== M73 (d): UN EXCEL CON LA FECHA DE HOY ==============================
+# El Maven de mentira de m73 (sobre el de m33) deja en cada caso un ficheros/informe.xlsx (m73-regresion-mvn.ps1); RESCATE_M73 dice en que caso lleva la fecha de hoy.
+function Escenario-M73r([string]$Nombre, $Casos) {
+  $e = Escenario-M33 $Nombre $Casos
+  $f = Join-Path $e.Home 'ajustes.json'
+  $aj = Lee-Json $f
+  $aj.MvnExe = Join-Path $falsos 'm73-regresion-mvn.ps1'
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $aj))
+  return $e
+}
+
+$Pruebas['m73 (d1) un caso con un .xlsx que lleva la fecha de hoy en una celda no vale como test fijo: -Regresion lo quita con su motivo; el de otro caso con un .xlsx sin fechas entra'] = {
+  $e = Escenario-M73r 'm73-d1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $env:RESCATE_M73 = 'fecha=caso-01'
+  try { $r = Prueba $e @('-Regresion') } finally { $env:RESCATE_M73 = '' }
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.resultado })) -join ',')
+  Comprueba 'el original deja su libro en los dos casos (si no, esta prueba no prueba nada)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/ficheros/informe.xlsx')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-02/ficheros/informe.xlsx'))) ''
+  $j = Lee-Json $e.Regresion
+  Igual 'quitado: el de la fecha en una celda' 'cargaJob/caso-01' ((@($j.quitados | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Comprueba 'con el motivo de siempre y el fichero' ("$($j.quitados[0].motivo)" -match '^ficheros/informe\.xlsx lleva la fecha de hoy, una hora o la ruta de una copia') "$($j.quitados[0].motivo)"
+  Igual 'queda como test el otro, con el libro sin fechas' 'cargaJob/caso-02' ((@($j.casos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  $f = @((Ficheros-Del-Commit $e.Wt) -split '\|')
+  Comprueba 'el commit lleva el libro del caso que entra' ($f -contains "$Esp/cargaJob/caso-02/ficheros/informe.xlsx") ($f -join ' ')
+  Igual 'y nada del que sale' 0 @($f | Where-Object { $_ -match '/caso-01/' }).Count
+  Comprueba 'la consola dice que quita el caso por su libro' ($r.Salida -match 'quitado: cargaJob/caso-01: ficheros/informe\.xlsx lleva la fecha de hoy') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas 'tests/probar-regresion.ps1'
