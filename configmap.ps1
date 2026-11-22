@@ -23,15 +23,21 @@ y para PowerShell 7.
   Guardas (las comprueba el script, siempre)
       (a) cada variable no secreta sale en algun fichero del entorno, con su valor en su linea (o con <PENDIENTE> si no se sabe);
       (b) cada variable secreta sale y no lleva valor; (c) ningun valor de un secreto del inventario sale en ningun fichero del repo nuevo
-      (si sale, el fichero se borra); (d) el nombre del batch de referencia no queda en ningun sitio. En la plataforma, ademas, el fichero no
+      (como palabra entera; si sale, el fichero se borra, salvo uno que el usuario ha cambiado: solo se avisa; un valor demasiado comun para vigilarlo
+      -sale en lo que la IA recibe de forma legitima- no se vigila y su clave va a PENDIENTE.md); (d) el nombre del batch de referencia no queda en
+      ningun sitio (salvo en los nombres de variables, claves y valores del inventario, que son del migrado y del inventario). En la plataforma, ademas, el fichero no
       esta vacio y, si es yml, lleva las mismas claves de primer nivel que el de referencia. Una tarea que falla se reintenta una vez con el
       motivo; si vuelve a fallar queda atascada. El valor de un secreto no sale nunca en un prompt, un fichero, un registro ni la consola.
 #>
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
-  # Una variable o una clave del inventario es secreta si su ultimo trozo (lo que va detras del ultimo punto) cumple esta regex. Es una red de seguridad.
-  ConfigMapSecretos          = '(?i)pass|pwd|secret|credential|apikey|clave|contrasen|user(name)?$|usuario$'
+  # Una variable o una clave del inventario es secreta si su nombre (cualquiera de sus trozos) cumple esta regex; user, solo al final o seguido de name.
+  # Es una red de seguridad.
+  ConfigMapSecretos          = '(?i)pass|pwd|secret|credential|credencial|apikey|api[._-]?key|token|private|clave|contrasen|user[._-]?name|user$|usuario$'
+  # Un valor del inventario que cumple esta regex lleva credenciales dentro (esquema://usuario:clave@host, usuario/clave@host): es secreto aunque su nombre no lo diga.
+  ConfigMapSecretosValor     = '(?i)://[^/\s:@]+:[^/\s@]+@|thin:[^/\s:@]+/[^/\s@]+@|^[^/\s:@]+/[^/\s@]+@'
+  ConfigMapCarpeta           = 'config'   # la carpeta del repo de configmap con una subcarpeta por entorno
   ConfigMapReferencia        = ''     # el repo de configmap de referencia; migracion.ps1 lo pregunta la primera vez y lo guarda en ajustes.json
   ConfigMapVariablesPorTarea = 10     # variables como mucho en cada tarea configmap-variables
   ConfigMapHallazgosMax      = 5      # hallazgos como mucho en cada revision
@@ -42,7 +48,12 @@ $CmMarca = '<PENDIENTE(?::[^>]*)?>'
 $CmE = [string][char]0xE9
 $CmI = [string][char]0xED
 $CmO = [string][char]0xF3
-$CmSecretos = New-Object 'System.Collections.Generic.List[string]'   # los valores de los secretos del inventario, de esta pasada
+$CmU = [string][char]0xFA
+$CmSecretos = New-Object 'System.Collections.Generic.List[string]'   # los valores de los secretos del inventario que se vigilan, de esta pasada
+$CmComunes = New-Object 'System.Collections.Generic.List[object]'    # los secretos cuyo valor es demasiado comun para vigilarlo (entorno y clave)
+$CmExentos = @()                                                     # lo que (d) no cuenta como resto del batch de referencia (mas largo primero)
+$CmCambiados = @()                                                   # los ficheros que el usuario ha cambiado desde la pasada anterior
+$CmFuera = New-Object 'System.Collections.Generic.List[string]'      # lo que una tarea escribio fuera de lo suyo y se ha deshecho
 $CmParte = $null                                                     # la parte distintiva (R y M) de esta pasada
 
 # ================================ NOMBRES ================================
@@ -117,11 +128,22 @@ function Get-NombreConfigMap([string]$C, $Parte, [string]$M) {
 }
 
 # ================================ SECRETOS ================================
-# Es secreto el nombre cuyo ultimo trozo (lo que va detras del ultimo punto) cumple $Cfg.ConfigMapSecretos.
+# Es secreto el nombre que cumple $Cfg.ConfigMapSecretos (cualquiera de sus trozos).
 function Test-NombreSecretoConfigMap([string]$Nombre) {
   if (-not $Nombre) { return $false }
-  $ultimo = ($Nombre -split '\.')[-1]
-  return [bool]($ultimo -match [string]$Cfg.ConfigMapSecretos)
+  return [bool]($Nombre -match [string]$Cfg.ConfigMapSecretos)
+}
+
+# Es secreto el valor que lleva credenciales dentro ($Cfg.ConfigMapSecretosValor)?
+function Test-ValorSecretoConfigMap([string]$Valor) {
+  $rx = [string]$Cfg.ConfigMapSecretosValor
+  if (-not $rx -or -not $Valor) { return $false }
+  return [bool][regex]::IsMatch($Valor, $rx)
+}
+
+# Sale $Valor como palabra entera en $Texto (sin letras ni cifras pegadas por ningun lado)?
+function Test-PalabraConfigMap([string]$Texto, [string]$Valor) {
+  return [regex]::IsMatch($Texto, ('(?<![\p{L}\p{N}])' + [regex]::Escape($Valor) + '(?![\p{L}\p{N}])'))
 }
 
 # $Texto sin ningun valor de secreto (cada uno cambia por ***).
@@ -145,6 +167,26 @@ function Get-Sha256Hex([byte[]]$Bytes) {
   return ((@($h) | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
+# El hash de un fichero con los saltos de linea como LF: git en Windows los pasa a CRLF y eso no es un cambio del usuario.
+function Get-HashFicheroConfigMap([string]$Ruta) {
+  $enc = [System.Text.Encoding]::GetEncoding(28591)
+  return (Get-Sha256Hex $enc.GetBytes($enc.GetString([System.IO.File]::ReadAllBytes($Ruta)).Replace("`r`n", "`n")))
+}
+
+# Como Write-Json, pero sin ningun valor de un secreto en el texto (ni escrito como lo escapa JSON).
+function Write-JsonConfigMap([string]$Ruta, $Objeto) {
+  $t = ConvertTo-Json -InputObject $Objeto -Depth 8
+  foreach ($v in $CmSecretos) {
+    if (-not $v) { continue }
+    $j = ConvertTo-Json -InputObject ([string]$v)
+    $t = $t.Replace($j.Substring(1, $j.Length - 2), '***').Replace($v, '***')
+  }
+  $d = Split-Path $Ruta -Parent
+  if (-not (Test-Path -LiteralPath $d)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+  [System.IO.File]::WriteAllText(($Ruta + '.tmp'), $t, $Utf8)
+  Move-Item -LiteralPath ($Ruta + '.tmp') -Destination $Ruta -Force
+}
+
 # Todos los ficheros de $Raiz (rutas con /, en orden), sin entrar en las carpetas de $Saltar.
 function Get-FicherosSinGit([string]$Raiz, [string[]]$Saltar = @('.git')) {
   $res = New-Object 'System.Collections.Generic.List[string]'
@@ -160,7 +202,8 @@ function Get-FicherosSinGit([string]$Raiz, [string[]]$Saltar = @('.git')) {
   return $res.ToArray()
 }
 
-# Ficheros de $Rels (en $Dir) con el valor de un secreto del inventario: se borran. Devuelve un mensaje por fichero (sin el valor).
+# Ficheros de $Rels (en $Dir) con el valor de un secreto que se vigila, como palabra entera: se borran, salvo los que el usuario ha cambiado (solo se avisa).
+# Devuelve un objeto por fichero: Rel y Borrado. Un valor demasiado comun para vigilarlo no esta en $CmSecretos: no prueba nada.
 function Get-ProblemasSecretosConfigMap([string]$Dir, [string[]]$Rels) {
   $res = @()
   foreach ($rel in $Rels) {
@@ -168,12 +211,26 @@ function Get-ProblemasSecretosConfigMap([string]$Dir, [string[]]$Rels) {
     if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { continue }
     $t = Read-TextoConfigMap $ruta
     $sale = $false
-    foreach ($v in $CmSecretos) { if ($v -and $t.Contains($v)) { $sale = $true; break } }
+    foreach ($v in $CmSecretos) { if ($v -and (Test-PalabraConfigMap $t $v)) { $sale = $true; break } }
     if (-not $sale) { continue }
-    Remove-Item -LiteralPath $ruta -Force
-    $res += "$rel llevaba el valor de un secreto del inventario (no lo copio aqui) y lo he borrado: un secreto va solo como referencia a un Secret, nunca con su valor."
+    $suyo = (@($CmCambiados) -ccontains $rel)
+    if (-not $suyo) { Remove-Item -LiteralPath $ruta -Force }
+    $res += [pscustomobject]@{ Rel = $rel; Borrado = (-not $suyo) }
   }
   return $res
+}
+
+# El mensaje (sin el valor) de un fichero de Get-ProblemasSecretosConfigMap.
+function Get-MensajeSecretoConfigMap($P) {
+  if ($P.Borrado) { return "$($P.Rel) llevaba el valor de un secreto del inventario (no lo copio aqui) y lo he borrado: un secreto va solo como referencia a un Secret, nunca con su valor." }
+  return "$($P.Rel) lleva el valor de un secreto del inventario (no lo copio aqui) y lo has cambiado tu: no lo borro. Quitalo tu: un secreto va solo como referencia a un Secret, nunca con su valor."
+}
+
+# Pone en $Lista el problema de cada fichero borrado; de los del usuario solo avisa.
+function Add-ProblemasSecretosConfigMap([string]$Dir, [string[]]$Rels, $Lista) {
+  foreach ($m in @(Get-ProblemasSecretosConfigMap $Dir $Rels)) {
+    if ($m.Borrado) { $Lista.Add((Get-MensajeSecretoConfigMap $m)) } else { Aviso (Get-MensajeSecretoConfigMap $m) }
+  }
 }
 
 # ================================ VARIABLES ================================
@@ -208,13 +265,13 @@ function Get-VariablesConfigMap([string]$Migrado) {
 }
 
 # ================================ INVENTARIO ================================
-# Por entorno: Tiene (hay carpeta del mismo nombre en el inventario, sin distinguir mayusculas), Claves (clave -> valor) y Secretos (los valores de
-# las claves secretas de 4 o mas caracteres). Solo se leen los *.properties de esa carpeta; nunca vault*, group_vars, host ni nada mas.
+# Por entorno: Tiene (hay carpeta del mismo nombre en el inventario, sin distinguir mayusculas), Claves (clave -> valor) y Secretas (las claves cuyo
+# nombre o cuyo valor es secreto -> valor). Solo se leen los *.properties de esa carpeta; nunca vault*, group_vars, host ni nada mas.
 function Read-InventarioConfigMap([string]$Inv, [string[]]$Entornos) {
   $res = [ordered]@{}
   $carpetas = @(Get-ChildItem -LiteralPath $Inv -Directory)
   foreach ($e in $Entornos) {
-    $o = [pscustomobject]@{ Entorno = $e; Tiene = $false; Claves = (New-Object 'System.Collections.Generic.Dictionary[string,string]'); Secretos = (New-Object 'System.Collections.Generic.List[string]') }
+    $o = [pscustomobject]@{ Entorno = $e; Tiene = $false; Claves = (New-Object 'System.Collections.Generic.Dictionary[string,string]'); Secretas = (New-Object 'System.Collections.Generic.Dictionary[string,string]') }
     $c = @($carpetas | Where-Object { $_.Name -ieq $e })
     if ($c.Count -gt 0) {
       $o.Tiene = $true
@@ -224,7 +281,7 @@ function Read-InventarioConfigMap([string]$Inv, [string[]]$Entornos) {
         foreach ($p in @(Read-PropiedadesProperties ($c[0].Name + '/' + $f.Name) $lineas 'default')) {
           if ($o.Claves.ContainsKey($p.clave)) { continue }
           $o.Claves[$p.clave] = [string]$p.valor
-          if ((Test-NombreSecretoConfigMap $p.clave) -and ([string]$p.valor).Length -ge $CmMinSecreto) { $o.Secretos.Add([string]$p.valor) }
+          if ((Test-NombreSecretoConfigMap $p.clave) -or (Test-ValorSecretoConfigMap ([string]$p.valor))) { $o.Secretas[$p.clave] = [string]$p.valor }
         }
       }
     }
@@ -242,6 +299,45 @@ function Get-ClavesInventarioConfigMap($Inv) {
   return $l.ToArray()
 }
 
+# Es secreta la clave $Clave en algun entorno (por su nombre o porque su valor lleva credenciales)?
+function Test-ClaveSecretaConfigMap([string]$Clave, $Inv) {
+  if (Test-NombreSecretoConfigMap $Clave) { return $true }
+  foreach ($o in $Inv.Values) { if ($o.Secretas.ContainsKey($Clave)) { return $true } }
+  return $false
+}
+
+# Todo lo que la IA recibe de forma legitima (nombres, variables, claves y valores no secretos del inventario, el repo de referencia, los application*
+# y el pom del migrado): un valor de secreto que sale ahi como palabra entera es demasiado comun para vigilarlo.
+function Get-TextoLegitimoConfigMap([string[]]$Nombres, $Vars, $Inv, [string]$Migrado, [string]$Referencia) {
+  $t = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($n in $Nombres) { if ($n) { $t.Add($n) } }
+  foreach ($v in $Vars) { $t.Add([string]$v.variable); $t.Add([string]$v.texto) }
+  foreach ($o in $Inv.Values) {
+    foreach ($k in $o.Claves.Keys) { $t.Add($k); if (-not $o.Secretas.ContainsKey($k)) { $t.Add([string]$o.Claves[$k]) } }
+  }
+  foreach ($rel in @(Get-FicherosSinGit $Referencia)) {
+    $ruta = Join-Ruta $Referencia $rel
+    if ([array]::IndexOf([System.IO.File]::ReadAllBytes($ruta), [byte]0) -lt 0) { $t.Add((Read-TextoConfigMap $ruta)) }
+  }
+  $fallos = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($f in @(Get-FicherosPropiedades $Migrado $false $fallos)) { $t.Add([string]$f.Texto) }
+  $pom = Join-Path $Migrado 'pom.xml'
+  if (Test-Path -LiteralPath $pom -PathType Leaf) { $t.Add((Read-TextoConfigMap $pom)) }
+  return ($t -join "`n")
+}
+
+# Lo que (d) no cuenta como resto del batch de referencia: los nombres de las variables del migrado, las claves del inventario y sus valores no secretos
+# que llevan R* (el mas largo primero). Lo escribe el migrado o el inventario, no la IA.
+function Get-ExentosConfigMap($Vars, $Inv) {
+  $l = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($v in $Vars) { [void]$l.Add([string]$v.variable) }
+  foreach ($o in $Inv.Values) {
+    foreach ($k in $o.Claves.Keys) { [void]$l.Add($k); if (-not $o.Secretas.ContainsKey($k)) { [void]$l.Add([string]$o.Claves[$k]) } }
+  }
+  $pat = Get-PatronParte $CmParte.R
+  return @($l | Where-Object { $_ -and [regex]::IsMatch($_, $pat) } | Sort-Object { $_.Length } -Descending)
+}
+
 # ============================ REFERENCIA ============================
 # Los ficheros del repo de configmap de referencia: Entornos (carpeta de config\ -> sus ficheros), Punto (los de las carpetas de punto, menos .git) y
 # Sueltos (todo lo demas). Rutas con /.
@@ -249,13 +345,14 @@ function Get-FicherosReferenciaConfigMap([string]$Ref) {
   $entornos = [ordered]@{}
   $punto = New-Object 'System.Collections.Generic.List[string]'
   $sueltos = New-Object 'System.Collections.Generic.List[string]'
-  $dirConfig = Join-Path $Ref 'config'
+  $carpeta = [string]$Cfg.ConfigMapCarpeta
+  $dirConfig = Join-Path $Ref $carpeta
   if (Test-Path -LiteralPath $dirConfig -PathType Container) {
     foreach ($d in @(Get-ChildItem -LiteralPath $dirConfig -Directory | Sort-Object Name)) { $entornos[$d.Name] = New-Object 'System.Collections.Generic.List[string]' }
   }
   foreach ($rel in @(Get-FicherosSinGit $Ref)) {
     $s = $rel.Split('/')
-    if ($s[0] -ceq 'config' -and $s.Count -ge 3 -and $entornos.Contains($s[1])) { $entornos[$s[1]].Add($rel) }
+    if ($s[0] -ceq $carpeta -and $s.Count -ge 3 -and $entornos.Contains($s[1])) { $entornos[$s[1]].Add($rel) }
     elseif ($s[0].StartsWith('.') -and $s.Count -ge 2) { $punto.Add($rel) }
     else { $sueltos.Add($rel) }
   }
@@ -381,6 +478,7 @@ function Compare-EstructuraYml($Ref, $Nuevo) {
 
 # ============================ COMPROBACIONES ============================
 function Test-QuedaParte([string]$Texto) {
+  foreach ($x in $CmExentos) { $Texto = $Texto.Replace($x, ' ') }
   $sin = [regex]::Replace($Texto, (Get-PatronParte $CmParte.M), '')
   return [regex]::IsMatch($sin, (Get-PatronParte $CmParte.R))
 }
@@ -406,11 +504,11 @@ function Test-SalidaEntornoConfigMap($T, [string]$Dir) {
   }
   # (c) un valor de un secreto del inventario no sale en ningun fichero de la carpeta del entorno
   $revisar = @($e.ficheros) + @(Get-FicherosSinGit (Join-Ruta $Dir $e.carpeta) | ForEach-Object { $e.carpeta + '/' + $_ })
-  foreach ($m in @(Get-ProblemasSecretosConfigMap $Dir @($revisar | Select-Object -Unique))) { $p.Add($m) }
+  Add-ProblemasSecretosConfigMap $Dir @($revisar | Select-Object -Unique) $p
   foreach ($rel in @($textos.Keys)) { if (-not (Test-Path -LiteralPath (Join-Ruta $Dir $rel))) { $textos.Remove($rel) } }
   $lineas = @()
-  foreach ($t in $textos.Values) { $lineas += @($t -split '\r?\n') }
-  # (a) y (b) cada variable de la tabla sale en algun fichero: la no secreta con su valor (o con <PENDIENTE>) en su linea; la secreta sin valor
+  foreach ($t in $textos.Values) { $lineas += @($t -split '\r?\n' | Where-Object { $_ -notmatch '^\s*(#|//|;)' }) }   # una linea de comentario no cuenta
+  # (a) y (b) cada variable de la tabla sale en algun fichero: la no secreta con su valor (palabra entera, despues de su nombre) o con <PENDIENTE> en su linea; la secreta sin valor
   foreach ($f in @($e.tabla)) {
     $re = '(?<![\w\-])' + [regex]::Escape($f.variable) + '(?![\w.\-])'
     $suyas = @($lineas | Where-Object { [regex]::IsMatch($_, $re) })
@@ -420,7 +518,8 @@ function Test-SalidaEntornoConfigMap($T, [string]$Dir) {
       if ($conValor.Count -gt 0) { $p.Add("La variable $($f.variable) es secreta y lleva un valor: va solo como referencia a un Secret, sin valor.") }
     }
     elseif ($f.estado -ceq 'valor') {
-      if (@($suyas | Where-Object { $_.Contains($f.valor) }).Count -eq 0) { $p.Add("La variable $($f.variable) no lleva su valor ($($f.valor)) en su linea.") }
+      $conVal = $re + '.*' + '(?<![\p{L}\p{N}])' + [regex]::Escape($f.valor) + '(?![\p{L}\p{N}])'
+      if (@($suyas | Where-Object { [regex]::IsMatch($_, $conVal) }).Count -eq 0) { $p.Add("La variable $($f.variable) no lleva su valor ($($f.valor)) en su linea.") }
     }
     elseif (@($suyas | Where-Object { $_ -match '<PENDIENTE' }).Count -eq 0) {
       $p.Add("La variable $($f.variable) no tiene valor conocido: su valor es <PENDIENTE>, no inventes uno.")
@@ -441,7 +540,7 @@ function Test-SalidaPlataformaConfigMap($T, [string]$Dir) {
   $ruta = Join-Ruta $Dir $rel
   if (-not (Test-Path -LiteralPath $ruta -PathType Leaf)) { return (New-Resultado $false "No has escrito el fichero $rel." $null) }
   $p = New-Object 'System.Collections.Generic.List[string]'
-  foreach ($m in @(Get-ProblemasSecretosConfigMap $Dir @($rel))) { $p.Add($m) }
+  Add-ProblemasSecretosConfigMap $Dir @($rel) $p
   if (Test-Path -LiteralPath $ruta -PathType Leaf) {
     $t = Read-TextoConfigMap $ruta
     if (-not $t.Trim()) { $p.Add("El fichero $rel esta vacio.") }
@@ -557,19 +656,22 @@ function Write-BytesConfigMap([string]$Ruta, [byte[]]$Bytes) {
   [System.IO.File]::WriteAllBytes($Ruta, $Bytes)
 }
 
-# Deja el repo nuevo como en la foto y devuelve las rutas que habia cambiado (tocadas, creadas o borradas).
-function Restore-InstantaneaConfigMap([string]$Dir, $Antes) {
+# Deja el repo nuevo como en la foto y devuelve las rutas que habia cambiado (tocadas, creadas o borradas). Con $Lote (las tareas de una ronda), lo que es de
+# alguna de ellas se deja como esta.
+function Restore-InstantaneaConfigMap([string]$Dir, $Antes, $Lote = $null) {
   $cambios = New-Object 'System.Collections.Generic.List[string]'
   $ahora = @(Get-FicherosSinGit $Dir @('.git', '.rescate'))
   $enAhora = New-Object 'System.Collections.Generic.HashSet[string]'
+  $suyo = { param($r) return [bool]($Lote -and @($Lote | Where-Object { Test-DuenoConfigMap $_ $r }).Count -gt 0) }
   foreach ($rel in $ahora) {
     [void]$enAhora.Add($rel)
     $ruta = Join-Ruta $Dir $rel
+    if (& $suyo $rel) { continue }
     if (-not $Antes.ContainsKey($rel)) { Remove-Item -LiteralPath $ruta -Force; $cambios.Add($rel); continue }
     if ((Get-Sha256Hex ([System.IO.File]::ReadAllBytes($ruta))) -cne $Antes[$rel].Hash) { Write-BytesConfigMap $ruta $Antes[$rel].Bytes; $cambios.Add($rel) }
   }
   foreach ($rel in @($Antes.Keys)) {
-    if (-not $enAhora.Contains($rel)) { Write-BytesConfigMap (Join-Ruta $Dir $rel) $Antes[$rel].Bytes; $cambios.Add($rel) }
+    if (-not $enAhora.Contains($rel) -and -not (& $suyo $rel)) { Write-BytesConfigMap (Join-Ruta $Dir $rel) $Antes[$rel].Bytes; $cambios.Add($rel) }
   }
   return $cambios.ToArray()
 }
@@ -580,6 +682,7 @@ function Test-LecturaConfigMap($T) { return (@('configmap-variables', 'configmap
 # Es $Rel de la tarea $T (uno de sus ficheros o algo dentro de su carpeta)?
 function Test-DuenoConfigMap($T, [string]$Rel) {
   if (@($T.entradas.ficheros) -ccontains $Rel) { return $true }
+  if ([string]$T.entradas.ficheroDestino -ceq $Rel) { return $true }
   $c = [string]$T.entradas.carpeta
   return [bool]($c -and $Rel.StartsWith($c + '/'))
 }
@@ -601,7 +704,8 @@ function Get-TareaConfigMap($T, [string[]]$Salidas, $Cambiados, [bool]$Conservar
 }
 
 # Rondas de hasta Paralelo llamadas hasta que no quedan tareas pendientes. $Dir es la carpeta de trabajo de Copilot (el repo nuevo); $Migrado, lo que puede leer.
-# Las tareas de lectura (variables y revision) no pueden cambiar nada: lo que toquen se deshace y la tarea es invalida.
+# Las tareas de lectura (variables y revision) no pueden cambiar nada: lo que toquen se deshace y la tarea es invalida. Las de escritura solo pueden cambiar
+# lo suyo: lo que una ronda cambia fuera de los destinos de sus tareas se deshace (se borra si es nuevo, se restaura si existia), se avisa y se apunta.
 function Invoke-TareasConfigMap($Tareas, [string]$Dir, [string]$Migrado) {
   while ($true) {
     $pend = @($Tareas | Where-Object { $_.estado -eq 'pendiente' })
@@ -609,8 +713,7 @@ function Invoke-TareasConfigMap($Tareas, [string]$Dir, [string]$Migrado) {
     $lectura = Test-LecturaConfigMap $pend[0]
     $lote = @($pend | Where-Object { (Test-LecturaConfigMap $_) -eq $lectura } | Select-Object -First ([int]$Cfg.Paralelo))
     Info ('Ronda: ' + $lote.Count + ' llamadas a la vez (quedan ' + $pend.Count + ' tareas)...')
-    $antes = $null
-    if ($lectura) { $antes = Get-InstantaneaConfigMap $Dir }
+    $antes = Get-InstantaneaConfigMap $Dir
     $items = @()
     foreach ($t in $lote) {
       $esf = $Cfg.EsfuerzoRedaccion
@@ -625,6 +728,13 @@ function Invoke-TareasConfigMap($Tareas, [string]$Dir, [string]$Migrado) {
     $llamadas = @(Invoke-Llamadas $items)
     $cambios = @()
     if ($lectura) { $cambios = @(Restore-InstantaneaConfigMap $Dir $antes) }
+    else {
+      $fuera = @(Restore-InstantaneaConfigMap $Dir $antes $lote)
+      if ($fuera.Count -gt 0) {
+        foreach ($r in $fuera) { if (-not $CmFuera.Contains($r)) { $CmFuera.Add($r) } }
+        Aviso ("Una tarea ha escrito fuera de lo suyo ($($fuera.Count) ficheros: " + (($fuera | Select-Object -First 5) -join ', ') + '): lo he deshecho.')
+      }
+    }
     $sinDueno = @($cambios | Where-Object { $r = $_; @($lote | Where-Object { Test-DuenoConfigMap $_ $r }).Count -eq 0 })
     for ($i = 0; $i -lt $lote.Count; $i++) {
       $t = $lote[$i]
@@ -745,6 +855,20 @@ function Get-TextoPendienteConfigMap($D) {
     $l.Add('')
     foreach ($x in $D.cambiados) { $l.Add("- $tilde$x$tilde") }
   }
+  if (@($D.comunes).Count -gt 0) {
+    $l.Add('')
+    $l.Add('## Secretos que no se pueden vigilar')
+    $l.Add('')
+    foreach ($x in $D.comunes) { $l.Add("- $tilde$($x.clave)$tilde ($($x.entorno.ToUpperInvariant())): revisa a mano: su valor es demasiado com${CmU}n para vigilarlo") }
+  }
+  if (@($D.aMano).Count -gt 0) {
+    $l.Add('')
+    $l.Add('## Ficheros tuyos con el valor de un secreto')
+    $l.Add('')
+    $l.Add('No los borro porque los has cambiado t' + $CmU + '. Quita el valor y deja solo la referencia a un Secret.')
+    $l.Add('')
+    foreach ($x in $D.aMano) { $l.Add("- $tilde$x$tilde") }
+  }
   if (@($D.borrados).Count -gt 0) {
     $l.Add('')
     $l.Add('## Ficheros borrados por llevar el valor de un secreto')
@@ -773,7 +897,7 @@ function Invoke-FaseConfigMap([string]$Plantilla, [string]$Migrado, [string]$Ref
   if (-not $Inventario -or -not (Test-Path -LiteralPath $Inventario -PathType Container)) { Fallo "No encuentro la carpeta del inventario del original: $Inventario"; return (New-ResultadoFaseConfigMap 1 '') }
   if (-not $Referencia -or -not (Test-Path -LiteralPath $Referencia -PathType Container)) { Fallo "No encuentro el repo de configmap de referencia: $Referencia"; return (New-ResultadoFaseConfigMap 1 '') }
   $ref = Get-FicherosReferenciaConfigMap $Referencia
-  if (@($ref.Entornos.Keys).Count -eq 0) { Fallo "El repo de configmap de referencia no tiene carpetas de entorno en config/: $Referencia"; return (New-ResultadoFaseConfigMap 1 '') }
+  if (@($ref.Entornos.Keys).Count -eq 0) { Fallo "El repo de configmap de referencia no tiene carpetas de entorno en $($Cfg.ConfigMapCarpeta)/: $Referencia"; return (New-ResultadoFaseConfigMap 1 '') }
   $nombreR = Split-Path $Plantilla -Leaf
   $nombreM = Split-Path $Migrado -Leaf
   $parte = Get-ParteDistintiva $nombreR $nombreM
@@ -804,25 +928,69 @@ function Invoke-FaseConfigMap([string]$Plantilla, [string]$Migrado, [string]$Ref
       if (-not $f -or -not $f.ruta) { continue }
       $hashes[[string]$f.ruta] = [string]$f.hash
       $ruta = Join-Ruta $destino $f.ruta
-      if ((Test-Path -LiteralPath $ruta -PathType Leaf) -and (Get-Sha256Hex ([System.IO.File]::ReadAllBytes($ruta))) -cne [string]$f.hash) { $cambiados += [string]$f.ruta }
+      if ((Test-Path -LiteralPath $ruta -PathType Leaf) -and (Get-HashFicheroConfigMap $ruta) -cne [string]$f.hash) { $cambiados += [string]$f.ruta }
     }
   }
   # que el repo nuevo quede apuntado como del script ya (si se corta, el relanzamiento sabe que es suyo)
-  Write-Json $rutaJson ([ordered]@{ version = 1; destino = $destino; referencia = $Referencia; inventario = $Inventario; migrado = $Migrado; ficheros = @($previo.ficheros | Where-Object { $_ }) })
+  Write-JsonConfigMap $rutaJson ([ordered]@{ version = 1; destino = $destino; referencia = $Referencia; inventario = $Inventario; migrado = $Migrado; modelo = "$ModeloElegido"; ficheros = @($previo.ficheros | Where-Object { $_ }) })
   foreach ($c in $cambiados) { Aviso "Has cambiado $c desde la ultima pasada: lo dejo como esta (si quieres que se escriba otra vez, borralo y relanza)." }
-  try { return (Invoke-PasosConfigMap $Plantilla $Migrado $Referencia $Inventario $ConservarAtascadas $ref $parte $nombre $destino $rutaJson $cambiados $hashes) }
+  $script:CmCambiados = @($cambiados)
+  $CmFuera.Clear()
+  # Copilot no ejecuta nada en la terminal (solo lee y escribe ficheros) y el migrado no debe cambiar: se mira su git status antes y despues
+  $args0 = $Cfg.CopilotArgs
+  $Cfg.CopilotArgs = @($args0) + '--deny-tool=shell'
+  $gitAntes = @(Get-GitMigradoConfigMap $Migrado)
+  try {
+    $res = Invoke-PasosConfigMap $Plantilla $Migrado $Referencia $Inventario $ConservarAtascadas $ref $parte $nombre $destino $rutaJson $cambiados $hashes
+    Test-MigradoSinCambiosConfigMap $Migrado $gitAntes
+    return $res
+  }
   finally {
+    $Cfg.CopilotArgs = $args0
     $r = Join-Path $destino '.rescate'
     if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force -ErrorAction SilentlyContinue }
   }
 }
 
+# Las lineas de git status --porcelain del migrado (sin lo que la propia pasada escribe en su carpeta de salida); vacio si no es un repo.
+function Get-GitMigradoConfigMap([string]$Migrado) {
+  if (-not (Test-Path -LiteralPath $Migrado -PathType Container)) { return @() }
+  $r = Invoke-Git $Migrado @('status', '--porcelain', '--untracked-files=all')
+  if ($r.Codigo -ne 0) { return @() }
+  $salida = ''
+  if ($Datos -and $Datos.StartsWith($Migrado)) { $salida = (Get-Rel $Migrado (Split-Path $Datos -Parent)) + '/' }
+  return @($r.Salida | Where-Object { $_ -and $_.Length -gt 3 -and -not ($salida -and $_.Substring(3).StartsWith($salida)) })
+}
+
+# El migrado no es de esta fase: si su git status ha cambiado, avisa con los ficheros y no deshace nada.
+function Test-MigradoSinCambiosConfigMap([string]$Migrado, $Antes) {
+  $ahora = @(Get-GitMigradoConfigMap $Migrado)
+  $dif = @($ahora | Where-Object { @($Antes) -cnotcontains $_ }) + @(@($Antes) | Where-Object { $ahora -cnotcontains $_ })
+  if ($dif.Count -eq 0) { return }
+  $f = @($dif | ForEach-Object { $_.Substring(3).Trim() } | Select-Object -Unique)
+  $mas = ''
+  if ($f.Count -gt 8) { $mas = " y $($f.Count - 8) mas" }
+  Aviso ('Ojo: ha cambiado el migrado durante esta fase (no lo he deshecho; mira git status): ' + (($f | Select-Object -First 8) -join ', ') + $mas + '.')
+}
+
 function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Referencia, [string]$Inventario, [bool]$ConservarAtascadas, $ref, $parte, [string]$nombre, [string]$destino, [string]$rutaJson, $cambiados, $hashes) {
   $entornos = @($ref.Entornos.Keys)
   $inv = Read-InventarioConfigMap $Inventario $entornos
-  $script:CmSecretos.Clear()
-  foreach ($o in $inv.Values) { foreach ($s in $o.Secretos) { if (-not $script:CmSecretos.Contains($s)) { $script:CmSecretos.Add($s) } } }
   $vars = @(Get-VariablesConfigMap $Migrado)
+  # un valor de secreto que sale como palabra entera en lo que la IA recibe de forma legitima (nombres, variables, claves, referencia, application*) es
+  # demasiado comun para vigilarlo: no prueba nada y la clave va a PENDIENTE.md; los demas se vigilan
+  $legitimo = Get-TextoLegitimoConfigMap @((Split-Path $Plantilla -Leaf), (Split-Path $Migrado -Leaf), $parte.R, $parte.M, $nombre, (Split-Path $Referencia -Leaf)) $vars $inv $Migrado $Referencia
+  $script:CmSecretos.Clear()
+  $script:CmComunes.Clear()
+  foreach ($o in $inv.Values) {
+    foreach ($k in $o.Secretas.Keys) {
+      $v = [string]$o.Secretas[$k]
+      if ($v.Length -lt $CmMinSecreto) { continue }
+      if (Test-PalabraConfigMap $legitimo $v) { $script:CmComunes.Add([pscustomobject]@{ entorno = $o.Entorno; clave = $k }) }
+      elseif (-not $script:CmSecretos.Contains($v)) { $script:CmSecretos.Add($v) }
+    }
+  }
+  $script:CmExentos = @(Get-ExentosConfigMap $vars $inv)
   $claves = @(Get-ClavesInventarioConfigMap $inv)
   Info "Repo de configmap: $nombre ($($parte.R) -> $($parte.M); $($vars.Count) variables, $($entornos.Count) entornos, $(@($inv.Values | Where-Object { $_.Tiene }).Count) con inventario)."
   $ejecutadas = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -861,10 +1029,11 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
   }
   foreach ($v in $vars) {
     $n = $v.variable
-    if ((Test-NombreSecretoConfigMap $n) -or ($pares.ContainsKey($n) -and (Test-NombreSecretoConfigMap $pares[$n]))) { $secretas[$n] = $true }
+    if ((Test-NombreSecretoConfigMap $n) -or ($pares.ContainsKey($n) -and (Test-ClaveSecretaConfigMap $pares[$n] $inv))) { $secretas[$n] = $true }
   }
 
   # 3. Paso 2: un entorno por carpeta de config\ y un fichero por cada uno de las carpetas de punto
+  $carp = [string]$Cfg.ConfigMapCarpeta
   $tablas = [ordered]@{}
   $tEntorno = @()
   $fuente = @($entornos | Where-Object { $ref.Entornos[$_].Count -gt 0 })
@@ -874,15 +1043,15 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
     $tabla = @(Get-TablaEntornoConfigMap $vars $pares $secretas $inv[$e])
     $tablas[$e] = $tabla
     $relsRef = @($ref.Entornos[$origen])
-    $prefijoRef = 'config/' + $origen
-    $ficheros = @($relsRef | ForEach-Object { 'config/' + $e + $_.Substring($prefijoRef.Length) } | ForEach-Object { Convert-ParteConfigMap $_ $parte })
+    $prefijoRef = $carp + '/' + $origen
+    $ficheros = @($relsRef | ForEach-Object { $carp + '/' + $e + $_.Substring($prefijoRef.Length) } | ForEach-Object { Convert-ParteConfigMap $_ $parte })
     $vacios = @()
     for ($j = 0; $j -lt $relsRef.Count; $j++) { if (-not (Read-TextoConfigMap (Join-Ruta $Referencia $relsRef[$j])).Trim()) { $vacios += $ficheros[$j] } }
     $textoTabla = Get-TextoTablaConfigMap $tabla
     $textoRef = Get-TextoReferenciaConfigMap $Referencia $relsRef
     $entradas = [pscustomobject]@{
-      entorno = $e; carpeta = "config/$e"; ficheros = $ficheros; vacios = $vacios; tabla = $tabla
-      prompt = [pscustomobject]@{ ENTORNO = $e; CARPETA = "config/$e"; FICHEROS = ($ficheros -join "`n"); TABLA = $textoTabla; REFERENCIA = $textoRef; MIGRADO = $Migrado }
+      entorno = $e; carpeta = "$carp/$e"; ficheros = $ficheros; vacios = $vacios; tabla = $tabla
+      prompt = [pscustomobject]@{ ENTORNO = $e; CARPETA = "$carp/$e"; FICHEROS = ($ficheros -join "`n"); TABLA = $textoTabla; REFERENCIA = $textoRef; MIGRADO = $Migrado }
       huella = (Get-Hash8 ($e + '|' + $textoTabla + '|' + $textoRef + '|' + ($ficheros -join ',')))
     }
     $t = Get-TareaConfigMap (New-TareaTipo 'configmap-entorno' "configmap-entorno-$e" '' '' $entradas) $ficheros $cambiados $tolera $false $destino
@@ -922,7 +1091,7 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
     $ficheros = @($t.entradas.ficheros | Where-Object { Test-Path -LiteralPath (Join-Ruta $destino $_) -PathType Leaf })
     if ($ficheros.Count -eq 0) { continue }
     $entradas = [pscustomobject]@{
-      unidad = $e; carpeta = "config/$e"; ficheros = $ficheros
+      unidad = $e; carpeta = "$carp/$e"; ficheros = $ficheros
       prompt = [pscustomobject]@{ UNIDAD = "entorno $e"; FICHEROS = ($ficheros -join "`n"); TABLA = (Get-TextoTablaConfigMap $t.entradas.tabla); REFERENCIA = $t.entradas.prompt.REFERENCIA; MIGRADO = $Migrado; HALLAZGOS_MAX = "$($Cfg.ConfigMapHallazgosMax)" }
       huella = (Get-Hash8 ($t.entradas.huella + '|' + ($ficheros -join ',')))
     }
@@ -944,25 +1113,35 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
 
   # 5. Salida: ningun valor de un secreto en el repo nuevo, PENDIENTE.md y datos\configmap.json
   $borrados = @()
+  $aMano = @()
   $paraBarrer = @(Get-FicherosSinGit $destino @('.git', '.rescate'))
-  foreach ($m in @(Get-ProblemasSecretosConfigMap $destino $paraBarrer)) { $borrados += ($m -replace ' llevaba el valor.*$', '') }
+  foreach ($m in @(Get-ProblemasSecretosConfigMap $destino $paraBarrer)) {
+    if ($m.Borrado) { $borrados += $m.Rel } else { $aMano += $m.Rel; Aviso (Get-MensajeSecretoConfigMap $m) }
+  }
   $pendientes = @(Get-PendientesFicherosConfigMap $destino)
   $hallazgos = @()
-  foreach ($t in @($tRev | Where-Object { $_.estado -eq 'hecha' })) { foreach ($h in @($t.resultado.hallazgos)) { if ($h) { $hallazgos += $h } } }
+  foreach ($t in @($tRev | Where-Object { $_.estado -eq 'hecha' })) {
+    foreach ($h in @($t.resultado.hallazgos)) { if ($h) { $hallazgos += [pscustomobject]@{ fichero = $h.fichero; linea = $h.linea; cita = (Hide-SecretosConfigMap ([string]$h.cita)); problema = (Hide-SecretosConfigMap ([string]$h.problema)) } } }
+  }
   $atascadas = @($todas | Where-Object { $_.estado -eq 'atascada' } | ForEach-Object { [pscustomobject]@{ id = $_.id; motivo = (Hide-SecretosConfigMap ("$($_.motivo)" -replace '\r?\n', ' / ')) } })
+  # lo que dice PENDIENTE.md sale del estado final: un entorno con su tarea atascada o con un fichero que falta no tiene nada puesto
   $datosEntornos = @()
   foreach ($e in $entornos) {
     if (-not $tablas.Contains($e)) { continue }
-    $datosEntornos += [pscustomobject]@{ nombre = $e; inventario = [bool]$inv[$e].Tiene; tabla = @($tablas[$e]) }
+    $tabla = @($tablas[$e])
+    $t = @($tEntorno | Where-Object { $_.entradas.entorno -ceq $e })[0]
+    $completo = ($t.estado -eq 'hecha') -and (@($t.entradas.ficheros | Where-Object { -not (Test-Path -LiteralPath (Join-Ruta $destino $_) -PathType Leaf) }).Count -eq 0)
+    if (-not $completo) { $tabla = @($tabla | ForEach-Object { [pscustomobject]@{ variable = $_.variable; clave = $_.clave; estado = 'pendiente'; valor = '' } }) }
+    $datosEntornos += [pscustomobject]@{ nombre = $e; inventario = [bool]$inv[$e].Tiene; tabla = $tabla }
   }
   $dif = @(Get-DiferenciasConfigMap $pares $inv)
   $nSecretas = @($vars | Where-Object { $secretas.ContainsKey($_.variable) }).Count
-  $D = [pscustomobject]@{ nombre = $nombre; entornos = $datosEntornos; diferencias = $dif; pendientes = $pendientes; hallazgos = $hallazgos; atascadas = $atascadas; cambiados = @($cambiados); borrados = $borrados; secretas = $nSecretas }
+  $D = [pscustomobject]@{ nombre = $nombre; entornos = $datosEntornos; diferencias = $dif; pendientes = $pendientes; hallazgos = $hallazgos; atascadas = $atascadas; cambiados = @($cambiados); borrados = $borrados; aMano = $aMano; comunes = $CmComunes.ToArray(); secretas = $nSecretas }
   [System.IO.File]::WriteAllText((Join-Path $destino 'PENDIENTE.md'), (Get-TextoPendienteConfigMap $D), $Utf8)
   $ficheros = @()
   foreach ($rel in @(Get-FicherosSinGit $destino @('.git', '.rescate'))) {
     if ($rel -ceq 'PENDIENTE.md') { continue }
-    $h = Get-Sha256Hex ([System.IO.File]::ReadAllBytes((Join-Ruta $destino $rel)))
+    $h = Get-HashFicheroConfigMap (Join-Ruta $destino $rel)
     if (@($cambiados) -contains $rel -and $hashes.Contains($rel)) { $h = $hashes[$rel] }
     $ficheros += [ordered]@{ ruta = $rel; hash = $h }
   }
@@ -971,8 +1150,8 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
       if ($pares.ContainsKey($_.variable)) { $c = $pares[$_.variable] }
       [ordered]@{ variable = $_.variable; fichero = $_.fichero; linea = $_.linea; clave = $c; secreta = $secretas.ContainsKey($_.variable) }
     })
-  Write-Json $rutaJson ([ordered]@{
-      version = 1; destino = $destino; referencia = $Referencia; inventario = $Inventario; migrado = $Migrado
+  Write-JsonConfigMap $rutaJson ([ordered]@{
+      version = 1; destino = $destino; referencia = $Referencia; inventario = $Inventario; migrado = $Migrado; modelo = "$ModeloElegido"
       parte = [ordered]@{ referencia = $parte.R; migrado = $parte.M }; actualizado = (Get-Date).ToString('s')
       variables = $datosVars
       entornos = @($datosEntornos | ForEach-Object { [ordered]@{ nombre = $_.nombre; inventario = $_.inventario; variables = @($_.tabla | ForEach-Object { [ordered]@{ variable = $_.variable; clave = $_.clave; estado = $_.estado } }) } })
@@ -981,6 +1160,8 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
       hallazgos = @($hallazgos | ForEach-Object { [ordered]@{ fichero = $_.fichero; linea = $_.linea; cita = $_.cita; problema = $_.problema } })
       atascadas = @($atascadas | ForEach-Object { [ordered]@{ id = $_.id; motivo = $_.motivo } })
       cambiados = @($cambiados)
+      fueraDeSitio = @($CmFuera)
+      secretosComunes = @($CmComunes.ToArray() | ForEach-Object { [ordered]@{ entorno = $_.entorno; clave = $_.clave } })
       ficheros = $ficheros
     })
   foreach ($m in $borrados) { Aviso "Borrado: $m llevaba el valor de un secreto." }
