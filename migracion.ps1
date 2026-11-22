@@ -248,7 +248,8 @@ function Select-Modelo {
 
 # ================================= FASES =================================
 # El diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y sus hallazgos se copian a datos\ como
-# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
+# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro (con -Legacy: la regla repositorio-batch compara
+# con el original; sin el, el motor solo lo conoce si ya existe .rescate\contrato.json). A continuacion se mide la cobertura de
 # tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile) y las buenas practicas
 # (datos\practicas-<Cuando>.json y su registro, con Invoke-Practicas de practicas.ps1: javac, Lombok y el texto de Java 21, hasta
 # $Cfg.SegundosPracticas s; nunca para el diagnostico: lo que no se pueda medir lo dice el JSON). Si el motor falla, parada 'motor'
@@ -257,7 +258,7 @@ function Invoke-DiagnosticoMotor([string]$Cuando) {
   $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
   $mMotor = Join-Ruta $RepoRoot '.rescate/diagnostico.md'
   if (Test-Path -LiteralPath $hMotor) { Remove-Item -LiteralPath $hMotor -Force }
-  $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'diagnostico', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Si')
+  $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'diagnostico', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Legacy', $LegacyRoot, '-Si')
   $registro = Join-Path $Registros "diagnostico-$Cuando.log"
   Save-Registro $registro $r.Salida
   if ($r.Codigo -ne 0 -or -not (Test-Path -LiteralPath $hMotor) -or -not (Test-Path -LiteralPath $mMotor)) {
