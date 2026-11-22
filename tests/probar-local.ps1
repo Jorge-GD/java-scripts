@@ -4149,7 +4149,7 @@ $Pruebas['m48 (e4) caso vacio: el test que dejo una llamada pasada de tiempo y d
 
 $Pruebas['m48 (f) si el migrado acaba EXCEPCION en todos los casos de un job y el original no: sale la linea de -RehacerArnes; no sale si falla un solo caso ni si el original tambien acaba EXCEPCION'] = {
   $e = Escenario-M48 'm48-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/caso-;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'la linea de cargaJob, con la clase y la causa' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
   Igual 'solo una linea de esas' 1 @([regex]::Matches($r.Salida, 'El migrado no arranca el job')).Count
@@ -4571,7 +4571,7 @@ $Pruebas['m50 (e) datos/prueba-local-grupos.jsonl: una linea por grupo y lanzami
 
 $Pruebas['m50 (f) la linea de -RehacerArnes sale dentro del bloque del grupo, una vez por job cuyo migrado no arranca en ningun caso, con el mismo texto de siempre'] = {
   $e = Escenario-M48 'm50-f' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00'); tarifaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/caso-;excepcion-mig:^remesaJob/caso-01$;excepcion-mig:^tarifaJob/caso-01$;excepcion-ambos:^tarifaJob/caso-02$'
   Igual 'sale con 2' 2 $r.Codigo
   $linea = 'El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.'
   Comprueba 'la linea de cargaJob, igual que antes' ($r.Salida.Contains($linea)) (Cola $r.Salida)
@@ -6410,6 +6410,59 @@ $Pruebas['m68 (c4) el primer intento del migrado ya lleva la lista de tablas de 
   $n = @(Llamadas $e).Count
   $r = Prueba-M68 $e '' 'tablas=1/T_B,CALENDARIO_02,BATCH_JOB_INSTANCE:arnes-original;tablas=1/T_B,CALENDARIO_02:arnes-migrado'
   Igual 'el segundo lanzamiento no escribe ningun test otra vez' $n @(Llamadas $e).Count
+}
+
+# --- (d) un job que no arranca con el test aceptado no se ejecuta en todos sus casos ---
+# Estos escenarios usan el Maven de m48 (excepcion-mig: el migrado acaba EXCEPCION en el caso vacio y en los casos; el original, no) o el de m68-excepcion.ps1 (lo mismo,
+# con otra clase de excepcion en los casos). Con Intentos = 2 (por defecto), el primer test se rechaza por el caso vacio y el segundo se acepta con el aviso.
+
+function Escenario-M68d([string]$Nombre, [switch]$OtraClase) {
+  $mas = @{}
+  if ($OtraClase) { $mas.MvnExe = (Join-Path $falsos 'm68-excepcion.ps1') }
+  return (Escenario-M48 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) $mas)
+}
+
+$Pruebas['m68 (d1) el test del migrado se acepta en el ultimo intento con el aviso de que no arranca: se ejecuta un caso, los otros 4 salen sin probar con su motivo y la linea final dice que puede ser el codigo'] = {
+  $e = Escenario-M68d 'm68-d1'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el primer intento del test se rechaza' 1 @([regex]::Matches($r.Salida, 'Arnes del migrado rechazado: Con un caso vacio, el original arranca el job cargaJob')).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'el migrado ejecuta un solo caso' 1 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'el primero sale distinto y los otros cuatro, sin probar en local' 'distinto,sin probar en local,sin probar en local,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  Igual 'con su motivo' 'el migrado no arranca el job con este test' (Caso $e 'cargaJob' 'caso-05').motivo
+  Comprueba 'la consola lo dice por caso' ($r.Salida -match 'sin probar en local: cargaJob/caso-05 \(Caso 5 de cargaJob\)\. el migrado no arranca el job con este test') (Cola $r.Salida)
+  $linea = 'El migrado no arranca el job cargaJob (BeanCreationException: java.lang.IllegalStateException: sin correo). El test ya se escribio 2 veces con este error: puede ser el codigo del migrado. Pregunta a Copilot, en el repo del migrado, si el job arrancaria igual fuera del test.'
+  Igual 'una sola linea final, la nueva' 1 @([regex]::Matches($r.Salida, 'El migrado no arranca el job cargaJob \(')).Count
+  Comprueba 'y la consola dice, al ejecutar, que no lanza los demas casos' ($r.Salida.Contains('El migrado no arranca el job cargaJob con este test (BeanCreationException): no ejecuto sus demas casos.')) (Cola $r.Salida)
+  Comprueba 'con el detalle, las veces y el consejo' ($r.Salida.Contains($linea)) (Cola $r.Salida)
+  Comprueba 'sin el consejo de -RehacerArnes' ($r.Salida -notmatch 'relanza con -RehacerArnes') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (d2) sin ese rechazo (un test guardado de otro lanzamiento, que se usa con el aviso) se ejecutan los 5 casos y sale la linea de siempre, con -RehacerArnes'] = {
+  $e = Escenario-M68d 'm68-d2'
+  $r = Prueba-M48 $e ''
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $antes = (Casos-Mvn $e $e.CopiaMig).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test guardado se usa, con el aviso del caso vacio' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob \(estado=COMPLETED\) y con tu test el migrado no: BeanCreationException \(java\.lang\.IllegalStateException: sin correo\)\.') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Igual 'los cinco salen distintos' 'distinto,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Comprueba 'la linea de siempre' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
+  Comprueba 'y ni rastro de la nueva' ($r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (d3) si el primer caso acaba EXCEPCION con otra clase que la del caso vacio, no se salta ninguno: se ejecutan los 5 casos'] = {
+  $e = Escenario-M68d 'm68-d3' -OtraClase
+  $env:RESCATE_M68 = 'otra-clase'
+  try { $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/' }
+  finally { $env:RESCATE_M68 = '' }
+  Igual 'sale con 2' 2 $r.Codigo
+  Comprueba 'el test se acepta con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'ninguno sin probar' 0 @(Resultados $e | Where-Object { $_ -eq 'sin probar en local' }).Count
 }
 
 # ================================ LANZADOR ================================

@@ -33,6 +33,9 @@ QUE HACE
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
      motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar (Get-PrevioArnes).
+     Si con un caso vacio el original arranca un job y el migrado no, el test del migrado se rechaza y, en el ultimo intento, se acepta con un aviso:
+     de ese job se ejecuta solo el primer caso y, si acaba EXCEPCION con la misma clase, los demas salen sin probar (no se ejecutan); la linea
+     final dice que puede ser el codigo del migrado y que se lo preguntes a Copilot en el repo del migrado, sin aconsejar -RehacerArnes.
   3. Entradas: una tarea de IA por caso (hasta 4 a la vez) escribe en la copia del original
      src\test\resources\prueba-local\<job>\<caso>\ (ficheros\, datos.sql, parametros.properties), o no-aplica.txt si
      el caso pide cambiar la configuracion. El script comprueba que solo escribe ahi y que el caso corre en el original.
@@ -172,6 +175,7 @@ $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cad
 $MarcaNo = '<!--no-->'
 # El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
 $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
+$MotivoNoArranca = 'el migrado no arranca el job con este test'
 # La causa de un lado sin estado.txt cuyo Maven acabo con 0 y sin otra causa (Get-Fallos): el test no encontro la carpeta del caso (arnes\migrado, regla 1).
 $MotivoMavenSinSalida = 'Maven acaba bien, pero el test no ha dejado salida: no ha ejecutado el caso (mira si ve su carpeta en src\test\resources\prueba-local)'
 # Lo que dice el motivo de un caso cuyo original no corre porque la base del test no tiene una tabla del codigo (Get-MotivoBase): la cuenta del final de la
@@ -1234,18 +1238,20 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   }
   # Con un caso vacio, el original arranca el job y el migrado no (estado=EXCEPCION): el test del migrado no simula lo que el job necesita, o le pasa
   # mal las propiedades. Como la puerta de las tablas: se rechaza mientras quedan intentos y, en el ultimo o con un test guardado, se acepta con un
-  # aviso (puede ser el codigo del migrado).
+  # aviso (puede ser el codigo del migrado). Uno rechazado antes por esto y aceptado en el ultimo intento se apunta en $script:NoArranca.
   if (-not $esOrig) {
     foreach ($j in $Jobs) {
       $estadoOrig = Get-Estado (Join-Ruta $Local "salidas/vacio/$j")
       $clase = Get-Excepcion (Join-Ruta $dir "target/prueba-local/$j/vacio")
       if (-not $estadoOrig -or $estadoOrig -ceq 'EXCEPCION' -or -not $clase) { continue }
       $causa = Get-CausaCorta $r.Causa
-      if ($causa) { $clase = "$clase ($causa)" }
-      $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $clase. Revisa lo que simula el test y las propiedades que le pasa."
+      $detalle = $clase
+      if ($causa) { $detalle = "$clase ($causa)" }
+      $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $detalle. Revisa lo que simula el test y las propiedades que le pasa."
       if (-not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) { return $roto }
       Aviso $roto
-      break
+      # Aceptado en el ultimo intento tras rechazarlo por esto (no uno guardado): el job se prueba con un solo caso (Invoke-Salidas) y la consola dice cuantas veces se escribio
+      if (-not $SoloAviso -and $T.motivo.Contains("el original arranca el job $j (estado=")) { $script:NoArranca[$j] = [pscustomobject]@{ clase = $clase; veces = $T.intentos + 1 } }
     }
   }
   $faltanOrig = @()
@@ -1703,13 +1709,26 @@ function Invoke-Casos($Tareas) {
 
 # ================================ EJECUCION ================================
 # Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>. Con $Limpiar
-# en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo).
+# en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo). De un job del migrado cuyo test se
+# acepto con el aviso de que no arranca ($script:NoArranca) se ejecuta solo el primer caso: si acaba EXCEPCION con la misma clase que su caso vacio, los demas
+# no se ejecutan y salen sin probar ($script:SinProbar, con $MotivoNoArranca); si arranca, sigue como siempre.
 function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas, [bool]$Limpiar = $true) {
   $dest = Join-Ruta $Local "salidas/$Nombre"
   if ($Limpiar) { Remove-Carpeta $dest }
   foreach ($j in @($Listas | ForEach-Object { $_.entradas.job } | Select-Object -Unique)) {
     Info "Ejecutando los casos de $j ($Nombre)..."
-    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) { Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $t.entradas.caso }
+    $primero = $true
+    $noArranca = $false
+    foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
+      $c = $t.entradas.caso
+      if ($noArranca) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoNoArranca; continue }
+      Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $c
+      if ($primero -and $Nombre -ceq 'migrado' -and $script:NoArranca.ContainsKey($j)) {
+        $noArranca = ((Get-Excepcion (Join-Ruta $Local "salidas/$Nombre/$j/$c")) -ceq $script:NoArranca[$j].clase)
+        if ($noArranca) { Info "El migrado no arranca el job $j con este test ($($script:NoArranca[$j].clase)): no ejecuto sus demas casos." }
+      }
+      $primero = $false
+    }
   }
 }
 
@@ -2099,7 +2118,8 @@ function Get-SinGuardar([string]$Nombre, [string]$Job, [string]$Caso) {
 # Un caso igual que deja lo mismo que el caso vacio del arnes lleva un aviso: puede que su entrada no llegue al job.
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
 # 'fallos' dice, de original y migrado, cual acaba FAILED, EXCEPCION o sin estado.txt y por que (Get-Fallos). Un caso con un fichero que no se
-# pudo guardar sale distinto, con ese fichero entre las diferencias (noGuardado).
+# pudo guardar sale distinto, con ese fichero entre las diferencias (noGuardado). Un caso que no se ejecuto en el migrado porque su job no arranca con
+# su test (Invoke-Salidas) sale sin probar en local.
 # $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde). Lo del original
 # se normaliza con los dias de su ejecucion (Get-DiasOriginal: puede ser de otro dia) y lo del migrado, con los de hoy.
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
@@ -2121,6 +2141,7 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
     return $o
   }
   if ($ArnesMig.estado -ne 'hecha') { $o.motivo = 'El migrado no tiene su test PruebaLocalTest (el arnes ha quedado atascado).'; return $o }
+  if ($script:SinProbar.ContainsKey("$Nombre|$j|$c")) { $o.resultado = 'sin probar en local'; $o.motivo = $script:SinProbar["$Nombre|$j|$c"]; return $o }
   $o.fallos = @(Get-Fallos $Nombre $j $c)
   $diasOrig = Get-DiasOriginal $j $c
   $azar = @(Compare-Caso $s1 (Join-Ruta $Local "salidas/original-2/$j/$c") $diasOrig $diasOrig)
@@ -2295,7 +2316,8 @@ function Add-Hechos($Grupos, $Res, [string]$Codigo, [string]$Hash) {
 
 # La tabla por consola, los casos distintos por grupo (Get-Grupos: la cabecera, los casos, lo medido y el detalle de los dos primeros) y, despues, lo que
 # no es igual de los demas, caso a caso. Si un grupo de fallo EXCEPCION cubre todos los casos que se han comparado de un job, lo normal es que sea el
-# test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso.
+# test del migrado (arnes\migrado) y no su codigo, y se arregla con -RehacerArnes: una linea por job, con la clase y la causa del primer caso. Si el test se
+# escribio varias veces con ese error ($script:NoArranca), la linea dice que puede ser el codigo y no aconseja -RehacerArnes.
 function Show-Resultado($Res, $PorJob, $Grupos) {
   Info ''
   Info 'Prueba en local: el original frente al migrado, con las mismas entradas'
@@ -2319,7 +2341,8 @@ function Show-Resultado($Res, $PorJob, $Grupos) {
         $causa = [string]@($casos[0].fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa
         $detalle = $clase
         if ($causa) { $detalle = "${clase}: $causa" }
-        Aviso "    El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes."
+        if ($script:NoArranca.ContainsKey($j)) { Aviso "    El migrado no arranca el job $j ($detalle). El test ya se escribio $($script:NoArranca[$j].veces) veces con este error: puede ser el codigo del migrado. Pregunta a Copilot, en el repo del migrado, si el job arrancaria igual fuera del test." }
+        else { Aviso "    El migrado no arranca el job $j en ningun caso ($detalle). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes." }
       }
     }
     foreach ($r in @($miembros | Select-Object -First 2)) {
@@ -3081,6 +3104,8 @@ $script:Racha = 0
 $script:Mavens = 0
 $script:Maven = @{}
 $script:NoGuardados = @{}   # por (lado|job|caso): los ficheros que no se pudieron guardar en salidas (Copy-Salida)
+$script:NoArranca = @{}   # por job: su test del migrado se rechazo porque con el caso vacio el migrado no arranca y el original si, y se acepto en el ultimo intento (clase, veces escrito)
+$script:SinProbar = @{}   # por (lado|job|caso): el motivo de un caso que no se ha ejecutado porque su job no arranca con ese test (Invoke-Salidas)
 $script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sale una sola vez
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
 $script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
