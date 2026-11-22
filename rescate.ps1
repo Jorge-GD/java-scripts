@@ -361,14 +361,18 @@ function Get-Hechos([string]$Raiz) {
       $ymls.Add([pscustomobject]@{ Rel = Get-Rel $Raiz $f.FullName; Nombre = $f.Name; Texto = $t })
     }
   }
-  # Lo que lanza o configura el batch fuera de src/test (scripts, Dockerfile, yml, properties), con su texto
+  # Lo que lanza o configura el batch fuera de src/test (scripts, Dockerfile, yml, properties), con su texto, y los scripts SQL que Spring Boot
+  # ejecuta al arrancar (schema.sql y data.sql de src/main/resources, con o sin sufijo de plataforma)
   $otros = New-Object System.Collections.Generic.List[object]
+  $sql = New-Object System.Collections.Generic.List[string]
   foreach ($f in @(Get-Arbol $Raiz)) {
-    if ($f.Length -gt 1MB -or $f.Name -notmatch '(?i)^(?:Dockerfile.*|.+\.(?:sh|ksh|bash|cmd|bat|ya?ml|properties))$') { continue }
     $rel = Get-Rel $Raiz $f.FullName
-    if (-not $rel.StartsWith('src/test/')) { $otros.Add([pscustomobject]@{ Rel = $rel; Texto = [System.IO.File]::ReadAllText($f.FullName) }) }
+    if ($rel -match '^src/main/resources/(?:schema|data)(?:-[\w-]+)?\.sql$') { $sql.Add($rel) }
+    elseif ($f.Length -le 1MB -and -not $rel.StartsWith('src/test/') -and $f.Name -match '(?i)^(?:Dockerfile.*|.+\.(?:sh|ksh|bash|cmd|bat|ya?ml|properties))$') {
+      $otros.Add([pscustomobject]@{ Rel = $rel; Texto = [System.IO.File]::ReadAllText($f.FullName) })
+    }
   }
-  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray(); Otros = $otros.ToArray() }
+  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray(); Otros = $otros.ToArray(); Sql = $sql.ToArray() }
 }
 
 function Get-Norm([string]$Fqn, [string]$BasePkg) {
@@ -1024,6 +1028,24 @@ function Add-CalNashornYComando($Out, $Hechos, $Deps) {
   }
 }
 
+# Init SQL sin base en memoria (fila SB25-01, fuentes-guias/sb-Spring-Boot-2.5-Release-Notes.html: "By default, SQL database initialization is only
+# performed when using an embedded in-memory database"): un schema.sql o data.sql de src/main/resources, ningun spring.sql.init.mode y una base que
+# no es en memoria. Lo es si todas las spring.datasource.url del migrado son de H2, HSQLDB o Derby en memoria; sin ninguna url, si el pom trae una de
+# esas bases (puede ser solo de pruebas, y no se sabe: no sale). Una url de variable (${...}) cuenta como no en memoria. Siempre aviso: el modo
+# puede venir de fuera del repo. Uno por script, en su linea 1.
+function Add-CalSqlInit($Out, $Hechos, $Props, $Deps) {
+  if ($Hechos.Sql.Count -eq 0 -or @(Get-Propiedad $Props 'spring.sql.init.mode').Count -gt 0) { return }
+  $urls = @(Get-Propiedad $Props 'spring.datasource.url')
+  $noMem = @($urls | Where-Object { $_.Valor -notmatch '(?i)^jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)' })
+  if ($urls.Count -gt 0) { if ($noMem.Count -eq 0) { return } }
+  elseif (@($Deps | Where-Object { @('h2', 'hsqldb', 'derby') -ccontains $_ }).Count -gt 0) { return }
+  $causa = 'no hay spring.datasource.url ni H2, HSQLDB o Derby en el pom'
+  if ($noMem.Count -gt 0) { $causa = 'spring.datasource.url es ' + $noMem[0].Valor + ', en ' + $noMem[0].Rel + ':' + $noMem[0].Linea }
+  foreach ($r in $Hechos.Sql) {
+    Add-Cal $Out $r 1 'sql-init-no-embebida' ($r.Split('/')[-1] + " ya no se ejecuta solo: desde Spring Boot 2.5 la inicializacion SQL solo corre por defecto con una base embebida en memoria, y esta no lo es ($causa). Pon spring.sql.init.mode=always si debe ejecutarse (cuidado: en una base con datos vuelve a correr el script) o never si no.")
+  }
+}
+
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
 function Get-SinComentarios([string]$Texto) {
   return $script:RxLexico.Replace($Texto, [System.Text.RegularExpressions.MatchEvaluator] {
@@ -1257,6 +1279,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   $deps = @()
   if ($pom) { $deps = @($pom.Deps) }
   Add-CalNashornYComando $out $Hechos $deps
+  Add-CalSqlInit $out $Hechos $props $deps
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }

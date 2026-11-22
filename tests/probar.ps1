@@ -6981,5 +6981,41 @@ $Pruebas['m76 (f2) comando-sin-partir (SBT5-18): SystemCommandTasklet con setCom
   Comprueba 'el texto dice que Spring Batch 5 ya no parte el comando, que busca un programa con ese nombre y como separarlo' ($h[0].Detalle -like '*SystemCommandTasklet.setCommand("ls -l") con el comando entero en un solo argumento: desde Spring Batch 5 setCommand recibe un array y ya no parte el comando por los espacios, asi que busca un programa que se llama "ls -l" y falla. Separa los argumentos: setCommand("ls", "-l").*') $h[0].Detalle
 }
 
+# El escenario con un schema.sql (y, si se pide, un data.sql) y esta configuracion de Spring en application.yml.
+function Sql-M76([string]$Nombre, [string]$Yml, [string[]]$Sql = @('schema.sql')) {
+  $e = Escenario-M70 $Nombre @{}
+  foreach ($s in $Sql) { Escribe $e.Repo ('src/main/resources/' + $s) "create table recibo (id bigint);`n" }
+  Escribe $e.Repo 'src/main/resources/application.yml' $Yml
+  return $e
+}
+
+$Pruebas['m76 (g1) sql-init-no-embebida (SB25-01): schema.sql o data.sql con una base que no es H2 en memoria y sin spring.sql.init.mode es un aviso por fichero; con jdbc:h2:mem o con el modo, no'] = {
+  $e = Sql-M76 'm76-g1' "spring:`n  datasource:`n    url: `${DB_URL}`n" @('schema.sql', 'data.sql', 'schema-oracle.sql')
+  Escribe $e.Repo 'src/main/resources/otro.sql' "select 1;`n"
+  $h = Cal-M76 $e 'sql-init-no-embebida'
+  Igual 'sale en los tres scripts de arranque y no en otro.sql' 'data schema schema-oracle' (Ficheros-M70 $h)
+  Igual 'es un aviso' 'aviso aviso aviso' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  $a = @($h | Where-Object { $_.Fichero -like '*src/main/resources/schema.sql' -or $_.Fichero -like '*src\main\resources\schema.sql' })
+  Igual 'en la linea 1' 1 $a[0].Linea
+  Comprueba 'el texto dice que desde Spring Boot 2.5 solo corre con una base embebida en memoria, la url que ve y que hacer' ($a[0].Detalle -like '*schema.sql ya no se ejecuta solo: desde Spring Boot 2.5 la inicializacion SQL solo corre por defecto con una base embebida en memoria, y esta no lo es (spring.datasource.url es ${DB_URL}, en src/main/resources/application.yml:3). Pon spring.sql.init.mode=always si debe ejecutarse (cuidado: en una base con datos vuelve a correr el script) o never si no.*') $a[0].Detalle
+
+  $m = Sql-M76 'm76-g1-mem' "spring:`n  datasource:`n    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1`n"
+  Igual 'con jdbc:h2:mem, no sale' 0 @(Cal-M76 $m 'sql-init-no-embebida').Count
+  $o = Sql-M76 'm76-g1-modo' "spring:`n  datasource:`n    url: `${DB_URL}`n  sql:`n    init:`n      mode: always`n"
+  Igual 'con spring.sql.init.mode, no sale' 0 @(Cal-M76 $o 'sql-init-no-embebida').Count
+  $s = Sql-M76 'm76-g1-sin' "spring:`n  datasource:`n    url: `${DB_URL}`n" @()
+  Igual 'sin schema.sql ni data.sql, no sale' 0 @(Cal-M76 $s 'sql-init-no-embebida').Count
+}
+
+$Pruebas['m76 (g2) sql-init-no-embebida: con una url en memoria en un perfil y otra de variable en otro, sale; sin url, depende de si el pom trae una base embebida'] = {
+  $e = Sql-M76 'm76-g2' "spring.datasource.url: jdbc:h2:mem:local`n"
+  Escribe $e.Repo 'src/main/resources/application-pre.properties' "spring.datasource.url=jdbc:oracle:thin:@//host:1521/svc`n"
+  Igual 'con una url en memoria y otra de Oracle, sale (la de pre)' 1 @(Cal-M76 $e 'sql-init-no-embebida').Count
+  $s = Sql-M76 'm76-g2-sin' "life:`n  inventory: legado`n"
+  Igual 'sin url y sin base embebida en el pom, sale' 1 @(Cal-M76 $s 'sql-init-no-embebida').Count
+  Pom-M76 $s @('h2')
+  Igual 'sin url y con h2 en el pom, no sale' 0 @(Cal-M76 $s 'sql-init-no-embebida').Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
