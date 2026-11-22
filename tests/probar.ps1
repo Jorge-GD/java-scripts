@@ -6274,7 +6274,7 @@ $Pruebas['m70 (b3) estilo-constructor: sin clases en la plantilla, manda el que 
   Igual 'sin empate manda el que mas usa, haya o no Lombok en el pom' 'L1' (Ficheros-M70 (Cal-M70 $e3 'estilo-constructor'))
 }
 
-$Pruebas['m70 (b4) estilo-constructor y estilo-logger: si la plantilla tambien mezcla estilos, se quedan en aviso'] = {
+$Pruebas['m70 (b4) estilo-constructor y estilo-logger: si la plantilla tambien mezcla estilos, salen igual como error (cambiado en M72 b)'] = {
   $e = Escenario-M70 'm70-b4' @{
     A1 = (Dependencias-M70 'A1' $true)
     A2 = (Dependencias-M70 'A2' $true)
@@ -6296,8 +6296,8 @@ $Pruebas['m70 (b4) estilo-constructor y estilo-logger: si la plantilla tambien m
     $h = @($cal | Where-Object { $_.Detalle.StartsWith("[$regla]") })
     Igual "$regla : sale una vez" 1 $h.Count
     if ($h.Count -eq 1) {
-      Igual "$regla : como aviso" 'aviso' $h[0].Sev
-      Comprueba "$regla : y dice que la plantilla tambien lo hace" ($h[0].Detalle -like '*(se queda en aviso: la plantilla tambien lo hace)') $h[0].Detalle
+      Igual "$regla : como error, aunque la plantilla tambien mezcle" 'error' $h[0].Sev
+      Comprueba "$regla : y no dice que se queda en aviso" ($h[0].Detalle -notlike '*se queda en aviso*') $h[0].Detalle
     }
   }
 }
@@ -6549,6 +6549,49 @@ $Pruebas['m72 (a7) las dos reglas de proxy se exigen aunque la plantilla tambien
       Comprueba "$regla : y no dice que se queda en aviso" ($h[0].Detalle -notlike '*se queda en aviso*') $h[0].Detalle
     }
   }
+}
+
+$Pruebas['m72 (b1) estilo-logger y estilo-constructor: aunque la plantilla mezcle, manda lo que mas usa el migrado y salen como error solo las pocas'] = {
+  $repo = @{ F1 = (Logger-M70 'F1' 'factory') }
+  foreach ($i in 1..20) { $repo["S$i"] = (Logger-M70 "S$i" 'slf4j') }
+  $e = Escenario-M70 'm72-b1' $repo @{
+    Q1 = (Logger-M70 'Q1' 'slf4j' $PkgPlantilla)
+    Q2 = (Logger-M70 'Q2' 'factory' $PkgPlantilla)
+    Q3 = (Logger-M70 'Q3' 'factory' $PkgPlantilla)
+  }
+  $h = Cal-M70 $e 'estilo-logger'
+  Igual 'con 20 con @Slf4j y 1 con LoggerFactory (la plantilla mezcla y usa mas LoggerFactory) sale solo la de LoggerFactory' 'F1' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Comprueba 'cuenta el migrado (20 de 21) y no habla de la plantilla' ($h[0].Detalle -like '*Logger con LoggerFactory; en el resto del batch (20 de 21 clases) se usa @Slf4j.*' -and $h[0].Detalle -notlike '*plantilla*') $h[0].Detalle
+  $c = Escenario-M70 'm72-b1-ctor' @{
+    L1 = (Dependencias-M70 'L1' $true)
+    L2 = (Dependencias-M70 'L2' $true)
+    L3 = (Dependencias-M70 'L3' $true)
+    M1 = (Dependencias-M70 'M1' $false)
+  } @{
+    P1 = (Dependencias-M70 'P1' $false $PkgPlantilla)
+    P2 = (Dependencias-M70 'P2' $false $PkgPlantilla)
+    P3 = (Dependencias-M70 'P3' $true $PkgPlantilla)
+  }
+  $hc = Cal-M70 $c 'estilo-constructor'
+  Igual 'con el constructor igual: la plantilla mezcla y usa mas el constructor a mano, pero sale solo la de a mano (el migrado usa 3 con Lombok)' 'M1' (Ficheros-M70 $hc)
+  Igual 'y es un error' 'error' $hc[0].Sev
+}
+
+$Pruebas['m72 (b2) estilo: si la plantilla usa un solo estilo, manda la plantilla; si mezcla y el migrado empata, Lombok solo si el pom lo tiene'] = {
+  $e = Escenario-M70 'm72-b2' @{ S1 = (Logger-M70 'S1' 'slf4j'); S2 = (Logger-M70 'S2' 'slf4j'); S3 = (Logger-M70 'S3' 'slf4j'); F1 = (Logger-M70 'F1' 'factory') } @{
+    Q1 = (Logger-M70 'Q1' 'factory' $PkgPlantilla)
+    Q2 = (Logger-M70 'Q2' 'factory' $PkgPlantilla)
+  }
+  $h = Cal-M70 $e 'estilo-logger'
+  Igual 'la plantilla solo usa LoggerFactory: salen las tres con @Slf4j, aunque sean mayoria' 'S1 S2 S3' (Ficheros-M70 $h)
+  Igual 'como error' 'error' $h[0].Sev
+  Comprueba 'y el texto dice que en la plantilla tambien se usa LoggerFactory' ($h[0].Detalle -like '*Logger con @Slf4j; en el resto del batch (1 de 4 clases) y en la plantilla se usa LoggerFactory.*') $h[0].Detalle
+  $dos = @{ L1 = (Dependencias-M70 'L1' $true); M1 = (Dependencias-M70 'M1' $false) }
+  $masMano = @{ P1 = (Dependencias-M70 'P1' $true $PkgPlantilla); P2 = (Dependencias-M70 'P2' $false $PkgPlantilla); P3 = (Dependencias-M70 'P3' $false $PkgPlantilla) }
+  $masLombok = @{ P1 = (Dependencias-M70 'P1' $true $PkgPlantilla); P2 = (Dependencias-M70 'P2' $true $PkgPlantilla); P3 = (Dependencias-M70 'P3' $false $PkgPlantilla) }
+  Igual 'la plantilla mezcla (mas a mano) y el migrado empata, con Lombok en el pom: manda Lombok y sale la de a mano' 'M1' (Ficheros-M70 (Cal-M70 (Escenario-M70 'm72-b2-lombok' $dos $masMano $true) 'estilo-constructor'))
+  Igual 'la plantilla mezcla (mas con Lombok) y el migrado empata, sin Lombok en el pom: manda el constructor a mano y sale la de Lombok' 'L1' (Ficheros-M70 (Cal-M70 (Escenario-M70 'm72-b2-sin' $dos $masLombok $false) 'estilo-constructor'))
 }
 
 # ================================ LANZADOR ================================

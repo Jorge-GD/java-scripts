@@ -229,9 +229,9 @@ $Cfg += @{
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
     'clase-final-proxy', 'metodo-final-proxy')
-  # Reglas que se exigen aunque la plantilla tampoco las cumpla (todas las de Spring; el resto, si la plantilla tambien las incumple, se queda en aviso)
+  # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
-    'clase-final-proxy', 'metodo-final-proxy')
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -718,9 +718,10 @@ $EstiloTextos = @{
 }
 
 # Estilo coherente. $Datos trae, por regla (Ctor y Logger), una fila por clase contada (RelRaiz, Linea, Estilo) y $Plantilla las cuentas de la
-# plantilla (estilo -> clases), o $null si lo que se mira es la propia plantilla. Si el migrado mezcla estilos, manda el de la plantilla (si
-# tiene clases que contar) o el que mas usa el migrado; si empatan, Lombok cuando el pom del migrado lo tiene. Cada clase de otro estilo sale
-# en $Out. Devuelve las cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola.
+# plantilla (estilo -> clases), o $null si lo que se mira es la propia plantilla. Si el migrado mezcla estilos, manda el de la plantilla cuando
+# usa uno solo; si la plantilla mezcla o no tiene clases que contar, manda el que mas usa el migrado (asi una plantilla que mezcla no obliga a
+# cambiar la mayoria del migrado); si empatan, Lombok cuando el pom del migrado lo tiene. Cada clase de otro estilo sale en $Out. Devuelve las
+# cuentas del migrado (para que sean las de la plantilla) y, si hay mezcla, la linea de la consola.
 function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
   $pom = Get-Pom $Hechos.Raiz
   $conLombok = [bool]($pom -and $pom.Valido -and ($pom.Deps -contains 'lombok'))
@@ -733,7 +734,7 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
     $cuentas[$r.Hecho] = $mias
     if ($mias.Count -lt 2) { continue }
     $base = $mias
-    $enPlantilla = ($Plantilla -and $Plantilla[$r.Hecho].Count -gt 0)
+    $enPlantilla = ($Plantilla -and $Plantilla[$r.Hecho].Count -eq 1)
     if ($enPlantilla) { $base = $Plantilla[$r.Hecho] }
     $orden = $r.SinLombok
     if ($conLombok) { $orden = $r.ConLombok }
