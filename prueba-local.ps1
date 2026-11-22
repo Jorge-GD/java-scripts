@@ -18,8 +18,9 @@ QUE HACE
      que lo traduce: lleva en su prompt la ruta del test del original ya guardado, para simular lo mismo y al mismo nivel.
      El script deshace lo que toque fuera de eso (lo dice) y, del pom.xml, deja el del original con solo las dependencias nuevas
      de la IA, todas con <scope>test</scope>; despues comprueba que compila y que, con un caso vacio, cada job deja su estado.txt
-     y que su base de prueba tiene las tablas que usa el codigo (las de src\main, sacadas con regex: Get-TablasBatch). Un intento sin ellas se
-     rechaza con la tabla y su fichero:linea; el ultimo, o un arnes guardado, se acepta con un aviso: el inventario es aproximado.
+     y que su base de prueba tiene las tablas que usa el codigo (las de src\main, sacadas con regex: Get-TablasBatch) y, en el migrado, las de la base
+     del test del original (las de su caso vacio, sin BATCH_ ni TASK_; su primer intento ya lleva la lista). Un intento sin ellas se
+     rechaza con la tabla y su fichero:linea (o con el nombre de la tabla del original); el ultimo, o un arnes guardado, se acepta con un aviso.
      Un fallo se repite una vez con el motivo; si vuelve a fallar, se para.
      Si la llamada se pasa del tope (SegundosArnes) o sale mal pero deja el test, se comprueba igual: si vale, se usa. Si no
      vale, el motivo lleva los dos fallos y, si fue por tiempo, el reintento sigue desde lo escrito. La IA solo puede lanzar
@@ -1157,12 +1158,24 @@ function Get-ListaTablas($Tablas) {
 # Las tablas que usa el codigo de $Dir (Get-TablasBatch) y la base de prueba no tiene: las que no son ningun tablas\<TABLA>.csv de la salida del
 # caso vacio (target\prueba-local\<job>\vacio, ya ejecutado) de ninguno de los $Jobs. El arnes deja uno por cada tabla de su base.
 function Get-TablasFaltan([string]$Dir, [string[]]$Jobs) {
-  $hay = @{}
-  foreach ($j in $Jobs) {
-    $d = Join-Ruta $Dir "target/prueba-local/$j/vacio/tablas"
-    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $hay[$f.BaseName.ToUpperInvariant()] = $true } }
-  }
+  $hay = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $Dir "target/prueba-local/$_/vacio/tablas" })
   return @(Get-TablasBatch $Dir | Where-Object { -not $hay.ContainsKey($_.tabla) })
+}
+
+# Los nombres, en mayusculas, de los <TABLA>.csv de las carpetas $Carpetas (las que existan), como las claves de una tabla hash.
+function Get-NombresTablas([string[]]$Carpetas) {
+  $n = @{}
+  foreach ($d in $Carpetas) {
+    if (Test-Path -LiteralPath $d) { foreach ($f in @(Get-ChildItem -LiteralPath $d -File -Filter '*.csv')) { $n[$f.BaseName.ToUpperInvariant()] = $true } }
+  }
+  return $n
+}
+
+# Las tablas de la base del test del original: las de tablas\ de su caso vacio de cada uno de los $Jobs (salidas\vacio\<job>, las que dejo Test-ArnesEscrito del
+# original), por orden de nombre y sin las de Spring Batch (BATCH_) ni las de Spring Cloud Task (TASK_), que cada lado trae a su manera (Compare-Caso las salta).
+function Get-TablasOriginal([string[]]$Jobs) {
+  $n = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $Local "salidas/vacio/$_/tablas" })
+  return @(Sort-Ordinal @($n.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' }))
 }
 
 # Comprueba el arnes que acaba de escribir la IA en su copia. Antes lo deja en lo que se puede probar: lo que cambio fuera de lo que
@@ -1190,7 +1203,8 @@ function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 
 # '' si el arnes de la copia, ya sin lo de fuera, vale; si no, el motivo: escrito el test, compila y, con un caso vacio por job, cada job
 # deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso) y la base de prueba tiene las
-# tablas que usa el codigo (Get-TablasFaltan). Esa ultima puerta rechaza el intento mientras queden otros, y no el ultimo ni uno guardado
+# tablas que usa el codigo (Get-TablasFaltan) y, en el del migrado, las que tiene la base del test del original (Get-TablasOriginal): la que el codigo arma en
+# tiempo de ejecucion no sale del inventario, pero el original ya la crea. Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
 # ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
 function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $dir = $T.entradas.copia
@@ -1234,6 +1248,14 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
       break
     }
   }
+  $faltanOrig = @()
+  if (-not $esOrig) {
+    $hay = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $dir "target/prueba-local/$_/vacio/tablas" })
+    $faltanOrig = @(Get-TablasOriginal $Jobs | Where-Object { -not $hay.ContainsKey($_) })
+    if ($faltanOrig.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
+      return "La base de tu test no tiene estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Crealas con las mismas columnas que en el test del original."
+    }
+  }
   $faltan = @(Get-TablasFaltan $dir $Jobs)
   if ($faltan.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
     return "La base de prueba no tiene estas tablas que usa el batch: $(Get-ListaTablas $faltan). Crealas en el paso de la base limpia con las columnas que usa el codigo."
@@ -1242,6 +1264,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     Remove-Carpeta (Join-Ruta $Local 'salidas/vacio')
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
   }
+  if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Para que lo escriba otra vez con ellas, relanza con -RehacerArnes." }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
   return ''
 }
@@ -1396,7 +1419,7 @@ function Get-MotivoArnes($T, $C, [string[]]$Jobs) {
 }
 
 # Las tareas de arnes pendientes, una detras de otra: primero la del original y, solo cuando esta hecha, la del migrado (que traduce
-# su test: se vuelve a calcular su huella con el test del original que acaba de quedar guardado). Cada una con su comprobacion y,
+# su test: se vuelve a calcular su huella con el test del original que acaba de quedar guardado y su previo lleva las tablas de su base). Cada una con su comprobacion y,
 # si falla, su reintento con el motivo. Si la del original queda atascada, la del migrado no se lanza: lo para el arranque.
 function Invoke-Arneses($Tareas, [string[]]$Jobs) {
   foreach ($repo in @('original', 'migrado')) {
@@ -1405,6 +1428,11 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
         if ($ArnesOrig.estado -ne 'hecha') { return }
         $t.entradas.hashOriginal = Get-HashGuardado 'original' $t.entradas.testOriginal
         $t.entradas.huella = Get-HuellaArnes $t.entradas.test $Jobs $t.entradas.hashOriginal
+        # Su primer intento sabe ya que tablas tiene la base del test del original (Test-ArnesEscrito pide las mismas): no se supo hasta que se escribio el del original
+        $tablas = @(Get-TablasOriginal $Jobs)
+        if ($t.intentos -eq 0 -and $tablas.Count -gt 0) {
+          $t.entradas.previo = (@([string]$t.entradas.previo, "La base del test del original tiene estas tablas: $($tablas -join ', '). La base de tu test tiene que tener las mismas, con las mismas columnas.") | Where-Object { $_ }) -join "`n"
+        }
       }
       while ($t.estado -eq 'pendiente') {
         Info "Arnes (el test que ejecuta los casos): $repo..."

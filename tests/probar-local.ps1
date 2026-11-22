@@ -3347,7 +3347,7 @@ class Logs {
 
 $Pruebas['m40 (b) arnes nuevo cuyo caso vacio no deja la tabla del codigo: el primer intento se rechaza con la tabla y su sitio; el segundo, que la deja, se acepta'] = {
   $e = Escenario-M40 'm40-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M40 $e 'tablas=2/T_A:arnes-original'
+  $r = Prueba-M40 $e 'tablas=2/T_A:arnes-original;tablas=1/T_A:arnes-migrado'
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'dos llamadas al arnes del original' 2 (Llamadas-Arnes $e 'original').Count
   $p = Registro-Arnes $e 'original' 2
@@ -5087,7 +5087,7 @@ $Pruebas['m56 (b) un arnes del original sin una tabla del inventario: el aviso, 
   Igual 'el aviso con -RehacerOriginal, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
   $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
   Igual 'con el arnes guardado, el mismo aviso, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
-  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original' @('-RehacerOriginal')
+  $r = Prueba-M40 $e 'tablas=1/T_A:arnes-original;tablas=1/T_A:arnes-migrado' @('-RehacerOriginal')
   Igual 'con -RehacerOriginal y la tabla en el test nuevo, sale con 0' 0 $r.Codigo
   Comprueba 'el test guardado lleva la tabla' ((Test-Guardado $e 'original').Contains('BASE_TABLAS=T_A')) ''
   Comprueba 'y ya no avisa' ($r.Salida -notmatch 'sigue sin estas tablas') (Cola $r.Salida)
@@ -6351,6 +6351,65 @@ $Pruebas['m68 (b4) un .log que no cabe en salidas ni con nombre corto no cuenta 
   Igual 'sin ninguna diferencia' 0 @((Caso $e 'cargaJob' 'caso-01').diferencias).Count
   $r = Prueba-M68 $e
   Comprueba 'el siguiente lanzamiento reutiliza el original' ($r.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+}
+
+# --- (c) la base del test del migrado tiene las tablas de la base del test del original ---
+# 'tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1 pone esa base en el test del arnes que casa desde su llamada n; el caso vacio de cada lado deja un tablas\<T>.csv por tabla.
+
+$MotivoTablas68 = 'La base de tu test no tiene estas tablas que si tiene la del test del original: CALENDARIO_02. Crealas con las mismas columnas que en el test del original.'
+
+$Pruebas['m68 (c1) el caso vacio del original deja CALENDARIO_02 y el del migrado no: el primer intento del migrado se rechaza con el motivo y la tabla, y el segundo, que la crea, se acepta'] = {
+  $e = Escenario-M68 'm68-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02:arnes-original;tablas=2/CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del migrado con el motivo' ($r.Salida.Contains("Arnes del migrado rechazado: $MotivoTablas68")) (Cola $r.Salida)
+  Igual 'hay dos llamadas del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'migrado' 2).Contains($MotivoTablas68)) (Cola (Registro-Arnes $e 'migrado' 2))
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'el segundo se acepta sin aviso de tablas' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -notmatch 'sigue sin estas tablas') (Cola $r.Salida)
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m68 (c2) en el ultimo intento, y con un test guardado, el migrado sin esa tabla se acepta con un aviso y los casos se ejecutan'] = {
+  $e = Escenario-M68 'm68-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02:arnes-original;tablas=9/CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'el primer intento se rechaza' 1 @([regex]::Matches($r.Salida, [regex]::Escape("Arnes del migrado rechazado: $MotivoTablas68"))).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  $aviso = 'La base de tu test sigue sin estas tablas que si tiene la del test del original: CALENDARIO_02.'
+  Comprueba 'con el aviso' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+  Igual 'la tarea queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+  $n = @(Llamadas $e).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M68 $e '' 'tablas=9/CALENDARIO_02:arnes-migrado'
+  Igual 'con el test guardado sale con 0' 0 $r.Codigo
+  Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'y avisa de la tabla' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
+}
+
+$Pruebas['m68 (c3) las tablas BATCH_ y TASK_ que deja el caso vacio del original y no el del migrado no cuentan: el migrado se acepta a la primera, sin aviso'] = {
+  $e = Escenario-M68 'm68-c3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CALENDARIO_02,BATCH_JOB_INSTANCE,TASK_EXECUTION:arnes-original;tablas=1/CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el caso vacio del original deja la de Spring Batch' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio/cargaJob/tablas/BATCH_JOB_INSTANCE.csv')) ''
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de tablas' ($r.Salida -notmatch 'tablas que si tiene la del test del original') (Cola $r.Salida)
+}
+
+$Pruebas['m68 (c4) el primer intento del migrado ya lleva la lista de tablas de la base del test del original en su prompt, el del original no, y la huella no cambia'] = {
+  $e = Escenario-M68 'm68-c4' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/T_B,CALENDARIO_02,BATCH_JOB_INSTANCE:arnes-original;tablas=1/T_B,CALENDARIO_02:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  $lista = 'La base del test del original tiene estas tablas: CALENDARIO_02, T_B.'
+  $p = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del primer intento del migrado lleva la lista, sin las de Spring Batch' ($p.Contains($lista)) (Cola $p)
+  Comprueba 'el del original no' (-not (Registro-Arnes $e 'original' 1).Contains('La base del test del original tiene estas tablas')) ''
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  $n = @(Llamadas $e).Count
+  $r = Prueba-M68 $e '' 'tablas=1/T_B,CALENDARIO_02,BATCH_JOB_INSTANCE:arnes-original;tablas=1/T_B,CALENDARIO_02:arnes-migrado'
+  Igual 'el segundo lanzamiento no escribe ningun test otra vez' $n @(Llamadas $e).Count
 }
 
 # ================================ LANZADOR ================================
