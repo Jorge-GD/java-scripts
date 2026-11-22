@@ -598,6 +598,8 @@ $RxComandoJunto = New-Object System.Text.RegularExpressions.Regex '\.setCommand\
 # Una url de base de datos en memoria (H2, HSQLDB o Derby) y lo que en Java o XML declara una base embebida en memoria
 $RxUrlMemoria = '(?i)^jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)'
 $RxMemoriaJava = 'jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)|EmbeddedDatabaseType\.(?:H2|HSQL|DERBY)|EmbeddedDatabaseBuilder'
+# Un setDataSource(un parametro) con el cuerpo vacio (los comentarios ya no estan): en un DefaultBatchConfigurer de Spring Batch 4 deja el repositorio en memoria
+$RxSetDataSourceVacio = '\bvoid\s+setDataSource\s*\(\s*[^(),{}]+\)\s*\{\s*\}'
 $RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
@@ -1083,13 +1085,16 @@ function Get-RepoBatch($Hechos, $Props, $Deps) {
 }
 
 # Por que el original no guarda las ejecuciones de Batch ('' si las guarda o no se sabe): usa MapJobRepositoryFactoryBean (o un DAO Map) en Java o XML
-# de src/main, o su unica base es una H2, HSQLDB o Derby en memoria (todas sus spring.datasource.url lo son o, sin url, el codigo declara una). Se
-# calcula una vez por carpeta: el original no cambia durante la ejecucion (-Modo fix vigila su huella) y cada diagnostico lo pediria otra vez.
+# de src/main, sobrescribe un setDataSource vacio en un DefaultBatchConfigurer (sin DataSource, initialize() cae en el repositorio Map: fuentes-m76/
+# sbatch43-DefaultBatchConfigurer.java:98, logger.warn "No datasource was provided...using a Map based JobRepository"), o su unica base es una H2,
+# HSQLDB o Derby en memoria (todas sus spring.datasource.url lo son o, sin url, el codigo declara una). Se calcula una vez por carpeta: el original no
+# cambia durante la ejecucion (-Modo fix vigila su huella) y cada diagnostico lo pediria otra vez.
 $OriginalNoGuardaPor = @{}
 function Get-OriginalNoGuarda([string]$Raiz) {
   if ($script:OriginalNoGuardaPor.ContainsKey($Raiz)) { return $script:OriginalNoGuardaPor[$Raiz] }
   $h = Get-Hechos $Raiz
-  $codigo = @($h.Ficheros | ForEach-Object { Get-SinComentarios $_.Texto })
+  $java = @($h.Ficheros | ForEach-Object { Get-SinComentarios $_.Texto })
+  $codigo = $java
   foreach ($f in @(Get-Arbol $Raiz | Where-Object { $_.Extension -ieq '.xml' -and $_.Length -le 1MB })) {
     if (-not (Get-Rel $Raiz $f.FullName).StartsWith('src/test/')) { $codigo += [regex]::Replace([System.IO.File]::ReadAllText($f.FullName), '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline) }
   }
@@ -1098,6 +1103,7 @@ function Get-OriginalNoGuarda([string]$Raiz) {
   if ($urls.Count -gt 0) { $mem = (@($urls | Where-Object { $_.Valor -notmatch $script:RxUrlMemoria }).Count -eq 0) } else { $mem = ($texto -cmatch $script:RxMemoriaJava) }
   $motivo = ''
   if ($texto -cmatch '\bMap(?:JobRepositoryFactoryBean|JobInstanceDao|JobExecutionDao|StepExecutionDao|ExecutionContextDao)\b') { $motivo = 'usa MapJobRepositoryFactoryBean, que las deja en memoria' }
+  elseif (@($java | Where-Object { $_ -cmatch '\bDefaultBatchConfigurer\b' -and $_ -cmatch $script:RxSetDataSourceVacio }).Count -gt 0) { $motivo = 'sobrescribe setDataSource vacio en DefaultBatchConfigurer, que deja el repositorio en memoria' }
   elseif ($mem) { $motivo = 'su base es una H2 en memoria' }
   $script:OriginalNoGuardaPor[$Raiz] = $motivo
   return $motivo

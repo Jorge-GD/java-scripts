@@ -7123,5 +7123,46 @@ $Pruebas['m76 (i2) el prompt del paso calidad dice que hacer con las reglas de l
   Comprueba 'y como dar su base a Batch, avisando de que crea un fichero nuevo' ($prompt -match 'Repositorio de Batch: crea una @Configuration en el paquete de configuracion con un DataSource H2 en memoria marcado con @BatchDataSource') $prompt
 }
 
+# Un original (Spring Batch 4) con un DefaultBatchConfigurer: $Setter es el metodo setDataSource que lleva ($Cabeza, lo que va antes de la clase).
+function OriginalConfigurador-M76($E, [string]$Setter, [string]$Cabeza = 'public class SinBase extends DefaultBatchConfigurer') {
+  return (Original-M76 $E @{ 'src/main/java/com/acme/life/config/SinBase.java' = "package com.acme.life.config;`n`nimport javax.sql.DataSource;`n`n/** Configurador de Batch. */`n$Cabeza {`n$Setter`n}`n" })
+}
+
+# Un escenario con el migrado a la base del negocio (url de variable) y la plantilla con su base propia de Batch.
+function EscenarioBase-M76([string]$Nombre, [hashtable]$Repo = @{}) {
+  $e = Escenario-M70 $Nombre $Repo @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  return $e
+}
+
+$Pruebas['m76 (i3) repositorio-batch: un DefaultBatchConfigurer del original (con extends o anonimo) que sobrescribe setDataSource con el cuerpo vacio deja el repositorio en memoria: sale'] = {
+  $e = EscenarioBase-M76 'm76-i3'
+  $vacio = "    @Override`n    public void setDataSource(DataSource dataSource) {`n    }"
+  $o = OriginalConfigurador-M76 $e $vacio
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'con extends y el cuerpo vacio, sale una vez' 1 $h.Count
+  Comprueba 'y el texto dice por que' ($h[0].Detalle -like '*El original no guarda las ejecuciones de Batch (sobrescribe setDataSource vacio en DefaultBatchConfigurer, que deja el repositorio en memoria)*') $h[0].Detalle
+  $o = OriginalConfigurador-M76 $e "    @Bean`n    BatchConfigurer configurer() {`n        return new DefaultBatchConfigurer() {`n            @Override`n            public void setDataSource(final DataSource ds) {}`n        };`n    }" 'public class Configuracion'
+  Igual 'anonimo, con un parametro final y las llaves juntas, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = OriginalConfigurador-M76 $e "    @Override`n    public void setDataSource(DataSource dataSource) {`n        // sin base: el repositorio va en memoria`n        /* nada */`n    }"
+  Igual 'con el cuerpo solo de comentarios, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (i4) repositorio-batch: un setDataSource del original que llama a super o asigna el campo, o uno vacio en un fichero que no nombra DefaultBatchConfigurer, no cuenta'] = {
+  $e = EscenarioBase-M76 'm76-i4'
+  $o = OriginalConfigurador-M76 $e "    @Override`n    public void setDataSource(DataSource dataSource) {`n        super.setDataSource(dataSource);`n    }"
+  Igual 'con una llamada a super, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = OriginalConfigurador-M76 $e "    private DataSource ds;`n`n    @Override`n    public void setDataSource(DataSource dataSource) {`n        this.ds = dataSource;`n    }"
+  Igual 'con una asignacion al campo, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = OriginalConfigurador-M76 $e "    public void setDataSource(DataSource dataSource) {`n    }" 'public class Gestor'
+  Igual 'vacio en una clase que no es un DefaultBatchConfigurer, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (i5) repositorio-batch: un setDataSource vacio dentro de un comentario del original no cuenta'] = {
+  $e = EscenarioBase-M76 'm76-i5'
+  $o = OriginalConfigurador-M76 $e "    // public void setDataSource(DataSource dataSource) {`n    // }`n    /*`n    public void setDataSource(DataSource dataSource) { }`n    */`n    /** Antes: setDataSource(DataSource d) { }. */`n    void otra() {}"
+  Igual 'en comentarios de linea, de bloque y de javadoc, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
