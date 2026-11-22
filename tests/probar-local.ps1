@@ -6777,5 +6777,39 @@ $Pruebas['m69 (b7) un test guardado de otro lanzamiento que no se rehace no pasa
   Comprueba 'sin aviso ni rechazo de columnas' ($r.Salida -notmatch 'sigue sin crear|Tu base no crea') (Cola $r.Salida)
 }
 
+# --- (c) el primer intento del original ya sabe lo que fallo en el caso vacio de antes ---
+
+$Pruebas['m69 (c1) el previo del primer intento del original lleva una linea del caso vacio de antes que no acabo COMPLETED, con su causa; el job que si acabo no lleva ninguna; la huella no cambia'] = {
+  $e = Escenario-M69 'm69-c1' ([ordered]@{ cargaJob = @('importe=10.00'); otroJob = @('importe=20.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=FAILED:cargaJob~M69_CAUSA=$CausaM69"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  Comprueba 'el primer intento de la primera vez no lleva nada del caso vacio de antes' (-not (Registro-Arnes $e 'original' 1).Contains('Con el test de antes')) ''
+  Igual 'el caso vacio guardado es FAILED en cargaJob y COMPLETED en otroJob' 'FAILED,COMPLETED' ((Vacio-Estado-M69 $e) + ',' + (Vacio-Estado-M69 $e 'salidas/vacio' 'otroJob'))
+  $huella = (Tarea-Arnes $e 'original').entradas.huella
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  $linea = "Con el test de antes, el caso vacio de cargaJob acababa FAILED: $CausaM69."
+  Comprueba 'el primer intento lleva la linea de cargaJob, con su causa' ($p.Contains($linea)) (Cola $p)
+  Comprueba 'y ninguna de otroJob, que acabo COMPLETED' (-not $p.Contains('el caso vacio de otroJob')) (Cola $p)
+  Comprueba 'dentro del bloque de lo que fallo la otra vez' ($p.Contains('Lo que fallo la otra vez (de un lanzamiento anterior):')) (Cola $p)
+  Igual 'la huella de la tarea no cambia' $huella (Tarea-Arnes $e 'original').entradas.huella
+  Comprueba 'el primer intento del migrado no lleva la linea' (-not (Registro-Arnes $e 'migrado' 1).Contains('Con el test de antes')) ''
+}
+
+$Pruebas['m69 (c2) cuatro jobs cuyo caso vacio de antes acabo EXCEPCION: el previo lleva tres lineas, las de los tres primeros jobs, con la clase y la causa'] = {
+  $e = Escenario-M69 'm69-c2' ([ordered]@{ aJob = @('importe=10.00'); bJob = @('importe=20.00'); cJob = @('importe=30.00'); dJob = @('importe=40.00') })
+  $r = Prueba-M69 $e "arnes-original@1@M69_VACIO=EXCEPCION~M69_CAUSA=java.lang.IllegalStateException: sin correo"
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $r = Prueba-M69 $e '' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  $p = Registro-Arnes $e 'original' 1
+  Igual 'tres lineas, no cuatro' 3 ([regex]::Matches($p, 'Con el test de antes, el caso vacio de')).Count
+  foreach ($j in @('aJob', 'bJob', 'cJob')) {
+    Comprueba "la de $j, con la clase y la causa" ($p.Contains("Con el test de antes, el caso vacio de $j acababa EXCEPCION: BeanCreationException: java.lang.IllegalStateException: sin correo.")) (Cola $p)
+  }
+  Comprueba 'y la del cuarto no' (-not $p.Contains('el caso vacio de dJob')) (Cola $p)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

@@ -32,7 +32,8 @@ QUE HACE
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
-     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar (Get-PrevioArnes).
+     motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar y una linea por cada job (3 como
+     mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes).
      El test que se escribe otra vez no se borra: pasa a prueba-local\arnes-anterior\<lado> (y el caso vacio del original, a
      salidas\vacio-anterior), pisando el de la vez anterior (Save-Anterior).
      El test del original que se escribe otra vez no puede quedar peor que el de antes con un caso vacio (el estado del job, las tablas y las columnas de
@@ -918,6 +919,8 @@ function Get-LineasFalloMigrado {
 #  - el ultimo motivo de la tarea de antes, si no estaba hecha (el de un test atascado ya lleva las pistas de Get-PistaArnes);
 #  - para el del original, las pistas (Get-PistaArnes sobre cada motivo, sin repetir y 3 como mucho) de los casos 'no se pudo preparar' del prueba-local.json de
 #    antes ($Anterior): casi todos esos motivos vienen del test del original.
+#  - para el del original, una linea por cada job (3 como mucho) cuyo caso vacio guardado (salidas\vacio) no acabo COMPLETED, con su estado, la clase de la excepcion
+#    y la primera linea de su causa (Get-LineasVacio): el test nuevo no debe dejarlo peor (Test-ArnesEscrito);
 #  - para el del migrado, las causas por las que el migrado acababa FAILED o EXCEPCION y el original no en ese prueba-local.json (Get-LineasFalloMigrado), con una
 #    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
 #    si viene de src/main, es un fallo del migrado y no se tapa.
@@ -935,6 +938,10 @@ function Get-PrevioArnes($T, $Antes) {
       if ($pistas.Count -ge 3) { break }
     }
     if ($pistas.Count -gt 0) { $partes += "Los casos que no se pudieron preparar con el test del original de antes dicen:`n" + (@($pistas | ForEach-Object { "- $_" }) -join "`n") }
+  }
+  if ($T.entradas.repo -eq 'original') {
+    $vacio = @(Get-LineasVacio)
+    if ($vacio.Count -gt 0) { $partes += (@($vacio) -join "`n") }
   }
   if ($T.entradas.repo -eq 'migrado' -and $Anterior) {
     $lineas = @(Get-LineasFalloMigrado)
@@ -1203,13 +1210,37 @@ function Get-RangoEstado([string]$Sal) {
 function Get-ComoAcaba([string]$Sal, [string]$Causa) {
   $estado = Get-Estado $Sal
   if (-not $estado) { return 'sin estado' }
+  $detalle = Get-DetalleVacio $Sal $Causa
+  if ($estado -ceq 'COMPLETED' -or -not $detalle) { return $estado }
+  return "$estado ($detalle)"
+}
+
+# El detalle de un caso vacio que no acabo COMPLETED: la clase de la excepcion si el job ni arranco (Get-Excepcion) y la primera linea de la causa ($Causa), unidas con ': '; '' si no hay ninguna.
+function Get-DetalleVacio([string]$Sal, [string]$Causa) {
   $partes = @()
   $clase = Get-Excepcion $Sal
   if ($clase) { $partes += $clase }
   $linea = (($Causa -split "`n")[0]).Trim()
   if ($linea) { $partes += $linea }
-  if ($estado -ceq 'COMPLETED' -or $partes.Count -eq 0) { return $estado }
-  return "$estado ($($partes -join ': '))"
+  return ($partes -join ': ')
+}
+
+# Las lineas del previo del original (Get-PrevioArnes) sobre su caso vacio guardado (salidas\vacio): por cada job cuyo caso no acabo COMPLETED (con estado), por orden de
+# nombre y 3 como mucho, 'Con el test de antes, el caso vacio de <job> acababa <estado>: <clase y causa>.' La causa es la de salidas\vacio\causas.json (Save-CausasVacio).
+function Get-LineasVacio {
+  $base = Join-Ruta $Local 'salidas/vacio'
+  $lineas = @()
+  if (-not (Test-Path -LiteralPath $base)) { return $lineas }
+  foreach ($d in @(Sort-Ordinal @(Get-ChildItem -LiteralPath $base -Directory | ForEach-Object { $_.Name }))) {
+    $sal = Join-Path $base $d
+    if ((Get-RangoEstado $sal) -in 0, 3) { continue }
+    $detalle = Get-DetalleVacio $sal (Get-CausaVacio $base $d)
+    $linea = "Con el test de antes, el caso vacio de $d acababa $(Get-Estado $sal)"
+    if ($detalle) { $linea += ": $detalle" }
+    $lineas += "$linea."
+    if ($lineas.Count -ge 3) { break }
+  }
+  return $lineas
 }
 
 # La causa con que acabo un job el caso vacio guardado en la carpeta $Carpeta (salidas\vacio o salidas\vacio-anterior), de su causas.json (Save-CausasVacio); '' si no la hay.
