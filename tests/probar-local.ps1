@@ -8264,5 +8264,110 @@ $Pruebas['m77 (g3) un solo caso del job con el original FAILED en el prueba-loca
   Igual 'arnes/original es el de antes' $v.original (Test-Guardado $v.e 'original')
 }
 
+# ============ M78: la prueba en local no borra los tests guardados del usuario y avisa cuando va a reescribir uno ============
+# Escenarios con el Copilot y el Maven de m20b (IGNORA_ENTRADAS: un test que no le pasa las entradas al job, y los casos salen como el vacio). El usuario retoca a mano
+# los tests guardados de arnes\<lado>: aqui, con esa marca (un test que ya no pasa las entradas) o con un comentario.
+
+$FraseM78 = 'Tus tests estan guardados en prueba-local\arnes-invalidado\. Si prefieres arreglarlos tu, copialos a prueba-local\arnes\ (las mismas carpetas) y relanza sin -Rehacer; si relanzas sin mas, se escriben otra vez con la IA.'
+$AvisoM78 = 'ya no vale en este commit'
+
+# Los PruebaLocalTest.java guardados de arnes\<lado>.
+function Tests-Guardados-M78($E, [string]$Lado) {
+  $d = Get-Ruta $E.Local "arnes/$Lado"
+  if (-not (Test-Path -LiteralPath $d)) { return @() }
+  return @(Get-ChildItem -LiteralPath $d -Recurse -File -Filter 'PruebaLocalTest.java')
+}
+
+# El usuario retoca a mano el test guardado del $Lado: le anade la linea $Linea.
+function Retoca-M78($E, [string]$Lado, [string]$Linea) {
+  foreach ($f in @(Tests-Guardados-M78 $E $Lado)) { [System.IO.File]::AppendAllText($f.FullName, "$Linea`n") }
+}
+
+# El usuario arregla a mano el test del $Lado: le quita la linea que le hacia ignorar las entradas.
+function Arregla-M78($E, [string]$Lado) {
+  foreach ($f in @(Tests-Guardados-M78 $E $Lado)) {
+    $x = [System.IO.File]::ReadAllText($f.FullName)
+    [System.IO.File]::WriteAllText($f.FullName, $x.Replace("// IGNORA_ENTRADAS`n", ''))
+  }
+}
+
+# 'ruta relativa=hash' de cada fichero de la carpeta $Rel de prueba-local, por orden; '(no existe)' sin ella.
+function Hashes-Carpeta-M78($E, [string]$Rel) {
+  $d = Get-Ruta $E.Local $Rel
+  if (-not (Test-Path -LiteralPath $d)) { return '(no existe)' }
+  $base = (Resolve-Path -LiteralPath $d).Path
+  return ((@(Get-ChildItem -LiteralPath $d -Recurse -File | ForEach-Object { $_.FullName.Substring($base.Length).Replace('\', '/') + '=' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) | Sort-Object { $_ }) -join '|')
+}
+
+# El job sale bien una vez (los dos arneses quedan guardados), el usuario retoca los dos tests a mano para que ya no pasen las entradas (la marca de m20b-mvn.ps1) y se
+# relanza: ningun caso deja nada distinto del caso vacio y Stop-Vacios invalida los dos. $Antes es lo que habia en arnes\<lado> (hash de cada fichero) justo antes del relanzamiento.
+function Invalida-M78([string]$Nombre, [scriptblock]$Entre = {}) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  Ajustes-M20b $e
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  foreach ($lado in @('original', 'migrado')) { Retoca-M78 $e $lado '// IGNORA_ENTRADAS' }
+  $antes = @{}
+  foreach ($lado in @('original', 'migrado')) { $antes[$lado] = Hashes-Carpeta-M78 $e "arnes/$lado" }
+  & $Entre $e
+  $r = Prueba $e
+  return [pscustomobject]@{ e = $e; antes = $antes; r = $r }
+}
+
+$Pruebas['m78 (a1) ningun caso deja nada distinto del caso vacio: los tests guardados pasan, tal cual, a arnes-invalidado\<lado>; arnes\<lado> ya no esta y la consola lo dice'] = {
+  $v = Invalida-M78 'm78-a1'
+  $e = $v.e; $r = $v.r
+  Igual 'sale con 1 (fallo)' 1 $r.Codigo
+  foreach ($lado in @('original', 'migrado')) {
+    Comprueba "habia un test guardado del $lado" ($v.antes[$lado] -match 'PruebaLocalTest\.java=') $v.antes[$lado]
+    Igual "arnes-invalidado\$lado tiene los mismos ficheros que tenia arnes\$lado (hash de cada uno)" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes-invalidado/$lado")
+    Comprueba "arnes\$lado ya no esta" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes/$lado")))
+    $t = Tarea-Arnes $e $lado
+    Comprueba "y su tarea vuelve a pendiente, con un intento y el motivo, como siempre ($lado)" ($t.estado -eq 'pendiente' -and $t.intentos -eq 1 -and "$($t.motivo)".Contains('ningun caso deja nada distinto del caso vacio')) "$($t.estado) $($t.intentos) $($t.motivo)"
+  }
+  Comprueba 'la consola lleva la frase de los tests guardados' ($r.Salida.Contains($FraseM78)) (Cola $r.Salida)
+  Comprueba 'y va despues de la linea del job' ($r.Salida.IndexOf($FraseM78) -gt $r.Salida.IndexOf('En cargaJob, ningun caso deja nada distinto del caso vacio'))
+  Comprueba 'sigue sin haber prueba-local.json' (-not (Test-Path -LiteralPath $e.Json))
+}
+
+$Pruebas['m78 (a2) los tests de arnes-invalidado, copiados de vuelta a arnes\ y arreglados, se usan al relanzar sin -Rehacer: sin llamar a la IA'] = {
+  $v = Invalida-M78 'm78-a2'
+  $e = $v.e
+  Igual 'el relanzamiento con los tests retocados sale con 1' 1 $v.r.Codigo
+  $n = @(Llamadas-Arnes $e 'original').Count + @(Llamadas-Arnes $e 'migrado').Count
+  foreach ($lado in @('original', 'migrado')) {
+    $de = Get-Ruta $e.Local "arnes-invalidado/$lado"
+    if (Test-Path -LiteralPath $de) {
+      $a = Get-Ruta $e.Local "arnes/$lado"
+      [void](New-Item -ItemType Directory -Force -Path $a)
+      Copy-Item -Path (Join-Path $de '*') -Destination $a -Recurse -Force
+    }
+    Arregla-M78 $e $lado
+  }
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el del original: bien, el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del original: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'el del migrado, igual' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot para los arneses' $n (@(Llamadas-Arnes $e 'original').Count + @(Llamadas-Arnes $e 'migrado').Count)
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  foreach ($lado in @('original', 'migrado')) { Igual "la tarea del $lado queda hecha" 'hecha' (Tarea-Arnes $e $lado).estado }
+}
+
+$Pruebas['m78 (a3) una copia vieja en arnes-invalidado\ se sustituye, no se mezcla'] = {
+  $v = Invalida-M78 'm78-a3' {
+    param($e)
+    foreach ($lado in @('original', 'migrado')) {
+      Escribe $e.Local "arnes-invalidado/$lado/restos-de-antes.txt" "de otra vez`n"
+      Escribe $e.Local "arnes-invalidado/$lado/src/test/java/com/acme/viejo/PruebaLocalTest.java" "// el de otra vez`n"
+    }
+  }
+  $e = $v.e
+  Igual 'sale con 1' 1 $v.r.Codigo
+  foreach ($lado in @('original', 'migrado')) {
+    Igual "arnes-invalidado\$lado es lo guardado ahora, sin nada de la copia vieja" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes-invalidado/$lado")
+    Comprueba "y no queda el fichero de antes ($lado)" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes-invalidado/$lado/restos-de-antes.txt")))
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

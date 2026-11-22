@@ -84,7 +84,8 @@ QUE HACE
      diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
      prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
-     lanzamiento los escriba otra vez con ese motivo. Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
+     lanzamiento los escriba otra vez con ese motivo (sus tests no se pierden: pasan a prueba-local\arnes-invalidado\<lado>, y si el usuario
+     los arregla y los copia a prueba-local\arnes\, el siguiente lanzamiento sin -Rehacer los usa). Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
      un solo lado es lo mismo que una tabla que no esta. Un fichero que el original deja en una carpeta y el migrado, con el mismo nombre (normalizado), en
      otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
      alguna copia del original o, si no, la primera linea distinta (Join-OtraCarpeta). Lo que solo esta en un lado y las tablas\ no se emparejan. Los casos
@@ -3806,18 +3807,26 @@ function Get-JobsVacios($Res) {
 
 # Es un fallo, no un igual: invalida los dos arneses guardados (se vuelven a escribir en el siguiente lanzamiento, y la IA recibe
 # este motivo por el mismo camino que el de un intento rechazado: la tarea queda pendiente, con su intento y su motivo), borra un
-# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. migracion.ps1
-# apunta como detalle las ultimas lineas de esta salida.
+# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. Los tests guardados
+# no se pierden: antes de borrar arnes\<lado> pasan a arnes-invalidado\<lado> (pisando la copia de otra vez), por si el usuario
+# los arregla a mano y los devuelve a arnes\ en vez de dejar que la IA los escriba otra vez. Sin un test guardado del lado, no se
+# toca nada. migracion.ps1 apunta como detalle las ultimas lineas de esta salida.
 function Stop-Vacios([string[]]$Jobs) {
   $detalles = @($Jobs | ForEach-Object { "En $_, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job." })
   foreach ($t in @($ArnesOrig, $ArnesMig)) {
-    Remove-Carpeta (Join-Ruta $Local "arnes/$($t.entradas.repo)")
+    $guardado = Join-Ruta $Local "arnes/$($t.entradas.repo)"
+    if (Test-Path -LiteralPath $guardado) {
+      $invalidado = Join-Ruta $Local "arnes-invalidado/$($t.entradas.repo)"
+      Remove-Carpeta $invalidado
+      Copy-Carpeta $guardado $invalidado
+      Remove-Carpeta $guardado
+    }
     $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = ($detalles -join ' ')
     Save-Tarea $t
   }
   $json = Join-Path $DatosMig 'prueba-local.json'
   if (Test-Path -LiteralPath $json) { Remove-Item -LiteralPath $json -Force }
-  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n"))
+  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n") + "`n" + 'Tus tests estan guardados en prueba-local\arnes-invalidado\. Si prefieres arreglarlos tu, copialos a prueba-local\arnes\ (las mismas carpetas) y relanza sin -Rehacer; si relanzas sin mas, se escriben otra vez con la IA.')
 }
 
 # Por job: sus casos, iguales, distintos y sin probar y, si no arranca o falla igual en todos sus casos, 'falloIgual' (para quien lea el json despues): el lado (original o
