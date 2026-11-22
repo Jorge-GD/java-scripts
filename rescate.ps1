@@ -228,10 +228,10 @@ $Cfg += @{
   # envolver una clase o un metodo final y el job no arranca.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
-    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger')
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -570,6 +570,10 @@ $RxMetodo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?
 # @JobScope y @Scope con TARGET_CLASS, que valen tambien en el @Bean que devuelve la clase).
 $ProxyMetodo = @('Transactional', 'Async', 'Retryable', 'Cacheable', 'CachePut', 'CacheEvict', 'Caching')
 $ProxyClase = @('Repository', 'Validated') + $ProxyMetodo
+# Los parametros de un metodo: desde justo despues de su '(' (con \G) hasta el ')' que lo cierra
+$RxParametros = New-Object System.Text.RegularExpressions.Regex '\G(?<p>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)'
+# Un campo de primer nivel de una clase: anotaciones, modificadores, tipo, genericos, nombre y valor inicial (el cuerpo trae las llaves reducidas a \x01)
+$RxCampo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<anot>(?:' + $RxAnot + ')*)(?<mods>(?>(?:(?:public|protected|private|static|final|transient|volatile)\s+)*))(?<tipo>[\w.]+)\s*(?:<(?<gen>[^;\x01()=]*)>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*(?<ini>=[^;]*)?;')
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
 $RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
@@ -615,15 +619,18 @@ function Get-Encima([string[]]$Cod, [bool[]]$Jd, [int]$I) {
   return ''
 }
 
-function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Detalle) {
-  [void]$Lista.Add([pscustomobject]@{ RelRaiz = $Rel; Linea = $Linea; Regla = $Regla; Detalle = $Detalle })
+# $Aviso: la falta se queda en aviso aunque su regla cuente como error (el texto dice por que).
+function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Detalle, [bool]$Aviso = $false) {
+  [void]$Lista.Add([pscustomobject]@{ RelRaiz = $Rel; Linea = $Linea; Regla = $Regla; Detalle = $Detalle; Aviso = $Aviso })
 }
 
 function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, $Indice).Split("`n").Count }
 
-# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones, si es final y lo que
-# tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01 seguido de los saltos
+# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones, si es final, sus
+# supertipos (extends e implements, sin paquete ni genericos: Supers) y lo que tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01 seguido de los saltos
 # de linea que tenia (asi se sabe la linea de cada cosa: LineaCuerpo es la de la llave que abre la clase).
+$RxGenericos = New-Object System.Text.RegularExpressions.Regex '<[^<>]*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>[^<>]*)*>'
+$RxSupers = New-Object System.Text.RegularExpressions.Regex '\b(?:extends|implements)\s+([\w.,\s]+?)(?=\s*\b(?:implements|extends|permits)\b|\s*$)'
 $EvalHoja = [System.Text.RegularExpressions.MatchEvaluator] { param($h) return ([string][char]1) + ("`n" * ($h.Value.Split("`n").Count - 1)) }
 function Get-Clases([string]$Limpio) {
   $res = New-Object System.Collections.Generic.List[object]
@@ -631,9 +638,13 @@ function Get-Clases([string]$Limpio) {
     $top = $m.Groups['cuerpo'].Value
     $top = $top.Substring(1, $top.Length - 2)
     do { $antes = $top; $top = $script:RxHoja.Replace($top, $script:EvalHoja) } while ($top -ne $antes)
+    $finNombre = $m.Groups['nombre'].Index + $m.Groups['nombre'].Length
+    $cabecera = $script:RxGenericos.Replace($Limpio.Substring($finNombre, $m.Groups['cuerpo'].Index - $finNombre), '')
+    $supers = @()
+    foreach ($s in $script:RxSupers.Matches($cabecera)) { $supers += @($s.Groups[1].Value.Split(',') | ForEach-Object { $_.Trim().Split('.')[-1] } | Where-Object { $_ }) }
     [void]$res.Add([pscustomobject]@{
         Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); LineaCuerpo = (Get-LineaDe $Limpio $m.Groups['cuerpo'].Index)
-        Anot = $m.Groups['anot'].Value; Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Top = $top
+        Anot = $m.Groups['anot'].Value; Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Top = $top; Supers = $supers
       })
   }
   return $res.ToArray()
@@ -646,10 +657,10 @@ function Get-Constructores($Clase) {
   $res = New-Object System.Collections.Generic.List[object]
   $rx = '(?<![^;\x01])\s*(?<anot>(?:' + $script:RxAnot + ')*)(?:(?:public|protected|private)\s+)?' + [regex]::Escape($Clase.Nombre) + '\s*\((?<params>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*(?:throws\s+[^;\x01(]+)?\x01'
   foreach ($m in [regex]::Matches($Clase.Top, $rx)) {
-    [void]$res.Add([pscustomobject]@{ Anot = $m.Groups['anot'].Value; Escrito = $true; Params = ($m.Groups['params'].Value.Trim() -ne '') })
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Groups['anot'].Value; Escrito = $true; Params = ($m.Groups['params'].Value.Trim() -ne ''); ParamsTexto = $m.Groups['params'].Value })
   }
   foreach ($m in $script:RxLombokCtor.Matches($Clase.Anot)) {
-    [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor') })
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor'); ParamsTexto = '' })
   }
   return $res.ToArray()
 }
@@ -660,12 +671,14 @@ function Get-Anotaciones([string]$Anot) {
 }
 
 # Los metodos de una clase que llevan alguna anotacion: sus anotaciones (Get-Anotaciones), si son final, si un proxy los puede interceptar (no
-# lo son los private ni los static: Spring los ignora), su tipo de retorno (sin paquete), su nombre y la linea de su declaracion.
+# lo son los private ni los static: Spring los ignora), si son static, su tipo de retorno (sin paquete), su nombre, el texto de sus parametros y la
+# linea de su declaracion.
 function Get-Metodos($Clase) {
   $res = New-Object System.Collections.Generic.List[object]
   foreach ($m in $script:RxMetodo.Matches($Clase.Top)) {
     $linea = $Clase.LineaCuerpo + $Clase.Top.Substring(0, $m.Groups['mods'].Index).Split("`n").Count - 1
-    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Interceptable = ($m.Groups['mods'].Value -cnotmatch '\b(?:private|static)\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Linea = $linea })
+    $params = $script:RxParametros.Match($Clase.Top, $m.Index + $m.Length)
+    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Interceptable = ($m.Groups['mods'].Value -cnotmatch '\b(?:private|static)\b'); Estatico = ($m.Groups['mods'].Value -cmatch '\bstatic\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Params = $params.Groups['p'].Value; Linea = $linea })
   }
   return $res.ToArray()
 }
@@ -693,6 +706,190 @@ function Get-AnotacionesProxy($Anots, [string]$Donde) {
     if ($vale) { $res += '@' + $a.Nombre }
   }
   return $res
+}
+
+# Los campos de una clase (primer nivel): sus anotaciones (Get-Anotaciones), si son static o final, si tienen valor inicial, su tipo (sin paquete ni
+# genericos), el texto de sus genericos y su nombre.
+function Get-Campos($Clase) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($m in $script:RxCampo.Matches($Clase.Top)) {
+    $mods = $m.Groups['mods'].Value
+    [void]$res.Add([pscustomobject]@{
+        Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Static = ($mods -cmatch '\bstatic\b'); Final = ($mods -cmatch '\bfinal\b'); Inicial = $m.Groups['ini'].Success
+        Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Gen = $m.Groups['gen'].Value; Nombre = $m.Groups['nombre'].Value
+      })
+  }
+  return $res.ToArray()
+}
+
+# Un texto partido por las comas que no van dentro de parentesis ni de <...>.
+function Split-Nivel0([string]$Texto) {
+  $trozos = New-Object System.Collections.Generic.List[string]
+  $prof = 0; $ini = 0
+  for ($i = 0; $i -lt $Texto.Length; $i++) {
+    $c = $Texto[$i]
+    if ($c -eq '<' -or $c -eq '(') { $prof++ }
+    elseif ($c -eq '>' -or $c -eq ')') { $prof-- }
+    elseif ($c -eq ',' -and $prof -eq 0) { $trozos.Add($Texto.Substring($ini, $i - $ini)); $ini = $i + 1 }
+  }
+  $trozos.Add($Texto.Substring($ini))
+  return $trozos.ToArray()
+}
+
+# Los parametros de un metodo o constructor (su texto sin los parentesis): cada uno con sus anotaciones (Get-Anotaciones), su tipo (sin paquete ni
+# genericos) y el texto de sus genericos.
+function Get-Parametros([string]$Texto) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($t in @(Split-Nivel0 $Texto)) {
+    $sin = $script:RxAnotUna.Replace($t, '') -replace '\bfinal\b', ''
+    $m = [regex]::Match($sin, '^\s*(?<tipo>[\w.]+)\s*(?:<(?<gen>.*)>)?(?:\s*\[\s*\])*\s*(?:\.\.\.)?\s+\w+\s*$')
+    if ($m.Success) { [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $t); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Gen = $m.Groups['gen'].Value }) }
+  }
+  return $res.ToArray()
+}
+
+# El tipo de bean que pide una dependencia (un parametro de Get-Parametros o un campo de Get-Campos), o '' si no se resuelve al crear el bean: con
+# @Lazy, o con ObjectProvider, Provider u ObjectFactory, Spring da un proxy o una llamada diferida. Una lista, un conjunto, un mapa o un Optional
+# pide los beans de su tipo (el ultimo generico).
+function Get-TipoDependencia($D) {
+  if (@($D.Anots | Where-Object { $_.Nombre -ceq 'Lazy' }).Count -gt 0) { return '' }
+  if ($D.Tipo -cmatch '^(?:ObjectProvider|Provider|ObjectFactory|Supplier)$') { return '' }
+  if ($D.Tipo -cmatch '^(?:List|Set|Collection|Iterable|Optional|Map|Queue|Deque|Stream)$' -and $D.Gen) {
+    $ultimo = @(Split-Nivel0 $D.Gen)[-1]
+    return (($ultimo -replace '\?\s*(?:extends|super)\s+', '' -replace '<.*$', '').Trim().Split('.')[-1])
+  }
+  return $D.Tipo
+}
+
+# Los nodos del grafo de dependencias de una clase: ella misma si es un componente (con lo que pide por constructor, por campos @Autowired o @Inject y
+# por metodos @Autowired o @Inject) y cada uno de sus metodos @Bean (con lo que pide por parametro y, si no es static, la clase que lo crea). Un
+# nodo lleva sus tipos (el suyo y sus supertipos), los tipos que pide (Deps) y las claves de nodos que pide sin resolver por tipo (Pide). Sin los
+# beans con scope de step o de job: Spring los crea al empezar el step, no al arrancar.
+# Que constructor usa Spring: el unico, o el que lleve @Autowired o @Inject si hay varios; los de Lombok piden los campos que dicen (final en
+# @RequiredArgsConstructor, todos en @AllArgsConstructor).
+function Get-NodosBean($Clase, [string]$Rel, $Ctores, $Metodos, [bool]$Componente) {
+  $nodos = @()
+  $claveClase = "C:${Rel}:$($Clase.Nombre)"
+  $scope = (@(Get-Anotaciones $Clase.Anot | Where-Object { @('StepScope', 'JobScope') -ccontains $_.Nombre }).Count -gt 0)
+  if ($Componente -and -not $scope) {
+    $campos = @(Get-Campos $Clase)
+    $pide = @()
+    $usado = @($Ctores)
+    if ($usado.Count -gt 1) { $usado = @($usado | Where-Object { $_.Anot -cmatch $script:RxAutowiredOInject } | Select-Object -First 1) }
+    foreach ($ct in $usado) {
+      if ($ct.Escrito) { $pide += @(Get-Parametros $ct.ParamsTexto) }
+      elseif ($ct.Anot -cmatch 'RequiredArgsConstructor') { $pide += @($campos | Where-Object { $_.Final -and -not $_.Static -and -not $_.Inicial }) }
+      elseif ($ct.Anot -cmatch 'AllArgsConstructor') { $pide += @($campos | Where-Object { -not $_.Static -and -not ($_.Final -and $_.Inicial) }) }
+    }
+    $pide += @($campos | Where-Object { -not $_.Static -and @($_.Anots | Where-Object { @('Autowired', 'Inject') -ccontains $_.Nombre }).Count -gt 0 })
+    foreach ($mt in @($Metodos | Where-Object { @($_.Anots | Where-Object { @('Autowired', 'Inject') -ccontains $_.Nombre }).Count -gt 0 -and -not $_.Estatico })) {
+      if (@($mt.Anots | Where-Object { $_.Nombre -ceq 'Lazy' }).Count -eq 0) { $pide += @(Get-Parametros $mt.Params) }
+    }
+    $nodos += [pscustomobject]@{ Clave = $claveClase; Nombre = $Clase.Nombre; Clase = $Clase.Nombre; RelRaiz = $Rel; Linea = $Clase.Linea; Tipos = @($Clase.Nombre) + @($Clase.Supers); Deps = @($pide | ForEach-Object { Get-TipoDependencia $_ } | Where-Object { $_ }); Pide = @(); Sale = @() }
+  }
+  foreach ($mt in @($Metodos | Where-Object { @($_.Anots | Where-Object { $_.Nombre -ceq 'Bean' }).Count -gt 0 -and @(Get-AnotacionesProxy $_.Anots 'bean').Count -eq 0 })) {
+    $fabrica = @()
+    if ($Componente -and -not $scope -and -not $mt.Estatico) { $fabrica = @($claveClase) }
+    $nodos += [pscustomobject]@{ Clave = "B:${Rel}:$($Clase.Nombre).$($mt.Nombre)"; Nombre = "$($Clase.Nombre).$($mt.Nombre)()"; Clase = $Clase.Nombre; RelRaiz = $Rel; Linea = $mt.Linea; Tipos = @($mt.Tipo); Deps = @(Get-Parametros $mt.Params | ForEach-Object { Get-TipoDependencia $_ } | Where-Object { $_ }); Pide = $fabrica; Sale = @() }
+  }
+  return $nodos
+}
+
+# Las propiedades de los application*.yml, .yaml y .properties del migrado, una por clave con valor, cada una con su fichero, su linea, su clave
+# tal cual (Clave: en un yml, las claves padre unidas con punto), la misma sin guiones ni subrayados y en minusculas (Norm: asi se encuentra
+# spring.main.allow-circular-references escrita como allowCircularReferences) y su valor (sin comentario ni comillas).
+function Get-PropiedadesConfig($Hechos) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($y in $Hechos.YmlFicheros) {
+    $lineas = @($y.Texto -split "`r?`n")
+    $pila = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $lineas.Count; $i++) {
+      $t = [string]$lineas[$i]
+      if ($t -match '^\s*(#|!|$)') { continue }
+      $clave = $null; $valor = ''
+      if ($y.Nombre -match '\.properties$') {
+        $m = [regex]::Match($t, '^\s*(?<k>[^\s=:]+)\s*[=:]\s*(?<v>.*?)\s*$')
+        if (-not $m.Success) { continue }
+        $clave = $m.Groups['k'].Value; $valor = $m.Groups['v'].Value
+      }
+      else {
+        if ($t -match '^---') { $pila.Clear(); continue }
+        $m = [regex]::Match($t, '^(?<s>\s*)["'']?(?<k>[\w.\-]+)["'']?\s*:(?:\s+(?<v>.*))?$')
+        if (-not $m.Success) { continue }
+        $sangria = $m.Groups['s'].Length
+        while ($pila.Count -gt 0 -and $pila[$pila.Count - 1].Sangria -ge $sangria) { $pila.RemoveAt($pila.Count - 1) }
+        $clave = (@($pila | ForEach-Object { $_.Clave }) + $m.Groups['k'].Value) -join '.'
+        $valor = ([regex]::Replace($m.Groups['v'].Value, '\s+#.*$', '')).Trim()
+        if ($valor -eq '') { $pila.Add([pscustomobject]@{ Sangria = $sangria; Clave = $m.Groups['k'].Value }); continue }
+      }
+      [void]$res.Add([pscustomobject]@{ Rel = $y.Rel; Linea = ($i + 1); Clave = $clave; Norm = ($clave.ToLowerInvariant() -replace '[-_]', ''); Valor = $valor.Trim('"', "'") })
+    }
+  }
+  return $res.ToArray()
+}
+
+# Las propiedades de esa clave (sin importar guiones, subrayados ni mayusculas), en el orden de los ficheros.
+function Get-Propiedad($Props, [string]$Clave) {
+  $n = $Clave.ToLowerInvariant() -replace '[-_]', ''
+  return @($Props | Where-Object { $_.Norm -ceq $n })
+}
+
+# Referencias circulares entre beans (Spring Boot 2.6, fuentes-guias/sb-Spring-Boot-2.6-Release-Notes.html, "Circular References Prohibited by
+# Default": "Circular references between beans are now prohibited by default" y "circular references can be allowed again by setting
+# spring.main.allow-circular-references to true"). Aristas: lo que pide un nodo (Deps) se resuelve por tipo solo si lo da un unico nodo (con dos,
+# Spring elige por nombre, @Primary o @Qualifier y aqui no se sabe cual); Pide va por clave. De cada nodo en un ciclo sale el ciclo mas corto
+# que pasa por el, una vez por clase. Con spring.main.allow-circular-references a true en el migrado, aviso.
+function Add-CalCiclos($Out, $Nodos, $SupersDe, $Props) {
+  $porTipo = @{}
+  $porClave = @{}
+  foreach ($n in $Nodos) {
+    $porClave[$n.Clave] = $n
+    $tipos = @($n.Tipos)
+    foreach ($t in @($n.Tipos)) { if ($SupersDe.ContainsKey($t)) { $tipos += @($SupersDe[$t]) } }
+    foreach ($t in @($tipos | Select-Object -Unique)) {
+      if (-not $porTipo.ContainsKey($t)) { $porTipo[$t] = New-Object System.Collections.Generic.List[object] }
+      [void]$porTipo[$t].Add($n)
+    }
+  }
+  foreach ($n in $Nodos) {
+    $sale = @($n.Pide)
+    foreach ($t in $n.Deps) { if ($porTipo.ContainsKey($t) -and $porTipo[$t].Count -eq 1) { $sale += $porTipo[$t][0].Clave } }
+    $n.Sale = @($sale | Where-Object { $_ -cne $n.Clave } | Select-Object -Unique)
+  }
+  # solo los nodos que tienen a quien pedir y a quien los pide, una y otra vez: los demas no estan en ningun ciclo
+  $activa = @{}
+  foreach ($n in $Nodos) { $activa[$n.Clave] = $true }
+  do {
+    $cambio = $false
+    $entran = @{}
+    foreach ($n in $Nodos) { if ($activa[$n.Clave]) { foreach ($s in $n.Sale) { if ($activa[$s]) { $entran[$s] = $true } } } }
+    foreach ($n in $Nodos) {
+      if ($activa[$n.Clave] -and (@($n.Sale | Where-Object { $activa[$_] }).Count -eq 0 -or -not $entran.ContainsKey($n.Clave))) { $activa[$n.Clave] = $false; $cambio = $true }
+    }
+  } while ($cambio)
+  $permite = @(Get-Propiedad $Props 'spring.main.allow-circular-references' | Where-Object { $_.Valor -ieq 'true' })
+  $vistas = @{}
+  foreach ($n in $Nodos) {
+    if (-not $activa[$n.Clave]) { continue }
+    $padre = @{}
+    $cola = New-Object System.Collections.Generic.Queue[string]
+    foreach ($s in $n.Sale) { if ($activa[$s] -and -not $padre.ContainsKey($s)) { $padre[$s] = $n.Clave; $cola.Enqueue($s) } }
+    $vuelve = $false
+    while ($cola.Count -gt 0 -and -not $vuelve) {
+      $x = $cola.Dequeue()
+      if ($x -ceq $n.Clave) { $vuelve = $true; break }
+      foreach ($s in $porClave[$x].Sale) { if ($activa[$s] -and -not $padre.ContainsKey($s)) { $padre[$s] = $x; $cola.Enqueue($s) } }
+    }
+    if (-not $vuelve -or $vistas.ContainsKey($n.RelRaiz + '|' + $n.Clase)) { continue }
+    $vistas[$n.RelRaiz + '|' + $n.Clase] = $true
+    $camino = New-Object System.Collections.Generic.List[string]
+    $cur = $n.Clave
+    do { $cur = $padre[$cur]; $camino.Insert(0, $porClave[$cur].Nombre) } while ($cur -cne $n.Clave)
+    $camino.Add($n.Nombre)
+    $texto = 'Referencia circular entre beans: ' + ($camino -join ' -> ') + '. Desde Spring Boot 2.6 estan prohibidas por defecto y la aplicacion no arranca (BeanCurrentlyInCreationException). Rompe el ciclo: saca lo que comparten a otra clase, o pon @Lazy (u ObjectProvider) en uno de los eslabones.'
+    if ($permite.Count -gt 0) { $texto += ' spring.main.allow-circular-references esta a true en ' + $permite[0].Rel + ': Spring intenta romperlo solo, pero es una apuesta.' }
+    Add-Cal $Out $n.RelRaiz $n.Linea 'referencia-circular' $texto ($permite.Count -gt 0)
+  }
 }
 
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
@@ -777,6 +974,9 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   $datos = @{ Ctor = (New-Object System.Collections.Generic.List[object]); Logger = (New-Object System.Collections.Generic.List[object]) }
   $finales = New-Object System.Collections.Generic.List[object]   # las clases final (RelRaiz, Linea, Nombre, Motivos por los que Spring las envolveria)
   $tiposProxy = @{}                                              # tipo devuelto por un @Bean con scope de proxy -> sus motivos
+  $props = @(Get-PropiedadesConfig $Hechos)                      # las propiedades de los application*.yml y .properties
+  $nodos = New-Object System.Collections.Generic.List[object]    # los beans del migrado y lo que piden (referencia-circular)
+  $supersDe = @{}                                                # clase -> sus supertipos
   foreach ($f in $Hechos.Ficheros) {
     $marcado = Get-Limpio $f.Texto
     $limpio = $marcado.Replace('/*JD*/', '').Replace('/*C*/', '')
@@ -842,7 +1042,10 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       # Spring envuelve con un proxy de clase lo que lleva @Repository, @Transactional...: una clase final no se puede heredar y el bean no se crea.
       # Una clase final sale cuando acabe el recorrido (un @Bean con scope de proxy de otro fichero puede devolverla); un metodo final, aqui.
       $motivos = @(Get-AnotacionesProxy @(Get-Anotaciones $c.Anot) 'clase')
-      foreach ($mt in @(Get-Metodos $c)) {
+      $metodos = @(Get-Metodos $c)
+      $supersDe[$c.Nombre] = @($c.Supers)
+      foreach ($nd in @(Get-NodosBean $c $f.RelRaiz $ctores $metodos $componente)) { [void]$nodos.Add($nd) }
+      foreach ($mt in $metodos) {
         $enMetodo = @()
         if ($mt.Interceptable) { $enMetodo = @(Get-AnotacionesProxy $mt.Anots 'metodo') }
         if ($enMetodo.Count -gt 0 -and $c.Final) { $motivos += @($enMetodo | ForEach-Object { "$_ en un metodo" }) }
@@ -897,6 +1100,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       Add-Cal $out $x.RelRaiz $x.Linea 'clase-final-proxy' ('Clase final que Spring tiene que envolver con un proxy (por ' + (($motivos | Select-Object -Unique) -join ', ') + '): el bean no se crea y el job no arranca ("Cannot subclass final class"). Quita final de la clase.')
     }
   }
+  Add-CalCiclos $out $nodos.ToArray() $supersDe $props
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }
@@ -2481,7 +2685,7 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   $script:LineaEstilo = $calidad.Linea
   foreach ($q in $calidad.Hallazgos) {
     $sev = 'aviso'; $nota = ''
-    if ($Cfg.CalidadErrores -contains $q.Regla) {
+    if (($Cfg.CalidadErrores -contains $q.Regla) -and -not $q.Aviso) {
       if ($cal -and $cal.Calidad.ContainsKey($q.Regla) -and ($Cfg.CalidadSiempre -notcontains $q.Regla)) { $nota = ' (se queda en aviso: la plantilla tambien lo hace)' }
       else { $sev = 'error' }
     }

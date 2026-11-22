@@ -6613,5 +6613,175 @@ $Pruebas['m72 (c1) estilo: la linea de la consola solo nombra los estilos que ti
   }
 }
 
+# ============== M76: LO QUE COMPILA PERO NO ARRANCA, O CAMBIA SIN AVISAR (de las guias de migracion; sin IA) ==============
+# Diagnostico del escenario (sin Maven), con el original si se da, y sus hallazgos de calidad de esa regla.
+function Cal-M76($E, [string]$Regla, [string]$Legacy = '') {
+  $a = @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-SinBuild')
+  if ($Legacy) { $a += @('-Legacy', $Legacy) }
+  [void](Rescate $a)
+  return @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'calidad' -and $_.Detalle.StartsWith('[' + $Regla + ']') })
+}
+
+# Una clase de componente que pide estas dependencias por constructor ("Tipo nombre, ...") y, si se dan, tiene estos miembros mas (campos).
+function Pide-M76([string]$Nombre, [string]$Params, [string]$Cabeza = '@Service', [string]$Campos = '') {
+  $miembros = $Campos
+  if ($Params) {
+    foreach ($p in $Params.Split(',')) { $miembros += '    private final ' + ($p.Trim() -replace '^@\w+\s+', '') + ";`n" }
+    $miembros += "`n" + (Ctor-M70 $Nombre '' $Params)
+  }
+  return (Clase-M70 $Nombre $Cabeza $miembros)
+}
+
+# Una clase de componente que implementa una interfaz y pide estas dependencias por constructor.
+function Implementa-M76([string]$Nombre, [string]$Interfaz, [string]$Params) {
+  return ((Pide-M76 $Nombre $Params '@Component') -replace "public class $Nombre ", "public class $Nombre implements $Interfaz ")
+}
+
+# Un fichero Java a mano (una interfaz, una clase sin anotaciones...).
+function Java-M76([string]$Nombre, [string]$Tipo = 'class', [string]$Miembros = '', [string]$Extra = '') {
+  return "package com.acme.life.application.usecases;`n`n/** $Nombre. */`npublic $Tipo $Nombre$Extra {`n$Miembros}`n"
+}
+
+$Pruebas['m76 (a1) referencia-circular (SB26): un ciclo de dos por constructor sale en las dos clases, con el ciclo entero; el que depende del ciclo sin estar en el, no'] = {
+  $e = Escenario-M70 'm76-a1' @{
+    ServicioA = (Pide-M76 'ServicioA' 'ServicioB b')
+    ServicioB = (Pide-M76 'ServicioB' 'ServicioA a')
+    ServicioC = (Pide-M76 'ServicioC' 'ServicioA a')
+    ServicioD = (Pide-M76 'ServicioD' 'String nombre')
+  }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'sale en A y B' 'ServicioA ServicioB' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*ServicioA.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Fuente-M72 $e 'ServicioA') 'public class ServicioA') $a[0].Linea
+  Comprueba 'el texto trae el ciclo entero, dice que Spring Boot 2.6 lo prohibe y que el job no arranca, y que hacer' ($a[0].Detalle -like '*Referencia circular entre beans: ServicioA -> ServicioB -> ServicioA. Desde Spring Boot 2.6 estan prohibidas por defecto y la aplicacion no arranca (BeanCurrentlyInCreationException). Rompe el ciclo*') $a[0].Detalle
+  $b = @($h | Where-Object { $_.Fichero -like '*ServicioB.java' })
+  Comprueba 'cada clase lleva el ciclo desde ella' ($b[0].Detalle -like '*ServicioB -> ServicioA -> ServicioB.*') $b[0].Detalle
+}
+
+$Pruebas['m76 (a2) referencia-circular: un ciclo de tres que mezcla un campo @Autowired, un constructor y un parametro de un metodo @Bean sale en cada clase, y tambien con Lombok'] = {
+  $config = @'
+package com.acme.life.application.usecases;
+
+/** Beans a mano. */
+@Configuration
+public class Config {
+
+    /** El contador, que pide al servicio A. */
+    @Bean
+    public Contador contador(ServicioA a) {
+        return new Contador();
+    }
+}
+'@
+  $e = Escenario-M70 'm76-a2' @{
+    ServicioA = (Clase-M70 'ServicioA' '@Service' "    @Autowired`n    private ServicioB b;`n")
+    ServicioB = (Pide-M76 'ServicioB' 'Contador c')
+    Contador  = (Java-M76 'Contador')
+    Config    = $config
+    LombokA   = (Clase-M70 'LombokA' "@Service`n@RequiredArgsConstructor" "    private final LombokB b;`n")
+    LombokB   = (Clase-M70 'LombokB' "@Service`n@RequiredArgsConstructor" "    private final LombokA a;`n    private String nombre;`n")
+  }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'sale en las tres clases del ciclo (la del @Bean es la Config) y en las dos con Lombok' 'Config LombokA LombokB ServicioA ServicioB' (Ficheros-M70 $h)
+  $c = @($h | Where-Object { $_.Fichero -like '*Config.java' })
+  Igual 'la del @Bean sale en la linea del metodo' (Linea-De (Fuente-M72 $e 'Config') 'public Contador contador(') $c[0].Linea
+  Comprueba 'y el texto nombra el bean como Config.contador()' ($c[0].Detalle -like '*Config.contador() -> ServicioA -> ServicioB -> Config.contador().*') $c[0].Detalle
+  $a = @($h | Where-Object { $_.Fichero -like '*ServicioA.java' })
+  Comprueba 'el texto de A trae los tres' ($a[0].Detalle -like '*ServicioA -> ServicioB -> Config.contador() -> ServicioA.*') $a[0].Detalle
+}
+
+$Pruebas['m76 (a3) referencia-circular: @Lazy, ObjectProvider o Provider en un eslabon, o un bean con @StepScope en el ciclo: no sale'] = {
+  $e = Escenario-M70 'm76-a3' @{
+    L1A = (Pide-M76 'L1A' '@Lazy L1B b')
+    L1B = (Pide-M76 'L1B' 'L1A a')
+    L2A = (Pide-M76 'L2A' 'ObjectProvider<L2B> b')
+    L2B = (Pide-M76 'L2B' 'L2A a')
+    L3A = (Pide-M76 'L3A' 'Provider<L3B> b')
+    L3B = (Pide-M76 'L3B' 'L3A a')
+    L4A = (Clase-M70 'L4A' '@Service' "    @Autowired`n    @Lazy`n    private L4B b;`n")
+    L4B = (Pide-M76 'L4B' 'L4A a')
+    L5A = (Pide-M76 'L5A' 'Lector l')
+    L5C = @'
+package com.acme.life.application.usecases;
+
+/** Beans con scope de step. */
+@Configuration
+public class L5C {
+
+    /** El lector se crea al empezar el step: no es una dependencia del arranque. */
+    @Bean
+    @StepScope
+    public Lector lector(L5A a) {
+        return new Lector();
+    }
+}
+'@
+    Lector = (Java-M76 'Lector')
+    RealA  = (Pide-M76 'RealA' 'RealB b')
+    RealB  = (Pide-M76 'RealB' 'RealA a')
+  }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'solo sale el ciclo de verdad' 'RealA RealB' (Ficheros-M70 $h)
+}
+
+$Pruebas['m76 (a4) referencia-circular: una dependencia por una interfaz se sigue hasta la clase que la implementa; con dos clases que la implementan, no se sabe cual y no sale'] = {
+  $e = Escenario-M70 'm76-a4' @{
+    ServicioA   = (Pide-M76 'ServicioA' 'PuertoB b')
+    PuertoB     = (Java-M76 'PuertoB' 'interface')
+    AdaptadorB  = (Implementa-M76 'AdaptadorB' 'PuertoB' 'ServicioA a')
+    ServicioX   = (Pide-M76 'ServicioX' 'PuertoY y')
+    PuertoY     = (Java-M76 'PuertoY' 'interface')
+    AdaptadorY1 = (Implementa-M76 'AdaptadorY1' 'PuertoY' 'ServicioX x')
+    AdaptadorY2 = (Implementa-M76 'AdaptadorY2' 'PuertoY' '')
+  }
+  Igual 'sale el ciclo ServicioA -> AdaptadorB; el de PuertoY, con dos implementaciones, no' 'AdaptadorB ServicioA' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (a5) referencia-circular: con spring.main.allow-circular-references a true (en un yml o un properties del migrado) baja a aviso; a false sigue siendo error'] = {
+  $repo = @{ ServicioA = (Pide-M76 'ServicioA' 'ServicioB b'); ServicioB = (Pide-M76 'ServicioB' 'ServicioA a') }
+  $y = Escenario-M70 'm76-a5-yml' $repo
+  Escribe $y.Repo 'src/main/resources/application.yml' "spring:`n  main:`n    allow-circular-references: true`n"
+  $h = Cal-M76 $y 'referencia-circular'
+  Igual 'con el yml: salen las dos' 'ServicioA ServicioB' (Ficheros-M70 $h)
+  Igual 'como aviso' 'aviso aviso' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'y el texto dice por que es aviso y en que fichero esta la propiedad' ($h[0].Detalle -like '*spring.main.allow-circular-references esta a true en src/main/resources/application.yml*') $h[0].Detalle
+  $p = Escenario-M70 'm76-a5-prop' $repo
+  Escribe $p.Repo 'src/main/resources/application-pre.properties' "spring.main.allow-circular-references=true`n"
+  Igual 'con el properties de un perfil: aviso' 'aviso aviso' ((Cal-M76 $p 'referencia-circular' | ForEach-Object { $_.Sev }) -join ' ')
+  $f = Escenario-M70 'm76-a5-false' $repo
+  Escribe $f.Repo 'src/main/resources/application.yml' "spring:`n  main:`n    allow-circular-references: false`n"
+  Igual 'con false: error' 'error error' ((Cal-M76 $f 'referencia-circular' | ForEach-Object { $_.Sev }) -join ' ')
+}
+
+$Pruebas['m76 (a6) referencia-circular: una @Configuration que pide con @Autowired un bean que ella misma crea sale una sola vez'] = {
+  $config = @'
+package com.acme.life.application.usecases;
+
+/** Beans a mano. */
+@Configuration
+public class Config {
+
+    @Autowired
+    private Paso paso;
+
+    /** El paso. */
+    @Bean
+    public Paso paso() {
+        return new Paso();
+    }
+
+    /** Un bean estatico no necesita la instancia de Config. */
+    @Bean
+    public static Otro otro() {
+        return new Otro();
+    }
+}
+'@
+  $e = Escenario-M70 'm76-a6' @{ Config = $config; Paso = (Java-M76 'Paso'); Otro = (Java-M76 'Otro') }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'sale en Config, una vez' 'Config' (Ficheros-M70 $h)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
