@@ -949,7 +949,7 @@ function Get-MasRepetidas($Por) {
 #    frase encima: si viene de una libreria es que al test le falta lo que en produccion prepara el arranque (como lo preparan los ejemplos, Get-PreparaEjemplos);
 #    si viene de src/main, es un fallo del migrado y no se tapa;
 #  - para el del migrado, una linea por cada pareja de carpetas (3 como mucho) con 2 casos o mas donde el original dejaba un fichero en una carpeta y el migrado en
-#    otra (otraCarpeta) en ese prueba-local.json (Get-LineasOtraCarpeta): que de a las propiedades de carpetas del test los mismos valores que les da el del original.
+#    otra (otraCarpeta) en ese prueba-local.json (Get-LineasOtraCarpeta): la linea pide dar a las propiedades de carpetas del test los mismos valores que les da el del original.
 # Sin nada de eso es '' y el prompt no cambia. Invoke-Lote lo pone como la correccion del primer intento, por el mismo camino que el motivo de un reintento; la
 # huella (Get-HuellaArnes) no lo lleva: un test que no se rehace no se escribe otra vez por esto. Una tarea que aun no ha llamado a la IA (se dijo que no a
 # la pregunta de llamar a Copilot) conserva el de antes si ahora no hay otro.
