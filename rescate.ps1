@@ -225,10 +225,14 @@ $Cfg += @{
   # inyeccion-estatica (S7178), value-sin-expresion (S6804). Las de estilo
   # miran todo el batch: estilo-constructor y estilo-logger. Las de proxy
   # (clase-final-proxy y metodo-final-proxy) no son de Sonar: Spring no puede
-  # envolver una clase o un metodo final y el job no arranca.
+  # envolver una clase o un metodo final y el job no arranca. Las de las guias
+  # de migracion (M76) miran lo que compila y falla al arrancar o cambia sin
+  # avisar: referencia-circular, bean-repetido, enable-batch, parametros-v4,
+  # nashorn, comando-sin-partir y repositorio-batch (esta ultima necesita el
+  # original). Siempre aviso: varios-jobs-sin-nombre y sql-init-no-embebida.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch', 'parametros-v4', 'nashorn', 'comando-sin-partir')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch', 'parametros-v4', 'nashorn', 'comando-sin-partir', 'repositorio-batch')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
     'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido', 'parametros-v4', 'nashorn', 'comando-sin-partir')
@@ -591,6 +595,9 @@ $RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?
 $RxParametroV4 = New-Object System.Text.RegularExpressions.Regex '(?<![\w.])(?<n>[A-Za-z_][\w.-]*)\\?\((?<t>long|date|double|string)\\?\)=(?<v>[^\s"'',;|&)\\]*)'
 $RxNashorn = New-Object System.Text.RegularExpressions.Regex ('\.getEngineByName\s*\(\s*"(?<n>nashorn|javascript|js|ecmascript)"\s*\)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 $RxComandoJunto = New-Object System.Text.RegularExpressions.Regex '\.setCommand\s*\(\s*"(?<c>[^"\\]*\s[^"\\]*)"\s*\)'
+# Una url de base de datos en memoria (H2, HSQLDB o Derby) y lo que en Java o XML declara una base embebida en memoria
+$RxUrlMemoria = '(?i)^jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)'
+$RxMemoriaJava = 'jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)|EmbeddedDatabaseType\.(?:H2|HSQL|DERBY)|EmbeddedDatabaseBuilder'
 $RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
@@ -1028,22 +1035,88 @@ function Add-CalNashornYComando($Out, $Hechos, $Deps) {
   }
 }
 
+# Si la base del negocio del migrado (o de la plantilla) es una base embebida en memoria: lo es si todas las spring.datasource.url son de H2, HSQLDB
+# o Derby en memoria (una url de variable, ${...}, no lo es); sin ninguna url, si el pom trae una de esas bases (puede ser solo de pruebas, y no se
+# sabe). Causa dice por que no lo es.
+function Get-BaseEnMemoria($Props, $Deps) {
+  $urls = @(Get-Propiedad $Props 'spring.datasource.url')
+  $noMem = @($urls | Where-Object { $_.Valor -notmatch $script:RxUrlMemoria })
+  if ($noMem.Count -gt 0) { return [pscustomobject]@{ EnMemoria = $false; Causa = 'spring.datasource.url es ' + $noMem[0].Valor + ', en ' + $noMem[0].Rel + ':' + $noMem[0].Linea } }
+  if ($urls.Count -eq 0 -and @($Deps | Where-Object { @('h2', 'hsqldb', 'derby') -ccontains $_ }).Count -eq 0) {
+    return [pscustomobject]@{ EnMemoria = $false; Causa = 'no hay spring.datasource.url ni H2, HSQLDB o Derby en el pom' }
+  }
+  return [pscustomobject]@{ EnMemoria = $true; Causa = '' }
+}
+
 # Init SQL sin base en memoria (fila SB25-01, fuentes-guias/sb-Spring-Boot-2.5-Release-Notes.html: "By default, SQL database initialization is only
 # performed when using an embedded in-memory database"): un schema.sql o data.sql de src/main/resources, ningun spring.sql.init.mode y una base que
-# no es en memoria. Lo es si todas las spring.datasource.url del migrado son de H2, HSQLDB o Derby en memoria; sin ninguna url, si el pom trae una de
-# esas bases (puede ser solo de pruebas, y no se sabe: no sale). Una url de variable (${...}) cuenta como no en memoria. Siempre aviso: el modo
-# puede venir de fuera del repo. Uno por script, en su linea 1.
+# no es en memoria (Get-BaseEnMemoria). Siempre aviso: el modo puede venir de fuera del repo. Uno por script, en su linea 1.
 function Add-CalSqlInit($Out, $Hechos, $Props, $Deps) {
   if ($Hechos.Sql.Count -eq 0 -or @(Get-Propiedad $Props 'spring.sql.init.mode').Count -gt 0) { return }
-  $urls = @(Get-Propiedad $Props 'spring.datasource.url')
-  $noMem = @($urls | Where-Object { $_.Valor -notmatch '(?i)^jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)' })
-  if ($urls.Count -gt 0) { if ($noMem.Count -eq 0) { return } }
-  elseif (@($Deps | Where-Object { @('h2', 'hsqldb', 'derby') -ccontains $_ }).Count -gt 0) { return }
-  $causa = 'no hay spring.datasource.url ni H2, HSQLDB o Derby en el pom'
-  if ($noMem.Count -gt 0) { $causa = 'spring.datasource.url es ' + $noMem[0].Valor + ', en ' + $noMem[0].Rel + ':' + $noMem[0].Linea }
+  $base = Get-BaseEnMemoria $Props $Deps
+  if ($base.EnMemoria) { return }
   foreach ($r in $Hechos.Sql) {
-    Add-Cal $Out $r 1 'sql-init-no-embebida' ($r.Split('/')[-1] + " ya no se ejecuta solo: desde Spring Boot 2.5 la inicializacion SQL solo corre por defecto con una base embebida en memoria, y esta no lo es ($causa). Pon spring.sql.init.mode=always si debe ejecutarse (cuidado: en una base con datos vuelve a correr el script) o never si no.")
+    Add-Cal $Out $r 1 'sql-init-no-embebida' ($r.Split('/')[-1] + " ya no se ejecuta solo: desde Spring Boot 2.5 la inicializacion SQL solo corre por defecto con una base embebida en memoria, y esta no lo es ($($base.Causa)). Pon spring.sql.init.mode=always si debe ejecutarse (cuidado: en una base con datos vuelve a correr el script) o never si no.")
   }
+}
+
+# Repositorio de Spring Batch. Spring Batch 5 quito el repositorio en memoria (fila SBT5-04, fuentes-guias/sbatch-Spring-Batch-5.0-Migration-Guide.md:
+# MapJobRepositoryFactoryBean) y Spring Boot 3 le da a Batch el DataSource del negocio, salvo uno marcado con @BatchDataSource
+# (fuentes-m76/sboot-BatchDataSource.java, "@since 2.2.0"; BatchAutoConfiguration: batchDataSource.getIfAvailable(() -> dataSource)). Con un
+# DataSource que no es en memoria faltan las tablas BATCH_ (filas SBT5-01 y SBT5-02: esquema nuevo) o se crean en la base del negocio. Propia: lo que
+# le da a Batch su base en memoria: un @BatchDataSource o un DefaultBatchConfiguration con getDataSource en un fichero que declara una base embebida
+# en memoria, o un ResourcelessJobRepository (fuentes-m76/sbatch-ResourcelessJobRepository.java, "@since 5.2.0"). Termina: Batch acaba en una base que
+# no es en memoria (sin propia y con la base del negocio fuera de memoria).
+function Get-RepoBatch($Hechos, $Props, $Deps) {
+  $propia = ''
+  foreach ($f in $Hechos.Ficheros) {
+    if (-not ($f.Texto -cmatch 'BatchDataSource|ResourcelessJobRepository|DefaultBatchConfiguration')) { continue }
+    $sin = Get-SinComentarios $f.Texto
+    $mem = ($sin -cmatch $script:RxMemoriaJava)
+    if ($mem -and $sin -cmatch '@(?:[\w.]+\.)?BatchDataSource\b') { $propia = $f.RelRaiz + ' (un DataSource con @BatchDataSource en memoria)' }
+    elseif ($mem -and $sin -cmatch '\bextends\s+DefaultBatchConfiguration\b' -and $sin -cmatch '\bgetDataSource\s*\(') { $propia = $f.RelRaiz + ' (un DefaultBatchConfiguration con un DataSource en memoria)' }
+    elseif ($sin -cmatch '\bResourcelessJobRepository\b') { $propia = $f.RelRaiz + ' (un ResourcelessJobRepository)' }
+    if ($propia) { break }
+  }
+  $base = Get-BaseEnMemoria $Props $Deps
+  return [pscustomobject]@{ Propia = $propia; Causa = $base.Causa; Termina = (-not $propia -and -not $base.EnMemoria) }
+}
+
+# Por que el original no guarda las ejecuciones de Batch ('' si las guarda o no se sabe): usa MapJobRepositoryFactoryBean (o un DAO Map) en Java o XML
+# de src/main, o su unica base es una H2, HSQLDB o Derby en memoria (todas sus spring.datasource.url lo son o, sin url, el codigo declara una). Se
+# calcula una vez por carpeta: el original no cambia durante la ejecucion (-Modo fix vigila su huella) y cada diagnostico lo pediria otra vez.
+$OriginalNoGuardaPor = @{}
+function Get-OriginalNoGuarda([string]$Raiz) {
+  if ($script:OriginalNoGuardaPor.ContainsKey($Raiz)) { return $script:OriginalNoGuardaPor[$Raiz] }
+  $h = Get-Hechos $Raiz
+  $codigo = @($h.Ficheros | ForEach-Object { Get-SinComentarios $_.Texto })
+  foreach ($f in @(Get-Arbol $Raiz | Where-Object { $_.Extension -ieq '.xml' -and $_.Length -le 1MB })) {
+    if (-not (Get-Rel $Raiz $f.FullName).StartsWith('src/test/')) { $codigo += [regex]::Replace([System.IO.File]::ReadAllText($f.FullName), '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline) }
+  }
+  $texto = $codigo -join "`n"
+  $urls = @(Get-Propiedad (Get-PropiedadesConfig $h) 'spring.datasource.url')
+  if ($urls.Count -gt 0) { $mem = (@($urls | Where-Object { $_.Valor -notmatch $script:RxUrlMemoria }).Count -eq 0) } else { $mem = ($texto -cmatch $script:RxMemoriaJava) }
+  $motivo = ''
+  if ($texto -cmatch '\bMap(?:JobRepositoryFactoryBean|JobInstanceDao|JobExecutionDao|StepExecutionDao|ExecutionContextDao)\b') { $motivo = 'usa MapJobRepositoryFactoryBean, que las deja en memoria' }
+  elseif ($mem) { $motivo = 'su base es una H2 en memoria' }
+  $script:OriginalNoGuardaPor[$Raiz] = $motivo
+  return $motivo
+}
+
+# Repositorio de Batch (fila SBT5-04): el original no guarda las ejecuciones ($Contexto.OriginalNoGuarda) y en el migrado Batch acaba en una base que
+# no es en memoria. Una vez por proyecto, en la clase de arranque (o en el pom). Sin original, nada. Con la plantilla en el mismo caso, aviso (lo
+# pone el diagnostico, porque Cal.Calidad lleva la regla); el texto dice lo que hace la plantilla si lo sabe ($Contexto.Plantilla).
+function Add-CalRepoBatch($Out, $Hechos, $Props, $Deps, $Contexto) {
+  if (-not $Contexto -or -not $Contexto.OriginalNoGuarda) { return }
+  $r = Get-RepoBatch $Hechos $Props $Deps
+  if (-not $r.Termina) { return }
+  $rel = 'pom.xml'; $linea = 0
+  $app = @($Hechos.Ficheros | Where-Object { $_.Texto -cmatch '@SpringBootApplication' })
+  if ($app.Count -gt 0) { $rel = $app[0].RelRaiz; $linea = Get-LineaDe $app[0].Texto $app[0].Texto.IndexOf('@SpringBootApplication') }
+  $pl = ''
+  if ($Contexto.Plantilla -and $Contexto.Plantilla.Propia) { $pl = ' La plantilla lo resuelve con ' + $Contexto.Plantilla.Propia + ': copialo.' }
+  elseif ($Contexto.Plantilla) { $pl = ' La plantilla tampoco le da a Batch una base propia; si en pre la resuelve devops de otra forma, deja este aviso.' }
+  Add-Cal $Out $rel $linea 'repositorio-batch' ("El original no guarda las ejecuciones de Batch ($($Contexto.OriginalNoGuarda)) y en el migrado Spring Batch acaba en la base del negocio ($($r.Causa)). Spring Batch 5 quito el repositorio en memoria y Spring Boot 3 usa el DataSource normal: en pre el primer arranque falla porque faltan las tablas BATCH_ (o las crea en la base del negocio si alguien pone spring.batch.jdbc.initialize-schema=always); en local no se ve porque la prueba usa H2. Dale a Batch una base propia en memoria: un DataSource H2 con @BatchDataSource." + $pl)
 }
 
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
@@ -1121,9 +1194,10 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
 }
 
 # Faltas de calidad del codigo de src/main (sin decidir aun si son error o aviso). $EstiloPlantilla: las cuentas de estilo de la plantilla
-# (Cuentas de lo que devolvio esta funcion para ella), o $null para la propia plantilla. Devuelve los hallazgos, las cuentas de estilo y la
+# (Cuentas de lo que devolvio esta funcion para ella), o $null para la propia plantilla. $Contexto: lo que se sabe de fuera del migrado para
+# repositorio-batch (OriginalNoGuarda: por que el original no guarda las ejecuciones de Batch, y Plantilla: Get-RepoBatch de la plantilla), o $null. Devuelve los hallazgos, las cuentas de estilo y la
 # linea de la consola sobre el estilo ('' si no hay mezcla).
-function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
+function Get-Calidad($Hechos, $EstiloPlantilla = $null, $Contexto = $null) {
   $out = New-Object System.Collections.Generic.List[object]
   $datos = @{ Ctor = (New-Object System.Collections.Generic.List[object]); Logger = (New-Object System.Collections.Generic.List[object]) }
   $finales = New-Object System.Collections.Generic.List[object]   # las clases final (RelRaiz, Linea, Nombre, Motivos por los que Spring las envolveria)
@@ -1280,6 +1354,7 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
   if ($pom) { $deps = @($pom.Deps) }
   Add-CalNashornYComando $out $Hechos $deps
   Add-CalSqlInit $out $Hechos $props $deps
+  Add-CalRepoBatch $out $Hechos $props $deps $Contexto
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }
@@ -1336,13 +1411,18 @@ function Get-Calibracion([string]$Raiz) {
   $calReglas = @{}
   $calidad = Get-Calidad $h
   foreach ($q in $calidad.Hallazgos) { $calReglas[$q.Regla] = $true }
+  $pom = Get-Pom $Raiz
+  $deps = @()
+  if ($pom) { $deps = @($pom.Deps) }
+  $repoBatch = Get-RepoBatch $h @(Get-PropiedadesConfig $h) $deps
+  if ($repoBatch.Termina) { $calReglas['repositorio-batch'] = $true }   # la plantilla tambien lo hace: en el migrado, aviso
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object); Paquetes = $paquetes
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
-    Calidad = $calReglas; Estilo = $calidad.Estilo; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
+    Calidad = $calReglas; Estilo = $calidad.Estilo; RepoBatch = $repoBatch; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
-    YmlSftp = ($h.Yml -match 'sftp'); SftpYml = (Get-SftpYml $h); Pom = (Get-Pom $Raiz); Extra = $extra
+    YmlSftp = ($h.Yml -match 'sftp'); SftpYml = (Get-SftpYml $h); Pom = $pom; Extra = $extra
   }
 }
 
@@ -2860,7 +2940,14 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   # ---------- calidad (Javadoc y buenas practicas de Java 21) ----------
   $estiloPlantilla = $null
   if ($cal) { $estiloPlantilla = $cal.Estilo }
-  $calidad = Get-Calidad $h $estiloPlantilla
+  $contexto = $null
+  $original = $LegacyRoot
+  if (-not $original -and $con -and $con.original -and (Test-Path -LiteralPath "$($con.original)")) { $original = "$($con.original)" }
+  if ($original) {
+    $contexto = [pscustomobject]@{ OriginalNoGuarda = (Get-OriginalNoGuarda $original); Plantilla = $null }
+    if ($cal) { $contexto.Plantilla = $cal.RepoBatch }
+  }
+  $calidad = Get-Calidad $h $estiloPlantilla $contexto
   $script:LineaEstilo = $calidad.Linea
   foreach ($q in $calidad.Hallazgos) {
     $sev = 'aviso'; $nota = ''
@@ -2972,7 +3059,7 @@ $TextoPaso = @{
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
   cobertura  = 'Escribe o amplia el test de la clase listada hasta cubrir sus lineas sin cubrir, sin tocar nada fuera de src/test/ (el detalle va en el prompt del lote).'
   sonar      = 'Corrige las incidencias de Sonar listadas SIN cambiar el comportamiento ni la API publica (el detalle de lo que se pide va en el prompt del lote).'
-  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. Clase o metodo final que Spring envuelve con un proxy: quita final y nada mas. No toques nada mas de esos ficheros.'
+  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. Clase o metodo final que Spring envuelve con un proxy: quita final y nada mas. Referencia circular entre beans: rompe el ciclo sin cambiar lo que hace (saca lo comun a un tercer bean, o inyecta uno de los dos con ObjectProvider o @Lazy). Bean repetido: cambia el nombre de uno. @EnableBatchProcessing o DefaultBatchConfiguration: quita la anotacion o la clase. Parametro de job nombre(tipo)=valor: nombre=valor,java.lang.Tipo (java.lang.Long, java.lang.Double, java.lang.String o java.time.LocalDate). getEngineByName("nashorn") y similares: anade nashorn-core al pom. setCommand con el comando entero en una cadena: una cadena por argumento. Repositorio de Batch: crea una @Configuration en el paquete de configuracion con un DataSource H2 en memoria marcado con @BatchDataSource (copia el de la plantilla si lo tiene); es la unica regla que crea un fichero nuevo. No toques nada mas de esos ficheros.'
 }
 
 # Lo que se le pide al codigo que la IA escribe en cualquier paso.

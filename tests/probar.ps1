@@ -7017,5 +7017,111 @@ $Pruebas['m76 (g2) sql-init-no-embebida: con una url en memoria en un perfil y o
   Igual 'sin url y con h2 en el pom, no sale' 0 @(Cal-M76 $s 'sql-init-no-embebida').Count
 }
 
+# El original de un escenario (una carpeta junto al repo) con estos ficheros (ruta -> texto).
+function Original-M76($E, [hashtable]$Ficheros) {
+  $o = Join-Path (Split-Path -Parent $E.Repo) 'original'
+  if (Test-Path -LiteralPath $o) { Remove-Item -LiteralPath $o -Recurse -Force }
+  foreach ($k in $Ficheros.Keys) { Escribe $o $k $Ficheros[$k] }
+  return $o
+}
+
+$OriginalMapa = @{ 'src/main/java/com/acme/life/config/RepoMapa.java' = "package com.acme.life.config;`n`n/** Repositorio en memoria. */`npublic class RepoMapa {`n    JobRepository repo() throws Exception {`n        MapJobRepositoryFactoryBean f = new MapJobRepositoryFactoryBean();`n        return f.getObject();`n    }`n}`n" }
+
+# Una @Configuration que da a Batch su base: $Cuerpo es el cuerpo del metodo que devuelve el DataSource.
+function BaseBatch-M76([string]$Anot, [string]$Cuerpo, [string]$Pkg = 'com.acme.plantilla.application.usecases') {
+  return (Clase-M70 'BaseBatch' '@Configuration' "    @Bean`n    $Anot`n    public DataSource baseBatch() {`n        $Cuerpo`n    }`n" $Pkg)
+}
+$MemoriaH2 = 'return new EmbeddedDatabaseBuilder().setType(EmbeddedDatabaseType.H2).build();'
+
+$Pruebas['m76 (h1) repositorio-batch (SBT5-04): el original no guarda las ejecuciones (Map) y el migrado acaba en la base del negocio: sale una vez, como error, en la clase de arranque'] = {
+  $e = Escenario-M70 'm76-h1' @{ Uno = (Pide-M76 'Uno' 'String a'); Dos = (Pide-M76 'Dos' 'String b') } @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e $OriginalMapa
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'sale una vez, en LifeApplication' 'LifeApplication' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Igual 'en la linea de @SpringBootApplication' 6 $h[0].Linea
+  Comprueba 'el texto dice lo que hace el original, donde acaba Batch en el migrado, por que falla en pre y no en local, que hacer y lo que hace la plantilla' ($h[0].Detalle -like "*El original no guarda las ejecuciones de Batch (usa MapJobRepositoryFactoryBean, que las deja en memoria) y en el migrado Spring Batch acaba en la base del negocio (spring.datasource.url es `${DB_URL}, en src/main/resources/application.yml:3). Spring Batch 5 quito el repositorio en memoria y Spring Boot 3 usa el DataSource normal: en pre el primer arranque falla porque faltan las tablas BATCH_ (o las crea en la base del negocio si alguien pone spring.batch.jdbc.initialize-schema=always); en local no se ve porque la prueba usa H2. Dale a Batch una base propia en memoria: un DataSource H2 con @BatchDataSource. La plantilla lo resuelve con src/main/java/com/acme/plantilla/application/usecases/BaseBatch.java (un DataSource con @BatchDataSource en memoria): copialo.") $h[0].Detalle
+  Igual 'sin original, no sale' 0 @(Cal-M76 $e 'repositorio-batch').Count
+  Escribe $e.Repo '.rescate/contrato.json' (ConvertTo-Json -InputObject @{ original = $o; jobs = @() })
+  Igual 'con el original solo en el contrato (sin -Legacy), sale' 1 @(Cal-M76 $e 'repositorio-batch').Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo '.rescate/contrato.json') -Force
+}
+
+$Pruebas['m76 (h2) repositorio-batch: no sale si el migrado le da a Batch una base propia en memoria (@BatchDataSource, DefaultBatchConfiguration o ResourcelessJobRepository) o si la suya ya es H2 en memoria; con @BatchDataSource a otra base, sale'] = {
+  $e = Escenario-M70 'm76-h2' @{} @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e $OriginalMapa
+  $ruta = 'src/main/java/com/acme/life/application/usecases/'
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (BaseBatch-M76 '@BatchDataSource' $MemoriaH2 'com.acme.life.application.usecases')
+  Igual 'con @BatchDataSource a una H2 en memoria, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (BaseBatch-M76 '@BatchDataSource' 'return DataSourceBuilder.create().url("jdbc:oracle:thin:@//host:1521/svc").build();' 'com.acme.life.application.usecases')
+  Igual 'con @BatchDataSource a Oracle, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (Clase-M70 'BaseBatch' '@Configuration' "    @Bean`n    public JobRepository repo() {`n        return new ResourcelessJobRepository();`n    }`n")
+  Igual 'con un ResourcelessJobRepository, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (Java-M76 'BaseBatch' 'class' "    @Override`n    protected DataSource getDataSource() {`n        $MemoriaH2`n    }`n" ' extends DefaultBatchConfiguration')
+  Igual 'con un DefaultBatchConfiguration que da una H2 en memoria, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo ($ruta + 'BaseBatch.java')) -Force
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: jdbc:h2:mem:batch`n"
+  Igual 'con la url del migrado en H2 en memoria, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (h3) repositorio-batch: si la plantilla tambien acaba en la base del negocio, aviso'] = {
+  $e = Escenario-M70 'm76-h3' @{} @{}
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e $OriginalMapa
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'sale una vez' 1 $h.Count
+  Igual 'como aviso' 'aviso' $h[0].Sev
+  Comprueba 'con la nota de la plantilla' ($h[0].Detalle -like '*(se queda en aviso: la plantilla tambien lo hace)') $h[0].Detalle
+  Comprueba 'y el texto dice que la plantilla tampoco le da una base propia' ($h[0].Detalle -like '*La plantilla tampoco le da a Batch una base propia*') $h[0].Detalle
+}
+
+$Pruebas['m76 (h4) repositorio-batch: el original que guarda en una base real, o con una url de variable y una H2 solo en src/test, no cuenta; el que usa solo una H2 en memoria, si'] = {
+  $e = Escenario-M70 'm76-h4' @{} @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e @{ 'src/main/resources/application.yml' = "spring:`n  datasource:`n    url: jdbc:oracle:thin:@//host:1521/svc`n" }
+  Igual 'el original con Oracle y sin Map, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = Original-M76 $e @{ 'src/main/resources/application.yml' = "spring:`n  datasource:`n    url: `${DB_URL}`n"; 'src/test/resources/application.yml' = "spring:`n  datasource:`n    url: jdbc:h2:mem:t`n" }
+  Igual 'el original con url de variable y una H2 solo en src/test, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = Original-M76 $e @{ 'src/main/resources/application.yml' = "spring:`n  datasource:`n    url: jdbc:h2:mem:legado`n" }
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'el original con solo una H2 en memoria, sale' 1 $h.Count
+  Comprueba 'y dice que su base es una H2 en memoria' ($h[0].Detalle -like '*El original no guarda las ejecuciones de Batch (su base es una H2 en memoria)*') $h[0].Detalle
+}
+
+$Pruebas['m76 (i1) las reglas que fallan al arrancar o cambian en silencio se exigen aunque la plantilla tambien las tenga (circular, bean repetido, parametros v4, nashorn, comando junto); enable-batch no'] = {
+  $mismo = { param($pkg) @{
+      CiA   = (Pide-M76 'CiA' 'CiB b')
+      CiB   = (Pide-M76 'CiB' 'CiA a')
+      CfgA  = (Beans-M76 'CfgA' @('@Bean public Lector lector() {') '@Configuration' $pkg)
+      CfgB  = (Beans-M76 'CfgB' @('@Bean public Lector lector() {') '@Configuration' $pkg)
+      Motor = (Metodo-M76 'Motor' 'Object m = manager.getEngineByName("nashorn"); SystemCommandTasklet t = null; t.setCommand("ls -l");')
+      Batch = (Clase-M70 'Batch' "@Configuration`n@EnableBatchProcessing" '')
+    } }
+  $e = Escenario-M70 'm76-i1' (& $mismo 'com.acme.life.application.usecases') (& $mismo 'com.acme.plantilla.application.usecases')
+  Escribe $e.Repo 'bin/lanza.sh' "java -jar b.jar `"n(long)=1`"`n"
+  Escribe $e.Plantilla 'bin/lanza.sh' "java -jar b.jar `"n(long)=1`"`n"
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  $cal = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'calidad' })
+  foreach ($regla in @('referencia-circular', 'bean-repetido', 'parametros-v4', 'nashorn', 'comando-sin-partir')) {
+    $r = @($cal | Where-Object { $_.Detalle.StartsWith('[' + $regla + ']') })
+    Comprueba "$regla sale" ($r.Count -gt 0) ''
+    Igual "$regla sigue siendo error" '' ((@($r | Where-Object { $_.Sev -ne 'error' } | ForEach-Object { $_.Sev }) | Select-Object -Unique) -join ' ')
+  }
+  $b = @($cal | Where-Object { $_.Detalle.StartsWith('[enable-batch]') })
+  Igual 'enable-batch, con la plantilla igual, es aviso' 'aviso' ((@($b | ForEach-Object { $_.Sev }) | Select-Object -Unique) -join ' ')
+}
+
+$Pruebas['m76 (i2) el prompt del paso calidad dice que hacer con las reglas de las guias de migracion, y el hallazgo lleva su texto'] = {
+  $e = Escenario-M70 'm76-i2' @{ ServicioA = (Pide-M76 'ServicioA' 'ServicioB b'); ServicioB = (Pide-M76 'ServicioB' 'ServicioA a') }
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'calidad', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1'))
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false; return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el hallazgo del lote es el del ciclo' ($prompt -match 'ServicioA\.java:\d+ - \[referencia-circular\] Referencia circular entre beans') $prompt
+  Comprueba 'el paso dice como romper un ciclo' ($prompt -match 'Referencia circular entre beans: rompe el ciclo sin cambiar lo que hace') $prompt
+  Comprueba 'y como dar su base a Batch, avisando de que crea un fichero nuevo' ($prompt -match 'Repositorio de Batch: crea una @Configuration en el paquete de configuracion con un DataSource H2 en memoria marcado con @BatchDataSource') $prompt
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
