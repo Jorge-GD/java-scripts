@@ -160,10 +160,12 @@ Comprueba, por texto, el código de `src/main`:
 | `autowired-varios` | error | `@Autowired` en más de un constructor sin `required = false` (Sonar S6818). |
 | `inyeccion-estatica` | error | `@Value`, `@Autowired` o `@Inject` en un campo `static`: Spring no lo inyecta (Sonar S7178). |
 | `value-sin-expresion` | error | `@Value("...")` en un campo sin `${...}` ni `#{...}` (Sonar S6804). |
-| `estilo-constructor`, `estilo-logger` | error | El batch mezcla estilos de constructor (Lombok o a mano) o de logger (`@Slf4j`, `LoggerFactory` u otro): salen las clases que no siguen el estilo de la plantilla, o el más usado. |
+| `estilo-constructor`, `estilo-logger` | error | El batch mezcla estilos de constructor (Lombok o a mano) o de logger (`@Slf4j`, `LoggerFactory` u otro): salen las clases que no siguen el estilo de la plantilla si usa uno solo; si la plantilla mezcla, el más usado del batch. |
+| `clase-final-proxy` | error | Clase `final` que Spring envuelve con un proxy (`@Repository`, `@Configuration` sin `proxyBeanMethods = false`, `@StepScope`, `@JobScope`, `@Transactional`, `@Async`, `@Validated`, `@Retryable` o de caché, en la clase o en un método, o devuelta por un `@Bean` con `@StepScope` o `@JobScope`): el bean no se crea y el job no arranca. |
+| `metodo-final-proxy` | error | Método `final` con `@Transactional`, `@Async`, `@Retryable` o de caché en una clase que no es `final`: Spring no lo puede interceptar. |
 | `instanceof-cast`, `fecha-antigua`, `coleccion-antigua` | aviso | Sintaxis y API antiguas. No se arreglan solas: pueden cambiar el comportamiento. |
 
-El Javadoc y las cuatro reglas de Spring se exigen aunque la plantilla no las cumpla. Las demás reglas bajan a aviso si la plantilla también las incumple (las de estilo, si la plantilla también mezcla).
+El Javadoc, las cuatro reglas de Spring, las de proxy y las de estilo se exigen aunque la plantilla no las cumpla. Las demás reglas bajan a aviso si la plantilla también las incumple.
 Para apagar una regla, quítala de `CalidadErrores` en `.rescate/config.json`.
 Para que `calidad` vaya como `sonar` (la IA solo compila, cada lote pasa los tests ligeros y la suite entera va en un control), pon `"PasosSoloCompila": ["sonar", "calidad"]` y `"PasosTestsElegidos": ["sonar", "calidad"]` en `.rescate/config.json` (el de la copia de rescate, `<migrado>-rescate/.rescate/config.json`, si lo lanza `migracion.ps1`); por defecto solo `sonar`. Mide el paso en `.rescate/intentos.tsv` antes y después.
 
