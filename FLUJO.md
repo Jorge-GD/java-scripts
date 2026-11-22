@@ -234,6 +234,29 @@ Relanzar la pasada no deshace el cierre. Y lanzar `-Cierre` otra vez con tu rama
 
 Después, si ya no la quieres, quita la carpeta de rescate: `git -C C:\ruta\migrado worktree remove C:\ruta\migrado-rescate`.
 
+### El repo de configmap
+
+El batch migrado lee sus variables (`${...}`) de un configmap que vive en otro repo. `-ConfigMap` te lo escribe junto a la carpeta del migrado, con la forma del repo de configmap de un batch que ya migraste.
+
+```powershell
+.\migracion.ps1 -Legacy C:\ruta\original -Migrado C:\ruta\migrado -Plantilla C:\ruta\referencia -ConfigMap -Inventario C:\ruta\inventario -ConfigMapReferencia C:\ruta\configmap-de-referencia
+```
+
+- `-Inventario`: la carpeta del inventario del original, con una carpeta por entorno y sus `.properties`. De ahí salen los valores. No lee nada más: ni el vault ni otros ficheros.
+- `-ConfigMapReferencia`: el repo de configmap de referencia. Si no lo das, te lo pregunta la primera vez y lo guarda en `ajustes.json`.
+- El inventario y el modelo quedan en `datos\configmap.json`: para relanzar basta `-ConfigMap`. Lo atascado se repite con `-Reintentar`.
+- No hace `git init`, commit ni push: eso es tuyo.
+- Se lanza solo, sin `-Cierre`, `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas` ni `-RevisarTodo`. Aparte, si ya tiene el inventario y la referencia, `-Cierre` lo hace al final. Nunca para el cierre: si falla, avisa con la ruta de `registros\configmap-error.log`.
+
+La IA empareja cada variable con una clave del inventario (de una lista cerrada), escribe cada entorno y cada fichero de la plataforma, y los revisa. El script comprueba cada respuesta y garantiza siempre esto:
+- Cada variable sale en cada entorno con su valor o con `<PENDIENTE>`.
+- Un secreto sale sin su valor. Es secreto lo que lo dice su nombre (`password`, `token`, `credencial`, `private`, `apikey`, `user` al final...) o lo que lleva credenciales dentro del valor (`https://usuario:clave@host`, `usuario/clave@host`).
+- El valor de un secreto no sale en ningún fichero como palabra entera. Si sale, se borra el fichero; si ese fichero lo has cambiado tú, solo avisa. Si el valor es tan común que sale en los nombres, no se puede vigilar: va a `PENDIENTE.md` para que lo mires.
+- El nombre del batch de referencia no queda en ningún sitio.
+- Copilot no puede usar la consola, y lo que escribe fuera de su sitio se deshace. Si cambia algo en el migrado, te avisa.
+
+**Lo que te toca:** abre `PENDIENTE.md` en el repo nuevo. Tiene, por entorno, cada variable con su estado (valor puesto, pendiente o secreto que hay que pedir), los `<PENDIENTE: ...>` con fichero y línea, lo que ha encontrado la revisión y lo atascado. Pon lo que falte, haz `git init` y commit. Al relanzar, lo que has cambiado a mano se respeta.
+
 ## Paso 5. Sonar
 
 ```powershell
