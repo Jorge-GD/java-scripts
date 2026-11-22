@@ -75,7 +75,7 @@ QUE HACE (la lectura del original, los datos para explicarlo a negocio, la corre
                 (datos\propiedades.json) con una sola tarea y un commit (arreglo-propiedades.ps1). Solo se queda con el cambio si compila, no fallan mas tests
                 que antes y ninguna clave empeora; datos\propiedades-arreglo.json. Una tarea que no sale bien se avisa (atascada) y la pasada sigue
     revision    con la respuesta corregir, despues de propiedades y antes de prueba-local: revisa el arbol final por flujos (revision.ps1) y solo lee. Una tarea por
-                unidad (un step con sus piezas, o un fichero suelto) con las 9 reglas del catalogo y como mucho 5 hallazgos por unidad, cada uno con una cita que
+                unidad (un step con sus piezas, o un fichero suelto) con las 8 reglas del catalogo y como mucho 5 hallazgos por unidad, cada uno con una cita que
                 el script comprueba. Mira lo que cambio frente a tu rama, lo que tiene papel de Spring Batch y las clases sin uso de datos\practicas-despues.json
                 (o de practicas-antes.json); con -RevisarTodo, todos los .java de src/main/java. Lo que una lectura toque del repositorio se deshace y la tarea no
                 vale. Va con -Limite, -MaxHoras y los fallos seguidos de Copilot como las demas fases; datos\revision.json
@@ -248,7 +248,8 @@ function Select-Modelo {
 
 # ================================= FASES =================================
 # El diagnostico (sin IA): rescate.ps1 -Modo diagnostico lee el migrado en el worktree y sus hallazgos se copian a datos\ como
-# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro. A continuacion se mide la cobertura de
+# hallazgos-<Cuando>.json y diagnostico-<Cuando>.md ($Cuando es antes o despues), con su registro (con -Legacy: la regla repositorio-batch compara
+# con el original; sin el, el motor solo lo conoce si ya existe .rescate\contrato.json). A continuacion se mide la cobertura de
 # tests (datos\cobertura-<Cuando>.json y su registro; un Maven mas, salvo que el migrado no compile) y las buenas practicas
 # (datos\practicas-<Cuando>.json y su registro, con Invoke-Practicas de practicas.ps1: javac, Lombok y el texto de Java 21, hasta
 # $Cfg.SegundosPracticas s; nunca para el diagnostico: lo que no se pueda medir lo dice el JSON). Si el motor falla, parada 'motor'
@@ -257,7 +258,7 @@ function Invoke-DiagnosticoMotor([string]$Cuando) {
   $hMotor = Join-Ruta $RepoRoot '.rescate/hallazgos.json'
   $mMotor = Join-Ruta $RepoRoot '.rescate/diagnostico.md'
   if (Test-Path -LiteralPath $hMotor) { Remove-Item -LiteralPath $hMotor -Force }
-  $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'diagnostico', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Si')
+  $r = Invoke-Nativo (Get-PowerShellExe) @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'rescate.ps1'), '-Modo', 'diagnostico', '-Repo', $RepoRoot, '-Plantilla', $PlantillaRoot, '-Legacy', $LegacyRoot, '-Si')
   $registro = Join-Path $Registros "diagnostico-$Cuando.log"
   Save-Registro $registro $r.Salida
   if ($r.Codigo -ne 0 -or -not (Test-Path -LiteralPath $hMotor) -or -not (Test-Path -LiteralPath $mMotor)) {

@@ -175,14 +175,14 @@ function Uno-Malo([string]$Nombre, [hashtable]$Cambios, [string]$ConJson = '') {
 # ================================ PRUEBAS ================================
 $Pruebas = [ordered]@{}
 
-$Pruebas['1 catalogo: las nueve reglas, con titulo, que busca y tokens; las tres que ya se miden no estan'] = {
+$Pruebas['1 catalogo: las ocho reglas, con titulo, que busca y tokens; las cuatro que ya se miden no estan'] = {
   $r = @(Get-ReglasRevision)
-  Igual 'los ids, en orden' 'SB-LISTENER,SB-STEPSCOPE,SB-TRANSACCION,SB-CONTEXTO,BOOT-ENABLEBATCH,J21-INTERNOS,CAND-MUERTA,SB-ESTADO,ERR-TRAGADA' (($r | ForEach-Object { $_.id }) -join ',')
+  Igual 'los ids, en orden' 'SB-LISTENER,SB-STEPSCOPE,SB-TRANSACCION,SB-CONTEXTO,J21-INTERNOS,CAND-MUERTA,SB-ESTADO,ERR-TRAGADA' (($r | ForEach-Object { $_.id }) -join ',')
   Comprueba 'cada una lleva titulo y que, con texto' (@($r | Where-Object { -not $_.titulo -or -not $_.que }).Count -eq 0)
   Comprueba 'cada una lleva al menos un token' (@($r | Where-Object { @($_.tokens).Count -eq 0 }).Count -eq 0)
   Igual 'los tokens de SB-LISTENER' 'Listener|@Before|@After|@On' ((@($r | Where-Object { $_.id -ceq 'SB-LISTENER' })[0].tokens) -join '|')
   Igual 'los de CAND-MUERTA' 'class |interface |enum |record ' ((@($r | Where-Object { $_.id -ceq 'CAND-MUERTA' })[0].tokens) -join '|')
-  foreach ($quitada in @('SB-FACTORIAS', 'J21-FORMATO', 'J21-SECURITYMANAGER')) {
+  foreach ($quitada in @('SB-FACTORIAS', 'J21-FORMATO', 'J21-SECURITYMANAGER', 'BOOT-ENABLEBATCH')) {
     Comprueba "$quitada no esta: ya lo mide practicas.ps1 o rescate.ps1" (@($r | Where-Object { $_.id -ceq $quitada }).Count -eq 0)
   }
   $l = @($r | Where-Object { $_.id -ceq 'SB-LISTENER' })[0].que
@@ -864,12 +864,12 @@ function Hallazgo-71([string]$Regla, [string]$Fichero, [int]$Linea, [string]$Cit
   return (Hallazgo @{ regla = $Regla; fichero = ($P + $Fichero + '.java'); linea = $Linea; cita = $Cita; texto = 'Texto de prueba.' })
 }
 
-$Pruebas['28 m71 a) catalogo: nueve reglas; SB-ESTADO y ERR-TRAGADA al final, con titulo, que y tokens'] = {
+$Pruebas['28 m71 a) catalogo: ocho reglas; SB-ESTADO y ERR-TRAGADA al final, con titulo, que y tokens'] = {
   $r = @(Get-ReglasRevision)
-  Igual 'nueve reglas' 9 $r.Count
+  Igual 'ocho reglas' 8 $r.Count
   Igual 'las dos nuevas, al final y en este orden' 'SB-ESTADO,ERR-TRAGADA' (($r | Select-Object -Last 2 | ForEach-Object { $_.id }) -join ',')
-  $s = $r[7]
-  $x = $r[8]
+  $s = $r[6]
+  $x = $r[7]
   Igual 'titulo de SB-ESTADO' 'Estado en un bean de un paso sin @StepScope' $s.titulo
   Igual 'titulo de ERR-TRAGADA' 'Error tragado en un paso' $x.titulo
   Igual 'los tokens de SB-ESTADO: la declaracion del campo o la linea que lo cambia' 'private |++|+=|.add(|.put(|this.' ($s.tokens -join '|')
@@ -882,7 +882,7 @@ $Pruebas['28 m71 a) catalogo: nueve reglas; SB-ESTADO y ERR-TRAGADA al final, co
   Comprueba 'ERR-TRAGADA: el job acaba COMPLETED y no cuenta el catch vacio (lo mide el diagnostico)' ($x.que -match 'COMPLETED' -and $x.que -match 'catch vac' -and $x.que -match 'diagn')
   Comprueba 'ERR-TRAGADA: no cuenta el error que se guarda donde el job lo mira (fichero de KO o ExecutionContext)' ($x.que -match 'KO' -and $x.que -match 'ExecutionContext')
   Comprueba 'los textos llevan tildes de verdad (no \u00xx sin leer)' (@($r | Where-Object { $_.que -match '\\u[0-9a-fA-F]{4}' -or $_.titulo -match '\\u[0-9a-fA-F]{4}' }).Count -eq 0)
-  Comprueba 'y los ids no se repiten' (@($r | ForEach-Object { $_.id } | Select-Object -Unique).Count -eq 9)
+  Comprueba 'y los ids no se repiten' (@($r | ForEach-Object { $_.id } | Select-Object -Unique).Count -eq 8)
 }
 
 $Pruebas['29 m71 b) ERR-TRAGADA: una cita con catch que sale en su linea vale; una sin catch se descarta con el motivo de los tokens'] = {
@@ -934,19 +934,19 @@ $Pruebas['30 m71 c) SB-ESTADO: la declaracion del campo y la linea que lo cambia
   Comprueba 'una buena y una sin token: vale la mitad, y se queda la buena' ($m.Ok -and @($m.Ficha.hallazgos).Count -eq 1 -and $m.Ficha.hallazgos[0].cita -ceq 'private int total = 0;' -and @($m.Ficha.descartados).Count -eq 1) $m.Motivo
 }
 
-$Pruebas['31 m71 d) huella: una tarea hecha con el catalogo de 7 reglas se vuelve a pedir una vez, y con el de 9 ya no'] = {
+$Pruebas['31 m71 d) huella: una tarea hecha con el catalogo de 6 reglas se vuelve a pedir una vez, y con el de 8 ya no'] = {
   $e = Nuevo-Escenario 'm71d' $FicherosM71
-  # Una pasada con el catalogo de antes (las 7 primeras): la funcion de aqui tapa a la de revision.ps1 solo dentro de este bloque
+  # Una pasada con el catalogo de antes (las 6 primeras): la funcion de aqui tapa a la de revision.ps1 solo dentro de este bloque
   $orig = ${function:Get-ReglasRevision}
-  $t1 = @(& { function Get-ReglasRevision { return @(& $orig | Select-Object -First 7) }; Pasada $e })
-  Igual 'catalogo de 7: dos unidades, hechas' 'hecha,hecha' (($t1 | ForEach-Object { $_.estado }) -join ',')
+  $t1 = @(& { function Get-ReglasRevision { return @(& $orig | Select-Object -First 6) }; Pasada $e })
+  Igual 'catalogo de 6: dos unidades, hechas' 'hecha,hecha' (($t1 | ForEach-Object { $_.estado }) -join ',')
   Igual 'y dos llamadas' 2 (Llamadas-De $e).Count
-  Igual 'revision.json lleva las 7 reglas de entonces' 7 @((Lee-Json $e.Json).reglas).Count
+  Igual 'revision.json lleva las 6 reglas de entonces' 6 @((Lee-Json $e.Json).reglas).Count
   $t2 = @(Pasada $e)
-  Igual 'con el catalogo de 9, la misma pasada sin tocar nada: las dos unidades se piden otra vez' 4 (Llamadas-De $e).Count
+  Igual 'con el catalogo de 8, la misma pasada sin tocar nada: las dos unidades se piden otra vez' 4 (Llamadas-De $e).Count
   Igual 'y quedan hechas' 'hecha,hecha' (($t2 | ForEach-Object { $_.estado }) -join ',')
   Comprueba 'con otra huella (la de los ids del catalogo nuevo)' ($t2[0].entradas.huella -cne $t1[0].entradas.huella -and $t2[1].entradas.huella -cne $t1[1].entradas.huella)
-  Igual 'revision.json lleva las 9' 9 @((Lee-Json $e.Json).reglas).Count
+  Igual 'revision.json lleva las 8' 8 @((Lee-Json $e.Json).reglas).Count
   $t3 = @(Pasada $e)
   Igual 'otra vez sin cambios: ninguna llamada mas' 4 (Llamadas-De $e).Count
   Igual 'y la huella no cambia' "$($t2[0].entradas.huella)|$($t2[1].entradas.huella)" "$($t3[0].entradas.huella)|$($t3[1].entradas.huella)"
@@ -970,7 +970,7 @@ $Pruebas['32 m71 e) el prompt de una unidad lleva SB-ESTADO y ERR-TRAGADA con su
   }
 }
 
-$Pruebas['33 m71 f) de punta a punta: la IA de mentira da un hallazgo de cada regla nueva; revision.json los lleva con su titulo y las 9 reglas'] = {
+$Pruebas['33 m71 f) de punta a punta: la IA de mentira da un hallazgo de cada regla nueva; revision.json los lleva con su titulo y las 8 reglas'] = {
   $resp = @{
     'revision-ContadorProcesador.json' = (Salida @((Hallazgo-71 'SB-ESTADO' 'ContadorProcesador' 4 'private int total = 0;')))
     'revision-TragaEscritor.json' = (Salida @((Hallazgo-71 'ERR-TRAGADA' 'TragaEscritor' 8 '} catch (IOException e) {')))
@@ -979,8 +979,8 @@ $Pruebas['33 m71 f) de punta a punta: la IA de mentira da un hallazgo de cada re
   $t = @(Pasada $e)
   Igual 'las dos hechas' 'hecha,hecha' (($t | ForEach-Object { $_.estado }) -join ',')
   $j = Lee-Json $e.Json
-  Igual 'las reglas de revision.json, las 9, con las dos nuevas al final' 'SB-ESTADO,ERR-TRAGADA' (($j.reglas | Select-Object -Last 2 | ForEach-Object { $_.id }) -join ',')
-  Igual 'nueve en total' 9 @($j.reglas).Count
+  Igual 'las reglas de revision.json, las 8, con las dos nuevas al final' 'SB-ESTADO,ERR-TRAGADA' (($j.reglas | Select-Object -Last 2 | ForEach-Object { $_.id }) -join ',')
+  Igual 'ocho en total' 8 @($j.reglas).Count
   Igual 'dos hallazgos, con el titulo de su regla' 'SB-ESTADO=Estado en un bean de un paso sin @StepScope|ERR-TRAGADA=Error tragado en un paso' ((@($j.hallazgos) | ForEach-Object { $_.regla + '=' + $_.titulo }) -join '|')
   Igual 'sin descartes' 0 $j.descartados
   Igual 'la consola' 'Revision por flujos: 2 hechas, 0 atascadas, 0 pendientes; 2 hallazgos (0 descartados por no poder comprobarlos).' (Get-LineaRevision $t)

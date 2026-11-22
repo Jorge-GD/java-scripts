@@ -225,13 +225,17 @@ $Cfg += @{
   # inyeccion-estatica (S7178), value-sin-expresion (S6804). Las de estilo
   # miran todo el batch: estilo-constructor y estilo-logger. Las de proxy
   # (clase-final-proxy y metodo-final-proxy) no son de Sonar: Spring no puede
-  # envolver una clase o un metodo final y el job no arranca.
+  # envolver una clase o un metodo final y el job no arranca. Las de las guias
+  # de migracion (M76) miran lo que compila y falla al arrancar o cambia sin
+  # avisar: referencia-circular, bean-repetido, enable-batch, parametros-v4,
+  # nashorn, comando-sin-partir y repositorio-batch (esta ultima necesita el
+  # original). Siempre aviso: varios-jobs-sin-nombre y sql-init-no-embebida.
   CalidadErrores        = @('javadoc-tipo', 'javadoc-metodo', 'inyeccion-campo', 'salida-consola', 'catch-vacio', 'envoltorio-new',
     'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion', 'estilo-constructor', 'estilo-logger',
-    'clase-final-proxy', 'metodo-final-proxy')
+    'clase-final-proxy', 'metodo-final-proxy', 'referencia-circular', 'bean-repetido', 'enable-batch', 'parametros-v4', 'nashorn', 'comando-sin-partir', 'repositorio-batch')
   # Reglas que se exigen aunque la plantilla tampoco las cumpla (el resto, si la plantilla tambien las incumple, se queda en aviso)
   CalidadSiempre        = @('javadoc-tipo', 'javadoc-metodo', 'constructores-sin-autowired', 'autowired-varios', 'inyeccion-estatica', 'value-sin-expresion',
-    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger')
+    'clase-final-proxy', 'metodo-final-proxy', 'estilo-constructor', 'estilo-logger', 'referencia-circular', 'bean-repetido', 'parametros-v4', 'nashorn', 'comando-sin-partir')
   # Metodos publicos de una clase que no necesitan Javadoc (en una interfaz, todos lo llevan)
   MetodosSinJavadoc     = '^(main|equals|hashCode|toString|(get|set|is)[A-Z0-9_]\w*)$'
   MaxFallosSeguidos     = 6     # ficheros atascados seguidos (sin un lote bueno entre medias) antes de parar (no gastar llamadas en balde)
@@ -361,7 +365,18 @@ function Get-Hechos([string]$Raiz) {
       $ymls.Add([pscustomobject]@{ Rel = Get-Rel $Raiz $f.FullName; Nombre = $f.Name; Texto = $t })
     }
   }
-  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray() }
+  # Lo que lanza o configura el batch fuera de src/test (scripts, Dockerfile, yml, properties), con su texto, y los scripts SQL que Spring Boot
+  # ejecuta al arrancar (schema.sql y data.sql de src/main/resources, con o sin sufijo de plataforma)
+  $otros = New-Object System.Collections.Generic.List[object]
+  $sql = New-Object System.Collections.Generic.List[string]
+  foreach ($f in @(Get-Arbol $Raiz)) {
+    $rel = Get-Rel $Raiz $f.FullName
+    if ($rel -match '^src/main/resources/(?:schema|data)(?:-[\w-]+)?\.sql$') { $sql.Add($rel) }
+    elseif ($f.Length -le 1MB -and -not $rel.StartsWith('src/test/') -and $f.Name -match '(?i)^(?:Dockerfile.*|.+\.(?:sh|ksh|bash|cmd|bat|ya?ml|properties))$') {
+      $otros.Add([pscustomobject]@{ Rel = $rel; Texto = [System.IO.File]::ReadAllText($f.FullName) })
+    }
+  }
+  return [pscustomobject]@{ Raiz = $Raiz; BaseDir = $baseDir; BasePkg = $basePkg; Ficheros = $lista.ToArray(); Tests = $tests.ToArray(); Yml = $yml; YmlFicheros = $ymls.ToArray(); Otros = $otros.ToArray(); Sql = $sql.ToArray() }
 }
 
 function Get-Norm([string]$Fqn, [string]$BasePkg) {
@@ -570,6 +585,22 @@ $RxMetodo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?
 # @JobScope y @Scope con TARGET_CLASS, que valen tambien en el @Bean que devuelve la clase).
 $ProxyMetodo = @('Transactional', 'Async', 'Retryable', 'Cacheable', 'CachePut', 'CacheEvict', 'Caching')
 $ProxyClase = @('Repository', 'Validated') + $ProxyMetodo
+# Los parametros de un metodo: desde justo despues de su '(' (con \G) hasta el ')' que lo cierra
+$RxParametros = New-Object System.Text.RegularExpressions.Regex '\G(?<p>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)'
+# Un campo de primer nivel de una clase: anotaciones, modificadores, tipo, genericos, nombre y valor inicial (el cuerpo trae las llaves reducidas a \x01)
+$RxCampo = New-Object System.Text.RegularExpressions.Regex ('(?<![^;\x01])\s*(?<anot>(?:' + $RxAnot + ')*)(?<mods>(?>(?:(?:public|protected|private|static|final|transient|volatile)\s+)*))(?<tipo>[\w.]+)\s*(?:<(?<gen>[^;\x01()=]*)>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*(?<ini>=[^;]*)?;')
+# Un metodo @Bean en el texto con sus cadenas (sin comentarios): sus argumentos, el tipo que devuelve y su nombre
+$RxBeanMetodo = New-Object System.Text.RegularExpressions.Regex ('@(?:[\w.]+\.)?Bean\b(?:\s*\((?<args>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\))?(?:\s*@[\w.]+(?:\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\))?)*\s*(?:(?:public|protected|private|static|final|synchronized)\s+)*(?:<[^;{()]*>\s*)?(?<tipo>[\w.]+)(?:\s*<[^;{()]*>)?(?:\s*\[\s*\])*\s+(?<nombre>\w+)\s*\(')
+# Un parametro de job con la notacion de Spring Batch 4, nombre(tipo)=valor, con o sin barras de shell delante de los parentesis
+$RxParametroV4 = New-Object System.Text.RegularExpressions.Regex '(?<![\w.])(?<n>[A-Za-z_][\w.-]*)\\?\((?<t>long|date|double|string)\\?\)=(?<v>[^\s"'',;|&)\\]*)'
+$RxNashorn = New-Object System.Text.RegularExpressions.Regex ('\.getEngineByName\s*\(\s*"(?<n>nashorn|javascript|js|ecmascript)"\s*\)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+$RxComandoJunto = New-Object System.Text.RegularExpressions.Regex '\.setCommand\s*\(\s*"(?<c>[^"\\]*\s[^"\\]*)"\s*\)'
+# Una url de base de datos en memoria (H2, HSQLDB o Derby) y lo que en Java o XML declara una base embebida en memoria
+$RxUrlMemoria = '(?i)^jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)'
+$RxMemoriaJava = 'jdbc:(?:h2:mem:|hsqldb:mem:|derby:memory:)|EmbeddedDatabaseType\.(?:H2|HSQL|DERBY)|EmbeddedDatabaseBuilder'
+# Un setDataSource(un parametro) con el cuerpo vacio (los comentarios ya no estan): en un DefaultBatchConfigurer de Spring Batch 4 deja el repositorio en memoria
+$RxSetDataSourceVacio = '\bvoid\s+setDataSource\s*\(\s*[^(),{}]+\)\s*\{\s*\}'
+$RxCondicion = '@(?:[\w.]+\.)?(?:Profile|Conditional\w*)\b'
 $RxConsola = New-Object System.Text.RegularExpressions.Regex '\bSystem\s*\.\s*(?:out|err)\s*\.\s*print\w*\s*\(|\.\s*printStackTrace\s*\(\s*\)'
 $RxCatchVacio = New-Object System.Text.RegularExpressions.Regex 'catch\s*\([^)]*\)\s*\{\s*\}'
 $RxCatch = New-Object System.Text.RegularExpressions.Regex '\bcatch\s*\('
@@ -615,25 +646,37 @@ function Get-Encima([string[]]$Cod, [bool[]]$Jd, [int]$I) {
   return ''
 }
 
-function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Detalle) {
-  [void]$Lista.Add([pscustomobject]@{ RelRaiz = $Rel; Linea = $Linea; Regla = $Regla; Detalle = $Detalle })
+# $Aviso: la falta se queda en aviso aunque su regla cuente como error (el texto dice por que).
+function Add-Cal($Lista, [string]$Rel, [int]$Linea, [string]$Regla, [string]$Detalle, [bool]$Aviso = $false) {
+  [void]$Lista.Add([pscustomobject]@{ RelRaiz = $Rel; Linea = $Linea; Regla = $Regla; Detalle = $Detalle; Aviso = $Aviso })
 }
 
 function Get-LineaDe([string]$Texto, [int]$Indice) { return $Texto.Substring(0, $Indice).Split("`n").Count }
 
-# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones, si es final y lo que
-# tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01 seguido de los saltos
+# Las clases de un texto sin comentarios ni cadenas (Get-Limpio), tambien las anidadas, cada una con su linea, sus anotaciones, si es final, sus
+# supertipos (extends e implements, sin paquete ni genericos: Supers) y lo que tiene en su primer nivel (Top): el cuerpo con lo que va entre llaves (metodos, bloques, clases anidadas) reducido a un \x01 seguido de los saltos
 # de linea que tenia (asi se sabe la linea de cada cosa: LineaCuerpo es la de la llave que abre la clase).
+$RxGenericos = New-Object System.Text.RegularExpressions.Regex '<[^<>]*(?:<[^<>]*(?:<[^<>]*>[^<>]*)*>[^<>]*)*>'
+$RxSupers = New-Object System.Text.RegularExpressions.Regex '\b(?:extends|implements)\s+([\w.,\s]+?)(?=\s*\b(?:implements|extends|permits)\b|\s*$)'
+# Una interfaz que extiende otras (Get-Clases solo lee clases), con el texto ya sin genericos
+$RxInterfazExtiende = New-Object System.Text.RegularExpressions.Regex '(?<![@\w.])interface\s+(?<n>\w+)\s+extends\s+(?<s>[\w.,\s]+?)\s*\{'
 $EvalHoja = [System.Text.RegularExpressions.MatchEvaluator] { param($h) return ([string][char]1) + ("`n" * ($h.Value.Split("`n").Count - 1)) }
+# Los nombres (sin paquete) de una lista de tipos separados por comas.
+function Split-Tipos([string]$Lista) { return @($Lista.Split(',') | ForEach-Object { $_.Trim().Split('.')[-1] } | Where-Object { $_ }) }
+
 function Get-Clases([string]$Limpio) {
   $res = New-Object System.Collections.Generic.List[object]
   foreach ($m in $script:RxClaseDecl.Matches($Limpio)) {
     $top = $m.Groups['cuerpo'].Value
     $top = $top.Substring(1, $top.Length - 2)
     do { $antes = $top; $top = $script:RxHoja.Replace($top, $script:EvalHoja) } while ($top -ne $antes)
+    $finNombre = $m.Groups['nombre'].Index + $m.Groups['nombre'].Length
+    $cabecera = $script:RxGenericos.Replace($Limpio.Substring($finNombre, $m.Groups['cuerpo'].Index - $finNombre), '')
+    $supers = @()
+    foreach ($s in $script:RxSupers.Matches($cabecera)) { $supers += @(Split-Tipos $s.Groups[1].Value) }
     [void]$res.Add([pscustomobject]@{
         Nombre = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Limpio $m.Groups['nombre'].Index); LineaCuerpo = (Get-LineaDe $Limpio $m.Groups['cuerpo'].Index)
-        Anot = $m.Groups['anot'].Value; Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Top = $top
+        Anot = $m.Groups['anot'].Value; Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Top = $top; Supers = $supers
       })
   }
   return $res.ToArray()
@@ -646,10 +689,10 @@ function Get-Constructores($Clase) {
   $res = New-Object System.Collections.Generic.List[object]
   $rx = '(?<![^;\x01])\s*(?<anot>(?:' + $script:RxAnot + ')*)(?:(?:public|protected|private)\s+)?' + [regex]::Escape($Clase.Nombre) + '\s*\((?<params>(?:[^()]|\((?:[^()]|\([^()]*\))*\))*)\)\s*(?:throws\s+[^;\x01(]+)?\x01'
   foreach ($m in [regex]::Matches($Clase.Top, $rx)) {
-    [void]$res.Add([pscustomobject]@{ Anot = $m.Groups['anot'].Value; Escrito = $true; Params = ($m.Groups['params'].Value.Trim() -ne '') })
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Groups['anot'].Value; Escrito = $true; Params = ($m.Groups['params'].Value.Trim() -ne ''); ParamsTexto = $m.Groups['params'].Value })
   }
   foreach ($m in $script:RxLombokCtor.Matches($Clase.Anot)) {
-    [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor') })
+    [void]$res.Add([pscustomobject]@{ Anot = $m.Value; Escrito = $false; Params = ($m.Value -cnotmatch 'NoArgsConstructor'); ParamsTexto = '' })
   }
   return $res.ToArray()
 }
@@ -660,12 +703,14 @@ function Get-Anotaciones([string]$Anot) {
 }
 
 # Los metodos de una clase que llevan alguna anotacion: sus anotaciones (Get-Anotaciones), si son final, si un proxy los puede interceptar (no
-# lo son los private ni los static: Spring los ignora), su tipo de retorno (sin paquete), su nombre y la linea de su declaracion.
+# lo son los private ni los static: Spring los ignora), si son static, su tipo de retorno (sin paquete), su nombre, el texto de sus parametros y la
+# linea de su declaracion.
 function Get-Metodos($Clase) {
   $res = New-Object System.Collections.Generic.List[object]
   foreach ($m in $script:RxMetodo.Matches($Clase.Top)) {
     $linea = $Clase.LineaCuerpo + $Clase.Top.Substring(0, $m.Groups['mods'].Index).Split("`n").Count - 1
-    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Interceptable = ($m.Groups['mods'].Value -cnotmatch '\b(?:private|static)\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Linea = $linea })
+    $params = $script:RxParametros.Match($Clase.Top, $m.Index + $m.Length)
+    [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Final = ($m.Groups['mods'].Value -cmatch '\bfinal\b'); Interceptable = ($m.Groups['mods'].Value -cnotmatch '\b(?:private|static)\b'); Estatico = ($m.Groups['mods'].Value -cmatch '\bstatic\b'); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Nombre = $m.Groups['nombre'].Value; Params = $params.Groups['p'].Value; Linea = $linea })
   }
   return $res.ToArray()
 }
@@ -693,6 +738,400 @@ function Get-AnotacionesProxy($Anots, [string]$Donde) {
     if ($vale) { $res += '@' + $a.Nombre }
   }
   return $res
+}
+
+# Los campos de una clase (primer nivel): sus anotaciones (Get-Anotaciones), si son static o final, si tienen valor inicial, su tipo (sin paquete ni
+# genericos), el texto de sus genericos y su nombre.
+function Get-Campos($Clase) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($m in $script:RxCampo.Matches($Clase.Top)) {
+    $mods = $m.Groups['mods'].Value
+    [void]$res.Add([pscustomobject]@{
+        Anots = @(Get-Anotaciones $m.Groups['anot'].Value); Static = ($mods -cmatch '\bstatic\b'); Final = ($mods -cmatch '\bfinal\b'); Inicial = $m.Groups['ini'].Success
+        Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Gen = $m.Groups['gen'].Value; Nombre = $m.Groups['nombre'].Value
+      })
+  }
+  return $res.ToArray()
+}
+
+# Un texto partido por las comas que no van dentro de parentesis ni de <...>.
+function Split-Nivel0([string]$Texto) {
+  $trozos = New-Object System.Collections.Generic.List[string]
+  $prof = 0; $ini = 0
+  for ($i = 0; $i -lt $Texto.Length; $i++) {
+    $c = $Texto[$i]
+    if ($c -eq '<' -or $c -eq '(') { $prof++ }
+    elseif ($c -eq '>' -or $c -eq ')') { $prof-- }
+    elseif ($c -eq ',' -and $prof -eq 0) { $trozos.Add($Texto.Substring($ini, $i - $ini)); $ini = $i + 1 }
+  }
+  $trozos.Add($Texto.Substring($ini))
+  return $trozos.ToArray()
+}
+
+# Los parametros de un metodo o constructor (su texto sin los parentesis): cada uno con sus anotaciones (Get-Anotaciones), su tipo (sin paquete ni
+# genericos) y el texto de sus genericos.
+function Get-Parametros([string]$Texto) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($t in @(Split-Nivel0 $Texto)) {
+    $sin = $script:RxAnotUna.Replace($t, '') -replace '\bfinal\b', ''
+    $m = [regex]::Match($sin, '^\s*(?<tipo>[\w.]+)\s*(?:<(?<gen>.*)>)?(?:\s*\[\s*\])*\s*(?:\.\.\.)?\s+\w+\s*$')
+    if ($m.Success) { [void]$res.Add([pscustomobject]@{ Anots = @(Get-Anotaciones $t); Tipo = $m.Groups['tipo'].Value.Split('.')[-1]; Gen = $m.Groups['gen'].Value }) }
+  }
+  return $res.ToArray()
+}
+
+# El tipo de bean que pide una dependencia (un parametro de Get-Parametros o un campo de Get-Campos), o '' si no se resuelve al crear el bean: con
+# @Lazy, o con ObjectProvider, Provider u ObjectFactory, Spring da un proxy o una llamada diferida. Una lista, un conjunto, un mapa o un Optional
+# pide los beans de su tipo (el ultimo generico).
+function Get-TipoDependencia($D) {
+  if (@($D.Anots | Where-Object { $_.Nombre -ceq 'Lazy' }).Count -gt 0) { return '' }
+  if ($D.Tipo -cmatch '^(?:ObjectProvider|Provider|ObjectFactory|Supplier)$') { return '' }
+  if ($D.Tipo -cmatch '^(?:List|Set|Collection|Iterable|Optional|Map|Queue|Deque|Stream)$' -and $D.Gen) {
+    $ultimo = @(Split-Nivel0 $D.Gen)[-1]
+    return (($ultimo -replace '\?\s*(?:extends|super)\s+', '' -replace '<.*$', '').Trim().Split('.')[-1])
+  }
+  return $D.Tipo
+}
+
+# Los nodos del grafo de dependencias de una clase: ella misma si es un componente (con lo que pide por constructor, por campos @Autowired o @Inject y
+# por metodos @Autowired o @Inject) y cada uno de sus metodos @Bean (con lo que pide por parametro y, si no es static, la clase que lo crea). Un
+# nodo lleva sus tipos (el suyo y sus supertipos), los tipos que pide (Deps) y las claves de nodos que pide sin resolver por tipo (Pide). Sin los
+# beans con scope de step o de job: Spring los crea al empezar el step, no al arrancar.
+# Que constructor usa Spring: el unico, o el que lleve @Autowired o @Inject si hay varios; los de Lombok piden los campos que dicen (final en
+# @RequiredArgsConstructor, todos en @AllArgsConstructor).
+function Get-NodosBean($Clase, [string]$Rel, $Ctores, $Metodos, [bool]$Componente) {
+  $nodos = @()
+  $claveClase = "C:${Rel}:$($Clase.Nombre)"
+  $scope = (@(Get-Anotaciones $Clase.Anot | Where-Object { @('StepScope', 'JobScope') -ccontains $_.Nombre }).Count -gt 0)
+  if ($Componente -and -not $scope) {
+    $campos = @(Get-Campos $Clase)
+    $pide = @()
+    $usado = @($Ctores)
+    if ($usado.Count -gt 1) { $usado = @($usado | Where-Object { $_.Anot -cmatch $script:RxAutowiredOInject } | Select-Object -First 1) }
+    foreach ($ct in $usado) {
+      if ($ct.Escrito) { $pide += @(Get-Parametros $ct.ParamsTexto) }
+      elseif ($ct.Anot -cmatch 'RequiredArgsConstructor') { $pide += @($campos | Where-Object { $_.Final -and -not $_.Static -and -not $_.Inicial }) }
+      elseif ($ct.Anot -cmatch 'AllArgsConstructor') { $pide += @($campos | Where-Object { -not $_.Static -and -not ($_.Final -and $_.Inicial) }) }
+    }
+    $pide += @($campos | Where-Object { -not $_.Static -and @($_.Anots | Where-Object { @('Autowired', 'Inject') -ccontains $_.Nombre }).Count -gt 0 })
+    foreach ($mt in @($Metodos | Where-Object { @($_.Anots | Where-Object { @('Autowired', 'Inject') -ccontains $_.Nombre }).Count -gt 0 -and -not $_.Estatico })) {
+      if (@($mt.Anots | Where-Object { $_.Nombre -ceq 'Lazy' }).Count -eq 0) { $pide += @(Get-Parametros $mt.Params) }
+    }
+    $nodos += [pscustomobject]@{ Clave = $claveClase; Nombre = $Clase.Nombre; Clase = $Clase.Nombre; RelRaiz = $Rel; Linea = $Clase.Linea; Tipos = @($Clase.Nombre) + @($Clase.Supers); Deps = @($pide | ForEach-Object { Get-TipoDependencia $_ } | Where-Object { $_ }); Pide = @(); Sale = @() }
+  }
+  foreach ($mt in @($Metodos | Where-Object { @($_.Anots | Where-Object { $_.Nombre -ceq 'Bean' }).Count -gt 0 -and @(Get-AnotacionesProxy $_.Anots 'bean').Count -eq 0 })) {
+    $fabrica = @()
+    if ($Componente -and -not $scope -and -not $mt.Estatico) { $fabrica = @($claveClase) }
+    $nodos += [pscustomobject]@{ Clave = "B:${Rel}:$($Clase.Nombre).$($mt.Nombre)"; Nombre = "$($Clase.Nombre).$($mt.Nombre)()"; Clase = $Clase.Nombre; RelRaiz = $Rel; Linea = $mt.Linea; Tipos = @($mt.Tipo); Deps = @(Get-Parametros $mt.Params | ForEach-Object { Get-TipoDependencia $_ } | Where-Object { $_ }); Pide = $fabrica; Sale = @() }
+  }
+  return $nodos
+}
+
+# Las propiedades de los application*.yml, .yaml y .properties del migrado, una por clave con valor, cada una con su fichero, su linea, su clave
+# tal cual (Clave: en un yml, las claves padre unidas con punto), la misma sin guiones ni subrayados y en minusculas (Norm: asi se encuentra
+# spring.main.allow-circular-references escrita como allowCircularReferences) y su valor (sin comentario ni comillas).
+function Get-PropiedadesConfig($Hechos) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($y in $Hechos.YmlFicheros) {
+    $lineas = @($y.Texto -split "`r?`n")
+    $pila = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $lineas.Count; $i++) {
+      $t = [string]$lineas[$i]
+      if ($t -match '^\s*(#|!|$)') { continue }
+      $clave = $null; $valor = ''
+      if ($y.Nombre -match '\.properties$') {
+        $m = [regex]::Match($t, '^\s*(?<k>[^\s=:]+)\s*[=:]\s*(?<v>.*?)\s*$')
+        if (-not $m.Success) { continue }
+        $clave = $m.Groups['k'].Value; $valor = $m.Groups['v'].Value
+      }
+      else {
+        if ($t -match '^---') { $pila.Clear(); continue }
+        $m = [regex]::Match($t, '^(?<s>\s*)["'']?(?<k>[\w.\-]+)["'']?\s*:(?:\s+(?<v>.*))?$')
+        if (-not $m.Success) { continue }
+        $sangria = $m.Groups['s'].Length
+        while ($pila.Count -gt 0 -and $pila[$pila.Count - 1].Sangria -ge $sangria) { $pila.RemoveAt($pila.Count - 1) }
+        $clave = (@($pila | ForEach-Object { $_.Clave }) + $m.Groups['k'].Value) -join '.'
+        $valor = ([regex]::Replace($m.Groups['v'].Value, '\s+#.*$', '')).Trim()
+        if ($valor -eq '') { $pila.Add([pscustomobject]@{ Sangria = $sangria; Clave = $m.Groups['k'].Value }); continue }
+      }
+      [void]$res.Add([pscustomobject]@{ Rel = $y.Rel; Linea = ($i + 1); Clave = $clave; Norm = ($clave.ToLowerInvariant() -replace '[-_]', ''); Valor = $valor.Trim('"', "'") })
+    }
+  }
+  return $res.ToArray()
+}
+
+# Las propiedades de esa clave (sin importar guiones, subrayados ni mayusculas), en el orden de los ficheros.
+function Get-Propiedad($Props, [string]$Clave) {
+  $n = $Clave.ToLowerInvariant() -replace '[-_]', ''
+  return @($Props | Where-Object { $_.Norm -ceq $n })
+}
+
+# Referencias circulares entre beans (Spring Boot 2.6, fuentes-guias/sb-Spring-Boot-2.6-Release-Notes.html, "Circular References Prohibited by
+# Default": "Circular references between beans are now prohibited by default" y "circular references can be allowed again by setting
+# spring.main.allow-circular-references to true"). Aristas: lo que pide un nodo (Deps) se resuelve por tipo solo si lo da un unico nodo (con dos,
+# Spring elige por nombre, @Primary o @Qualifier y aqui no se sabe cual); Pide va por clave. De cada nodo en un ciclo sale el ciclo mas corto
+# que pasa por el, una vez por clase. Con spring.main.allow-circular-references a true en el migrado, aviso.
+function Add-CalCiclos($Out, $Nodos, $SupersDe, $Props) {
+  $porTipo = @{}
+  $porClave = @{}
+  foreach ($n in $Nodos) {
+    $porClave[$n.Clave] = $n
+    $tipos = @($n.Tipos)
+    foreach ($t in @($n.Tipos)) { if ($SupersDe.ContainsKey($t)) { $tipos += @($SupersDe[$t]) } }
+    foreach ($t in @($tipos | Select-Object -Unique)) {
+      if (-not $porTipo.ContainsKey($t)) { $porTipo[$t] = New-Object System.Collections.Generic.List[object] }
+      [void]$porTipo[$t].Add($n)
+    }
+  }
+  foreach ($n in $Nodos) {
+    $sale = @($n.Pide)
+    foreach ($t in $n.Deps) { if ($porTipo.ContainsKey($t) -and $porTipo[$t].Count -eq 1) { $sale += $porTipo[$t][0].Clave } }
+    $n.Sale = @($sale | Where-Object { $_ -cne $n.Clave } | Select-Object -Unique)
+  }
+  # solo los nodos que tienen a quien pedir y a quien los pide, una y otra vez: los demas no estan en ningun ciclo
+  $activa = @{}
+  foreach ($n in $Nodos) { $activa[$n.Clave] = $true }
+  do {
+    $cambio = $false
+    $entran = @{}
+    foreach ($n in $Nodos) { if ($activa[$n.Clave]) { foreach ($s in $n.Sale) { if ($activa[$s]) { $entran[$s] = $true } } } }
+    foreach ($n in $Nodos) {
+      if ($activa[$n.Clave] -and (@($n.Sale | Where-Object { $activa[$_] }).Count -eq 0 -or -not $entran.ContainsKey($n.Clave))) { $activa[$n.Clave] = $false; $cambio = $true }
+    }
+  } while ($cambio)
+  $permite = @(Get-Propiedad $Props 'spring.main.allow-circular-references' | Where-Object { $_.Valor -ieq 'true' })
+  $vistas = @{}
+  foreach ($n in $Nodos) {
+    if (-not $activa[$n.Clave]) { continue }
+    $padre = @{}
+    $cola = New-Object System.Collections.Generic.Queue[string]
+    foreach ($s in $n.Sale) { if ($activa[$s] -and -not $padre.ContainsKey($s)) { $padre[$s] = $n.Clave; $cola.Enqueue($s) } }
+    $vuelve = $false
+    while ($cola.Count -gt 0 -and -not $vuelve) {
+      $x = $cola.Dequeue()
+      if ($x -ceq $n.Clave) { $vuelve = $true; break }
+      foreach ($s in $porClave[$x].Sale) { if ($activa[$s] -and -not $padre.ContainsKey($s)) { $padre[$s] = $x; $cola.Enqueue($s) } }
+    }
+    if (-not $vuelve -or $vistas.ContainsKey($n.RelRaiz + '|' + $n.Clase)) { continue }
+    $vistas[$n.RelRaiz + '|' + $n.Clase] = $true
+    $camino = New-Object System.Collections.Generic.List[string]
+    $cur = $n.Clave
+    do { $cur = $padre[$cur]; $camino.Insert(0, $porClave[$cur].Nombre) } while ($cur -cne $n.Clave)
+    $camino.Add($n.Nombre)
+    $texto = 'Referencia circular entre beans: ' + ($camino -join ' -> ') + '. Desde Spring Boot 2.6 estan prohibidas por defecto y la aplicacion no arranca (BeanCurrentlyInCreationException). Rompe el ciclo: saca lo que comparten a otra clase, o pon @Lazy (u ObjectProvider) en uno de los eslabones.'
+    if ($permite.Count -gt 0) { $texto += ' spring.main.allow-circular-references esta a true en ' + $permite[0].Rel + ': Spring intenta romperlo solo, pero es una apuesta.' }
+    Add-Cal $Out $n.RelRaiz $n.Linea 'referencia-circular' $texto ($permite.Count -gt 0)
+  }
+}
+
+# Los nombres de bean que dan los metodos @Bean de un texto (sin comentarios, con sus cadenas): los de @Bean("a"), @Bean(name = "a") o
+# @Bean({"a", "b"}) o, sin nombre, el del metodo; cada uno con su linea, el tipo que devuelve el metodo y el nombre del metodo.
+function Get-NombresBean([string]$Texto) {
+  $res = New-Object System.Collections.Generic.List[object]
+  foreach ($m in $script:RxBeanMetodo.Matches($Texto)) {
+    $a = $m.Groups['args'].Value
+    $e = [regex]::Match($a, '^\s*(?:(?:value|name)\s*=\s*)?(?<n>\{[^}]*\}|"[^"]*")')
+    if (-not $e.Success) { $e = [regex]::Match($a, ',\s*(?:value|name)\s*=\s*(?<n>\{[^}]*\}|"[^"]*")') }
+    $nombres = @($m.Groups['nombre'].Value)
+    if ($e.Success) { $nombres = @([regex]::Matches($e.Groups['n'].Value, '"([^"]*)"') | ForEach-Object { $_.Groups[1].Value }) }
+    foreach ($n in $nombres) { [void]$res.Add([pscustomobject]@{ Nombre = $n; Tipo = $m.Groups['tipo'].Value; Metodo = $m.Groups['nombre'].Value; Linea = (Get-LineaDe $Texto $m.Groups['nombre'].Index) }) }
+  }
+  return $res.ToArray()
+}
+
+# Nombre de bean que Spring da a una clase de componente sin nombre explicito: el de la clase con la primera letra en minuscula (salvo con las dos
+# primeras en mayuscula, como java.beans.Introspector.decapitalize).
+function Get-NombreBeanClase([string]$Clase) {
+  if ($Clase.Length -gt 1 -and [char]::IsUpper($Clase[0]) -and [char]::IsUpper($Clase[1])) { return $Clase }
+  return ($Clase.Substring(0, 1).ToLowerInvariant() + $Clase.Substring(1))
+}
+
+# Beans repetidos. Dos @Bean con el mismo nombre en ficheros distintos: desde Spring Boot 2.1 la sobrescritura esta desactivada
+# (fuentes-guias/sb-Spring-Boot-2.1-Release-Notes.html: "Bean overriding has been disabled by default"; fila SB21-01) y con
+# spring.main.allow-bean-definition-overriding a true se queda en aviso. Dos clases de componente con el mismo nombre de bean (nombre simple de la
+# clase, sin nombre explicito): el escaner lanza ConflictingBeanDefinitionException aunque se permita la sobrescritura
+# (fuentes-m76/sfw-ClassPathBeanDefinitionScanner.java, checkCandidate). Lo que lleva @Profile o @Conditional* no cuenta (puede ser de perfiles
+# distintos): ni un @Bean de un fichero que los use ni una clase que los lleve. Sale en cada fichero del grupo, una vez.
+function Add-CalBeansRepetidos($Out, $Beans, $Clases, $Props) {
+  $permite = @(Get-Propiedad $Props 'spring.main.allow-bean-definition-overriding' | Where-Object { $_.Valor -ieq 'true' })
+  foreach ($g in @($Beans | Where-Object { -not $_.Cond } | Group-Object Nombre)) {
+    $ficheros = @($g.Group | ForEach-Object { $_.RelRaiz } | Select-Object -Unique)
+    if ($ficheros.Count -lt 2) { continue }
+    foreach ($b in $g.Group) {
+      $otros = (@($ficheros | Where-Object { $_ -cne $b.RelRaiz }) -join ', ')
+      $texto = "Dos beans se llaman '$($g.Name)' (tambien en $otros): desde Spring Boot 2.1 la sobrescritura de beans esta desactivada y la aplicacion no arranca. Cambia el nombre de uno (el metodo o @Bean(`"otroNombre`")) o quita el que sobra."
+      if ($permite.Count -gt 0) { $texto += ' spring.main.allow-bean-definition-overriding esta a true en ' + $permite[0].Rel + ': el ultimo que se registra gana, y no se sabe cual.' }
+      Add-Cal $Out $b.RelRaiz $b.Linea 'bean-repetido' $texto ($permite.Count -gt 0)
+    }
+  }
+  foreach ($g in @($Clases | Where-Object { -not $_.Cond } | Group-Object Nombre)) {
+    $ficheros = @($g.Group | ForEach-Object { $_.RelRaiz } | Select-Object -Unique)
+    if ($ficheros.Count -lt 2) { continue }
+    foreach ($c in $g.Group) {
+      $otros = (@($ficheros | Where-Object { $_ -cne $c.RelRaiz }) -join ', ')
+      Add-Cal $Out $c.RelRaiz $c.Linea 'bean-repetido' "Dos clases dan el mismo nombre de bean '$($g.Name)' (tambien $otros): Spring no arranca (ConflictingBeanDefinitionException), ni permitiendo la sobrescritura. Ponle nombre a una (@Service(`"otroNombre`")) o renombra la clase."
+    }
+  }
+}
+
+# Parametros de job con la notacion de Spring Batch 4, nombre(tipo)=valor (fila SBT5-09,
+# fuentes-guias/sbatch-Spring-Batch-5.0-Migration-Guide.md: "parameterName(parameterType)=value" frente a "parameterName=parameterValue,parameterType,
+# identificationFlag", con el tipo como nombre completo de clase): Spring Batch 5 ya no la lee, el parametro llega como un texto con ese nombre
+# y el job no recibe el suyo, sin fallar. Se busca en los scripts, Dockerfile, yml y properties del migrado (fuera de comentarios) y en los
+# literales de Java. Una vez por linea. El tipo de date es java.time.LocalDate (si lleva hora, java.time.LocalDateTime).
+function Add-CalParametrosV4($Out, $Hechos) {
+  $tipos = @{ long = 'java.lang.Long'; date = 'java.time.LocalDate'; double = 'java.lang.Double'; string = 'java.lang.String' }
+  $fuentes = @($Hechos.Ficheros | Where-Object { $_.Texto.Contains(')=') } | ForEach-Object { @{ Rel = $_.RelRaiz; Texto = (Get-SinComentarios $_.Texto); Comentario = '' } }) +
+    @($Hechos.Otros | Where-Object { $_.Texto.Contains(')=') } | ForEach-Object { @{ Rel = $_.Rel; Texto = $_.Texto; Comentario = '(?i)^\s*(?:#|!|::|@?rem\b)' } })
+  foreach ($s in $fuentes) {
+    $lineas = @($s.Texto -split "`r?`n")
+    for ($i = 0; $i -lt $lineas.Count; $i++) {
+      if ($s.Comentario -and $lineas[$i] -match $s.Comentario) { continue }
+      $cambios = @()
+      $primero = $null
+      foreach ($m in $script:RxParametroV4.Matches($lineas[$i])) {
+        $v = $m.Groups['v'].Value
+        $viejo = $m.Groups['n'].Value + '(' + $m.Groups['t'].Value + ')'
+        if (-not $primero) { $primero = $viejo }
+        if (-not $v) { $v = 'valor' }
+        $cambios += ("'" + $viejo + '=' + $m.Groups['v'].Value + "' por '" + $m.Groups['n'].Value + '=' + $v + ',' + $tipos[$m.Groups['t'].Value] + "'")
+      }
+      if ($cambios.Count -eq 0) { continue }
+      Add-Cal $Out $s.Rel ($i + 1) 'parametros-v4' ("Parametro de job con la notacion de Spring Batch 4: en Spring Batch 5 se lee como un texto cuyo nombre es '$primero', asi que el job no recibe el parametro y no falla. Cambia " + ($cambios -join ' y ') + '.')
+    }
+  }
+}
+
+# Varios jobs y ningun nombre (fila SB30-09, fuentes-guias/sb-Spring-Boot-3.0-Migration-Guide.html: "Running multiple batch jobs is no longer
+# supported" y "a job name to execute on startup must be supplied" con spring.batch.job.name). Cuenta los metodos @Bean que devuelven un Job (sin
+# @Profile ni @Conditional en su fichero) y busca el nombre en las propiedades del migrado y en sus scripts, Dockerfile y yml (-D, --, variable de
+# entorno SPRING_BATCH_JOB_NAME). Con spring.batch.job.enabled a false el runner no arranca ningun job y no hace falta. Siempre aviso: el nombre
+# puede venir de fuera del repo. Una vez, en el primer job.
+function Add-CalVariosJobs($Out, $Beans, $Props, $Otros) {
+  $jobs = @($Beans | Where-Object { -not $_.Cond -and $_.Tipo -cmatch '^(?:[\w.]+\.)?(?:Job|SimpleJob|FlowJob)$' } | Group-Object { $_.RelRaiz + ':' + $_.Linea } | ForEach-Object { $_.Group[0] } | Sort-Object RelRaiz, Linea)
+  if ($jobs.Count -lt 2) { return }
+  if (@(Get-Propiedad $Props 'spring.batch.job.name').Count -gt 0 -or @(Get-Propiedad $Props 'spring.batch.job.enabled' | Where-Object { $_.Valor -ieq 'false' }).Count -gt 0) { return }
+  if (@($Otros | Where-Object { $_.Texto -match '(?i)spring[._]batch[._]job[._]name\b' }).Count -gt 0) { return }
+  Add-Cal $Out $jobs[0].RelRaiz $jobs[0].Linea 'varios-jobs-sin-nombre' ("Hay $($jobs.Count) jobs ($((@($jobs | ForEach-Object { $_.Metodo }) -join ', '))) y ninguna spring.batch.job.name en la configuracion: Spring Boot 3 ya no admite arrancar varios jobs y exige decir cual con spring.batch.job.name. Ponla en application.yml o en el lanzador (-Dspring.batch.job.name=...); si el nombre viene de fuera del repo (un configmap), deja este aviso.")
+}
+
+# Lo que compila y falla al ejecutarse en Java 21 y Spring Batch 5. Motor Nashorn (fila JDK-06, fuentes-guias/jdk15-nashorn-jep372.html: "Remove the
+# Nashorn JavaScript script engine and APIs"): getEngineByName("nashorn", "javascript", "js" o "ecmascript") da null desde Java 15, salvo que el pom
+# traiga un motor aparte: org.openjdk.nashorn:nashorn-core (fuentes-m76/nashorn-README.md: "a standalone version of Nashorn suitable for use with
+# Java 11 and later") o GraalJS con js-scriptengine (fuentes-m76/graaljs-ScriptEngine.md: getEngineByName("js")). Comando junto (fila SBT5-18,
+# fuentes-m76/sbatch-SystemCommandTasklet.java: setCommand(String... command), ejemplo setCommand("myCommand", "myArg1", "myArg2")): en un fichero con
+# SystemCommandTasklet, setCommand("ls -l") con un solo literal con espacios; un literal que acaba en .exe, .bat, .cmd o .sh es una ruta de programa y vale.
+function Add-CalNashornYComando($Out, $Hechos, $Deps) {
+  $hayMotor = @($Deps | Where-Object { $_ -ceq 'nashorn-core' -or $_ -ceq 'js-scriptengine' }).Count -gt 0
+  foreach ($f in $Hechos.Ficheros) {
+    if (-not $hayMotor -and $f.Texto.Contains('getEngineByName')) {
+      $sin = Get-SinComentarios $f.Texto
+      foreach ($m in $script:RxNashorn.Matches($sin)) {
+        Add-Cal $Out $f.RelRaiz (Get-LineaDe $sin $m.Index) 'nashorn' ('getEngineByName("' + $m.Groups['n'].Value + '") devuelve null desde Java 15 (JEP 372 quito Nashorn del JDK) y el job falla con un NullPointerException al usar el motor. Anade org.openjdk.nashorn:nashorn-core al pom (Nashorn como libreria aparte) o GraalJS (js-scriptengine), o pasa el script a Java.')
+      }
+    }
+    if ($f.Texto.Contains('SystemCommandTasklet')) {
+      $sin = Get-SinComentarios $f.Texto
+      foreach ($m in $script:RxComandoJunto.Matches($sin)) {
+        $c = $m.Groups['c'].Value.Trim()
+        if ($c -notmatch '\s' -or $c -match '(?i)\.(?:exe|bat|cmd|sh)$') { continue }
+        $partes = (@($c -split '\s+') | ForEach-Object { '"' + $_ + '"' }) -join ', '
+        Add-Cal $Out $f.RelRaiz (Get-LineaDe $sin $m.Index) 'comando-sin-partir' ('SystemCommandTasklet.setCommand("' + $c + '") con el comando entero en un solo argumento: desde Spring Batch 5 setCommand recibe un array y ya no parte el comando por los espacios, asi que busca un programa que se llama "' + $c + '" y falla. Separa los argumentos: setCommand(' + $partes + ').')
+      }
+    }
+  }
+}
+
+# Si la base del negocio del migrado (o de la plantilla) es una base embebida en memoria: lo es si todas las spring.datasource.url son de H2, HSQLDB
+# o Derby en memoria (una url de variable, ${...}, no lo es); sin ninguna url, si el pom trae una de esas bases (puede ser solo de pruebas, y no se
+# sabe). Causa dice por que no lo es.
+function Get-BaseEnMemoria($Props, $Deps) {
+  $urls = @(Get-Propiedad $Props 'spring.datasource.url')
+  $noMem = @($urls | Where-Object { $_.Valor -notmatch $script:RxUrlMemoria })
+  if ($noMem.Count -gt 0) { return [pscustomobject]@{ EnMemoria = $false; Causa = 'spring.datasource.url es ' + $noMem[0].Valor + ', en ' + $noMem[0].Rel + ':' + $noMem[0].Linea } }
+  if ($urls.Count -eq 0 -and @($Deps | Where-Object { @('h2', 'hsqldb', 'derby') -ccontains $_ }).Count -eq 0) {
+    return [pscustomobject]@{ EnMemoria = $false; Causa = 'no hay spring.datasource.url ni H2, HSQLDB o Derby en el pom' }
+  }
+  return [pscustomobject]@{ EnMemoria = $true; Causa = '' }
+}
+
+# Init SQL sin base en memoria (fila SB25-01, fuentes-guias/sb-Spring-Boot-2.5-Release-Notes.html: "By default, SQL database initialization is only
+# performed when using an embedded in-memory database"): un schema.sql o data.sql de src/main/resources, ningun spring.sql.init.mode y una base que
+# no es en memoria (Get-BaseEnMemoria). Siempre aviso: el modo puede venir de fuera del repo. Uno por script, en su linea 1.
+function Add-CalSqlInit($Out, $Hechos, $Props, $Deps) {
+  if ($Hechos.Sql.Count -eq 0 -or @(Get-Propiedad $Props 'spring.sql.init.mode').Count -gt 0) { return }
+  $base = Get-BaseEnMemoria $Props $Deps
+  if ($base.EnMemoria) { return }
+  foreach ($r in $Hechos.Sql) {
+    Add-Cal $Out $r 1 'sql-init-no-embebida' ($r.Split('/')[-1] + " ya no se ejecuta solo: desde Spring Boot 2.5 la inicializacion SQL solo corre por defecto con una base embebida en memoria, y esta no lo es ($($base.Causa)). Pon spring.sql.init.mode=always si debe ejecutarse (cuidado: en una base con datos vuelve a correr el script) o never si no.")
+  }
+}
+
+# Repositorio de Spring Batch. Spring Batch 5 quito el repositorio en memoria (fila SBT5-04, fuentes-guias/sbatch-Spring-Batch-5.0-Migration-Guide.md:
+# MapJobRepositoryFactoryBean) y Spring Boot 3 le da a Batch el DataSource del negocio, salvo uno marcado con @BatchDataSource
+# (fuentes-m76/sboot-BatchDataSource.java, "@since 2.2.0"; BatchAutoConfiguration: batchDataSource.getIfAvailable(() -> dataSource)). Con un
+# DataSource que no es en memoria faltan las tablas BATCH_ (filas SBT5-01 y SBT5-02: esquema nuevo) o se crean en la base del negocio. Propia: lo que
+# le da a Batch su base en memoria: un @BatchDataSource, un @EnableBatchProcessing(dataSourceRef = "x") (fuentes-m76/sbatch50-EnableBatchProcessing.java:
+# 173-176, "the bean name of the data source to use. Default to dataSource") o un DefaultBatchConfiguration con getDataSource en un fichero que
+# declara una base embebida en memoria, o un ResourcelessJobRepository (fuentes-m76/sbatch-ResourcelessJobRepository.java, "@since 5.2.0"). Termina:
+# Batch acaba en una base que no es en memoria (sin propia y con la base del negocio fuera de memoria).
+function Get-RepoBatch($Hechos, $Props, $Deps) {
+  $propia = ''
+  foreach ($f in $Hechos.Ficheros) {
+    if (-not ($f.Texto -cmatch 'BatchDataSource|ResourcelessJobRepository|DefaultBatchConfiguration|dataSourceRef')) { continue }
+    $sin = Get-SinComentarios $f.Texto
+    $mem = ($sin -cmatch $script:RxMemoriaJava)
+    if ($mem -and $sin -cmatch '@(?:[\w.]+\.)?BatchDataSource\b') { $propia = $f.RelRaiz + ' (un DataSource con @BatchDataSource en memoria)' }
+    elseif ($mem -and $sin -cmatch '@(?:[\w.]+\.)?EnableBatchProcessing\s*\([^)]*\bdataSourceRef\s*=') { $propia = $f.RelRaiz + ' (un @EnableBatchProcessing(dataSourceRef) con un DataSource en memoria)' }
+    elseif ($mem -and $sin -cmatch '\bextends\s+DefaultBatchConfiguration\b' -and $sin -cmatch '\bgetDataSource\s*\(') { $propia = $f.RelRaiz + ' (un DefaultBatchConfiguration con un DataSource en memoria)' }
+    elseif ($sin -cmatch '\bResourcelessJobRepository\b') { $propia = $f.RelRaiz + ' (un ResourcelessJobRepository)' }
+    if ($propia) { break }
+  }
+  $base = Get-BaseEnMemoria $Props $Deps
+  return [pscustomobject]@{ Propia = $propia; Causa = $base.Causa; Termina = (-not $propia -and -not $base.EnMemoria) }
+}
+
+# Por que el original no guarda las ejecuciones de Batch ('' si las guarda o no se sabe): usa MapJobRepositoryFactoryBean (o un DAO Map) en Java o XML
+# de src/main, sobrescribe un setDataSource vacio en un DefaultBatchConfigurer (sin DataSource, initialize() cae en el repositorio Map: fuentes-m76/
+# sbatch43-DefaultBatchConfigurer.java:98, logger.warn "No datasource was provided...using a Map based JobRepository"), o su unica base es una H2,
+# HSQLDB o Derby en memoria (todas sus spring.datasource.url lo son o, sin url, el codigo declara una). Se calcula una vez por carpeta: el original no
+# cambia durante la ejecucion (-Modo fix vigila su huella) y cada diagnostico lo pediria otra vez.
+$OriginalNoGuardaPor = @{}
+function Get-OriginalNoGuarda([string]$Raiz) {
+  if ($script:OriginalNoGuardaPor.ContainsKey($Raiz)) { return $script:OriginalNoGuardaPor[$Raiz] }
+  $h = Get-Hechos $Raiz
+  $java = @($h.Ficheros | ForEach-Object { Get-SinComentarios $_.Texto })
+  $codigo = $java
+  foreach ($f in @(Get-Arbol $Raiz | Where-Object { $_.Extension -ieq '.xml' -and $_.Length -le 1MB })) {
+    if (-not (Get-Rel $Raiz $f.FullName).StartsWith('src/test/')) { $codigo += [regex]::Replace([System.IO.File]::ReadAllText($f.FullName), '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline) }
+  }
+  $texto = $codigo -join "`n"
+  $urls = @(Get-Propiedad (Get-PropiedadesConfig $h) 'spring.datasource.url')
+  if ($urls.Count -gt 0) { $mem = (@($urls | Where-Object { $_.Valor -notmatch $script:RxUrlMemoria }).Count -eq 0) } else { $mem = ($texto -cmatch $script:RxMemoriaJava) }
+  $motivo = ''
+  if ($texto -cmatch '\bMap(?:JobRepositoryFactoryBean|JobInstanceDao|JobExecutionDao|StepExecutionDao|ExecutionContextDao)\b') { $motivo = 'usa MapJobRepositoryFactoryBean, que las deja en memoria' }
+  elseif (@($java | Where-Object { $_ -cmatch '\bDefaultBatchConfigurer\b' -and $_ -cmatch $script:RxSetDataSourceVacio }).Count -gt 0) { $motivo = 'sobrescribe setDataSource vacio en DefaultBatchConfigurer, que deja el repositorio en memoria' }
+  elseif ($mem) { $motivo = 'su base es una H2 en memoria' }
+  $script:OriginalNoGuardaPor[$Raiz] = $motivo
+  return $motivo
+}
+
+# Repositorio de Batch (fila SBT5-04): el original no guarda las ejecuciones ($Contexto.OriginalNoGuarda) y en el migrado Batch acaba en una base que
+# no es en memoria. Una vez por proyecto, en la clase de arranque (o en el pom). Sin original, nada. Con la plantilla en el mismo caso, aviso; el
+# texto dice lo que hace la plantilla si lo sabe ($Contexto.Plantilla: Get-RepoBatch de la plantilla).
+function Add-CalRepoBatch($Out, $Hechos, $Props, $Deps, $Contexto) {
+  if (-not $Contexto -or -not $Contexto.OriginalNoGuarda) { return }
+  $r = Get-RepoBatch $Hechos $Props $Deps
+  if (-not $r.Termina) { return }
+  $rel = 'pom.xml'; $linea = 0
+  $app = @($Hechos.Ficheros | Where-Object { $_.Texto -cmatch '@SpringBootApplication' })
+  if ($app.Count -gt 0) { $rel = $app[0].RelRaiz; $linea = Get-LineaDe $app[0].Texto $app[0].Texto.IndexOf('@SpringBootApplication') }
+  $pl = ''
+  $igual = [bool]($Contexto.Plantilla -and $Contexto.Plantilla.Termina)
+  if ($Contexto.Plantilla -and $Contexto.Plantilla.Propia) { $pl = ' La plantilla lo resuelve con ' + $Contexto.Plantilla.Propia + ': copialo.' }
+  elseif ($igual) { $pl = ' La plantilla tampoco le da a Batch una base propia; si en pre la resuelve devops de otra forma, deja este aviso. (se queda en aviso: la plantilla tambien lo hace)' }
+  elseif ($Contexto.Plantilla) { $pl = ' La plantilla usa la base del negocio en memoria para Batch.' }
+  Add-Cal $Out $rel $linea 'repositorio-batch' ("El original no guarda las ejecuciones de Batch ($($Contexto.OriginalNoGuarda)) y en el migrado Spring Batch acaba en la base del negocio ($($r.Causa)). Spring Batch 5 quito el repositorio en memoria y Spring Boot 3 usa el DataSource normal: en pre el primer arranque falla porque faltan las tablas BATCH_ (o las crea en la base del negocio si alguien pone spring.batch.jdbc.initialize-schema=always); en local no se ve porque la prueba usa H2. Dale a Batch una base propia en memoria: un DataSource H2 con @BatchDataSource." + $pl) $igual
 }
 
 # Codigo sin comentarios y con las cadenas, con los mismos saltos de linea que el texto.
@@ -770,13 +1209,19 @@ function Add-CalEstilo($Out, $Hechos, $Datos, $Plantilla) {
 }
 
 # Faltas de calidad del codigo de src/main (sin decidir aun si son error o aviso). $EstiloPlantilla: las cuentas de estilo de la plantilla
-# (Cuentas de lo que devolvio esta funcion para ella), o $null para la propia plantilla. Devuelve los hallazgos, las cuentas de estilo y la
+# (Cuentas de lo que devolvio esta funcion para ella), o $null para la propia plantilla. $Contexto: lo que se sabe de fuera del migrado para
+# repositorio-batch (OriginalNoGuarda: por que el original no guarda las ejecuciones de Batch, y Plantilla: Get-RepoBatch de la plantilla), o $null. Devuelve los hallazgos, las cuentas de estilo y la
 # linea de la consola sobre el estilo ('' si no hay mezcla).
-function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
+function Get-Calidad($Hechos, $EstiloPlantilla = $null, $Contexto = $null) {
   $out = New-Object System.Collections.Generic.List[object]
   $datos = @{ Ctor = (New-Object System.Collections.Generic.List[object]); Logger = (New-Object System.Collections.Generic.List[object]) }
   $finales = New-Object System.Collections.Generic.List[object]   # las clases final (RelRaiz, Linea, Nombre, Motivos por los que Spring las envolveria)
   $tiposProxy = @{}                                              # tipo devuelto por un @Bean con scope de proxy -> sus motivos
+  $props = @(Get-PropiedadesConfig $Hechos)                      # las propiedades de los application*.yml y .properties
+  $nodos = New-Object System.Collections.Generic.List[object]    # los beans del migrado y lo que piden (referencia-circular)
+  $supersDe = @{}                                                # clase o interfaz -> sus supertipos
+  $beans = New-Object System.Collections.Generic.List[object]    # los nombres de bean que dan los metodos @Bean (bean-repetido)
+  $clasesBean = New-Object System.Collections.Generic.List[object]  # las clases de componente sin nombre explicito, con su nombre de bean
   foreach ($f in $Hechos.Ficheros) {
     $marcado = Get-Limpio $f.Texto
     $limpio = $marcado.Replace('/*JD*/', '').Replace('/*C*/', '')
@@ -828,6 +1273,14 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
         }
       }
     }
+    # Nombres de los metodos @Bean del fichero (con sus cadenas); un @Profile o @Conditional en cualquier parte del fichero los saca de la cuenta
+    if ($f.Texto.Contains('@Bean')) {
+      $sinCom = Get-SinComentarios $f.Texto
+      $cond = ($sinCom -cmatch $script:RxCondicion)
+      foreach ($b in @(Get-NombresBean $sinCom)) { [void]$beans.Add([pscustomobject]@{ Nombre = $b.Nombre; Tipo = $b.Tipo; Metodo = $b.Metodo; RelRaiz = $f.RelRaiz; Linea = $b.Linea; Cond = $cond }) }
+    }
+    # Un bean que implementa una interfaz da tambien las que esa interfaz extiende (los supertipos de las clases van abajo, en $supersDe)
+    foreach ($i in $script:RxInterfazExtiende.Matches($script:RxGenericos.Replace($limpio, ''))) { $supersDe[$i.Groups['n'].Value] = @(Split-Tipos $i.Groups['s'].Value) }
     # Constructores y logger de cada clase (las anidadas cuentan aparte)
     foreach ($c in @(Get-Clases $limpio)) {
       $ctores = @(Get-Constructores $c)
@@ -841,8 +1294,20 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       if ($marcados -ge 2) { Add-Cal $out $f.RelRaiz $c.Linea 'autowired-varios' "@Autowired en $marcados constructores: solo uno puede llevarlo (Sonar S6818)." }
       # Spring envuelve con un proxy de clase lo que lleva @Repository, @Transactional...: una clase final no se puede heredar y el bean no se crea.
       # Una clase final sale cuando acabe el recorrido (un @Bean con scope de proxy de otro fichero puede devolverla); un metodo final, aqui.
-      $motivos = @(Get-AnotacionesProxy @(Get-Anotaciones $c.Anot) 'clase')
-      foreach ($mt in @(Get-Metodos $c)) {
+      $anotsClase = @(Get-Anotaciones $c.Anot)
+      $motivos = @(Get-AnotacionesProxy $anotsClase 'clase')
+      $metodos = @(Get-Metodos $c)
+      # Spring Boot 3: @EnableBatchProcessing "is now discouraged" y "should be removed"; un bean con ella o que extienda DefaultBatchConfiguration
+      # hace que la configuracion automatica de Batch se aparte (fuentes-guias/sb-Spring-Boot-3.0-Migration-Guide.html; fila SB30-08)
+      if (@($anotsClase | Where-Object { $_.Nombre -ceq 'EnableBatchProcessing' }).Count -gt 0 -or @($c.Supers) -ccontains 'DefaultBatchConfiguration') {
+        Add-Cal $out $f.RelRaiz $c.Linea 'enable-batch' '@EnableBatchProcessing (o extender DefaultBatchConfiguration): en Spring Boot 3 la configuracion automatica de Batch se aparta, asi que el job no se lanza al arrancar y no se crean las tablas BATCH_. Quita la anotacion (o la clase) y deja la configuracion automatica; si el equipo lanza los jobs de otra forma, es un aviso que se puede dejar.'
+      }
+      $supersDe[$c.Nombre] = @($c.Supers)
+      if ($componente -and (@(Get-Anotaciones $c.Anot | Where-Object { $_.Arg -cmatch '""' }).Count -eq 0)) {
+        [void]$clasesBean.Add([pscustomobject]@{ Nombre = (Get-NombreBeanClase $c.Nombre); RelRaiz = $f.RelRaiz; Linea = $c.Linea; Cond = ($c.Anot -cmatch $script:RxCondicion) })
+      }
+      foreach ($nd in @(Get-NodosBean $c $f.RelRaiz $ctores $metodos $componente)) { [void]$nodos.Add($nd) }
+      foreach ($mt in $metodos) {
         $enMetodo = @()
         if ($mt.Interceptable) { $enMetodo = @(Get-AnotacionesProxy $mt.Anots 'metodo') }
         if ($enMetodo.Count -gt 0 -and $c.Final) { $motivos += @($enMetodo | ForEach-Object { "$_ en un metodo" }) }
@@ -897,6 +1362,16 @@ function Get-Calidad($Hechos, $EstiloPlantilla = $null) {
       Add-Cal $out $x.RelRaiz $x.Linea 'clase-final-proxy' ('Clase final que Spring tiene que envolver con un proxy (por ' + (($motivos | Select-Object -Unique) -join ', ') + '): el bean no se crea y el job no arranca ("Cannot subclass final class"). Quita final de la clase.')
     }
   }
+  Add-CalCiclos $out $nodos.ToArray() $supersDe $props
+  Add-CalBeansRepetidos $out $beans.ToArray() $clasesBean.ToArray() $props
+  Add-CalParametrosV4 $out $Hechos
+  Add-CalVariosJobs $out $beans.ToArray() $props $Hechos.Otros
+  $pom = Get-Pom $Hechos.Raiz
+  $deps = @()
+  if ($pom) { $deps = @($pom.Deps) }
+  Add-CalNashornYComando $out $Hechos $deps
+  Add-CalSqlInit $out $Hechos $props $deps
+  Add-CalRepoBatch $out $Hechos $props $deps $Contexto
   $estilo = Add-CalEstilo $out $Hechos $datos $EstiloPlantilla
   return [pscustomobject]@{ Hallazgos = $out.ToArray(); Estilo = $estilo.Cuentas; Linea = $estilo.Linea }
 }
@@ -953,13 +1428,17 @@ function Get-Calibracion([string]$Raiz) {
   $calReglas = @{}
   $calidad = Get-Calidad $h
   foreach ($q in $calidad.Hallazgos) { $calReglas[$q.Regla] = $true }
+  $pom = Get-Pom $Raiz
+  $deps = @()
+  if ($pom) { $deps = @($pom.Deps) }
+  $repoBatch = Get-RepoBatch $h @(Get-PropiedadesConfig $h) $deps   # no va en Calidad: la plantilla sola no incumple nada (hace falta el original)
   return [pscustomobject]@{
     Capas = $capas; Sub2 = $sub2; Dirs3 = @($dirs3.Keys | Sort-Object); Paquetes = $paquetes
     ExcImports = $excImp; ExcFicheros = $excFic; Tokens = $tokens; UsaJakarta = $jakarta
-    Calidad = $calReglas; Estilo = $calidad.Estilo; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
+    Calidad = $calReglas; Estilo = $calidad.Estilo; RepoBatch = $repoBatch; Secretos = @(Get-SecretosEnClaro $h | Where-Object { $_.Sev -eq 'error' }).Count
     UsaConfigProps = ($todo -match '@ConfigurationProperties'); UsaValue = ($todo -match '@Value\s*\(')
     TieneSftp = (@($h.Ficheros | Where-Object { $_.Rel -match '(^|/)sftp/' }).Count -gt 0)
-    YmlSftp = ($h.Yml -match 'sftp'); SftpYml = (Get-SftpYml $h); Pom = (Get-Pom $Raiz); Extra = $extra
+    YmlSftp = ($h.Yml -match 'sftp'); SftpYml = (Get-SftpYml $h); Pom = $pom; Extra = $extra
   }
 }
 
@@ -2477,11 +2956,18 @@ function Invoke-Diagnostico([bool]$ConBuild, [bool]$ConTests) {
   # ---------- calidad (Javadoc y buenas practicas de Java 21) ----------
   $estiloPlantilla = $null
   if ($cal) { $estiloPlantilla = $cal.Estilo }
-  $calidad = Get-Calidad $h $estiloPlantilla
+  $contexto = $null
+  $original = $LegacyRoot
+  if (-not $original -and $con -and $con.original -and (Test-Path -LiteralPath "$($con.original)")) { $original = "$($con.original)" }
+  if ($original) {
+    $contexto = [pscustomobject]@{ OriginalNoGuarda = (Get-OriginalNoGuarda $original); Plantilla = $null }
+    if ($cal) { $contexto.Plantilla = $cal.RepoBatch }
+  }
+  $calidad = Get-Calidad $h $estiloPlantilla $contexto
   $script:LineaEstilo = $calidad.Linea
   foreach ($q in $calidad.Hallazgos) {
     $sev = 'aviso'; $nota = ''
-    if ($Cfg.CalidadErrores -contains $q.Regla) {
+    if (($Cfg.CalidadErrores -contains $q.Regla) -and -not $q.Aviso) {
       if ($cal -and $cal.Calidad.ContainsKey($q.Regla) -and ($Cfg.CalidadSiempre -notcontains $q.Regla)) { $nota = ' (se queda en aviso: la plantilla tambien lo hace)' }
       else { $sev = 'error' }
     }
@@ -2589,7 +3075,7 @@ $TextoPaso = @{
   tests      = 'Haz que los tests listados pasen. Si fallan por la reestructuracion (paquetes, puertos, mocks), adapta el test. Si destapan un fallo real de la migracion, corrige el codigo. No borres tests ni relajes aserciones.'
   cobertura  = 'Escribe o amplia el test de la clase listada hasta cubrir sus lineas sin cubrir, sin tocar nada fuera de src/test/ (el detalle va en el prompt del lote).'
   sonar      = 'Corrige las incidencias de Sonar listadas SIN cambiar el comportamiento ni la API publica (el detalle de lo que se pide va en el prompt del lote).'
-  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. Clase o metodo final que Spring envuelve con un proxy: quita final y nada mas. No toques nada mas de esos ficheros.'
+  calidad    = 'Resuelve los hallazgos de calidad listados SIN cambiar el comportamiento. Javadoc: lee antes el codigo y escribe que hace la clase y que papel tiene en su capa; en cada metodo, que hace, @param, @return y @throws; no te lo inventes ni repitas el nombre. @Autowired en un campo: pasa a inyeccion por constructor con campos private final y adapta los tests que construyan la clase. System.out y printStackTrace: usa el logger que usa la PLANTILLA, con el mismo mensaje. catch vacio: no cambies el flujo; registra la excepcion con el logger o deja un comentario que explique por que se ignora. new Integer(...) y similares: valueOf. Varios constructores sin @Autowired: deja uno solo o marca con @Autowired el que Spring debe usar. @Value o @Autowired en un campo static, o @Value sin ${...}: quita static o la anotacion, o pon la propiedad con ${...}. Estilo (constructor, logger): pasa la clase al estilo que dice el hallazgo. Clase o metodo final que Spring envuelve con un proxy: quita final y nada mas. Referencia circular entre beans: rompe el ciclo sin cambiar lo que hace (saca lo comun a un tercer bean, o inyecta uno de los dos con ObjectProvider o @Lazy). Bean repetido: cambia el nombre de uno. @EnableBatchProcessing o DefaultBatchConfiguration: quita la anotacion o la clase. Parametro de job nombre(tipo)=valor: nombre=valor,java.lang.Tipo (java.lang.Long, java.lang.Double, java.lang.String o java.time.LocalDate). getEngineByName("nashorn") y similares: anade nashorn-core al pom. setCommand con el comando entero en una cadena: una cadena por argumento. Repositorio de Batch: crea una @Configuration en el paquete de configuracion con un DataSource H2 en memoria marcado con @BatchDataSource (copia el de la plantilla si lo tiene); es la unica regla que crea un fichero nuevo. No toques nada mas de esos ficheros.'
 }
 
 # Lo que se le pide al codigo que la IA escribe en cualquier paso.

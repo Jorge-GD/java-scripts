@@ -6613,5 +6613,703 @@ $Pruebas['m72 (c1) estilo: la linea de la consola solo nombra los estilos que ti
   }
 }
 
+# ============== M76: LO QUE COMPILA PERO NO ARRANCA, O CAMBIA SIN AVISAR (de las guias de migracion; sin IA) ==============
+# Diagnostico del escenario (sin Maven), con el original si se da, y sus hallazgos de calidad de esa regla.
+function Cal-M76($E, [string]$Regla, [string]$Legacy = '') {
+  $a = @('-Repo', $E.Repo, '-Plantilla', $E.Plantilla, '-SinBuild')
+  if ($Legacy) { $a += @('-Legacy', $Legacy) }
+  [void](Rescate $a)
+  return @(Hallazgos $E.Repo | Where-Object { $_.Cat -eq 'calidad' -and $_.Detalle.StartsWith('[' + $Regla + ']') })
+}
+
+# Una clase de componente que pide estas dependencias por constructor ("Tipo nombre, ...") y, si se dan, tiene estos miembros mas (campos).
+function Pide-M76([string]$Nombre, [string]$Params, [string]$Cabeza = '@Service', [string]$Campos = '') {
+  $miembros = $Campos
+  if ($Params) {
+    foreach ($p in $Params.Split(',')) { $miembros += '    private final ' + ($p.Trim() -replace '^@\w+\s+', '') + ";`n" }
+    $miembros += "`n" + (Ctor-M70 $Nombre '' $Params)
+  }
+  return (Clase-M70 $Nombre $Cabeza $miembros)
+}
+
+# Una clase de componente que implementa una interfaz y pide estas dependencias por constructor.
+function Implementa-M76([string]$Nombre, [string]$Interfaz, [string]$Params) {
+  return ((Pide-M76 $Nombre $Params '@Component') -replace "public class $Nombre ", "public class $Nombre implements $Interfaz ")
+}
+
+# Un fichero Java a mano (una interfaz, una clase sin anotaciones...).
+function Java-M76([string]$Nombre, [string]$Tipo = 'class', [string]$Miembros = '', [string]$Extra = '') {
+  return "package com.acme.life.application.usecases;`n`n/** $Nombre. */`npublic $Tipo $Nombre$Extra {`n$Miembros}`n"
+}
+
+$Pruebas['m76 (a1) referencia-circular (SB26): un ciclo de dos por constructor sale en las dos clases, con el ciclo entero; el que depende del ciclo sin estar en el, no'] = {
+  $e = Escenario-M70 'm76-a1' @{
+    ServicioA = (Pide-M76 'ServicioA' 'ServicioB b')
+    ServicioB = (Pide-M76 'ServicioB' 'ServicioA a')
+    ServicioC = (Pide-M76 'ServicioC' 'ServicioA a')
+    ServicioD = (Pide-M76 'ServicioD' 'String nombre')
+  }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'sale en A y B' 'ServicioA ServicioB' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*ServicioA.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Fuente-M72 $e 'ServicioA') 'public class ServicioA') $a[0].Linea
+  Comprueba 'el texto trae el ciclo entero, dice que Spring Boot 2.6 lo prohibe y que el job no arranca, y que hacer' ($a[0].Detalle -like '*Referencia circular entre beans: ServicioA -> ServicioB -> ServicioA. Desde Spring Boot 2.6 estan prohibidas por defecto y la aplicacion no arranca (BeanCurrentlyInCreationException). Rompe el ciclo*') $a[0].Detalle
+  $b = @($h | Where-Object { $_.Fichero -like '*ServicioB.java' })
+  Comprueba 'cada clase lleva el ciclo desde ella' ($b[0].Detalle -like '*ServicioB -> ServicioA -> ServicioB.*') $b[0].Detalle
+}
+
+$Pruebas['m76 (a2) referencia-circular: un ciclo de tres que mezcla un campo @Autowired, un constructor y un parametro de un metodo @Bean sale en cada clase, y tambien con Lombok'] = {
+  $config = @'
+package com.acme.life.application.usecases;
+
+/** Beans a mano. */
+@Configuration
+public class Config {
+
+    /** El contador, que pide al servicio A. */
+    @Bean
+    public Contador contador(ServicioA a) {
+        return new Contador();
+    }
+}
+'@
+  $e = Escenario-M70 'm76-a2' @{
+    ServicioA = (Clase-M70 'ServicioA' '@Service' "    @Autowired`n    private ServicioB b;`n")
+    ServicioB = (Pide-M76 'ServicioB' 'Contador c')
+    Contador  = (Java-M76 'Contador')
+    Config    = $config
+    LombokA   = (Clase-M70 'LombokA' "@Service`n@RequiredArgsConstructor" "    private final LombokB b;`n")
+    LombokB   = (Clase-M70 'LombokB' "@Service`n@RequiredArgsConstructor" "    private final LombokA a;`n    private String nombre;`n")
+  }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'sale en las tres clases del ciclo (la del @Bean es la Config) y en las dos con Lombok' 'Config LombokA LombokB ServicioA ServicioB' (Ficheros-M70 $h)
+  $c = @($h | Where-Object { $_.Fichero -like '*Config.java' })
+  Igual 'la del @Bean sale en la linea del metodo' (Linea-De (Fuente-M72 $e 'Config') 'public Contador contador(') $c[0].Linea
+  Comprueba 'y el texto nombra el bean como Config.contador()' ($c[0].Detalle -like '*Config.contador() -> ServicioA -> ServicioB -> Config.contador().*') $c[0].Detalle
+  $a = @($h | Where-Object { $_.Fichero -like '*ServicioA.java' })
+  Comprueba 'el texto de A trae los tres' ($a[0].Detalle -like '*ServicioA -> ServicioB -> Config.contador() -> ServicioA.*') $a[0].Detalle
+}
+
+$Pruebas['m76 (a3) referencia-circular: @Lazy, ObjectProvider o Provider en un eslabon, o un bean con @StepScope en el ciclo: no sale'] = {
+  $e = Escenario-M70 'm76-a3' @{
+    L1A = (Pide-M76 'L1A' '@Lazy L1B b')
+    L1B = (Pide-M76 'L1B' 'L1A a')
+    L2A = (Pide-M76 'L2A' 'ObjectProvider<L2B> b')
+    L2B = (Pide-M76 'L2B' 'L2A a')
+    L3A = (Pide-M76 'L3A' 'Provider<L3B> b')
+    L3B = (Pide-M76 'L3B' 'L3A a')
+    L4A = (Clase-M70 'L4A' '@Service' "    @Autowired`n    @Lazy`n    private L4B b;`n")
+    L4B = (Pide-M76 'L4B' 'L4A a')
+    L5A = (Pide-M76 'L5A' 'Lector l')
+    L5C = @'
+package com.acme.life.application.usecases;
+
+/** Beans con scope de step. */
+@Configuration
+public class L5C {
+
+    /** El lector se crea al empezar el step: no es una dependencia del arranque. */
+    @Bean
+    @StepScope
+    public Lector lector(L5A a) {
+        return new Lector();
+    }
+}
+'@
+    Lector = (Java-M76 'Lector')
+    RealA  = (Pide-M76 'RealA' 'RealB b')
+    RealB  = (Pide-M76 'RealB' 'RealA a')
+  }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'solo sale el ciclo de verdad' 'RealA RealB' (Ficheros-M70 $h)
+}
+
+$Pruebas['m76 (a4) referencia-circular: una dependencia por una interfaz se sigue hasta la clase que la implementa; con dos clases que la implementan, no se sabe cual y no sale'] = {
+  $e = Escenario-M70 'm76-a4' @{
+    ServicioA   = (Pide-M76 'ServicioA' 'PuertoB b')
+    PuertoB     = (Java-M76 'PuertoB' 'interface')
+    AdaptadorB  = (Implementa-M76 'AdaptadorB' 'PuertoB' 'ServicioA a')
+    ServicioX   = (Pide-M76 'ServicioX' 'PuertoY y')
+    PuertoY     = (Java-M76 'PuertoY' 'interface')
+    AdaptadorY1 = (Implementa-M76 'AdaptadorY1' 'PuertoY' 'ServicioX x')
+    AdaptadorY2 = (Implementa-M76 'AdaptadorY2' 'PuertoY' '')
+  }
+  Igual 'sale el ciclo ServicioA -> AdaptadorB; el de PuertoY, con dos implementaciones, no' 'AdaptadorB ServicioA' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (a5) referencia-circular: con spring.main.allow-circular-references a true (en un yml o un properties del migrado) baja a aviso; a false sigue siendo error'] = {
+  $repo = @{ ServicioA = (Pide-M76 'ServicioA' 'ServicioB b'); ServicioB = (Pide-M76 'ServicioB' 'ServicioA a') }
+  $y = Escenario-M70 'm76-a5-yml' $repo
+  Escribe $y.Repo 'src/main/resources/application.yml' "spring:`n  main:`n    allow-circular-references: true`n"
+  $h = Cal-M76 $y 'referencia-circular'
+  Igual 'con el yml: salen las dos' 'ServicioA ServicioB' (Ficheros-M70 $h)
+  Igual 'como aviso' 'aviso aviso' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'y el texto dice por que es aviso y en que fichero esta la propiedad' ($h[0].Detalle -like '*spring.main.allow-circular-references esta a true en src/main/resources/application.yml*') $h[0].Detalle
+  $p = Escenario-M70 'm76-a5-prop' $repo
+  Escribe $p.Repo 'src/main/resources/application-pre.properties' "spring.main.allow-circular-references=true`n"
+  Igual 'con el properties de un perfil: aviso' 'aviso aviso' ((Cal-M76 $p 'referencia-circular' | ForEach-Object { $_.Sev }) -join ' ')
+  $f = Escenario-M70 'm76-a5-false' $repo
+  Escribe $f.Repo 'src/main/resources/application.yml' "spring:`n  main:`n    allow-circular-references: false`n"
+  Igual 'con false: error' 'error error' ((Cal-M76 $f 'referencia-circular' | ForEach-Object { $_.Sev }) -join ' ')
+}
+
+$Pruebas['m76 (a6) referencia-circular: una @Configuration que pide con @Autowired un bean que ella misma crea sale una sola vez'] = {
+  $config = @'
+package com.acme.life.application.usecases;
+
+/** Beans a mano. */
+@Configuration
+public class Config {
+
+    @Autowired
+    private Paso paso;
+
+    /** El paso. */
+    @Bean
+    public Paso paso() {
+        return new Paso();
+    }
+
+    /** Un bean estatico no necesita la instancia de Config. */
+    @Bean
+    public static Otro otro() {
+        return new Otro();
+    }
+}
+'@
+  $e = Escenario-M70 'm76-a6' @{ Config = $config; Paso = (Java-M76 'Paso'); Otro = (Java-M76 'Otro') }
+  $h = Cal-M76 $e 'referencia-circular'
+  Igual 'sale en Config, una vez' 'Config' (Ficheros-M70 $h)
+}
+
+# Una @Configuration con estos beans (cada uno: la anotacion y el metodo), en el paquete que se diga.
+function Beans-M76([string]$Nombre, [string[]]$Beans, [string]$Cabeza = '@Configuration', [string]$Pkg = 'com.acme.life.application.usecases') {
+  $m = ''
+  foreach ($b in $Beans) { $m += "    $b`n        return null;`n    }`n`n" }
+  return (Clase-M70 $Nombre $Cabeza $m $Pkg)
+}
+
+$Pruebas['m76 (b1) bean-repetido (SB21-01): dos metodos @Bean con el mismo nombre en clases distintas salen en las dos; con otro nombre o en la misma clase, no'] = {
+  $e = Escenario-M70 'm76-b1' @{
+    CfgA  = (Beans-M76 'CfgA' @('@Bean public Lector lector() {', '@Bean public Escritor escritor() {'))
+    CfgB  = (Beans-M76 'CfgB' @('@Bean public Lector lector() {', '@Bean public Otro otro() {'))
+    CfgC  = (Beans-M76 'CfgC' @('@Bean public Lector lectorPropio() {', '@Bean public Procesador procesar(String a) {', '@Bean public Procesador procesar(int a, int b) {'))
+  }
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'sale en las dos clases con lector(), y no en la que tiene otro nombre ni en la que sobrecarga el suyo' 'CfgA CfgB' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*CfgA.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea del metodo' (Linea-De (Fuente-M72 $e 'CfgA') 'public Lector lector()') $a[0].Linea
+  Comprueba 'el texto dice el nombre, la otra clase, que la sobrescritura esta desactivada desde Spring Boot 2.1 y que hacer' ($a[0].Detalle -like "*Dos beans se llaman 'lector' (tambien en*CfgB.java*): desde Spring Boot 2.1 la sobrescritura de beans esta desactivada y la aplicacion no arranca. Cambia el nombre de uno (el metodo o @Bean(`"otroNombre`")) o quita el que sobra.*") $a[0].Detalle
+}
+
+$Pruebas['m76 (b2) bean-repetido: el nombre explicito de @Bean cuenta (value, name o una lista); un @Profile o @Conditional en la clase o en el metodo hace que no cuente'] = {
+  $e = Escenario-M70 'm76-b2' @{
+    ExA = (Beans-M76 'ExA' @('@Bean("compartido") public Uno uno() {'))
+    ExB = (Beans-M76 'ExB' @('@Bean(name = "compartido") public Dos dos() {'))
+    ExC = (Beans-M76 'ExC' @('@Bean(autowireCandidate = false, name = {"alias", "tercero"}) public Tres tres() {'))
+    ExD = (Beans-M76 'ExD' @('@Bean(initMethod = "close") public Cuatro tercero() {'))
+    ExE = (Beans-M76 'ExE' @('@Bean(initMethod = "close") public Cinco cinco() {'))
+    PfA = (Beans-M76 'PfA' @('@Bean public Fuente fuente() {') '@Configuration' )
+    PfB = (Beans-M76 'PfB' @('@Bean @Profile("pre") public Fuente fuente() {'))
+    CnA = (Beans-M76 'CnA' @('@Bean public Fuente conectar() {') "@Configuration`n@Profile(`"dev`")")
+    CnB = (Beans-M76 'CnB' @('@Bean public Fuente conectar() {') "@Configuration`n@ConditionalOnProperty(`"x`")")
+  }
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'salen ExA y ExB (compartido) y ExC y ExD (tercero: un alias y el nombre de un metodo); ExE no, y los de perfil tampoco' 'ExA ExB ExC ExD' (Ficheros-M70 $h)
+}
+
+$Pruebas['m76 (b3) bean-repetido: con spring.main.allow-bean-definition-overriding a true, los @Bean repetidos bajan a aviso'] = {
+  $repo = @{ CfgA = (Beans-M76 'CfgA' @('@Bean public Lector lector() {')); CfgB = (Beans-M76 'CfgB' @('@Bean public Lector lector() {')) }
+  $e = Escenario-M70 'm76-b3' $repo
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  main:`n    allow-bean-definition-overriding: true`n"
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'salen los dos' 'CfgA CfgB' (Ficheros-M70 $h)
+  Igual 'como aviso' 'aviso aviso' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'y dice que la propiedad esta a true en el yml' ($h[0].Detalle -like '*spring.main.allow-bean-definition-overriding esta a true en src/main/resources/application.yml*') $h[0].Detalle
+}
+
+$Pruebas['m76 (b4) bean-repetido: dos componentes con el mismo nombre de clase en paquetes distintos y sin nombre explicito salen en los dos, aunque se permita la sobrescritura'] = {
+  $e = Escenario-M70 'm76-b4' @{
+    Duplicada = (Clase-M70 'Duplicada' '@Service' '')
+    Nombrada  = (Clase-M70 'Nombrada' '@Service' '')
+    Perfil    = (Clase-M70 'Perfil' "@Service`n@Profile(`"dev`")" '')
+  }
+  $otro = 'com.acme.life.infrastructure.adapters'
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Duplicada.java' (Clase-M70 'Duplicada' '@Component' '' $otro)
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Nombrada.java' (Clase-M70 'Nombrada' '@Service("otra")' '' $otro)
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Perfil.java' (Clase-M70 'Perfil' "@Service`n@Profile(`"pre`")" '' $otro)
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring.main.allow-bean-definition-overriding: true`n"
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'sale Duplicada en sus dos paquetes; Nombrada (una con nombre explicito) y Perfil (con @Profile) no' 'Duplicada Duplicada' (Ficheros-M70 $h)
+  Igual 'como error, porque la propiedad no vale para los componentes' 'error error' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'el texto dice el nombre del bean, la otra clase y que hacer' ($h[0].Detalle -like "*Dos clases dan el mismo nombre de bean 'duplicada' (tambien*Duplicada.java*): Spring no arranca (ConflictingBeanDefinitionException), ni permitiendo la sobrescritura. Ponle nombre a una (@Service(`"otroNombre`")) o renombra la clase.*") $h[0].Detalle
+}
+
+$Pruebas['m76 (c1) enable-batch (SB30-08): @EnableBatchProcessing o extender DefaultBatchConfiguration sale como error; con la plantilla igual, aviso; sin eso, nada'] = {
+  $e = Escenario-M70 'm76-c1' @{
+    Anotada  = (Clase-M70 'Anotada' "@Configuration`n@EnableBatchProcessing" '')
+    Extiende = (Java-M76 'Extiende' 'class' '' ' extends DefaultBatchConfiguration')
+    Larga    = (Clase-M70 'Larga' "@Configuration`n@org.springframework.batch.core.configuration.annotation.EnableBatchProcessing(modular = true)" '')
+    Normal   = (Clase-M70 'Normal' '@Configuration' "    // @EnableBatchProcessing en un comentario`n    private static final String X = `"EnableBatchProcessing`";`n")
+    Hija     = (Java-M76 'Hija' 'class' '' ' extends Normal implements Serializable')
+  }
+  $h = Cal-M76 $e 'enable-batch'
+  Igual 'sale en las tres clases que lo hacen' 'Anotada Extiende Larga' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*Anotada.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea de la clase' (Linea-De (Fuente-M72 $e 'Anotada') 'public class Anotada') $a[0].Linea
+  Comprueba 'el texto dice que la configuracion automatica se aparta, que el job no se lanza ni se crean las tablas, y que hacer' ($a[0].Detalle -like '*@EnableBatchProcessing (o extender DefaultBatchConfiguration): en Spring Boot 3 la configuracion automatica de Batch se aparta, asi que el job no se lanza al arrancar y no se crean las tablas BATCH_. Quita la anotacion (o la clase) y deja la configuracion automatica*') $a[0].Detalle
+  $p = Escenario-M70 'm76-c1-plantilla' @{ Anotada = (Clase-M70 'Anotada' "@Configuration`n@EnableBatchProcessing" '') } @{ Plantilla = (Clase-M70 'Plantilla' "@Configuration`n@EnableBatchProcessing" '' $PkgPlantilla) }
+  $hp = Cal-M76 $p 'enable-batch'
+  Igual 'con la plantilla haciendo lo mismo: sale una vez, como aviso' 'aviso' (($hp | ForEach-Object { $_.Sev }) -join ' ')
+  Comprueba 'y dice que se queda en aviso porque la plantilla tambien lo hace' ($hp[0].Detalle -like '*(se queda en aviso: la plantilla tambien lo hace)') $hp[0].Detalle
+}
+
+$Pruebas['m76 (c2) revision.ps1 ya no lleva BOOT-ENABLEBATCH: lo mide rescate.ps1 sin IA'] = {
+  $texto = Lee (Split-Path -Parent $aqui) 'revision.ps1'
+  Comprueba 'el catalogo de la revision no tiene BOOT-ENABLEBATCH' (-not $texto.Contains("@('BOOT-ENABLEBATCH'")) ''
+  Comprueba 'y la cabecera dice que ya sale del diagnostico' ($texto -match 'BOOT-ENABLEBATCH[^\r\n]*rescate\.ps1') ''
+}
+
+$Pruebas['m76 (d1) parametros-v4 (SBT5-09): fecha(date)=valor en un .sh sale; la notacion nueva, no'] = {
+  $e = Escenario-M70 'm76-d1' @{}
+  Escribe $e.Repo 'scripts/vieja.sh' "#!/bin/sh`njava -jar batch-life.jar `"fecha(date)=2024-01-01`" `"id(long)=7`"`n"
+  Escribe $e.Repo 'scripts/nueva.sh' "#!/bin/sh`njava -jar batch-life.jar fecha=2024-01-01,java.time.LocalDate id=7,java.lang.Long`n"
+  $h = Cal-M76 $e 'parametros-v4'
+  Igual 'sale solo en el script viejo, una vez aunque lleve dos parametros' 'vieja' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Igual 'en la linea del java' 2 $h[0].Linea
+  Igual 'con la ruta del fichero' 'scripts/vieja.sh' ($h[0].Fichero -replace '\\', '/')
+  Comprueba 'el texto dice que se lee como un texto, que el job no recibe el parametro y no falla, y la notacion nueva de cada uno' ($h[0].Detalle -like "*Parametro de job con la notacion de Spring Batch 4: en Spring Batch 5 se lee como un texto cuyo nombre es 'fecha(date)', asi que el job no recibe el parametro y no falla. Cambia 'fecha(date)=2024-01-01' por 'fecha=2024-01-01,java.time.LocalDate' y 'id(long)=7' por 'id=7,java.lang.Long'.*") $h[0].Detalle
+}
+
+$Pruebas['m76 (d2) parametros-v4: tambien en .cmd, .bat, .yml, .properties, Dockerfile y un literal de Java, con o sin barras; no en un comentario ni en src/test'] = {
+  $e = Escenario-M70 'm76-d2' @{
+    Lanza = (Clase-M70 'Lanza' '@Component' "    String[] args = {`"total(double)=1.5`"};`n    // `"borrado(long)=1`"`n")
+  }
+  Escribe $e.Repo 'bin/a.cmd' "java -jar b.jar nombre(string)=x`r`n"
+  Escribe $e.Repo 'bin/b.bat' "REM java -jar b.jar viejo(long)=1`r`njava -jar b.jar n(long)=%NUM%`r`n"
+  Escribe $e.Repo 'k8s/c.yml' "args:`n  - `"fecha(date)=2024-01-01`"`n"
+  Escribe $e.Repo 'k8s/d.yaml' "args: [`"x(long)=3`"]`n"
+  Escribe $e.Repo 'k8s/e.properties' "job.args=y(long)=4`n"
+  Escribe $e.Repo 'Dockerfile' "FROM eclipse-temurin:21`nCMD [`"java`", `"-jar`", `"b.jar`", `"z(long)=5`"]`n"
+  Escribe $e.Repo 'bin/f.sh' "# java -jar b.jar viejo(long)=1`njava -jar b.jar fecha\(date\)=2024-01-01`n"
+  Escribe $e.Repo 'src/test/resources/test.properties' "t(long)=1`n"
+  Escribe $e.Repo 'notas.txt' "n(long)=1`n"
+  $h = Cal-M76 $e 'parametros-v4'
+  Igual 'salen los ocho que lo llevan en codigo, y no el comentario de f.sh, el de b.bat, el de Lanza, src/test ni notas.txt' 'a b c d Dockerfile e f Lanza' (Ficheros-M70 $h)
+  Igual 'de b.bat, la linea 2 (no la del REM)' '2' (@($h | Where-Object { $_.Fichero -like '*b.bat' } | ForEach-Object { $_.Linea }) -join ' ')
+  Igual 'de Lanza, la linea del literal y no la del comentario' (Linea-De (Fuente-M72 $e 'Lanza') 'total(double)') (@($h | Where-Object { $_.Fichero -like '*Lanza.java' } | ForEach-Object { $_.Linea }) -join ' ')
+  $f = @($h | Where-Object { $_.Fichero -like '*f.sh' })
+  Comprueba 'con la barra del shell el texto dice el nombre sin ella' ($f[0].Detalle -like "*cuyo nombre es 'fecha(date)'*por 'fecha=2024-01-01,java.time.LocalDate'*") $f[0].Detalle
+}
+
+$Pruebas['m76 (e1) varios-jobs-sin-nombre (SB30-09): dos jobs y ningun spring.batch.job.name es un aviso, una vez; con el nombre en el yml, en un script o con el runner apagado, nada; con un solo job, nada'] = {
+  $dos = @{
+    Jobs1 = (Beans-M76 'Jobs1' @('@Bean public Job altaJob(JobRepository r) {'))
+    Jobs2 = (Beans-M76 'Jobs2' @('@Bean public Job bajaJob(JobRepository r) {', '@Bean public Step paso() {'))
+  }
+  $e = Escenario-M70 'm76-e1' $dos
+  $h = Cal-M76 $e 'varios-jobs-sin-nombre'
+  Igual 'sale una vez, en el primer job' 'Jobs1' (Ficheros-M70 $h)
+  Igual 'es un aviso' 'aviso' $h[0].Sev
+  Igual 'en la linea del metodo' (Linea-De (Fuente-M72 $e 'Jobs1') 'public Job altaJob') $h[0].Linea
+  Comprueba 'el texto dice los jobs, que Spring Boot 3 ya no arranca varios sin nombre, que hacer y que puede venir de fuera' ($h[0].Detalle -like "*Hay 2 jobs (altaJob, bajaJob) y ninguna spring.batch.job.name en la configuracion: Spring Boot 3 ya no admite arrancar varios jobs y exige decir cual con spring.batch.job.name. Ponla en application.yml o en el lanzador (-Dspring.batch.job.name=...); si el nombre viene de fuera del repo (un configmap), deja este aviso.*") $h[0].Detalle
+
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  batch:`n    job:`n      name: altaJob`n"
+  Igual 'con spring.batch.job.name en el yml, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  batch:`n    job:`n      enabled: false`n"
+  Igual 'con el runner apagado (spring.batch.job.enabled: false), no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo 'src/main/resources/application.yml' "life:`n  inventory: legado`n"
+  Escribe $e.Repo 'bin/lanza.sh' "#!/bin/sh`njava -Dspring.batch.job.name=altaJob -jar batch-life.jar`n"
+  Igual 'con -Dspring.batch.job.name en un script, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo 'bin/lanza.sh') -Force
+  Escribe $e.Repo ('src/main/java/com/acme/life/application/usecases/Jobs2.java') (Beans-M76 'Jobs2' @('@Bean public Step bajaStep() {'))
+  Igual 'con un solo job, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo ('src/main/java/com/acme/life/application/usecases/Jobs2.java') (Beans-M76 'Jobs2' @('@Bean public Job bajaJob(JobRepository r) {') "@Configuration`n@Profile(`"pre`")")
+  Igual 'con el otro job en un @Profile, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+}
+
+# El pom del repo del escenario con estas dependencias mas (solo el artifactId; el grupo es inventado).
+function Pom-M76($E, [string[]]$Deps) {
+  $x = ''
+  foreach ($d in $Deps) { $x += "  <dependency><groupId>com.acme.dep</groupId><artifactId>$d</artifactId></dependency>`n" }
+  Escribe $E.Repo 'pom.xml' ($Pom -replace '</dependencies>', ($x + '  </dependencies>'))
+}
+
+# Una clase de componente con un solo metodo cuyo cuerpo es esto.
+function Metodo-M76([string]$Nombre, [string]$Cuerpo) {
+  return (Clase-M70 $Nombre '@Component' "    public void corre() {`n        $Cuerpo`n    }`n")
+}
+
+$Pruebas['m76 (f1) nashorn (JDK-06): getEngineByName con nashorn, javascript, js o ecmascript sale como error; otro motor, un comentario o nashorn-core en el pom, no'] = {
+  $e = Escenario-M70 'm76-f1' @{
+    Nashorn = (Metodo-M76 'Nashorn' 'Object m = new ScriptEngineManager().getEngineByName("nashorn");')
+    Js      = (Metodo-M76 'Js' 'Object m = manager.getEngineByName("JavaScript");')
+    Corto   = (Metodo-M76 'Corto' 'Object m = manager.getEngineByName( "js" );')
+    Ecma    = (Metodo-M76 'Ecma' 'Object m = manager.getEngineByName("ECMAScript");')
+    Groovy  = (Metodo-M76 'Groovy' 'Object m = manager.getEngineByName("groovy");')
+    Coment  = (Metodo-M76 'Coment' '// getEngineByName("nashorn")')
+  }
+  $h = Cal-M76 $e 'nashorn'
+  Igual 'sale con los cuatro nombres, y no con groovy ni en un comentario' 'Corto Ecma Js Nashorn' (Ficheros-M70 $h)
+  $a = @($h | Where-Object { $_.Fichero -like '*Nashorn.java' })
+  Igual 'es un error' 'error' $a[0].Sev
+  Igual 'en la linea de la llamada' (Linea-De (Fuente-M72 $e 'Nashorn') 'getEngineByName') $a[0].Linea
+  Comprueba 'el texto dice que devuelve null desde Java 15, que el job falla con NullPointerException y que hacer' ($a[0].Detalle -like '*getEngineByName("nashorn") devuelve null desde Java 15 (JEP 372 quito Nashorn del JDK) y el job falla con un NullPointerException al usar el motor. Anade org.openjdk.nashorn:nashorn-core al pom (Nashorn como libreria aparte) o GraalJS (js-scriptengine), o pasa el script a Java.*') $a[0].Detalle
+  Pom-M76 $e @('nashorn-core')
+  Igual 'con nashorn-core en el pom, no sale' 0 @(Cal-M76 $e 'nashorn').Count
+  Pom-M76 $e @('js-scriptengine')
+  Igual 'con js-scriptengine (GraalJS) en el pom, no sale' 0 @(Cal-M76 $e 'nashorn').Count
+}
+
+$Pruebas['m76 (f2) comando-sin-partir (SBT5-18): SystemCommandTasklet con setCommand("ls -l") en un solo argumento sale como error; con varios argumentos, un programa sin espacios o una ruta con espacios, no'] = {
+  $e = Escenario-M70 'm76-f2' @{
+    Junto   = (Metodo-M76 'Junto' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("ls -l");')
+    Partido = (Metodo-M76 'Partido' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("ls", "-l");')
+    Solo    = (Metodo-M76 'Solo' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("ls");')
+    Ruta    = (Metodo-M76 'Ruta' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand("C:/Program Files/app/run.exe");')
+    Variable = (Metodo-M76 'Variable' 'SystemCommandTasklet t = new SystemCommandTasklet(); t.setCommand(texto);')
+    Otra    = (Metodo-M76 'Otra' 'MiClase t = new MiClase(); t.setCommand("ls -l");')
+  }
+  $h = Cal-M76 $e 'comando-sin-partir'
+  Igual 'sale solo en el comando junto' 'Junto' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Igual 'en la linea de la llamada' (Linea-De (Fuente-M72 $e 'Junto') 'setCommand') $h[0].Linea
+  Comprueba 'el texto dice que Spring Batch 5 ya no parte el comando, que busca un programa con ese nombre y como separarlo' ($h[0].Detalle -like '*SystemCommandTasklet.setCommand("ls -l") con el comando entero en un solo argumento: desde Spring Batch 5 setCommand recibe un array y ya no parte el comando por los espacios, asi que busca un programa que se llama "ls -l" y falla. Separa los argumentos: setCommand("ls", "-l").*') $h[0].Detalle
+}
+
+# El escenario con un schema.sql (y, si se pide, un data.sql) y esta configuracion de Spring en application.yml.
+function Sql-M76([string]$Nombre, [string]$Yml, [string[]]$Sql = @('schema.sql')) {
+  $e = Escenario-M70 $Nombre @{}
+  foreach ($s in $Sql) { Escribe $e.Repo ('src/main/resources/' + $s) "create table recibo (id bigint);`n" }
+  Escribe $e.Repo 'src/main/resources/application.yml' $Yml
+  return $e
+}
+
+$Pruebas['m76 (g1) sql-init-no-embebida (SB25-01): schema.sql o data.sql con una base que no es H2 en memoria y sin spring.sql.init.mode es un aviso por fichero; con jdbc:h2:mem o con el modo, no'] = {
+  $e = Sql-M76 'm76-g1' "spring:`n  datasource:`n    url: `${DB_URL}`n" @('schema.sql', 'data.sql', 'schema-oracle.sql')
+  Escribe $e.Repo 'src/main/resources/otro.sql' "select 1;`n"
+  $h = Cal-M76 $e 'sql-init-no-embebida'
+  Igual 'sale en los tres scripts de arranque y no en otro.sql' 'data schema schema-oracle' (Ficheros-M70 $h)
+  Igual 'es un aviso' 'aviso aviso aviso' (($h | ForEach-Object { $_.Sev }) -join ' ')
+  $a = @($h | Where-Object { $_.Fichero -like '*src/main/resources/schema.sql' -or $_.Fichero -like '*src\main\resources\schema.sql' })
+  Igual 'en la linea 1' 1 $a[0].Linea
+  Comprueba 'el texto dice que desde Spring Boot 2.5 solo corre con una base embebida en memoria, la url que ve y que hacer' ($a[0].Detalle -like '*schema.sql ya no se ejecuta solo: desde Spring Boot 2.5 la inicializacion SQL solo corre por defecto con una base embebida en memoria, y esta no lo es (spring.datasource.url es ${DB_URL}, en src/main/resources/application.yml:3). Pon spring.sql.init.mode=always si debe ejecutarse (cuidado: en una base con datos vuelve a correr el script) o never si no.*') $a[0].Detalle
+
+  $m = Sql-M76 'm76-g1-mem' "spring:`n  datasource:`n    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1`n"
+  Igual 'con jdbc:h2:mem, no sale' 0 @(Cal-M76 $m 'sql-init-no-embebida').Count
+  $o = Sql-M76 'm76-g1-modo' "spring:`n  datasource:`n    url: `${DB_URL}`n  sql:`n    init:`n      mode: always`n"
+  Igual 'con spring.sql.init.mode, no sale' 0 @(Cal-M76 $o 'sql-init-no-embebida').Count
+  $s = Sql-M76 'm76-g1-sin' "spring:`n  datasource:`n    url: `${DB_URL}`n" @()
+  Igual 'sin schema.sql ni data.sql, no sale' 0 @(Cal-M76 $s 'sql-init-no-embebida').Count
+}
+
+$Pruebas['m76 (g2) sql-init-no-embebida: con una url en memoria en un perfil y otra de variable en otro, sale; sin url, depende de si el pom trae una base embebida'] = {
+  $e = Sql-M76 'm76-g2' "spring.datasource.url: jdbc:h2:mem:local`n"
+  Escribe $e.Repo 'src/main/resources/application-pre.properties' "spring.datasource.url=jdbc:oracle:thin:@//host:1521/svc`n"
+  Igual 'con una url en memoria y otra de Oracle, sale (la de pre)' 1 @(Cal-M76 $e 'sql-init-no-embebida').Count
+  $s = Sql-M76 'm76-g2-sin' "life:`n  inventory: legado`n"
+  Igual 'sin url y sin base embebida en el pom, sale' 1 @(Cal-M76 $s 'sql-init-no-embebida').Count
+  Pom-M76 $s @('h2')
+  Igual 'sin url y con h2 en el pom, no sale' 0 @(Cal-M76 $s 'sql-init-no-embebida').Count
+}
+
+# El original de un escenario (una carpeta junto al repo) con estos ficheros (ruta -> texto).
+function Original-M76($E, [hashtable]$Ficheros) {
+  $o = Join-Path (Split-Path -Parent $E.Repo) 'original'
+  if (Test-Path -LiteralPath $o) { Remove-Item -LiteralPath $o -Recurse -Force }
+  foreach ($k in $Ficheros.Keys) { Escribe $o $k $Ficheros[$k] }
+  return $o
+}
+
+$OriginalMapa = @{ 'src/main/java/com/acme/life/config/RepoMapa.java' = "package com.acme.life.config;`n`n/** Repositorio en memoria. */`npublic class RepoMapa {`n    JobRepository repo() throws Exception {`n        MapJobRepositoryFactoryBean f = new MapJobRepositoryFactoryBean();`n        return f.getObject();`n    }`n}`n" }
+
+# Una @Configuration que da a Batch su base: $Cuerpo es el cuerpo del metodo que devuelve el DataSource.
+function BaseBatch-M76([string]$Anot, [string]$Cuerpo, [string]$Pkg = 'com.acme.plantilla.application.usecases') {
+  return (Clase-M70 'BaseBatch' '@Configuration' "    @Bean`n    $Anot`n    public DataSource baseBatch() {`n        $Cuerpo`n    }`n" $Pkg)
+}
+$MemoriaH2 = 'return new EmbeddedDatabaseBuilder().setType(EmbeddedDatabaseType.H2).build();'
+
+$Pruebas['m76 (h1) repositorio-batch (SBT5-04): el original no guarda las ejecuciones (Map) y el migrado acaba en la base del negocio: sale una vez, como error, en la clase de arranque'] = {
+  $e = Escenario-M70 'm76-h1' @{ Uno = (Pide-M76 'Uno' 'String a'); Dos = (Pide-M76 'Dos' 'String b') } @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e $OriginalMapa
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'sale una vez, en LifeApplication' 'LifeApplication' (Ficheros-M70 $h)
+  Igual 'es un error' 'error' $h[0].Sev
+  Igual 'en la linea de @SpringBootApplication' 6 $h[0].Linea
+  Comprueba 'el texto dice lo que hace el original, donde acaba Batch en el migrado, por que falla en pre y no en local, que hacer y lo que hace la plantilla' ($h[0].Detalle -like "*El original no guarda las ejecuciones de Batch (usa MapJobRepositoryFactoryBean, que las deja en memoria) y en el migrado Spring Batch acaba en la base del negocio (spring.datasource.url es `${DB_URL}, en src/main/resources/application.yml:3). Spring Batch 5 quito el repositorio en memoria y Spring Boot 3 usa el DataSource normal: en pre el primer arranque falla porque faltan las tablas BATCH_ (o las crea en la base del negocio si alguien pone spring.batch.jdbc.initialize-schema=always); en local no se ve porque la prueba usa H2. Dale a Batch una base propia en memoria: un DataSource H2 con @BatchDataSource. La plantilla lo resuelve con src/main/java/com/acme/plantilla/application/usecases/BaseBatch.java (un DataSource con @BatchDataSource en memoria): copialo.") $h[0].Detalle
+  Igual 'sin original, no sale' 0 @(Cal-M76 $e 'repositorio-batch').Count
+  Escribe $e.Repo '.rescate/contrato.json' (ConvertTo-Json -InputObject @{ original = $o; jobs = @() })
+  Igual 'con el original solo en el contrato (sin -Legacy), sale' 1 @(Cal-M76 $e 'repositorio-batch').Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo '.rescate/contrato.json') -Force
+}
+
+$Pruebas['m76 (h2) repositorio-batch: no sale si el migrado le da a Batch una base propia en memoria (@BatchDataSource, DefaultBatchConfiguration o ResourcelessJobRepository) o si la suya ya es H2 en memoria; con @BatchDataSource a otra base, sale'] = {
+  $e = Escenario-M70 'm76-h2' @{} @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e $OriginalMapa
+  $ruta = 'src/main/java/com/acme/life/application/usecases/'
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (BaseBatch-M76 '@BatchDataSource' $MemoriaH2 'com.acme.life.application.usecases')
+  Igual 'con @BatchDataSource a una H2 en memoria, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (BaseBatch-M76 '@BatchDataSource' 'return DataSourceBuilder.create().url("jdbc:oracle:thin:@//host:1521/svc").build();' 'com.acme.life.application.usecases')
+  Igual 'con @BatchDataSource a Oracle, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (Clase-M70 'BaseBatch' '@Configuration' "    @Bean`n    public JobRepository repo() {`n        return new ResourcelessJobRepository();`n    }`n")
+  Igual 'con un ResourcelessJobRepository, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo ($ruta + 'BaseBatch.java') (Java-M76 'BaseBatch' 'class' "    @Override`n    protected DataSource getDataSource() {`n        $MemoriaH2`n    }`n" ' extends DefaultBatchConfiguration')
+  Igual 'con un DefaultBatchConfiguration que da una H2 en memoria, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo ($ruta + 'BaseBatch.java')) -Force
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: jdbc:h2:mem:batch`n"
+  Igual 'con la url del migrado en H2 en memoria, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (h3) repositorio-batch: si la plantilla tambien acaba en la base del negocio, aviso'] = {
+  $e = Escenario-M70 'm76-h3' @{} @{}
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e $OriginalMapa
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'sale una vez' 1 $h.Count
+  Igual 'como aviso' 'aviso' $h[0].Sev
+  Comprueba 'con la nota de la plantilla' ($h[0].Detalle -like '*(se queda en aviso: la plantilla tambien lo hace)') $h[0].Detalle
+  Comprueba 'y el texto dice que la plantilla tampoco le da una base propia' ($h[0].Detalle -like '*La plantilla tampoco le da a Batch una base propia*') $h[0].Detalle
+}
+
+$Pruebas['m76 (h4) repositorio-batch: el original que guarda en una base real, o con una url de variable y una H2 solo en src/test, no cuenta; el que usa solo una H2 en memoria, si'] = {
+  $e = Escenario-M70 'm76-h4' @{} @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  $o = Original-M76 $e @{ 'src/main/resources/application.yml' = "spring:`n  datasource:`n    url: jdbc:oracle:thin:@//host:1521/svc`n" }
+  Igual 'el original con Oracle y sin Map, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = Original-M76 $e @{ 'src/main/resources/application.yml' = "spring:`n  datasource:`n    url: `${DB_URL}`n"; 'src/test/resources/application.yml' = "spring:`n  datasource:`n    url: jdbc:h2:mem:t`n" }
+  Igual 'el original con url de variable y una H2 solo en src/test, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = Original-M76 $e @{ 'src/main/resources/application.yml' = "spring:`n  datasource:`n    url: jdbc:h2:mem:legado`n" }
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'el original con solo una H2 en memoria, sale' 1 $h.Count
+  Comprueba 'y dice que su base es una H2 en memoria' ($h[0].Detalle -like '*El original no guarda las ejecuciones de Batch (su base es una H2 en memoria)*') $h[0].Detalle
+}
+
+$Pruebas['m76 (i1) las reglas que fallan al arrancar o cambian en silencio se exigen aunque la plantilla tambien las tenga (circular, bean repetido, parametros v4, nashorn, comando junto); enable-batch no'] = {
+  $mismo = { param($pkg) @{
+      CiA   = (Pide-M76 'CiA' 'CiB b')
+      CiB   = (Pide-M76 'CiB' 'CiA a')
+      CfgA  = (Beans-M76 'CfgA' @('@Bean public Lector lector() {') '@Configuration' $pkg)
+      CfgB  = (Beans-M76 'CfgB' @('@Bean public Lector lector() {') '@Configuration' $pkg)
+      Motor = (Metodo-M76 'Motor' 'Object m = manager.getEngineByName("nashorn"); SystemCommandTasklet t = null; t.setCommand("ls -l");')
+      Batch = (Clase-M70 'Batch' "@Configuration`n@EnableBatchProcessing" '')
+    } }
+  $e = Escenario-M70 'm76-i1' (& $mismo 'com.acme.life.application.usecases') (& $mismo 'com.acme.plantilla.application.usecases')
+  Escribe $e.Repo 'bin/lanza.sh' "java -jar b.jar `"n(long)=1`"`n"
+  Escribe $e.Plantilla 'bin/lanza.sh' "java -jar b.jar `"n(long)=1`"`n"
+  [void](Rescate @('-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-SinBuild'))
+  $cal = @(Hallazgos $e.Repo | Where-Object { $_.Cat -eq 'calidad' })
+  foreach ($regla in @('referencia-circular', 'bean-repetido', 'parametros-v4', 'nashorn', 'comando-sin-partir')) {
+    $r = @($cal | Where-Object { $_.Detalle.StartsWith('[' + $regla + ']') })
+    Comprueba "$regla sale" ($r.Count -gt 0) ''
+    Igual "$regla sigue siendo error" '' ((@($r | Where-Object { $_.Sev -ne 'error' } | ForEach-Object { $_.Sev }) | Select-Object -Unique) -join ' ')
+  }
+  $b = @($cal | Where-Object { $_.Detalle.StartsWith('[enable-batch]') })
+  Igual 'enable-batch, con la plantilla igual, es aviso' 'aviso' ((@($b | ForEach-Object { $_.Sev }) | Select-Object -Unique) -join ' ')
+}
+
+$Pruebas['m76 (i2) el prompt del paso calidad dice que hacer con las reglas de las guias de migracion, y el hallazgo lleva su texto'] = {
+  $e = Escenario-M70 'm76-i2' @{ ServicioA = (Pide-M76 'ServicioA' 'ServicioB b'); ServicioB = (Pide-M76 'ServicioB' 'ServicioA a') }
+  [void](Rescate @('-Modo', 'fix', '-Repo', $e.Repo, '-Plantilla', $e.Plantilla, '-Paso', 'calidad', '-SinPlan', '-Auto', '-Si', '-MaxIntentos', '1', '-MaxLotes', '1'))
+  if (-not (Test-Path -LiteralPath (Join-Path $e.Wt '.git'))) { Comprueba 'existe el worktree' $false; return }
+  $prompt = Lee $e.Wt '.rescate/prompt.md'
+  Comprueba 'el hallazgo del lote es el del ciclo' ($prompt -match 'ServicioA\.java:\d+ - \[referencia-circular\] Referencia circular entre beans') $prompt
+  Comprueba 'el paso dice como romper un ciclo' ($prompt -match 'Referencia circular entre beans: rompe el ciclo sin cambiar lo que hace') $prompt
+  Comprueba 'y como dar su base a Batch, avisando de que crea un fichero nuevo' ($prompt -match 'Repositorio de Batch: crea una @Configuration en el paquete de configuracion con un DataSource H2 en memoria marcado con @BatchDataSource') $prompt
+}
+
+# Un original (Spring Batch 4) con un DefaultBatchConfigurer: $Setter es el metodo setDataSource que lleva ($Cabeza, lo que va antes de la clase).
+function OriginalConfigurador-M76($E, [string]$Setter, [string]$Cabeza = 'public class SinBase extends DefaultBatchConfigurer') {
+  return (Original-M76 $E @{ 'src/main/java/com/acme/life/config/SinBase.java' = "package com.acme.life.config;`n`nimport javax.sql.DataSource;`n`n/** Configurador de Batch. */`n$Cabeza {`n$Setter`n}`n" })
+}
+
+# Un escenario con el migrado a la base del negocio (url de variable) y la plantilla con su base propia de Batch.
+function EscenarioBase-M76([string]$Nombre, [hashtable]$Repo = @{}) {
+  $e = Escenario-M70 $Nombre $Repo @{ BaseBatch = (BaseBatch-M76 '@BatchDataSource' $MemoriaH2) }
+  Escribe $e.Repo 'src/main/resources/application.yml' "spring:`n  datasource:`n    url: `${DB_URL}`n"
+  return $e
+}
+
+$Pruebas['m76 (i3) repositorio-batch: un DefaultBatchConfigurer del original (con extends o anonimo) que sobrescribe setDataSource con el cuerpo vacio deja el repositorio en memoria: sale'] = {
+  $e = EscenarioBase-M76 'm76-i3'
+  $vacio = "    @Override`n    public void setDataSource(DataSource dataSource) {`n    }"
+  $o = OriginalConfigurador-M76 $e $vacio
+  $h = Cal-M76 $e 'repositorio-batch' $o
+  Igual 'con extends y el cuerpo vacio, sale una vez' 1 $h.Count
+  Comprueba 'y el texto dice por que' ($h[0].Detalle -like '*El original no guarda las ejecuciones de Batch (sobrescribe setDataSource vacio en DefaultBatchConfigurer, que deja el repositorio en memoria)*') $h[0].Detalle
+  $o = OriginalConfigurador-M76 $e "    @Bean`n    BatchConfigurer configurer() {`n        return new DefaultBatchConfigurer() {`n            @Override`n            public void setDataSource(final DataSource ds) {}`n        };`n    }" 'public class Configuracion'
+  Igual 'anonimo, con un parametro final y las llaves juntas, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = OriginalConfigurador-M76 $e "    @Override`n    public void setDataSource(DataSource dataSource) {`n        // sin base: el repositorio va en memoria`n        /* nada */`n    }"
+  Igual 'con el cuerpo solo de comentarios, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (i4) repositorio-batch: un setDataSource del original que llama a super o asigna el campo, o uno vacio en un fichero que no nombra DefaultBatchConfigurer, no cuenta'] = {
+  $e = EscenarioBase-M76 'm76-i4'
+  $o = OriginalConfigurador-M76 $e "    @Override`n    public void setDataSource(DataSource dataSource) {`n        super.setDataSource(dataSource);`n    }"
+  Igual 'con una llamada a super, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = OriginalConfigurador-M76 $e "    private DataSource ds;`n`n    @Override`n    public void setDataSource(DataSource dataSource) {`n        this.ds = dataSource;`n    }"
+  Igual 'con una asignacion al campo, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  $o = OriginalConfigurador-M76 $e "    public void setDataSource(DataSource dataSource) {`n    }" 'public class Gestor'
+  Igual 'vacio en una clase que no es un DefaultBatchConfigurer, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (i5) repositorio-batch: un setDataSource vacio dentro de un comentario del original no cuenta'] = {
+  $e = EscenarioBase-M76 'm76-i5'
+  $o = OriginalConfigurador-M76 $e "    // public void setDataSource(DataSource dataSource) {`n    // }`n    /*`n    public void setDataSource(DataSource dataSource) { }`n    */`n    /** Antes: setDataSource(DataSource d) { }. */`n    void otra() {}"
+  Igual 'en comentarios de linea, de bloque y de javadoc, no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+$Pruebas['m76 (i6) repositorio-batch: @EnableBatchProcessing(dataSourceRef = "x") con un DataSource en memoria en el mismo fichero es una base propia de Batch (Spring Batch 5); enable-batch sigue saliendo'] = {
+  $cuerpo = "    @Bean(`"batchDs`")`n    public DataSource batchDs() {`n        $MemoriaH2`n    }`n"
+  $e = EscenarioBase-M76 'm76-i6' @{ BatchCfg = (Clase-M70 'BatchCfg' "@Configuration`n@EnableBatchProcessing(dataSourceRef = `"batchDs`")" $cuerpo) }
+  $o = Original-M76 $e $OriginalMapa
+  Igual 'con dataSourceRef y una H2 en memoria, repositorio-batch no sale' 0 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Igual 'y enable-batch sale en esa clase' 'BatchCfg' (Ficheros-M70 @(Cal-M76 $e 'enable-batch' $o))
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/BatchCfg.java' (Clase-M70 'BatchCfg' "@Configuration`n@EnableBatchProcessing(dataSourceRef = `"batchDs`")" $cuerpo.Replace($MemoriaH2, 'return DataSourceBuilder.create().url("jdbc:oracle:thin:@//host:1521/svc").build();'))
+  Igual 'con dataSourceRef y un DataSource que no es en memoria, sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/BatchCfg.java' (Clase-M70 'BatchCfg' "@Configuration`n@EnableBatchProcessing" $cuerpo)
+  Igual 'con un DataSource en memoria pero sin dataSourceRef (Batch sigue en dataSource), sale' 1 @(Cal-M76 $e 'repositorio-batch' $o).Count
+}
+
+# Los dos ficheros de un ciclo por constructor entre dos componentes: Pide-M76 de cada uno con lo que pide (para varios pares a la vez).
+function Par-M76([string]$A, [string]$ParamA, [string]$B, [string]$ParamB, [string]$Cabeza = '@Service') {
+  return @{ $A = (Pide-M76 $A $ParamA $Cabeza); $B = (Pide-M76 $B $ParamB $Cabeza) }
+}
+
+$Pruebas['m76 (j1) referencia-circular: un ciclo a traves de List<X>, Optional<X> o Set<? extends X> en el constructor sale (pide los beans del ultimo generico)'] = {
+  $repo = @{}
+  foreach ($par in @(@('LiA', 'List<LiB> bs', 'LiB', 'LiA a'), @('OpA', 'Optional<OpB> b', 'OpB', 'OpA a'), @('SeA', 'Set<? extends SeB> bs', 'SeB', 'SeA a'))) { $repo += Par-M76 $par[0] $par[1] $par[2] $par[3] }
+  $e = Escenario-M70 'm76-j1' $repo
+  Igual 'salen las seis clases' 'LiA LiB OpA OpB SeA SeB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j2) referencia-circular: un ciclo a traves de un supertipo de un supertipo (clase -> clase -> interfaz que se pide) sale'] = {
+  $e = Escenario-M70 'm76-j2' @{
+    Puerto0    = (Java-M76 'Puerto0' 'interface')
+    Base       = (Java-M76 'Base' 'class' '' ' implements Puerto0')
+    Adap       = ((Pide-M76 'Adap' 'Consumidor c' '@Component') -replace 'public class Adap ', 'public class Adap extends Base ')
+    Consumidor = (Pide-M76 'Consumidor' 'Puerto0 p')
+  }
+  Igual 'salen Adap y Consumidor' 'Adap Consumidor' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j3) referencia-circular: un ciclo a traves de implements Puerto<Algo> (interfaz con genericos) sale'] = {
+  $e = Escenario-M70 'm76-j3' @{
+    PuertoG  = (Java-M76 'PuertoG<T>' 'interface')
+    AdapG    = (Implementa-M76 'AdapG' 'PuertoG<String>' 'ClienteG c')
+    ClienteG = (Pide-M76 'ClienteG' 'PuertoG p')
+  }
+  Igual 'salen AdapG y ClienteG' 'AdapG ClienteG' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j4) referencia-circular: un ciclo a traves de un metodo @Autowired (un setter) sale; con @Lazy en el metodo, no'] = {
+  $e = Escenario-M70 'm76-j4' @{
+    SetA = (Clase-M70 'SetA' '@Service' "    @Autowired`n    public void setB(SetB b) {`n    }`n")
+    SetB = (Pide-M76 'SetB' 'SetA a')
+    SetC = (Clase-M70 'SetC' '@Service' "    @Autowired`n    @Lazy`n    public void setD(SetD d) {`n    }`n")
+    SetD = (Pide-M76 'SetD' 'SetC c')
+  }
+  Igual 'salen SetA y SetB, y no SetC ni SetD (con @Lazy)' 'SetA SetB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j5) bean-repetido: el nombre del bean de una clase es el de Introspector.decapitalize: URLLector se queda como esta y Servicio pasa a servicio'] = {
+  $e = Escenario-M70 'm76-j5' @{ URLLector = (Clase-M70 'URLLector' '@Service' ''); Servicio = (Clase-M70 'Servicio' '@Service' '') }
+  $otro = 'com.acme.life.infrastructure.adapters'
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/URLLector.java' (Clase-M70 'URLLector' '@Component' '' $otro)
+  Escribe $e.Repo 'src/main/java/com/acme/life/infrastructure/adapters/Servicio.java' (Clase-M70 'Servicio' '@Component' '' $otro)
+  $h = Cal-M76 $e 'bean-repetido'
+  Igual 'salen las dos clases en sus dos paquetes' 'Servicio Servicio URLLector URLLector' (Ficheros-M70 $h)
+  Comprueba "el nombre de URLLector es 'URLLector' (las dos primeras en mayuscula)" (@($h | Where-Object { $_.Fichero -like '*URLLector.java' -and $_.Detalle -clike "*el mismo nombre de bean 'URLLector' (*" }).Count -eq 2) (($h | ForEach-Object { $_.Detalle }) -join ' / ')
+  Comprueba "y el de Servicio es 'servicio'" (@($h | Where-Object { $_.Fichero -like '*Servicio.java' -and $_.Detalle -clike "*el mismo nombre de bean 'servicio' (*" }).Count -eq 2) (($h | ForEach-Object { $_.Detalle }) -join ' / ')
+}
+
+$Pruebas['m76 (j6) varios-jobs-sin-nombre: SPRING_BATCH_JOB_NAME como variable de entorno en un script o en el Dockerfile cuenta como nombre'] = {
+  $e = Escenario-M70 'm76-j6' @{
+    Jobs1 = (Beans-M76 'Jobs1' @('@Bean public Job altaJob(JobRepository r) {'))
+    Jobs2 = (Beans-M76 'Jobs2' @('@Bean public Job bajaJob(JobRepository r) {'))
+  }
+  Igual 'sin nombre, sale' 1 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Escribe $e.Repo 'bin/lanza.sh' "#!/bin/sh`nSPRING_BATCH_JOB_NAME=altaJob java -jar batch-life.jar`n"
+  Igual 'con la variable en un script, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+  Remove-Item -LiteralPath (Join-Path $e.Repo 'bin/lanza.sh') -Force
+  Escribe $e.Repo 'Dockerfile' "FROM eclipse-temurin:21`nENV SPRING_BATCH_JOB_NAME=altaJob`nCMD [`"java`", `"-jar`", `"batch-life.jar`"]`n"
+  Igual 'con ENV en el Dockerfile, no sale' 0 @(Cal-M76 $e 'varios-jobs-sin-nombre').Count
+}
+
+$Pruebas['m76 (j7) referencia-circular: un componente con @StepScope o @JobScope dentro de un ciclo no cuenta (Spring lo crea al empezar el step, no al arrancar)'] = {
+  $repo = Par-M76 'SsA' 'SsB b' 'SsB' 'SsA a'
+  $repo['SsA'] = (Pide-M76 'SsA' 'SsB b' "@Component`n@StepScope")
+  $repo += @{ JsA = (Pide-M76 'JsA' 'JsB b' "@Component`n@JobScope"); JsB = (Pide-M76 'JsB' 'JsA a') }
+  $e = Escenario-M70 'm76-j7' $repo
+  Igual 'no sale ninguno' '' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j8) referencia-circular: un @Bean static no depende de su clase de configuracion; sin static, el ciclo sale'] = {
+  $miembros = { param($mod) "    private final Lector lector;`n`n" + (Ctor-M70 'FabCfg' '' 'Lector lector') + "    @Bean`n    public $mod Lector lector() {`n        return null;`n    }`n" }
+  $e = Escenario-M70 'm76-j8' @{ FabCfg = (Clase-M70 'FabCfg' '@Configuration' (& $miembros 'static')) }
+  Igual 'con static, no sale' '' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/FabCfg.java' (Clase-M70 'FabCfg' '@Configuration' (& $miembros ''))
+  Igual 'sin static, sale' 'FabCfg' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j9) referencia-circular: con @RequiredArgsConstructor un campo final con valor inicial no se pide; sin valor inicial, si'] = {
+  $e = Escenario-M70 'm76-j9' @{
+    RqA = (Clase-M70 'RqA' "@Service`n@RequiredArgsConstructor" "    private final RqB b = new RqB(null);`n")
+    RqB = (Pide-M76 'RqB' 'RqA a')
+    RqD = (Clase-M70 'RqD' "@Service`n@RequiredArgsConstructor" "    private final RqE e;`n")
+    RqE = (Pide-M76 'RqE' 'RqD d')
+  }
+  Igual 'salen RqD y RqE, y no RqA ni RqB' 'RqD RqE' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j10) bean-repetido: dos componentes con el mismo nombre de clase, uno con @Conditional* o @Conditional(...), no salen; sin condicion, si'] = {
+  $e = Escenario-M70 'm76-j10' @{
+    Cond1 = (Clase-M70 'Cond1' "@Service`n@ConditionalOnMissingBean" '')
+    Cond2 = (Clase-M70 'Cond2' "@Service`n@Conditional(MiCondicion.class)" '')
+    Libre = (Clase-M70 'Libre' '@Service' '')
+  }
+  $otro = 'com.acme.life.infrastructure.adapters'
+  foreach ($n in @('Cond1', 'Cond2', 'Libre')) { Escribe $e.Repo "src/main/java/com/acme/life/infrastructure/adapters/$n.java" (Clase-M70 $n '@Component' '' $otro) }
+  Igual 'sale Libre en sus dos paquetes, y no Cond1 ni Cond2' 'Libre Libre' (Ficheros-M70 (Cal-M76 $e 'bean-repetido'))
+}
+
+$Pruebas['m76 (j11) nashorn: getEngineByName("nashorn") dentro de un comentario de linea o de bloque no sale'] = {
+  $e = Escenario-M70 'm76-j11' @{
+    Real   = (Metodo-M76 'Real' 'Object m = manager.getEngineByName("nashorn");')
+    Linea  = (Metodo-M76 'Linea' '// Object m = manager.getEngineByName("nashorn");')
+    Bloque = (Metodo-M76 'Bloque' '/* Object m = manager.getEngineByName("js"); */')
+  }
+  Igual 'sale Real y no los comentarios' 'Real' (Ficheros-M70 (Cal-M76 $e 'nashorn'))
+}
+
+$Pruebas['m76 (j12) referencia-circular: con dos constructores solo cuenta el que lleva @Autowired; los parametros del otro no crean un ciclo'] = {
+  $e = Escenario-M70 'm76-j12' @{
+    CtA = (Clase-M70 'CtA' '@Service' ((Ctor-M70 'CtA' '@Autowired' 'String texto') + (Ctor-M70 'CtA' '' 'CtB b')))
+    CtB = (Pide-M76 'CtB' 'CtA a')
+  }
+  Igual 'con @Autowired en el que no pide CtB, no sale' '' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+  Escribe $e.Repo 'src/main/java/com/acme/life/application/usecases/CtA.java' (Clase-M70 'CtA' '@Service' ((Ctor-M70 'CtA' '' 'String texto') + (Ctor-M70 'CtA' '@Autowired' 'CtB b')))
+  Igual 'con @Autowired en el que pide CtB, sale' 'CtA CtB' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
+$Pruebas['m76 (j13) referencia-circular: un ciclo a traves de una interfaz que extiende la que se pide (interface Puerto1 extends Puerto0, con o sin genericos) sale'] = {
+  $e = Escenario-M70 'm76-j13' @{
+    Puerto0     = (Java-M76 'Puerto0' 'interface')
+    Puerto1     = (Java-M76 'Puerto1' 'interface' '' ' extends Puerto0')
+    Adap        = (Implementa-M76 'Adap' 'Puerto1' 'Consumidor c')
+    Consumidor  = (Pide-M76 'Consumidor' 'Puerto0 p')
+    PuertoG0    = (Java-M76 'PuertoG0<T>' 'interface')
+    PuertoG1    = (Java-M76 'PuertoG1<T>' 'interface' '' ' extends PuertoG0<T>')
+    AdapG       = (Implementa-M76 'AdapG' 'PuertoG1<String>' 'ConsumidorG c')
+    ConsumidorG = (Pide-M76 'ConsumidorG' 'PuertoG0 p')
+  }
+  Igual 'salen los dos ciclos' 'Adap AdapG Consumidor ConsumidorG' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

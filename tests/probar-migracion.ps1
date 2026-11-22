@@ -1984,6 +1984,20 @@ function Sistema-Motor-Lento {
   return (Join-Path $sis 'migracion.ps1')
 }
 
+# El mismo sistema, con el motor de mentira apuntando tambien el -Legacy que recibe (la ultima columna de cada llamada).
+function Sistema-Motor-Legacy {
+  $sis = Join-Path $Dir 'sistema-motor-legacy'
+  if (-not (Test-Path -LiteralPath $sis)) {
+    Copy-Item -LiteralPath (Split-Path -Parent (Sistema-Motor)) -Destination $sis -Recurse
+    $motor = Join-Path $sis 'rescate.ps1'
+    $t = [System.IO.File]::ReadAllText($motor)
+    $apunta = $t.Replace('|$Repo`n")', '|$Repo|$Legacy`n")')
+    Comprueba 'el motor falso apunta el -Legacy' ($apunta -ne $t)
+    [System.IO.File]::WriteAllText($motor, $apunta)
+  }
+  return (Join-Path $sis 'migracion.ps1')
+}
+
 # Las lineas que el motor falso apunto de ese modo (una por llamada).
 function Llamadas-Motor($E, [string]$Modo) {
   $l = Get-Ruta $E.Raiz 'motor-falso.json.llamadas'
@@ -8587,12 +8601,21 @@ $Pruebas['w2 (j) migracion.ps1: carga revision.ps1 y arreglo-propiedades.ps1 des
   Comprueba 'migracion.ps1 es solo ASCII' (@([System.IO.File]::ReadAllBytes($Script) | Where-Object { $_ -gt 127 }).Count -eq 0)
 }
 
+$Pruebas['m76 (j) diagnostico: migracion.ps1 le pasa -Legacy al motor en cada diagnostico (antes y despues), para que repositorio-batch lea el original sin depender de contrato.json'] = {
+  $e = Nuevo-Escenario 'm76-legacy' @('Clase1')
+  $r = Migra-Motor $e (Orden-Base) (Corrige $e) (Sistema-Motor-Legacy)
+  Igual 'sale con 0' 0 $r.Codigo
+  $d = @(Llamadas-Motor $e 'diagnostico')
+  Igual 'dos diagnosticos, antes y despues' 2 $d.Count
+  Igual 'los dos terminan en el repo del worktree y el original' '' ((@($d | Where-Object { -not $_.EndsWith('|' + $e.Wt + '|' + $e.Legacy) }) -join ' / '))
+}
+
 $Pruebas['w2 (k) FLUJO.md (Paso 2) cuenta la fase propiedades y la revision: que revisa, con que reglas, que solo lee, la cita comprobada, el tope de 5, -RevisarTodo y datos/revision.json'] = {
   $f = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $Script) 'FLUJO.md'))
   $paso = [regex]::Match($f, '(?s)## Paso 2\. Corregir lo del informe.*?(?=\r?\n## |\z)').Value
   Comprueba 'el Paso 2 existe' ($paso.Length -gt 0)
   Comprueba 'dice que revisa un step con sus piezas o un fichero suelto' ($paso -match 'step' -and $paso -match 'fichero suelto') $paso
-  Comprueba 'con las 9 reglas del cat.logo' ($paso -match '9 reglas') $paso
+  Comprueba 'con las 8 reglas del cat.logo' ($paso -match '8 reglas') $paso
   Comprueba 'que solo lee, que cada hallazgo lleva una cita comprobada y el tope de 5 por unidad' ($paso -match 'solo lee' -and $paso -match 'cita comprobada' -and $paso -match '5 hallazgos por unidad') $paso
   Comprueba 'que -RevisarTodo revisa todos los .java' ($paso -match '-RevisarTodo' -and $paso -match 'src/main/java') $paso
   Comprueba 'y que el resultado va a datos\revision.json' ($paso.Contains('datos\revision.json')) $paso
