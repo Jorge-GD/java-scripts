@@ -6518,5 +6518,102 @@ $Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo cortad
   Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
 }
 
+# ===================== M69: un test que se escribe otra vez no puede quedar peor que el de antes =====================
+# Escenarios con el Copilot de m69 (tests/falsos/m69-copilot.ps1) y el Maven de m69 (m69-mvn.ps1), que hacen lo de m40 y, con RESCATE_M69 (guiones separados por ';'
+# '<regex sobre el id de la tarea>@<n>@<marca>~<marca>'), dejan en el test del arnes que casa, en su llamada n (contando las de todos los lanzamientos), una linea
+# '// <marca>' por marca: M69_VERSION=<x> (solo hace distinto el test), M69_VACIO=<estado>[:<regex sobre el job>] (el estado del caso vacio: COMPLETED, FAILED,
+# EXCEPCION...), M69_CAUSA=<texto> (la causa que dice Maven), M69_TABLAS=T_A:ID|NOMBRE,T_B:ID (las tablas, con sus columnas, que deja el caso vacio).
+
+function Escenario-M69([string]$Nombre, $Casos, [hashtable]$Mas = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'm69-copilot.ps1'); MvnExe = (Join-Path $falsos 'm69-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Mas.Keys) { $aj[$k] = $Mas[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+# Lanza con los guiones $Guiones de m69-copilot.ps1 (RESCATE_M69) y la base de los tests $Tablas ('tablas=<n>/<T_A,T_B>:<id>' de m40-copilot.ps1).
+function Prueba-M69($E, [string]$Guiones = '', [string[]]$A = @(), [string]$Tablas = '') {
+  $env:RESCATE_M69 = $Guiones
+  $env:RESCATE_M40 = $Tablas
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M69 = ''; $env:RESCATE_M40 = '' }
+}
+
+# El test que dejo guardado, en arnes-anterior, el arnes del $Repo ('original' o 'migrado'), o '' si no hay.
+function Test-Anterior($E, [string]$Repo) {
+  $paquete = 'viejo'
+  if ($Repo -eq 'migrado') { $paquete = 'nuevo' }
+  $f = Get-Ruta $E.Local "arnes-anterior/$Repo/src/test/java/com/acme/$paquete/PruebaLocalTest.java"
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return [System.IO.File]::ReadAllText($f)
+}
+
+# Los ficheros de una carpeta de prueba-local, con su contenido, para comparar dos carpetas: 'ruta relativa=contenido' en orden y separados por '|'.
+function Foto-Carpeta($E, [string]$Rel) {
+  $d = Get-Ruta $E.Local $Rel
+  if (-not (Test-Path -LiteralPath $d)) { return '(no existe)' }
+  $base = (Resolve-Path -LiteralPath $d).Path
+  return ((@(Get-ChildItem -LiteralPath $d -Recurse -File | ForEach-Object { $_.FullName.Substring($base.Length).Replace('\', '/') + '=' + ([System.IO.File]::ReadAllText($_.FullName) -replace "\s+", ' ') }) | Sort-Object { $_ }) -join '|')
+}
+
+$V2 = 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2'
+
+$Pruebas['m69 (a1) con -RehacerOriginal, el test del original y el del migrado de antes acaban en arnes-anterior y salidas/vacio en salidas/vacio-anterior; sin -Rehacer..., nada se mueve'] = {
+  $e = Escenario-M69 'm69-a1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e $V2
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  Comprueba 'el caso vacio guardado lleva algo' ($v1 -match 'cargaJob/estado.txt=estado=COMPLETED') $v1
+  Comprueba 'aun no hay arnes-anterior ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  $r = Prueba-M69 $e $V2
+  Igual 'sin -Rehacer, sale con 0' 0 $r.Codigo
+  Comprueba 'sin -Rehacer no se mueve nada: ni arnes-anterior ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  Igual 'y los tests guardados son los mismos' "$o1|$m1" ((Test-Guardado $e 'original') + '|' + (Test-Guardado $e 'migrado'))
+  $r = Prueba-M69 $e $V2 @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/original es el test de antes' $o1 (Test-Anterior $e 'original')
+  Igual 'arnes-anterior/migrado es el de antes del migrado (se escribe otra vez por el original)' $m1 (Test-Anterior $e 'migrado')
+  Comprueba 'el del original guardado ahora es el nuevo (con su marca)' ((Test-Guardado $e 'original').Contains('M69_VERSION=v2') -and (Test-Guardado $e 'original') -ne $o1) ''
+  Comprueba 'y el del migrado' ((Test-Guardado $e 'migrado').Contains('M69_VERSION=v2') -and (Test-Guardado $e 'migrado') -ne $m1) ''
+  Igual 'salidas/vacio-anterior es el caso vacio de antes, entero' $v1 (Foto-Carpeta $e 'salidas/vacio-anterior')
+}
+
+$Pruebas['m69 (a2) con -RehacerArnes solo el del migrado va a arnes-anterior: el del original y salidas/vacio no se tocan'] = {
+  $e = Escenario-M69 'm69-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e $V2
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'; $m1 = Test-Guardado $e 'migrado'
+  $v1 = Foto-Carpeta $e 'salidas/vacio'
+  $r = Prueba-M69 $e $V2 @('-RehacerArnes')
+  Igual 'con -RehacerArnes, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/migrado es el de antes' $m1 (Test-Anterior $e 'migrado')
+  Comprueba 'el del migrado guardado es el nuevo' ((Test-Guardado $e 'migrado').Contains('M69_VERSION=v2')) ''
+  Igual 'arnes-anterior/original no existe' '' (Test-Anterior $e 'original')
+  Comprueba 'ni salidas/vacio-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/vacio-anterior'))) ''
+  Igual 'el del original guardado no cambia' $o1 (Test-Guardado $e 'original')
+  Igual 'ni salidas/vacio' $v1 (Foto-Carpeta $e 'salidas/vacio')
+}
+
+$Pruebas['m69 (a3) un test guardado con la plantilla de otro lanzamiento (se escribe otra vez sin que nadie lo pida) tambien pasa a arnes-anterior; un tercer -RehacerOriginal pisa el de antes'] = {
+  $e = Escenario-M69 'm69-a3' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3'
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  $o1 = Test-Guardado $e 'original'
+  Deja-Tarea-M37 $e 'original' $null 'aaaaaaaa'
+  Deja-Tarea-M37 $e 'migrado' $null 'bbbbbbbb'
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3'
+  Igual 'con la plantilla vieja, sale con 0' 0 $r.Codigo
+  Comprueba 'dice que escribe otra vez los dos' ($r.Salida.Contains($AvisoM37b)) (Cola $r.Salida)
+  Igual 'arnes-anterior/original es el de la primera vez' $o1 (Test-Anterior $e 'original')
+  $o2 = Test-Guardado $e 'original'
+  Comprueba 'y el guardado es el nuevo' ($o2.Contains('M69_VERSION=v2')) ''
+  $r = Prueba-M69 $e 'arnes-original@2@M69_VERSION=v2;arnes-migrado@2@M69_VERSION=v2;arnes-original@3@M69_VERSION=v3;arnes-migrado@3@M69_VERSION=v3' @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal, sale con 0' 0 $r.Codigo
+  Igual 'arnes-anterior/original es ahora el de la segunda vez: pisa el de antes' $o2 (Test-Anterior $e 'original')
+  Comprueba 'y el guardado es el de la tercera' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

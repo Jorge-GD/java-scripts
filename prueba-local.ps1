@@ -27,12 +27,14 @@ QUE HACE
      mvn -q test-compile y mvn test -Dtest=PruebaLocalTest con -Dsurefire.timeout=SegundosTestArnes (la comprobacion tambien).
      Un arnes guardado de otro lanzamiento se comprueba antes de llamar a la IA, aunque su tarea no este hecha (la plantilla
      cambio, o el reintento quedo atascado): si sigue valiendo se usa, sin llamar a Copilot. Con -RehacerArnes, el del migrado
-     se borra y se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
+     se escribe otra vez (el del original no se toca); con -RehacerOriginal, el del original (por ejemplo, si su base
      de prueba no crea las tablas del codigo) y, con el, el del migrado. Lo mismo, sin pedirlo, si el guardado se escribio con otra
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
      tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
      motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar (Get-PrevioArnes).
+     El test que se escribe otra vez no se borra: pasa a prueba-local\arnes-anterior\<lado> (y el caso vacio del original, a
+     salidas\vacio-anterior), pisando el de la vez anterior (Save-Anterior).
      Si con un caso vacio el original arranca un job y el migrado no, el test del migrado se rechaza y, en el ultimo intento, se acepta con un aviso:
      de ese job se ejecuta solo el primer caso y, si acaba EXCEPCION con la misma clase, los demas salen sin probar (no se ejecutan); la linea
      final dice que puede ser el codigo del migrado y que se lo preguntes a Copilot en el repo del migrado, sin aconsejar -RehacerArnes.
@@ -140,8 +142,8 @@ param(
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
   [switch]$Regresion,         # deja los casos que salen iguales como tests de JUnit (RegresionLocalTest) en la rama de rescate, en un commit
-  [switch]$RehacerArnes,      # borra el test del migrado guardado y lo escribe otra vez con la IA, traduciendo el del original (que no se toca)
-  [switch]$RehacerOriginal,   # borra el test del original guardado y lo escribe otra vez con la IA, y con el el del migrado, que lo traduce
+  [switch]$RehacerArnes,      # escribe otra vez con la IA el test del migrado (el de antes pasa a arnes-anterior), traduciendo el del original (que no se toca)
+  [switch]$RehacerOriginal,   # escribe otra vez con la IA el test del original (el de antes pasa a arnes-anterior), y con el el del migrado, que lo traduce
   [switch]$Si                 # no preguntar antes de llamar a Copilot
 )
 $ErrorActionPreference = 'Stop'
@@ -1380,6 +1382,25 @@ function Save-Arnes($T) {
   $permitidos = @(Get-Permitidos $T)
   foreach ($rel in @(Get-Cambios $dir | Where-Object { $permitidos -contains $_ })) { Copy-Fichero (Join-Ruta $dir $rel) (Join-Ruta $dest $rel) }
   Save-Copia $dir
+}
+
+# El test de $Lado ('original' o 'migrado') que se va a escribir otra vez no se borra: pasa de prueba-local\arnes\<lado> a prueba-local\arnes-anterior\<lado>,
+# pisando el de la vez anterior, y el del original lleva con el su caso vacio (salidas\vacio pasa a salidas\vacio-anterior: el nuevo lo pisa). Sin un test
+# guardado (un lanzamiento anterior se corto con el de antes ya movido), no se toca nada: sigue el que hubiera. Apunta en $script:Anteriores si hay un test de
+# antes con el que comparar el nuevo (Test-ArnesEscrito) o al que volver (Restore-Anterior).
+function Save-Anterior([string]$Lado) {
+  $actual = Join-Ruta $Local "arnes/$Lado"
+  $anterior = Join-Ruta $Local "arnes-anterior/$Lado"
+  if (Test-Path -LiteralPath $actual) {
+    Remove-Carpeta $anterior
+    Copy-Carpeta $actual $anterior
+    if ($Lado -eq 'original') {
+      Remove-Carpeta (Join-Ruta $Local 'salidas/vacio-anterior')
+      Copy-Carpeta (Join-Ruta $Local 'salidas/vacio') (Join-Ruta $Local 'salidas/vacio-anterior')
+    }
+    Remove-Carpeta $actual
+  }
+  $script:Anteriores[$Lado] = (Test-Path -LiteralPath $anterior)
 }
 
 # Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
@@ -3115,6 +3136,7 @@ $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repeti
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 $script:Arbol = $null   # el arbol de dependencias del migrado (Get-ArbolDependencias), la primera vez que un grupo lo pide
 $script:Anterior = Get-JsonPrueba   # el prueba-local.json de antes de este lanzamiento: Save-Resultado lo pisa y Add-Hechos lo compara
+$script:Anteriores = @{}   # por lado (original, migrado): hay un test de antes en arnes-anterior con el que comparar el que se escribe otra vez en este lanzamiento (Save-Anterior)
 try {
   if (-not (Set-Despierto $true)) { Aviso 'No he podido pedir a Windows que no suspenda el equipo: si lo dejas solo, compruebalo.' }
   # 1. Copias desechables y que compilen
@@ -3164,7 +3186,7 @@ try {
       if (-not $rehacer.migrado -and $x[0] -eq 'migrado') { Info 'La plantilla del test ha cambiado desde que se escribio el del migrado: lo escribo otra vez traduciendo el del original.' }
       $rehacer[$x[0]] = $true
     }
-    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado se borra tras la pregunta
+    # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado pasa a arnes-anterior tras la pregunta
     if ($rehacer[$x[0]]) { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
     elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
     # Si el del original no queda hecho (la plantilla, o ya no vale en este commit), se escribe otra vez y el del migrado guardado tambien: lo
@@ -3192,7 +3214,7 @@ try {
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
-  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Remove-Carpeta (Join-Ruta $Local "arnes/$repo") } }
+  foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Save-Anterior $repo } }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   $escribeOriginal = ($ArnesOrig.estado -ne 'hecha')
