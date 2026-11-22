@@ -84,7 +84,8 @@ QUE HACE
      diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
      prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
-     lanzamiento los escriba otra vez con ese motivo. Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
+     lanzamiento los escriba otra vez con ese motivo (sus tests no se pierden: pasan a prueba-local\arnes-invalidado\<lado>, y si el usuario
+     los arregla y los copia a prueba-local\arnes\, el siguiente lanzamiento sin -Rehacer los usa). Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
      un solo lado es lo mismo que una tabla que no esta. Un fichero que el original deja en una carpeta y el migrado, con el mismo nombre (normalizado), en
      otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
      alguna copia del original o, si no, la primera linea distinta (Join-OtraCarpeta). Lo que solo esta en un lado y las tablas\ no se emparejan. Los casos
@@ -1016,7 +1017,7 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   if (-not $t.entradas.PSObject.Properties['plantilla']) { $t.entradas | Add-Member -NotePropertyName plantilla -NotePropertyValue '' }   # una tarea de antes de M37
   # Un arnes invalidado (Stop-Vacios, o un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
   # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas. Que el test del
-  # original ya no este guardado (Stop-Vacios lo borra) no cuenta: la huella se compara con el hash del original de entonces.
+  # original ya no este en arnes\ (Stop-Vacios lo pasa a arnes-invalidado\) no cuenta: la huella se compara con el hash del original de entonces.
   if ($t.estado -eq 'pendiente' -and $antes -and $antes.estado -eq 'pendiente' -and $antes.intentos -gt 0 -and $antes.motivo -and $antes.entradas.huella -eq (Get-HuellaArnes $Test $Jobs ([string]$antes.entradas.hashOriginal))) {
     $t.intentos = $antes.intentos; $t.motivo = $antes.motivo; $t.ultimoEstado = $antes.ultimoEstado
     Save-Tarea $t
@@ -1857,8 +1858,9 @@ function Restore-Anterior($T) {
 
 # Pone en su copia el arnes guardado de otro lanzamiento y le pasa la misma comprobacion que a uno nuevo (el commit puede ser
 # otro), antes de llamar a la IA: aunque su tarea no este hecha (la plantilla cambio y con ella la huella, o el reintento quedo
-# atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace; una tarea
-# hecha vuelve a empezar (y se avisa), una que ya estaba por hacer sigue como estaba. Que le falten tablas a su base de prueba no lo
+# atascado), un test que sigue valiendo se usa y la tarea queda hecha, sin llamar a Copilot. Si ya no vale, se deshace y se avisa siempre
+# (aunque la tarea no estuviera hecha: el usuario puede haberlo arreglado a mano); una tarea hecha vuelve a empezar, una que ya
+# estaba por hacer sigue como estaba. Que le falten tablas a su base de prueba no lo
 # invalida (un arnes que ya sale todo igual no se rehace por eso): solo se avisa.
 function Use-ArnesGuardado($T, [string[]]$Jobs) {
   $estabaHecha = ($T.estado -eq 'hecha')
@@ -1874,8 +1876,8 @@ function Use-ArnesGuardado($T, [string[]]$Jobs) {
     return
   }
   Undo-Copia $T.entradas.copia
-  if (-not $estabaHecha) { return }
   Aviso "El test PruebaLocalTest del $($T.entradas.repo) de otro lanzamiento ya no vale en este commit ($(($m -split "`n")[0])): se vuelve a escribir."
+  if (-not $estabaHecha) { return }
   $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
   Save-Tarea $T
 }
@@ -3806,18 +3808,26 @@ function Get-JobsVacios($Res) {
 
 # Es un fallo, no un igual: invalida los dos arneses guardados (se vuelven a escribir en el siguiente lanzamiento, y la IA recibe
 # este motivo por el mismo camino que el de un intento rechazado: la tarea queda pendiente, con su intento y su motivo), borra un
-# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. migracion.ps1
-# apunta como detalle las ultimas lineas de esta salida.
+# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. Los tests guardados
+# no se pierden: antes de borrar arnes\<lado> pasan a arnes-invalidado\<lado> (pisando la copia de otra vez), por si el usuario
+# los arregla a mano y los devuelve a arnes\ en vez de dejar que la IA los escriba otra vez. Sin un test guardado del lado, no se
+# toca nada. migracion.ps1 apunta como detalle las ultimas lineas de esta salida.
 function Stop-Vacios([string[]]$Jobs) {
   $detalles = @($Jobs | ForEach-Object { "En $_, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job." })
   foreach ($t in @($ArnesOrig, $ArnesMig)) {
-    Remove-Carpeta (Join-Ruta $Local "arnes/$($t.entradas.repo)")
+    $guardado = Join-Ruta $Local "arnes/$($t.entradas.repo)"
+    if (Test-Path -LiteralPath $guardado) {
+      $invalidado = Join-Ruta $Local "arnes-invalidado/$($t.entradas.repo)"
+      Remove-Carpeta $invalidado
+      Copy-Carpeta $guardado $invalidado
+      Remove-Carpeta $guardado
+    }
     $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = ($detalles -join ' ')
     Save-Tarea $t
   }
   $json = Join-Path $DatosMig 'prueba-local.json'
   if (Test-Path -LiteralPath $json) { Remove-Item -LiteralPath $json -Force }
-  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n"))
+  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n") + "`n" + 'Tus tests estan guardados en prueba-local\arnes-invalidado\. Si prefieres arreglarlos tu, copialos a prueba-local\arnes\ (las mismas carpetas) y relanza sin -Rehacer; si relanzas sin mas, se escriben otra vez con la IA.')
 }
 
 # Por job: sus casos, iguales, distintos y sin probar y, si no arranca o falla igual en todos sus casos, 'falloIgual' (para quien lea el json despues): el lado (original o
