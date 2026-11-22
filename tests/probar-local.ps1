@@ -7818,5 +7818,45 @@ $Pruebas['m73 (c6) un PDF: sin su /CreationDate, /ModDate ni /ID se compara como
   Comprueba 'con la nota que dice que puede ser la fecha de creacion' ($dif[0].Contains('un PDF lleva su fecha de creacion dentro')) $dif[0]
 }
 
+$Pruebas['m73 (d2) Get-MotivoCambiante: un .xlsx con la fecha de hoy en una celda, un .zip o un .gz con la hora de hoy en un texto y un PDF con su fecha de creacion no valen como test fijo (el motivo de siempre); sin fechas (o con la fecha solo en docProps) valen, y un .png tambien'] = {
+  $serial = ([datetime]'2026-11-22' - [datetime]'1899-12-30').Days
+  $png = Png-M73 0x80
+  $ficheros = [ordered]@{
+    'con-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(@('A1', 's', 'importe'), @('A2', 'n', "$serial.5")) }))
+    'texto-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(, @('A1', 's', 'generado 2026-11-22 10:26:58')) }))
+    'sin-excel.xlsx' = (Xlsx-M73 '2026-11-22T10:26:58Z' ([ordered]@{ Hoja1 = @(@('A1', 's', 'importe'), @('A2', 'n', '15')) }))
+    'con-zip.zip' = (Zip-M73 ([ordered]@{ 'r.txt' = "hecho 2026-11-22 10:26:58`n"; 'logo.png' = $png }))
+    'nombre-zip.zip' = (Zip-M73 ([ordered]@{ 'r_20261122.txt' = "importe;10`n" }))
+    'sin-zip.zip' = (Zip-M73 ([ordered]@{ 'r.txt' = "importe;10`n"; 'logo.png' = $png }))
+    'con-gz.txt.gz' = (Gz-M73 "hecho 2026-11-22 10:26:58`n")
+    'sin-gz.txt.gz' = (Gz-M73 "importe;10`n")
+    'con-pdf.pdf' = (Pdf-M73 '20261122102658' 'AA11BB22' 'hola')
+    'sin-pdf.pdf' = (Pdf-M73 '' '' 'hola')
+    'logo.png' = $png
+  }
+  $d = Join-Path $Dir 'm73-d2-ficheros'
+  if (Test-Path -LiteralPath $d) { Remove-Item -LiteralPath $d -Recurse -Force }
+  [void](New-Item -ItemType Directory -Path $d -Force)
+  foreach ($k in $ficheros.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $d $k), [byte[]]$ficheros[$k]) }
+  $f = Join-Path $Dir 'm73-d2.ps1'
+  $cabeza = @'
+param([string]$Raiz)
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-22')
+$Latin = [System.Text.Encoding]::GetEncoding(28591); $Utf8 = New-Object System.Text.UTF8Encoding($false)
+'@
+  $cola = 'foreach ($n in @(Get-ChildItem -LiteralPath $Raiz -File | ForEach-Object { $_.Name })) { ''M '' + $n + '' ['' + (Get-MotivoCambiante $Raiz @($n)) + '']'' }'
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  $regresion = Join-Path (Split-Path -Parent $Script) 'regresion.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnLeer + @('Get-Normal', 'Test-NombreCorto'))) + "`n" + (Texto-De-Funciones $comun @('Join-Ruta')) + "`n" + (Texto-De-Funciones $regresion @('Get-MotivoCambiante')) + "`n" + $cola))
+  $r = Lanzar $f @($d)
+  $m = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^M (\S+) \[(.*)\]$') { $m[$Matches[1]] = $Matches[2] } }
+  $motivo = 'lleva la fecha de hoy, una hora o la ruta de una copia: no saldria igual en otra ejecucion.'
+  foreach ($k in @('con-excel.xlsx', 'texto-excel.xlsx', 'con-zip.zip', 'nombre-zip.zip', 'con-gz.txt.gz', 'con-pdf.pdf')) { Igual "$k no vale como test fijo, con el motivo de siempre" "$k $motivo" $m[$k] }
+  foreach ($k in @('sin-excel.xlsx', 'sin-zip.zip', 'sin-gz.txt.gz', 'sin-pdf.pdf', 'logo.png')) { Igual "$k vale" '' $m[$k] }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

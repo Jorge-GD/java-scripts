@@ -2281,10 +2281,10 @@ function Get-TipoContenido([string]$Nombre, [byte[]]$Bytes) {
 
 # La linea de un binario: binario: <n> bytes, sha256 <hash>. Dos binarios son iguales si sus bytes lo son. Un PDF generado lleva dentro su fecha de creacion y de
 # modificacion y un identificador distinto en cada ejecucion: sin comprimir (los de un PDF antiguo o simple; en un PDF con objetos comprimidos no se ven), /CreationDate,
-# /ModDate, /ID y las fechas y ids del XMP se sustituyen por un valor fijo del mismo largo antes de contar y de sacar el hash.
-function Get-LineaBinaria([byte[]]$Bytes) {
+# /ModDate, /ID y las fechas y ids del XMP se sustituyen por un valor fijo del mismo largo antes de contar y de sacar el hash (con $Crudo, no).
+function Get-LineaBinaria([byte[]]$Bytes, [bool]$Crudo = $false) {
   $b = $Bytes
-  if ($b.Length -ge 5 -and $Latin.GetString($b, 0, 5) -ceq '%PDF-') {
+  if (-not $Crudo -and $b.Length -ge 5 -and $Latin.GetString($b, 0, 5) -ceq '%PDF-') {
     $t = $Latin.GetString($b)
     $t = [regex]::Replace($t, '/(CreationDate|ModDate)\s*\(D:[^)]*\)', [System.Text.RegularExpressions.MatchEvaluator]{ param($m) '/' + $m.Groups[1].Value + ' (D:' + ('0' * 14) + ')' })
     $t = [regex]::Replace($t, '/ID\s*\[\s*<[0-9A-Fa-f]*>\s*<[0-9A-Fa-f]*>\s*\]', '/ID [<00><00>]')
@@ -2299,8 +2299,8 @@ function Get-LineaBinaria([byte[]]$Bytes) {
 # xl/worksheets/*.xml con las celdas <c r= t=> con <v>, <is> o <f>): una linea por celda con valor, '<hoja>!<celda>: <valor>', las hojas en su orden y las celdas en el del fichero.
 # Una formula sale como =<formula> y su ultimo valor (-> valor). Un numero que es una fecha de Excel de uno de los $Dias (sin tener en cuenta la hora) sale <hoy:excel><hora>
 # si lleva fraccion de dia y <hoy:excel> si no, y el resto de valores pasan por Get-Normal; las fechas y estilos de docProps/ y xl/styles.xml no cuentan. Un salto de linea dentro
-# de un valor sale como \n. Lanza una excepcion si no es un libro que se pueda leer.
-function Get-LineasExcel([byte[]]$Bytes, $Dias = $null) {
+# de un valor sale como \n. Con $Crudo, sin normalizar nada (ni las fechas de Excel ni Get-Normal). Lanza una excepcion si no es un libro que se pueda leer.
+function Get-LineasExcel([byte[]]$Bytes, $Dias = $null, [bool]$Crudo = $false) {
   if ($null -eq $Dias) { $Dias = $Hoy }
   Add-Type -AssemblyName System.IO.Compression
   $nsR = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -2358,7 +2358,7 @@ function Get-LineasExcel([byte[]]$Bytes, $Dias = $null) {
         if ($tipo -ceq 's' -and $null -ne $v -and [int]::TryParse($v, [ref]$i) -and $i -ge 0 -and $i -lt $comp.Count) { $valor = $comp[$i] }
         elseif ($tipo -ceq 'inlineStr') { $valor = $dentro }
         elseif ($tipo -ceq 'b') { if ($v -ceq '1') { $valor = 'TRUE' } elseif ($v -ceq '0') { $valor = 'FALSE' } }
-        elseif (-not $tipo -or $tipo -ceq 'n') {
+        elseif ((-not $tipo -or $tipo -ceq 'n') -and -not $Crudo) {
           $num = 0.0
           if ($null -ne $v -and [double]::TryParse($v, [System.Globalization.NumberStyles]::Float, $inv, [ref]$num) -and $num -ge 1 -and $num -lt 2958466) {
             $dia = [Math]::Floor($num)
@@ -2373,13 +2373,15 @@ function Get-LineasExcel([byte[]]$Bytes, $Dias = $null) {
   } finally { $zip.Dispose() }
   if ($lineas.Count -eq 0) { return @() }
   # Una sola pasada de Get-Normal para todas las lineas (sin saltos dentro de una linea, nada cruza de una a otra), en la forma de los ficheros: bytes UTF-8 vistos como Latin-1.
-  return @((Get-Normal ($Latin.GetString($Utf8.GetBytes(($lineas -join "`n")))) $Dias) -split "`n")
+  $todo = $Latin.GetString($Utf8.GetBytes(($lineas -join "`n")))
+  if (-not $Crudo) { $todo = Get-Normal $todo $Dias }
+  return @($todo -split "`n")
 }
 
 # Las lineas de un zip o de un docx, jar...: una por linea de cada entrada (las carpetas no cuentan) con el nombre de la entrada, normalizado, delante, y las entradas en el orden de
 # ese nombre (un zip con las mismas entradas en otro orden es el mismo contenido). Cada entrada se lee segun su tipo (Get-LineasContenido): texto, un libro, otro zip (hasta
-# 3 niveles) o un binario. Una entrada vacia sale como '<nombre>: (vacio)' para que sobre o falte. Lanza una excepcion si no se puede abrir.
-function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0) {
+# 3 niveles) o un binario. Una entrada vacia sale como '<nombre>: (vacio)' para que sobre o falte. Con $Crudo, sin normalizar nada. Lanza una excepcion si no se puede abrir.
+function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0, [bool]$Crudo = $false) {
   Add-Type -AssemblyName System.IO.Compression
   $zip = New-Object System.IO.Compression.ZipArchive((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.ZipArchiveMode]::Read)
   $claves = New-Object 'System.Collections.Generic.List[string]'
@@ -2390,8 +2392,9 @@ function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0) {
       $ms = New-Object System.IO.MemoryStream
       $s = $e.Open()
       try { $s.CopyTo($ms) } finally { $s.Dispose() }
-      $nombre = Get-Normal ($Latin.GetString($Utf8.GetBytes($e.FullName))) $Dias
-      $l = @(Get-LineasContenido $e.FullName $ms.ToArray() $Dias ($Nivel + 1))
+      $nombre = $Latin.GetString($Utf8.GetBytes($e.FullName))
+      if (-not $Crudo) { $nombre = Get-Normal $nombre $Dias }
+      $l = @(Get-LineasContenido $e.FullName $ms.ToArray() $Dias ($Nivel + 1) $Crudo)
       if ($l.Count -eq 0) { $l = @('(vacio)') }
       $claves.Add($nombre + [char]0 + $trozos.Count.ToString('D6'))
       $trozos.Add(@($l | ForEach-Object { $nombre + ': ' + $_ }))
@@ -2409,15 +2412,16 @@ function Get-LineasZip([byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0) {
 # Las lineas de un contenido ya leido ($Bytes de un fichero o de una entrada con el nombre $Nombre), segun su tipo (Get-TipoContenido): un libro de Excel, una linea por celda
 # (Get-LineasExcel); un zip o un gz, las de lo que lleva dentro, cada entrada con su nombre (Get-LineasZip; un gz lleva el nombre del fichero sin .gz); un binario (y un
 # libro o un zip que no se pueden abrir), la linea binario: <n> bytes, sha256 <hash> (Get-LineaBinaria); un texto, sus lineas normalizadas (Get-Normal; los saltos \r\n cuentan
-# como \n y el ultimo salto no cuenta como linea; se leen byte a byte, Latin-1: dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este).
-function Get-LineasContenido([string]$Nombre, [byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0) {
+# como \n y el ultimo salto no cuenta como linea; se leen byte a byte, Latin-1: dos ficheros solo son iguales si sus bytes lo son, este en la codificacion que este). Con $Crudo, sin
+# normalizar nada: las mismas lineas tal cual salen (Get-MotivoCambiante, de regresion.ps1, compara las dos para saber si el contenido lleva algo de esta ejecucion).
+function Get-LineasContenido([string]$Nombre, [byte[]]$Bytes, $Dias = $null, [int]$Nivel = 0, [bool]$Crudo = $false) {
   $tipo = Get-TipoContenido $Nombre $Bytes
-  if ($Nivel -ge 3 -and (@('xlsx', 'zip', 'gz') -contains $tipo)) { return @(Get-LineaBinaria $Bytes) }
+  if ($Nivel -ge 3 -and (@('xlsx', 'zip', 'gz') -contains $tipo)) { return @(Get-LineaBinaria $Bytes $Crudo) }
   if ($tipo -ceq 'xlsx') {
-    try { return @(Get-LineasExcel $Bytes $Dias) } catch { $tipo = 'zip' }
+    try { return @(Get-LineasExcel $Bytes $Dias $Crudo) } catch { $tipo = 'zip' }
   }
   if ($tipo -ceq 'zip') {
-    try { return @(Get-LineasZip $Bytes $Dias $Nivel) } catch { return @(Get-LineaBinaria $Bytes) }
+    try { return @(Get-LineasZip $Bytes $Dias $Nivel $Crudo) } catch { return @(Get-LineaBinaria $Bytes $Crudo) }
   }
   if ($tipo -ceq 'gz') {
     try {
@@ -2425,14 +2429,17 @@ function Get-LineasContenido([string]$Nombre, [byte[]]$Bytes, $Dias = $null, [in
       $g = New-Object System.IO.Compression.GZipStream((New-Object System.IO.MemoryStream (, $Bytes)), [System.IO.Compression.CompressionMode]::Decompress)
       try { $g.CopyTo($ms) } finally { $g.Dispose() }
       $dentro = [System.IO.Path]::GetFileName($Nombre) -replace '(?i)\.gz$', ''
-      $l = @(Get-LineasContenido $dentro $ms.ToArray() $Dias ($Nivel + 1))
+      $l = @(Get-LineasContenido $dentro $ms.ToArray() $Dias ($Nivel + 1) $Crudo)
       if ($l.Count -eq 0) { $l = @('(vacio)') }
-      $nom = Get-Normal ($Latin.GetString($Utf8.GetBytes($dentro))) $Dias
+      $nom = $Latin.GetString($Utf8.GetBytes($dentro))
+      if (-not $Crudo) { $nom = Get-Normal $nom $Dias }
       return @($l | ForEach-Object { $nom + ': ' + $_ })
-    } catch { return @(Get-LineaBinaria $Bytes) }
+    } catch { return @(Get-LineaBinaria $Bytes $Crudo) }
   }
-  if ($tipo -ceq 'pdf' -or $tipo -ceq 'binario') { return @(Get-LineaBinaria $Bytes) }
-  $l = @((Get-Normal ($Latin.GetString($Bytes)) $Dias) -split '\r?\n')
+  if ($tipo -ceq 'pdf' -or $tipo -ceq 'binario') { return @(Get-LineaBinaria $Bytes $Crudo) }
+  $t = $Latin.GetString($Bytes)
+  if (-not $Crudo) { $t = Get-Normal $t $Dias }
+  $l = @($t -split '\r?\n')
   if ($l.Count -gt 0 -and $l[$l.Count - 1] -eq '') { $l = @($l | Select-Object -First ($l.Count - 1)) }
   return $l
 }

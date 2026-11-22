@@ -63,26 +63,8 @@ if (Test-Path -LiteralPath $dir) {
     $hora = '10-26-58'; $creado = $hoy + 'T10:26:58Z'; $celda = 'x'
     if ($migrado) { $hora = '10-31-07'; $creado = $hoy + 'T10:31:07Z'; $celda = 'y' }
     if ($banderas -notcontains 'celda') { $celda = 'x' }
-    Add-Type -AssemblyName System.IO.Compression
-    $fijo = New-Object System.DateTimeOffset(2020, 1, 1, 0, 0, 0, [System.TimeSpan]::Zero)
-    $partes = [ordered]@{
-      '[Content_Types].xml' = '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>'
-      'docProps/core.xml' = '<?xml version="1.0" encoding="UTF-8"?><cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/"><dcterms:created>' + $creado + '</dcterms:created></cp:coreProperties>'
-      'xl/workbook.xml' = '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Hoja1" sheetId="1" r:id="rId1"/></sheets></workbook>'
-      'xl/_rels/workbook.xml.rels' = '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
-      'xl/worksheets/sheet1.xml' = '<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>importe</t></is></c><c r="B1"><v>10</v></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>generado ' + $hoy + ' ' + $hora.Replace('-', ':') + '</t></is></c></row><row r="3"><c r="B3" t="inlineStr"><is><t>' + $celda + '</t></is></c></row></sheetData></worksheet>'
-    }
     $f = [System.IO.Path]::Combine($dir, 'ficheros', 'informes', ($hoy + '-' + $hora), 'resumen.xlsx')
-    [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
-    $flujo = New-Object System.IO.FileStream($f, [System.IO.FileMode]::Create)
-    $zip = New-Object System.IO.Compression.ZipArchive($flujo, [System.IO.Compression.ZipArchiveMode]::Create)
-    foreach ($k in $partes.Keys) {
-      $e = $zip.CreateEntry($k)
-      $e.LastWriteTime = $fijo
-      $w = New-Object System.IO.StreamWriter($e.Open(), (New-Object System.Text.UTF8Encoding($false)))
-      $w.Write($partes[$k]); $w.Dispose()
-    }
-    $zip.Dispose(); $flujo.Dispose()
+    & (Join-Path $PSScriptRoot 'm73-libro.ps1') $f $creado ($hoy + ' ' + $hora.Replace('-', ':')) $celda
   }
   if ($banderas -contains 'png' -or $banderas -contains 'png-otro') {
     $bytes = [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0xFF, 0xFE, 0x80)
