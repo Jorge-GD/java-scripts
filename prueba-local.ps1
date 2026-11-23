@@ -87,10 +87,11 @@ QUE HACE
      no determinista (el original da dos salidas distintas: no cuenta), no se pudo preparar
      o sin probar en local. Si un fichero solo cambia de codificacion o de formato de numeros, lo apunta como posible
      diferencia del JDK, sin esconderlo. Un caso que deja lo mismo que el caso vacio del arnes sale igual, con su aviso;
-     pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: la
-     prueba acaba con 1 (fallo), sin prueba-local.json, y los dos arneses guardados se invalidan para que el siguiente
-     lanzamiento los escriba otra vez con ese motivo (sus tests no se pierden: pasan a prueba-local\arnes-invalidado\<lado>, y si el usuario
-     los arregla y los copia a prueba-local\arnes\, el siguiente lanzamiento sin -Rehacer los usa). Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
+     pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: esos casos pasan a
+     'no se pudo preparar' con ese motivo (no cuentan como iguales: el -Cierre no pasa), la prueba sigue con los demas jobs, guarda
+     prueba-local.json como siempre y acaba con 2, como con casos distintos. Al final lo dice en rojo, una vez por job. Los tests guardados no se
+     tocan: el usuario los arregla en prueba-local\arnes\<lado> y relanza sin -Rehacer, o relanza con -RehacerArnes y la IA recibe ese motivo (Get-PrevioArnes).
+     Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
      un solo lado es lo mismo que una tabla que no esta. Un fichero que el original deja en una carpeta y el migrado, con el mismo nombre (normalizado), en
      otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
      alguna copia del original o, si no, la primera linea distinta (Join-OtraCarpeta). Lo que solo esta en un lado y las tablas\ no se emparejan. Los casos
@@ -129,7 +130,7 @@ QUE HACE
   9. Solo con -Rapida (no se combina con -Reparar, -Regresion ni -Desde): para saber en minutos si un arreglo vale, sin esperar a todos los casos. Mismo arranque (las copias, los
      arneses, las comprobaciones y el caso vacio) y, de cada job, solo el primer caso (en el orden de siempre). Al acabar, la tabla y los grupos de esos casos y una linea: 'Prueba
      rapida: N casos de M. No vale para -Cierre'. No escribe ni borra datos\prueba-local.json (lo que lee -Cierre; ni prueba-local-grupos.jsonl): deja su resultado en
-     datos\prueba-local-rapida.json. No corre Stop-Vacios: si el caso deja lo mismo que el caso vacio, lo avisa y deja los tests guardados donde estan. Las salidas del original que
+     datos\prueba-local-rapida.json. Un job cuyo caso deja lo mismo que el caso vacio se trata como en el paso 5, en ese json. Las salidas del original que
      guarda se reutilizan en la prueba entera (la clave de cada original ya cuenta lo que entra en su ejecucion).
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
@@ -210,6 +211,8 @@ $Casos = 'src/test/resources/prueba-local'   # donde van los casos dentro de cad
 $MarcaNo = '<!--no-->'
 # El aviso de un caso igual que deja lo mismo que el caso vacio del arnes (Get-Resultado); Get-JobsVacios lo busca.
 $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene entradas, mira que lleguen al job.'
+# Lo que dicen los casos de un job donde todos dejan lo mismo que el caso vacio (Get-JobsVacios): no se pudieron preparar, que el test no les pasa las entradas.
+$MotivoSinEntradas = 'El test no le pasa las entradas al job: ningun caso deja nada distinto del caso vacio.'
 $MotivoNoArranca = 'el migrado no arranca el job con este test'
 # Lo que dice un caso que no se ejecuta porque el original de su job falla igual en los primeros $CasosParaParar casos (Invoke-Originales); Get-Resultado lo pone como motivo.
 $MotivoNoArrancaOriginal = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
@@ -1050,9 +1053,9 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   }
   $t = Restore-Tarea (New-TareaTipo 'arnes-local' ('arnes-' + $Repo) '' ('prueba-local/arnes/' + $Repo) $e) $false
   if (-not $t.entradas.PSObject.Properties['plantilla']) { $t.entradas | Add-Member -NotePropertyName plantilla -NotePropertyValue '' }   # una tarea de antes de M37
-  # Un arnes invalidado (Stop-Vacios, o un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
+  # Un arnes invalidado (un reintento que un corte dejo a medias) no empieza de cero: sigue por su intento y su
   # motivo, y la IA recibe ese motivo en su prompt de correccion. Restore-Tarea solo conserva las tareas hechas. Que el test del
-  # original ya no este en arnes\ (Stop-Vacios lo pasa a arnes-invalidado\) no cuenta: la huella se compara con el hash del original de entonces.
+  # original ya no este en arnes\ no cuenta: la huella se compara con el hash del original de entonces.
   if ($t.estado -eq 'pendiente' -and $antes -and $antes.estado -eq 'pendiente' -and $antes.intentos -gt 0 -and $antes.motivo -and $antes.entradas.huella -eq (Get-HuellaArnes $Test $Jobs ([string]$antes.entradas.hashOriginal))) {
     $t.intentos = $antes.intentos; $t.motivo = $antes.motivo; $t.ultimoEstado = $antes.ultimoEstado
     Save-Tarea $t
@@ -1113,6 +1116,8 @@ function Get-MasRepetidas($Por) {
 # cambio la plantilla, o su tarea de antes quedo atascada y Restore-Tarea no la conserva). $Antes es su tarea del lanzamiento anterior (Get-TareaGuardada, antes
 # de que Get-TareaArnes la pise) o $null. Lleva, en este orden:
 #  - el ultimo motivo de la tarea de antes, si no estaba hecha (el de un test atascado ya lleva las pistas de Get-PistaArnes);
+#  - para los dos, una linea por cada job (3 como mucho) cuyos casos del prueba-local.json de antes ($Anterior) salieron 'no se pudo preparar' porque el test no le pasa las
+#    entradas ($MotivoSinEntradas, Get-FraseSinEntradas): esos tests no se invalidan, y asi la IA sabe por que se rehacen;
 #  - para el del original, las pistas (Get-PistaArnes sobre cada motivo, sin repetir y 3 como mucho) de los casos 'no se pudo preparar' del prueba-local.json de
 #    antes ($Anterior): casi todos esos motivos vienen del test del original.
 #  - para el del original, una linea por cada job (3 como mucho) cuyo caso vacio guardado (salidas\vacio) no acabo COMPLETED, con su estado, la clase de la excepcion
@@ -1130,6 +1135,9 @@ function Get-MasRepetidas($Por) {
 function Get-PrevioArnes($T, $Antes) {
   $partes = @()
   if ($Antes -and $Antes.estado -ne 'hecha' -and $Antes.motivo) { $partes += "El ultimo motivo del test de antes: $($Antes.motivo)" }
+  if ($Anterior) {
+    foreach ($j in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'no se pudo preparar' -and $_.motivo -ceq $MotivoSinEntradas } | ForEach-Object { [string]$_.job } | Select-Object -Unique | Select-Object -First 3)) { $partes += (Get-FraseSinEntradas $j) }
+  }
   if ($T.entradas.repo -eq 'original' -and $Anterior) {
     $pistas = @()
     foreach ($m in @(@($Anterior.casos) | Where-Object { $_.resultado -ceq 'no se pudo preparar' -and $_.motivo } | ForEach-Object { [string]$_.motivo } | Select-Object -Unique)) {
@@ -3868,8 +3876,9 @@ function Show-Reparaciones($Reps) {
 
 # ================================ RESULTADO ================================
 # Los jobs donde ningun caso deja nada distinto del caso vacio del arnes (el aviso de Get-Resultado) y ninguno sale distinto ni no
-# determinista: el test no le pasa las entradas al job y lo que sale igual no se ha probado. Los casos sin probar o sin preparar
-# no cuentan. Si solo algunos casos del job salen como el vacio, el job no esta aqui: sigue como siempre, con el aviso en cada uno.
+# determinista: el test no le pasa las entradas al job y lo que sale igual no se ha probado: sus casos pasan a 'no se pudo preparar' ($MotivoSinEntradas), no a un fallo
+# que pare la prueba, y los tests guardados no se tocan. Los casos sin probar o sin preparar no cuentan. Si solo algunos casos del job salen como el vacio, el job no
+# esta aqui: sigue como siempre, con el aviso en cada uno.
 function Get-JobsVacios($Res) {
   $vacios = @()
   foreach ($j in @($Res | ForEach-Object { $_.job } | Select-Object -Unique)) {
@@ -3879,28 +3888,9 @@ function Get-JobsVacios($Res) {
   return $vacios
 }
 
-# Es un fallo, no un igual: invalida los dos arneses guardados (se vuelven a escribir en el siguiente lanzamiento, y la IA recibe
-# este motivo por el mismo camino que el de un intento rechazado: la tarea queda pendiente, con su intento y su motivo), borra un
-# prueba-local.json de antes (el informe no tiene que dar por buenos casos que no probaron nada) y sale con 1. Los tests guardados
-# no se pierden: antes de borrar arnes\<lado> pasan a arnes-invalidado\<lado> (pisando la copia de otra vez), por si el usuario
-# los arregla a mano y los devuelve a arnes\ en vez de dejar que la IA los escriba otra vez. Sin un test guardado del lado, no se
-# toca nada. migracion.ps1 apunta como detalle las ultimas lineas de esta salida.
-function Stop-Vacios([string[]]$Jobs) {
-  $detalles = @($Jobs | ForEach-Object { "En $_, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job." })
-  foreach ($t in @($ArnesOrig, $ArnesMig)) {
-    $guardado = Join-Ruta $Local "arnes/$($t.entradas.repo)"
-    if (Test-Path -LiteralPath $guardado) {
-      $invalidado = Join-Ruta $Local "arnes-invalidado/$($t.entradas.repo)"
-      Remove-Carpeta $invalidado
-      Copy-Carpeta $guardado $invalidado
-      Remove-Carpeta $guardado
-    }
-    $t.estado = 'pendiente'; $t.intentos = 1; $t.ultimoEstado = 'invalida'; $t.motivo = ($detalles -join ' ')
-    Save-Tarea $t
-  }
-  $json = Join-Path $DatosMig 'prueba-local.json'
-  if (Test-Path -LiteralPath $json) { Remove-Item -LiteralPath $json -Force }
-  Stop-Arranque ("No se da por igual lo que no se ha probado: los dos arneses guardados quedan invalidados y el proximo lanzamiento los vuelve a escribir, con este motivo.`n" + ($detalles -join "`n") + "`n" + 'Tus tests estan guardados en prueba-local\arnes-invalidado\. Si prefieres arreglarlos tu, copialos a prueba-local\arnes\ (las mismas carpetas) y relanza sin -Rehacer; si relanzas sin mas, se escriben otra vez con la IA.')
+# Lo que se dice de un job de Get-JobsVacios: a la IA, al rehacer su test (Get-PrevioArnes), y al usuario, al final de la consola (con lo que puede hacer).
+function Get-FraseSinEntradas([string]$Job) {
+  return "En $Job, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job."
 }
 
 # Por job: sus casos, iguales, distintos y sin probar y, si no arranca o falla igual en todos sus casos, 'falloIgual' (para quien lea el json despues): el lado (original o
@@ -4180,8 +4170,7 @@ try {
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
   $res = @(Confirm-OriginalesDeOtroDia $tareasCasos $res)
   $vacios = @(Get-JobsVacios $res)
-  if ($vacios.Count -gt 0 -and $Rapida) { foreach ($v in $vacios) { Aviso "En $v, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job. Con -Rapida no invalido los tests guardados: lanza sin -Rapida para decidirlo." } }
-  elseif ($vacios.Count -gt 0) { Stop-Vacios $vacios }
+  foreach ($r in @($res | Where-Object { $vacios -ccontains $_.job -and $_.resultado -ceq 'igual' -and $_.motivo -ceq $MotivoVacio })) { $r.resultado = 'no se pudo preparar'; $r.motivo = $MotivoSinEntradas }
   $o = Save-Resultado $res @()
   foreach ($g in @($o.grupos | Where-Object { -not $Rapida })) {   # una linea por grupo y lanzamiento (no de una -Rapida: son pocos casos): cuantas causas hay y de que clase
     $linea = [ordered]@{ fecha = (Get-Date).ToString('s'); numero = $g.numero; tipo = $g.tipo; firma = $g.firma; casos = @($g.casos).Count; hechos = @($g.hechos) }
@@ -4221,11 +4210,12 @@ try {
   if ($Rapida) { Info "Prueba rapida: $($res.Count) casos de $casosEnTotal. No vale para -Cierre: cuando salga igual, lanza sin -Rapida." }
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig $NombreJson)"
   Info $NoPromete
+  foreach ($v in $vacios) { Fallo ((Get-FraseSinEntradas $v) + ' Arreglalo en tu test guardado (prueba-local\arnes\<lado>) y relanza sin -Rehacer, o relanza con -RehacerArnes para que la IA lo escriba otra vez.') }
 
   # Lo que no se podia tocar sigue igual
   $H1 = @($intocables | ForEach-Object { Get-Huella $_ })
   if (@(0..($intocables.Count - 1) | Where-Object { -not (Test-MismaHuella $intocables[$_] $H0[$_] $H1[$_]) }).Count -gt 0) { Stop-Arranque ('Ha cambiado durante la prueba alguna de estas carpetas: ' + ($intocables -join ', ') + '. Miralo con git status y git diff.') }
-  if (@($res | Where-Object { $_.resultado -eq 'distinto' }).Count -gt 0) { exit 2 }
+  if ($vacios.Count -gt 0 -or @($res | Where-Object { $_.resultado -eq 'distinto' }).Count -gt 0) { exit 2 }
   if ($ArnesMig.estado -ne 'hecha' -or @($res | Where-Object { $_.resultado -eq 'igual' }).Count -eq 0) { exit 1 }
   exit 0
 }
