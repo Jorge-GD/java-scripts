@@ -1,8 +1,3 @@
-PROMPT 7 (carpeta: la del migrado, en la rama de rescate)
-
-Un texto con tildes de un .properties sale roto en el migrado (la a con tilde sale como dos caracteres raros) y bien en el original: el .properties del migrado esta en UTF-8 y se lee como ISO-8859-1 (es la causa 1 que ya encontraste). Arreglalo sin depender de la codificacion: en todos los .properties de src/main/resources del migrado, escribe cada caracter que no sea ASCII como \uXXXX (por ejemplo, la a con tilde = \u00e1, la n con tilde = \u00f1). Revisa todos los valores, no solo esa linea, y compara cada uno con el del original. Primero escribe un test unitario que lea esa propiedad del classpath como la lee la aplicacion y compruebe que el texto es el mismo que en el original: en rojo antes del cambio y en verde despues. Luego mvn test, commit y git status limpio. No toques los casos ni los tests de prueba-local.
-
-
 PROMPT 8 (carpeta: la del migrado, la que tiene dentro migracion-*; no la de rescate)
 
 La prueba local ha rechazado el test guardado del migrado (prueba-local\arnes\migrado, dentro de migracion-*) y lo iba a escribir otra vez: con un caso vacio (una carpeta sin nada), un job acaba con error.txt: JdbcSQLIntegrityConstraintViolationException, una columna NOT NULL recibe NULL. Pasa desde el ultimo arreglo de los dos tests (las filas por defecto de la tabla con la configuracion del correo). El test del original si pasa su caso vacio.
@@ -10,3 +5,29 @@ Paso 1: mira el registro de Maven mas reciente de ese caso vacio (migracion-*\re
 Paso 2: si es el test, corrigelo en el test guardado del migrado para que esa columna lleve un valor. Comprueba que esa tabla tiene la misma definicion en los dos tests (columnas, tipos y NOT NULL) y las mismas filas por defecto; si el del original tiene que cambiar, cambialo igual. Si es el codigo del migrado, dimelo y no toques nada.
 Paso 3: ejecuta el caso vacio de TODOS los jobs con cada test en su copia: el del migrado en la carpeta del migrado terminada en -prueba-local, y el del original en la carpeta del original terminada en -prueba-local (no los mezcles). Copia el test, crea src/test/resources/prueba-local/JOB/vacio como carpeta vacia y lanza mvn test -Dtest=PruebaLocalTest -Dprueba.local.job=JOB -Dprueba.local.caso=vacio. Cada job tiene que dejar estado.txt y ningun error.txt en los dos lados. Ensename una tabla con job, estado del original y estado del migrado.
 Paso 4: Get-FileHash de cada test guardado y de su copia. No toques src/main ni los casos.
+
+
+PROMPT 9 (carpeta: la del migrado, la que tiene dentro migracion-*; no la de rescate)
+
+Lo que te dije antes estaba al reves. El texto con tildes sale bien en el migrado y roto en el original: el original lee su .properties, que esta en UTF-8, como ISO-8859-1, y la a con tilde sale como dos caracteres raros. El migrado esta bien y no hay que tocarlo. Es un fallo del original que el migrado ya corrige, pero hace que muchos casos salgan distintos solo por eso.
+Arreglalo en el test guardado del original (prueba-local\arnes\original, dentro de migracion-*), no en el codigo:
+Paso 1: busca en los .properties de src/main/resources del original los valores con caracteres que no son ASCII. Dime cuales son y donde los usa el codigo.
+Paso 2: en el test guardado del original, antes de que arranque Spring, vuelve a leer ese .properties en UTF-8 y anade solo esas propiedades con la maxima prioridad (por ejemplo, con un ApplicationContextInitializer en el test). Asi el original usa el mismo texto que el migrado. No cambies nada mas del test.
+Paso 3: en la copia del original (la carpeta del original terminada en -prueba-local), ejecuta con ese test un caso que envie el correo y ensename el asunto, ya sin caracteres raros. Ejecuta tambien el caso vacio de todos los jobs: cada uno deja estado.txt y ningun error.txt.
+Paso 4: Get-FileHash del test guardado y de su copia. No toques src/main, ni el test del migrado, ni los casos.
+
+
+PROMPT 10 (carpeta: la del migrado, la que tiene dentro migracion-*; no la de rescate)
+
+La prueba rapida dice que en un job ningun caso deja nada distinto del caso vacio: su caso sale "no se pudo preparar" y el log del job dice que no comprueba ficheros porque le falta un parametro de fecha. El job esta en migracion-*\datos\prueba-local-rapida.json (el que tiene "no se pudo preparar").
+Paso 1: mira en el codigo del original que parametro de fecha lee ese job: su nombre, su formato y como lo usa para elegir los ficheros de entrada.
+Paso 2: mira los casos de ese job (prueba-local\casos\JOB\caso-*): si tienen parametros.properties con ese parametro y una fecha que case con sus ficheros de entrada. Mira tambien si los dos tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) le pasan al job lo que hay en parametros.properties.
+Paso 3: arreglalo donde falle. Si es el caso, anade el parametro a cada caso de ese job, con la fecha que piden sus ficheros. Si es el test, corrigelo igual en los dos tests guardados.
+Paso 4: ejecuta caso-01 de ese job con cada test en su copia (el del migrado en la carpeta del migrado terminada en -prueba-local, el del original en la del original; no los mezcles) y ensename que ninguno de los dos sale igual que su caso vacio. Get-FileHash de cada test guardado y de su copia. No toques src/main.
+
+
+PROMPT 11 (carpeta: la del migrado, en la misma ventana de Copilot que te hizo la ultima tabla de casos por job)
+
+En tu ultima tabla, un job sale igual que el caso vacio en los dos lados, y otros dos salen igual que el caso vacio en el original pero distintos en el migrado. La prueba en local marcara el primero como "no se pudo preparar" y los otros dos como distintos. Antes de relanzar, mira por que en cada uno: el caso no trae entradas para ese job, el test no se las pasa (base de datos, ficheros o SQL) o el job del original no hace nada con ellas.
+Si es el test o el caso, arreglalo (en los dos tests guardados por igual) y vuelve a ejecutar esos casos con cada test en su copia. Si el original no hace nada con esas entradas y el migrado si, dimelo y no toques nada.
+Ensename la misma tabla y Get-FileHash de cada test guardado y de su copia. No toques src/main.
