@@ -1092,32 +1092,28 @@ $Hoy = @(Get-Hoy $inicio ($inicio.AddHours(1)))
   Igual 'la fecha de hoy sola sigue con su marca' 'f_<hoy:yyyy-MM-dd>.txt' $v['N6']
 }
 
-$Pruebas['57 m20b (d): todos los casos de un job como el vacio y ninguno distinto: fallo con el detalle, arnes invalidado y el motivo llega a la IA al relanzar'] = {
+$Pruebas['57 m20b (d): todos los casos de un job como el vacio y ninguno distinto: no para (sale con 2, con prueba-local.json y los casos no se pudo preparar), el detalle va al final y el motivo llega a la IA al rehacer el test'] = {
   $e = Nuevo-Escenario 'm20b-vacios' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
   Ajustes-M20b $e
   $detalle = 'En cargaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job'
-  New-Item -ItemType Directory -Force -Path (Split-Path $e.Json) | Out-Null
-  Set-Content -LiteralPath $e.Json -Value '{"jobs":[]}'   # el de un lanzamiento anterior: el informe lo pintaria como bueno
   $r = Prueba $e @() 'm20b-sin-entradas'
-  Igual 'sale con 1 (fallo)' 1 $r.Codigo
-  Comprueba 'el detalle esta en las tres ultimas lineas con texto (lo que guarda migracion.ps1)' ((@($r.Salida -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' / ').Contains($detalle)) (Cola $r.Salida)
-  Comprueba 'no deja prueba-local.json (el informe no da por buenos casos que no probaron nada)' (-not (Test-Path -LiteralPath $e.Json))
+  Igual 'sale con 2, como con casos distintos' 2 $r.Codigo
+  Comprueba 'el detalle es la ultima linea con texto' (@($r.Salida -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)[0].Contains($detalle)) (Cola $r.Salida)
+  Igual 'prueba-local.json lleva los tres casos como no se pudo preparar' 'no se pudo preparar,no se pudo preparar,no se pudo preparar' ((Resultados $e) -join ',')
   foreach ($lado in @('original', 'migrado')) {
-    Comprueba "el arnes guardado del $lado queda invalidado" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes/$lado")))
-    $t = Tarea-Arnes $e $lado
-    Comprueba "y su tarea vuelve a pendiente, con un intento y el motivo ($lado)" ($t.estado -eq 'pendiente' -and $t.intentos -eq 1 -and "$($t.motivo)".Contains($detalle)) "$($t.estado) $($t.intentos) $($t.motivo)"
+    Comprueba "el arnes guardado del $lado sigue en arnes\" (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes/$lado"))
+    Igual "y su tarea sigue hecha ($lado)" 'hecha' (Tarea-Arnes $e $lado).estado
   }
   $n = @(Llamadas $e).Count
   Igual 'cinco llamadas: dos arneses y tres casos' 5 $n
-  $r = Prueba $e
-  Igual 'al relanzar, con un arnes que si pasa las entradas, sale con 0' 0 $r.Codigo
+  $r = Prueba $e @('-RehacerOriginal')
+  Igual 'al relanzar con -RehacerOriginal, con un arnes que si pasa las entradas, sale con 0' 0 $r.Codigo
   Igual 'solo se vuelven a escribir los dos arneses' ($n + 2) @(Llamadas $e).Count
   foreach ($lado in @('original', 'migrado')) {
-    $p = Registro-Arnes $e $lado 2
+    $p = Registro-Arnes $e $lado 1
     Comprueba "el prompt del arnes del $lado lleva el motivo, en la seccion de correccion" ($p -match 'CORRECCI' -and $p.Contains($detalle)) $p
   }
   Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
-  Comprueba 'y ya hay prueba-local.json' (Test-Path -LiteralPath $e.Json)
 }
 
 $Pruebas['58 m20b (e): si solo algunos casos salen como el vacio, o el job tiene un distinto, todo sigue como hoy'] = {
@@ -8286,10 +8282,8 @@ $Pruebas['m77 (g3) un solo caso del job con el original FAILED en el prueba-loca
 }
 
 # ============ M78: la prueba en local no borra los tests guardados del usuario y avisa cuando va a reescribir uno ============
-# Escenarios con el Copilot y el Maven de m20b (IGNORA_ENTRADAS: un test que no le pasa las entradas al job, y los casos salen como el vacio). El usuario retoca a mano
-# los tests guardados de arnes\<lado>: aqui, con esa marca (un test que ya no pasa las entradas) o con un comentario.
+# El usuario retoca a mano los tests guardados de arnes\<lado> (aqui, con un comentario) y se relanza.
 
-$FraseM78 = 'Tus tests estan guardados en prueba-local\arnes-invalidado\. Si prefieres arreglarlos tu, copialos a prueba-local\arnes\ (las mismas carpetas) y relanza sin -Rehacer; si relanzas sin mas, se escriben otra vez con la IA.'
 $AvisoM78 = 'ya no vale en este commit'
 
 # Los PruebaLocalTest.java guardados de arnes\<lado>.
@@ -8304,90 +8298,12 @@ function Retoca-M78($E, [string]$Lado, [string]$Linea) {
   foreach ($f in @(Tests-Guardados-M78 $E $Lado)) { [System.IO.File]::AppendAllText($f.FullName, "$Linea`n") }
 }
 
-# El usuario arregla a mano el test del $Lado: le quita la linea que le hacia ignorar las entradas.
-function Arregla-M78($E, [string]$Lado) {
-  foreach ($f in @(Tests-Guardados-M78 $E $Lado)) {
-    $x = [System.IO.File]::ReadAllText($f.FullName)
-    [System.IO.File]::WriteAllText($f.FullName, $x.Replace("// IGNORA_ENTRADAS`n", ''))
-  }
-}
-
 # 'ruta relativa=hash' de cada fichero de la carpeta $Rel de prueba-local, por orden; '(no existe)' sin ella.
 function Hashes-Carpeta-M78($E, [string]$Rel) {
   $d = Get-Ruta $E.Local $Rel
   if (-not (Test-Path -LiteralPath $d)) { return '(no existe)' }
   $base = (Resolve-Path -LiteralPath $d).Path
   return ((@(Get-ChildItem -LiteralPath $d -Recurse -File | ForEach-Object { $_.FullName.Substring($base.Length).Replace('\', '/') + '=' + (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }) | Sort-Object { $_ }) -join '|')
-}
-
-# El job sale bien una vez (los dos arneses quedan guardados), el usuario retoca los dos tests a mano para que ya no pasen las entradas (la marca de m20b-mvn.ps1) y se
-# relanza: ningun caso deja nada distinto del caso vacio y Stop-Vacios invalida los dos. $Antes es lo que habia en arnes\<lado> (hash de cada fichero) justo antes del relanzamiento.
-function Invalida-M78([string]$Nombre, [scriptblock]$Entre = {}, [string[]]$A = @()) {
-  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
-  Ajustes-M20b $e
-  $r = Prueba $e
-  Igual 'la primera vez sale con 0' 0 $r.Codigo
-  foreach ($lado in @('original', 'migrado')) { Retoca-M78 $e $lado '// IGNORA_ENTRADAS' }
-  $antes = @{}
-  foreach ($lado in @('original', 'migrado')) { $antes[$lado] = Hashes-Carpeta-M78 $e "arnes/$lado" }
-  & $Entre $e
-  $r = Prueba $e $A
-  return [pscustomobject]@{ e = $e; antes = $antes; r = $r }
-}
-
-$Pruebas['m78 (a1) ningun caso deja nada distinto del caso vacio: los tests guardados pasan, tal cual, a arnes-invalidado\<lado>; arnes\<lado> ya no esta y la consola lo dice'] = {
-  $v = Invalida-M78 'm78-a1'
-  $e = $v.e; $r = $v.r
-  Igual 'sale con 1 (fallo)' 1 $r.Codigo
-  foreach ($lado in @('original', 'migrado')) {
-    Comprueba "habia un test guardado del $lado" ($v.antes[$lado] -match 'PruebaLocalTest\.java=') $v.antes[$lado]
-    Igual "arnes-invalidado\$lado tiene los mismos ficheros que tenia arnes\$lado (hash de cada uno)" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes-invalidado/$lado")
-    Comprueba "arnes\$lado ya no esta" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes/$lado")))
-    $t = Tarea-Arnes $e $lado
-    Comprueba "y su tarea vuelve a pendiente, con un intento y el motivo, como siempre ($lado)" ($t.estado -eq 'pendiente' -and $t.intentos -eq 1 -and "$($t.motivo)".Contains('ningun caso deja nada distinto del caso vacio')) "$($t.estado) $($t.intentos) $($t.motivo)"
-  }
-  Comprueba 'la consola lleva la frase de los tests guardados' ($r.Salida.Contains($FraseM78)) (Cola $r.Salida)
-  Comprueba 'y va despues de la linea del job' ($r.Salida.IndexOf($FraseM78) -gt $r.Salida.IndexOf('En cargaJob, ningun caso deja nada distinto del caso vacio'))
-  Comprueba 'sigue sin haber prueba-local.json' (-not (Test-Path -LiteralPath $e.Json))
-}
-
-$Pruebas['m78 (a2) los tests de arnes-invalidado, copiados de vuelta a arnes\ y arreglados, se usan al relanzar sin -Rehacer: sin llamar a la IA'] = {
-  $v = Invalida-M78 'm78-a2'
-  $e = $v.e
-  Igual 'el relanzamiento con los tests retocados sale con 1' 1 $v.r.Codigo
-  $n = @(Llamadas-Arnes $e 'original').Count + @(Llamadas-Arnes $e 'migrado').Count
-  foreach ($lado in @('original', 'migrado')) {
-    $de = Get-Ruta $e.Local "arnes-invalidado/$lado"
-    if (Test-Path -LiteralPath $de) {
-      $a = Get-Ruta $e.Local "arnes/$lado"
-      [void](New-Item -ItemType Directory -Force -Path $a)
-      Copy-Item -Path (Join-Path $de '*') -Destination $a -Recurse -Force
-    }
-    Arregla-M78 $e $lado
-  }
-  $r = Prueba $e
-  Igual 'sale con 0' 0 $r.Codigo
-  Comprueba 'el del original: bien, el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del original: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
-  Comprueba 'el del migrado, igual' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
-  Igual 'ninguna llamada a Copilot para los arneses' $n (@(Llamadas-Arnes $e 'original').Count + @(Llamadas-Arnes $e 'migrado').Count)
-  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
-  foreach ($lado in @('original', 'migrado')) { Igual "la tarea del $lado queda hecha" 'hecha' (Tarea-Arnes $e $lado).estado }
-}
-
-$Pruebas['m78 (a3) una copia vieja en arnes-invalidado\ se sustituye, no se mezcla'] = {
-  $v = Invalida-M78 'm78-a3' {
-    param($e)
-    foreach ($lado in @('original', 'migrado')) {
-      Escribe $e.Local "arnes-invalidado/$lado/restos-de-antes.txt" "de otra vez`n"
-      Escribe $e.Local "arnes-invalidado/$lado/src/test/java/com/acme/viejo/PruebaLocalTest.java" "// el de otra vez`n"
-    }
-  }
-  $e = $v.e
-  Igual 'sale con 1' 1 $v.r.Codigo
-  foreach ($lado in @('original', 'migrado')) {
-    Igual "arnes-invalidado\$lado es lo guardado ahora, sin nada de la copia vieja" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes-invalidado/$lado")
-    Comprueba "y no queda el fichero de antes ($lado)" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes-invalidado/$lado/restos-de-antes.txt")))
-  }
 }
 
 # --- (b) Use-ArnesGuardado avisa siempre que descarta un test guardado ---
@@ -8565,20 +8481,6 @@ $Pruebas['m80 (c1) -Rapida: de 2 jobs con 4 casos, solo el primer caso de cada u
   Igual 'otra -Rapida: sale con 0' 0 $r.Codigo
   Igual 'prueba-local.json igual que antes (hash)' $antes (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
   Igual 'el migrado ejecuta 2 casos' 'caso-01' (Casos-M77 $e 'migrado' 'cargaJob')
-}
-
-$Pruebas['m80 (c2) -Rapida con un caso que deja lo mismo que el caso vacio: avisa, no corre Stop-Vacios (los arneses guardados siguen en arnes\, nada en arnes-invalidado\) y no borra prueba-local.json'] = {
-  $v = Invalida-M78 'm80-c2' {} @('-Rapida')
-  $e = $v.e; $r = $v.r
-  Igual 'sale con 0 (el caso sale igual)' 0 $r.Codigo
-  Comprueba 'avisa de que no le pasa las entradas al job' ($r.Salida.Contains('En cargaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job.')) (Cola $r.Salida)
-  Comprueba 'y de que con -Rapida no invalida los tests' ($r.Salida -match 'Con -Rapida no invalido los tests guardados') (Cola $r.Salida)
-  foreach ($lado in @('original', 'migrado')) {
-    Igual "arnes\$lado sigue igual" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes/$lado")
-    Comprueba "y no hay arnes-invalidado\$lado" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes-invalidado/$lado")))
-  }
-  Comprueba 'prueba-local.json de antes sigue ahi' (Test-Path -LiteralPath $e.Json) ''
-  Comprueba 'y deja prueba-local-rapida.json' (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json')) ''
 }
 
 $Pruebas['m80 (c3) -Rapida con -Reparar, -Regresion o -Desde: para con un mensaje claro, sin ejecutar nada'] = {
@@ -9072,6 +8974,122 @@ $Pruebas['m81 (a9) surefire:test que ejecuta el test (deja su informe) pero no d
   Comprueba 'la consola no dice que siga con mvn test' ($r.Salida -notmatch 'sin el ciclo de Maven') (Cola $r.Salida)
   Comprueba 'las filas de tiempos del migrado: modo directo, con los segundos del test del informe' (@(Tiempos $e | Where-Object { $_.lado -eq 'migrado' -and $_.caso -ne '(compilar)' }).Count -eq 2 -and @(Tiempos $e | Where-Object { $_.lado -eq 'migrado' -and $_.caso -ne '(compilar)' -and $_.modo -eq 'directo' -and $_.segundosTest -eq 0.3 }).Count -eq 2) ((Tiempos $e | ForEach-Object { "$($_.lado)/$($_.caso)/$($_.modo)/$($_.segundosTest)" }) -join ' ')
   Igual 'el original no se ve afectado: sus casos igual, en directo' 0 (Mvn-M81 $e $e.CopiaOrig $Ciclo81).Count
+}
+
+# ============ M82: un job vacio no tira el resultado de los demas ============
+# Escenarios con el Maven de m82 (m82-mvn.ps1, sobre mvn-local.ps1): con RESCATE_M82 (una regex de nombres de job), esos jobs dejan lo que dejaria un test que no les pasa las
+# entradas (cada caso sale como el vacio) y los demas, no. remesaJob es el vacio; cargaJob tiene un caso distinto (el migrado, con otro minimo) y uno igual.
+
+$MotivoM82 = 'El test no le pasa las entradas al job: ningun caso deja nada distinto del caso vacio.'
+$DetalleM82 = 'En remesaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job.'
+$LineaM82 = "$DetalleM82 Arreglalo en tu test guardado (prueba-local\arnes\<lado>) y relanza sin -Rehacer, o relanza con -RehacerArnes para que la IA lo escriba otra vez."
+
+function Escenario-M82([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) 'minimo=5.00' 'minimo=5.01'
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm82-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  return $e
+}
+
+function Prueba-M82($E, [string[]]$A = @()) {
+  $env:RESCATE_M82 = '^remesaJob$'
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M82 = '' }
+}
+
+$Pruebas['m82 (a1) un job vacio y otro con un caso distinto: no para, prueba-local.json lleva los dos jobs, los casos del vacio son no se pudo preparar con su motivo, y la consola dice el job despues de la tabla'] = {
+  $e = Escenario-M82 'm82-a1'
+  $r = Prueba-M82 $e
+  Igual 'sale con 2, como con casos distintos' 2 $r.Codigo
+  Comprueba 'hay prueba-local.json' (Test-Path -LiteralPath $e.Json) (Cola $r.Salida)
+  Igual 'con los dos jobs' 'cargaJob,remesaJob' ((@((Lee-Json $e.Json).jobs | ForEach-Object { $_.job }) | Sort-Object) -join ',')
+  foreach ($c in @('caso-01', 'caso-02', 'caso-03')) {
+    $x = Caso $e 'remesaJob' $c
+    Igual "remesaJob/$c no se pudo preparar" 'no se pudo preparar' "$($x.resultado)"
+    Igual "y su motivo" $MotivoM82 "$($x.motivo)"
+  }
+  Igual 'cargaJob conserva su distinto y su igual' 'distinto,igual' ((@('caso-01', 'caso-02') | ForEach-Object { (Caso $e 'cargaJob' $_).resultado }) -join ',')
+  $j = @((Lee-Json $e.Json).jobs | Where-Object { $_.job -eq 'remesaJob' })[0]
+  Igual 'remesaJob cuenta 0 iguales y 0 distintos' '0/0' "$($j.iguales)/$($j.distintos)"
+  $tabla = $r.Salida.IndexOf('Prueba en local: el original frente al migrado')
+  Comprueba 'la consola lleva la tabla' ($tabla -ge 0 -and $r.Salida -match 'cargaJob\s+2\s+1\s+1') (Cola $r.Salida)
+  Igual 'la linea del job vacio sale una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($LineaM82))).Count
+  Comprueba 'y va despues de la tabla' ($r.Salida.IndexOf($LineaM82) -gt $tabla) (Cola $r.Salida)
+  Comprueba 'el job con casos distintos no lleva la linea' ($r.Salida -notmatch 'En cargaJob, ningun caso deja nada distinto del caso vacio') (Cola $r.Salida)
+  Comprueba 'ya no para con el mensaje de invalidar' ($r.Salida -notmatch 'invalidados|arnes-invalidado') (Cola $r.Salida)
+}
+
+$Pruebas['m82 (a2) los tests guardados siguen en arnes\<lado> (mismo hash de cada fichero), sus tareas quedan hechas, no hay arnes-invalidado\ y relanzar no llama a la IA'] = {
+  $e = Escenario-M82 'm82-a2'
+  $r = Prueba-M82 $e
+  Igual 'la primera vez sale con 2' 2 $r.Codigo
+  $antes = @{}
+  foreach ($lado in @('original', 'migrado')) { $antes[$lado] = Hashes-Carpeta-M78 $e "arnes/$lado" }
+  $n = @(Llamadas $e).Count
+  $r = Prueba-M82 $e
+  Igual 'el relanzamiento sale con 2' 2 $r.Codigo
+  foreach ($lado in @('original', 'migrado')) {
+    Comprueba "habia un test guardado del $lado" ($antes[$lado] -match 'PruebaLocalTest\.java=') $antes[$lado]
+    Igual "arnes\$lado tiene los mismos ficheros (hash de cada uno)" $antes[$lado] (Hashes-Carpeta-M78 $e "arnes/$lado")
+    Comprueba "no hay arnes-invalidado\$lado" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes-invalidado/$lado")))
+    $t = Tarea-Arnes $e $lado
+    Comprueba "la tarea del $lado sigue hecha, sin motivo" ($t.estado -eq 'hecha' -and $t.ultimoEstado -eq 'ok' -and -not $t.motivo) "$($t.estado) $($t.ultimoEstado) $($t.motivo)"
+  }
+  Comprueba 'no hay arnes-invalidado\ en ningun sitio' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-invalidado')))
+  Igual 'el relanzamiento no llama a Copilot' $n @(Llamadas $e).Count
+}
+
+$Pruebas['m82 (a3) Get-FallosPruebaLocal de informe.ps1 sobre ese json dice que el job vacio no tiene ningun caso igual: el -Cierre no pasa'] = {
+  $e = Escenario-M82 'm82-a3'
+  $r = Prueba-M82 $e
+  Igual 'sale con 2' 2 $r.Codigo
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'informe.ps1') @('Get-FallosPruebaLocal'))))
+  $mapa = Lee-Json (Get-Ruta $e.Migrado 'migracion-batch-nuevo/datos/mapa.json')
+  $f = @(Get-FallosPruebaLocal (Lee-Json $e.Json) $mapa)
+  Comprueba 'dice que remesaJob no tiene ningun caso igual' ($f -ccontains 'el job remesaJob no tiene ningun caso igual') ($f -join ' / ')
+  Comprueba 'y que cargaJob tiene 1 caso distinto' ($f -ccontains 'el job cargaJob tiene 1 casos distintos') ($f -join ' / ')
+  Comprueba 'los dos arneses estan hechos: no dice nada de ellos' (@($f | Where-Object { $_ -match 'arnes' }).Count -eq 0) ($f -join ' / ')
+}
+
+$Pruebas['m82 (a4) relanzar con -RehacerArnes (el test del migrado) o con -RehacerOriginal (el del original, y con el el del migrado): el prompt del que se escribe lleva el motivo del job vacio'] = {
+  $e = Escenario-M82 'm82-a4'
+  $r = Prueba-M82 $e
+  Igual 'la primera vez sale con 2' 2 $r.Codigo
+  foreach ($lado in @('original', 'migrado')) { Comprueba "el prompt de la primera vez del $lado no lleva el motivo" (-not (Registro-Arnes $e $lado 1).Contains($DetalleM82)) }
+  $n = @(Llamadas-Arnes $e 'original').Count
+  $r = Prueba-M82 $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 2' 2 $r.Codigo
+  Igual 'no se escribe otra vez el del original' $n @(Llamadas-Arnes $e 'original').Count
+  $p = Registro-Arnes $e 'migrado' 1
+  Comprueba 'el prompt del migrado lleva la seccion de lo que fallo la otra vez' ($p.Contains('Lo que fallo la otra vez')) $p
+  Igual 'y el motivo del job vacio, una vez' 1 @([regex]::Matches($p, [regex]::Escape($DetalleM82))).Count
+  Comprueba 'y no el de otro job' (-not $p.Contains('En cargaJob, ningun caso deja nada distinto')) $p
+  $r = Prueba-M82 $e @('-RehacerOriginal')
+  Igual 'con -RehacerOriginal sale con 2' 2 $r.Codigo
+  foreach ($lado in @('original', 'migrado')) {
+    $p = Registro-Arnes $e $lado 1
+    Igual "el prompt del $lado lleva el motivo del job vacio, una vez" 1 @([regex]::Matches($p, [regex]::Escape($DetalleM82))).Count
+  }
+}
+
+$Pruebas['m82 (a5) -Rapida: lo mismo en prueba-local-rapida.json, y prueba-local.json sigue igual (hash); los tests guardados no se tocan'] = {
+  $e = Escenario-M82 'm82-a5'
+  $rapida = Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'
+  $r = Prueba-M82 $e
+  Igual 'la prueba entera sale con 2' 2 $r.Codigo
+  $hash = (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  $antes = @{}
+  foreach ($lado in @('original', 'migrado')) { $antes[$lado] = Hashes-Carpeta-M78 $e "arnes/$lado" }
+  $r = Prueba-M82 $e @('-Rapida')
+  Igual 'con -Rapida sale con 2' 2 $r.Codigo
+  Comprueba 'deja prueba-local-rapida.json' (Test-Path -LiteralPath $rapida) (Cola $r.Salida)
+  Igual 'con el primer caso de cada job: el vacio no se pudo preparar y el otro es distinto' 'cargaJob/caso-01:distinto,remesaJob/caso-01:no se pudo preparar' ((@((Lee-Json $rapida).casos | ForEach-Object { "$($_.job)/$($_.caso):$($_.resultado)" }) | Sort-Object) -join ',')
+  Igual 'el motivo del vacio' $MotivoM82 "$(@((Lee-Json $rapida).casos | Where-Object { $_.job -eq 'remesaJob' })[0].motivo)"
+  Igual 'prueba-local.json no ha cambiado (hash)' $hash (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Igual 'la linea del job vacio sale una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($LineaM82))).Count
+  Comprueba 'y ya no dice que con -Rapida no invalida' ($r.Salida -notmatch 'Con -Rapida no invalido') (Cola $r.Salida)
+  foreach ($lado in @('original', 'migrado')) { Igual "arnes\$lado sigue igual" $antes[$lado] (Hashes-Carpeta-M78 $e "arnes/$lado") }
+  Comprueba 'no hay arnes-invalidado\' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-invalidado')))
 }
 
 # ================================ LANZADOR ================================
