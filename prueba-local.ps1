@@ -1191,6 +1191,8 @@ function Get-TareaArnes([string]$Repo, [string]$Dir, [string]$Test, [string[]]$J
   $guardada = Join-Path (Join-Path $Datos 'tareas') ('arnes-' + $Repo + '.json')
   $antes = $null
   if (Test-Path -LiteralPath $guardada) { try { $antes = Read-Json $guardada } catch { } }
+  # Lo que escribio el script no se pierde porque cambie la huella (el migrado, cada vez que cambia el test del original guardado): la tarea nueva hereda el hash (Get-ParadaArnes)
+  if ($antes -and $antes.entradas.PSObject.Properties['hashEscrito']) { $e | Add-Member -NotePropertyName hashEscrito -NotePropertyValue ([string]$antes.entradas.hashEscrito) }
   # Con un test guardado, la plantilla de la tarea es la de la tarea de antes (o '' si no la apuntaba), no la de ahora: sigue asi hasta que
   # se escriba otro test (Invoke-Arneses). Un no a la pregunta o un corte no dan por bueno en el siguiente lanzamiento un test de otra plantilla.
   if (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$Repo")) {
@@ -2078,13 +2080,15 @@ function Get-MotivoTablaMal([string]$Texto) {
   return $PrefijoTablaMal + $sentencia
 }
 
-# Guarda lo que ha escrito el arnes (en prueba-local\arnes\<repo>) y lo da por bueno en la copia.
+# Guarda lo que ha escrito el arnes (en prueba-local\arnes\<repo>) y lo da por bueno en la copia. Apunta en la tarea (entradas.hashEscrito) el hash de lo que ha
+# guardado: si despues el de arnes\<repo> es otro, lo ha cambiado el usuario (Get-ParadaArnes).
 function Save-Arnes($T) {
   $dir = $T.entradas.copia
   $dest = Join-Ruta $Local "arnes/$($T.entradas.repo)"
   Remove-Carpeta $dest
   $permitidos = @(Get-Permitidos $T)
   foreach ($rel in @(Get-Cambios $dir | Where-Object { $permitidos -contains $_ })) { Copy-Fichero (Join-Ruta $dir $rel) (Join-Ruta $dest $rel) }
+  $T.entradas | Add-Member -NotePropertyName hashEscrito -NotePropertyValue (Get-HashCarpeta $dest) -Force
   Save-Copia $dir
 }
 
@@ -2113,7 +2117,7 @@ function Save-Anterior([string]$Lado) {
 }
 
 # Vuelve al test de antes del arnes $T (el del original, cuando el nuevo ha quedado peor: Test-ArnesEscrito): arnes-anterior\<lado> vuelve a arnes\<lado> y a la copia de $T,
-# y salidas\vacio-anterior a salidas\vacio. Se fia del test de antes sin volver a comprobarlo: el nuevo es el que no valia. Lo compilado del nuevo se borra (target\test-classes):
+# y salidas\vacio-anterior a salidas\vacio, y la tarea deja de decir que el script lo escribio (hashEscrito vacio). Se fia del test de antes sin volver a comprobarlo: el nuevo es el que no valia. Lo compilado del nuevo se borra (target\test-classes):
 # el de antes llega con la fecha de cuando se escribio y Maven no veria que hay que compilarlo otra vez.
 function Restore-Anterior($T) {
   $lado = $T.entradas.repo
@@ -2127,6 +2131,7 @@ function Restore-Anterior($T) {
   Undo-Copia $dir
   Remove-Carpeta (Join-Ruta $dir 'target/test-classes')
   Copy-Carpeta (Join-Ruta $Local "arnes/$lado") $dir
+  $T.entradas | Add-Member -NotePropertyName hashEscrito -NotePropertyValue '' -Force   # el de antes puede ser del usuario: no se sabe que lo escribio el script
   Save-Copia $dir
 }
 
@@ -2136,7 +2141,9 @@ function Restore-Anterior($T) {
 # (aunque la tarea no estuviera hecha: el usuario puede haberlo arreglado a mano); una tarea hecha vuelve a empezar, una que ya
 # estaba por hacer sigue como estaba. Que le falten tablas a su base de prueba no lo
 # invalida (un arnes que ya sale todo igual no se rehace por eso): solo se avisa.
-function Use-ArnesGuardado($T, [string[]]$Jobs) {
+# Con $ParaSiEsDelUsuario (el arranque), un test que ya no vale y ha cambiado el usuario no se descarta ni se avisa de que se vuelve a escribir: devuelve el texto de la
+# parada (Get-ParadaArnes) y no toca la tarea. En cualquier otro caso devuelve '' (el test vale o se vuelve a escribir).
+function Use-ArnesGuardado($T, [string[]]$Jobs, [bool]$ParaSiEsDelUsuario = $false) {
   $estabaHecha = ($T.estado -eq 'hecha')
   Copy-Carpeta (Join-Ruta $Local "arnes/$($T.entradas.repo)") $T.entradas.copia
   $m = Test-Arnes $T $Jobs $true
@@ -2147,13 +2154,33 @@ function Use-ArnesGuardado($T, [string[]]$Jobs) {
       Save-Tarea $T
       Bien "Arnes del $($T.entradas.repo): bien (el test de otro lanzamiento sigue valiendo)."
     }
-    return
+    return ''
   }
   Undo-Copia $T.entradas.copia
+  if ($ParaSiEsDelUsuario) {
+    $parada = Get-ParadaArnes $T $m
+    if ($parada) { return $parada }
+  }
   Aviso "El test PruebaLocalTest del $($T.entradas.repo) de otro lanzamiento ya no vale en este commit ($(($m -split "`n")[0])): se vuelve a escribir."
-  if (-not $estabaHecha) { return }
-  $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
-  Save-Tarea $T
+  if ($estabaHecha) {
+    $T.estado = 'pendiente'; $T.intentos = 0; $T.motivo = ''
+    Save-Tarea $T
+  }
+  return ''
+}
+
+# '' si el test guardado de $T, que ya no vale ($Motivo, el de Test-Arnes), es tal cual lo escribio el script (su hash es el que apunta la tarea en entradas.hashEscrito: se vuelve
+# a escribir con la IA). Si lo ha cambiado el usuario (otro hash, o la tarea no apunta ninguno: una de antes de M91 puede ser del usuario, y ante la duda no se pisa), el texto
+# de la parada: lo que pasa, el motivo entero y como seguir (arreglarlo, o pedir que la IA lo escriba otra vez con -RehacerOriginal o -RehacerArnes).
+function Get-ParadaArnes($T, [string]$Motivo) {
+  $lado = $T.entradas.repo
+  $escrito = ''
+  if ($T.entradas.PSObject.Properties['hashEscrito']) { $escrito = [string]$T.entradas.hashEscrito }
+  if ($escrito -and $escrito -ceq (Get-HashCarpeta (Join-Ruta $Local "arnes/$lado"))) { return '' }
+  $rehacer = '-RehacerArnes'
+  if ($lado -eq 'original') { $rehacer = '-RehacerOriginal' }
+  return ("Tu test guardado del $lado (prueba-local\arnes\$lado) ya no vale en este commit y lo has cambiado tu: no lo reescribo con la IA para no perder tus cambios.`n$Motivo`n" +
+    "Arreglalo en prueba-local\arnes\$lado y relanza sin -Rehacer. Si prefieres que la IA lo escriba otra vez, relanza con $rehacer (el tuyo pasa a prueba-local\arnes-anterior\$lado).")
 }
 
 # '' si lo que dejo la IA en la copia del arnes $T tras la llamada $C vale; si no, el motivo. Una llamada que se paso del tope o
@@ -2185,7 +2212,7 @@ function Invoke-Arneses($Tareas, [string[]]$Jobs) {
         # comprueba; si ya no vale, se escribe otra vez como siempre)
         if ($script:VueltaAlDeAntes -and $script:MigradoPorOriginal -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes-anterior/migrado'))) {
           Copy-Carpeta (Join-Ruta $Local 'arnes-anterior/migrado') (Join-Ruta $Local 'arnes/migrado')
-          Use-ArnesGuardado $t $Jobs
+          [void](Use-ArnesGuardado $t $Jobs)
           if ($t.estado -eq 'hecha') { continue }
         }
         $t.entradas.hashOriginal = Get-HashGuardado 'original' $t.entradas.testOriginal
@@ -4396,6 +4423,7 @@ try {
 
   # 2. Tareas: los arneses y los casos (las hechas de antes, a sus copias)
   $arneses = @()
+  $paradas = @()   # los tests guardados que ya no valen y ha cambiado el usuario (Get-ParadaArnes): se para antes de llamar a la IA, con un solo mensaje
   $rehacer = @{ original = [bool]$RehacerOriginal; migrado = [bool]$RehacerArnes }   # los que se escriben otra vez sin pasar por Use-ArnesGuardado
   $testOriginal = ''   # donde va el test del original: el del migrado lo traduce
   foreach ($x in @(@('original', $CopiaOrig), @('migrado', $CopiaMig))) {
@@ -4412,11 +4440,14 @@ try {
     }
     # Lo que se rehace vuelve a empezar sin pasar por Use-ArnesGuardado; lo guardado pasa a arnes-anterior tras la pregunta
     if ($rehacer[$x[0]]) { $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = '' }
-    elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) { Use-ArnesGuardado $t $todosJobs }
+    elseif (Test-Path -LiteralPath (Join-Ruta $Local "arnes/$($x[0])")) {
+      $parada = Use-ArnesGuardado $t $todosJobs $true
+      if ($parada) { $paradas += $parada }
+    }
     # Si el del original no queda hecho (la plantilla, o ya no vale en este commit), se escribe otra vez y el del migrado guardado tambien: lo
     # traduce (Use-ArnesGuardado lo daria por bueno aunque cambie el test del original). Sin migrado guardado no hay que dejar de fiarse de nada:
-    # su tarea sigue por su intento y su motivo, como hoy.
-    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) {
+    # su tarea sigue por su intento y su motivo, como hoy. Si se para por el del original (es del usuario), no: se comprueba el del migrado para decir los dos.
+    if ($x[0] -eq 'original' -and $t.estado -ne 'hecha' -and $paradas.Count -eq 0 -and (Test-Path -LiteralPath (Join-Ruta $Local 'arnes/migrado'))) {
       $script:MigradoPorOriginal = -not $rehacer.migrado
       $rehacer.migrado = $true
     }
@@ -4427,6 +4458,7 @@ try {
     $arneses += , $t
     if ($x[0] -eq 'original') { $testOriginal = $test }
   }
+  if ($paradas.Count -gt 0) { Stop-Arranque ($paradas -join "`n`n") }
   $ArnesOrig = $arneses[0]
   $ArnesMig = $arneses[1]
   $tareasCasos = @()
