@@ -31,3 +31,14 @@ PROMPT 11 (carpeta: la del migrado, en la misma ventana de Copilot que te hizo l
 En tu ultima tabla, un job sale igual que el caso vacio en los dos lados, y otros dos salen igual que el caso vacio en el original pero distintos en el migrado. La prueba en local marcara el primero como "no se pudo preparar" y los otros dos como distintos. Antes de relanzar, mira por que en cada uno: el caso no trae entradas para ese job, el test no se las pasa (base de datos, ficheros o SQL) o el job del original no hace nada con ellas.
 Si es el test o el caso, arreglalo (en los dos tests guardados por igual) y vuelve a ejecutar esos casos con cada test en su copia. Si el original no hace nada con esas entradas y el migrado si, dimelo y no toques nada.
 Ensename la misma tabla y Get-FileHash de cada test guardado y de su copia. No toques src/main.
+
+
+PROMPT 12 (comprobacion final: pegalo en cada ventana de los prompts 9, 10 y 11 cuando acabe; misma carpeta)
+
+Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en local:
+1. Copia cada test guardado a su copia: el del original a la carpeta del original terminada en -prueba-local y el del migrado a la del migrado. No los mezcles. Compilan los dos.
+2. Caso vacio de TODOS los jobs, en los dos lados: cada job deja estado.txt y ningun error.txt. Si uno falla, arreglalo antes de seguir: con un caso vacio que falla, la prueba en local descarta el test.
+3. Si has cambiado el test del original, ejecuta un mismo caso con el test de antes (el de git o el de la ultima copia) y con el de ahora, y dime que cambia en su salida. Solo puede cambiar lo que querias arreglar.
+4. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
+5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
+6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
