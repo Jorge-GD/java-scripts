@@ -81,8 +81,24 @@ function Nuevo-Escenario([string]$Nombre, $Casos, [string]$ReglaOrig = 'minimo=5
   }
 }
 
+# Los tests de antes de m81 cuentan los 'mvn test' de cada caso y sus Maven de mentira no conocen surefire:test: salvo que el escenario sea de m81
+# (Escenario-M81 lo marca con DirectoPorDefecto) o su ajustes.json ya diga MavenCasoDirecto, se lo ponen en false (el ciclo entero, como antes).
+function Ajusta-Directo($E) {
+  if ($E.PSObject.Properties['DirectoPorDefecto']) { return }
+  $f = Join-Path $E.Home 'ajustes.json'
+  if (-not (Test-Path -LiteralPath $f)) { return }
+  try {
+    $o = [System.IO.File]::ReadAllText($f) | ConvertFrom-Json
+    if ($o.PSObject.Properties['MavenCasoDirecto']) { return }
+    Add-Member -InputObject $o -NotePropertyName MavenCasoDirecto -NotePropertyValue $false
+    [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $o -Depth 6))
+  }
+  catch { $null = $_ }   # un ajustes.json que no se lee es justo lo que esa prueba quiere ver
+}
+
 # Lanza prueba-local.ps1 con RESCATE_HOME en la carpeta del escenario (nunca toca los ajustes reales).
 function Prueba($E, [string[]]$A = @(), [string]$Guion = '', [string]$Responde = '') {
+  Ajusta-Directo $E
   $env:RESCATE_HOME = $E.Home
   $env:RESCATE_LLAMADAS = $E.Llamadas
   $si = @('-Si')
@@ -8401,6 +8417,263 @@ $Pruebas['m78 (b2) con el mismo cambio y un test del migrado que si vale: bien, 
   Comprueba 'dice que el test del migrado de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
   Comprueba 'sin aviso de que ya no vale' (-not $r.Salida.Contains($AvisoM78)) (Cola $r.Salida)
   Igual 'sin llamadas a Copilot para el migrado' $v.n @(Llamadas-Arnes $e 'migrado').Count
+}
+
+# ===================== M81: cada caso sin el ciclo entero de Maven, y las rutas largas caben =====================
+# m81-mvn.ps1 (sobre m32-mvn.ps1) entiende 'surefire:test' como 'test' y, segun RESCATE_M81, un surefire:test que sale como un JaCoCo sin prepare-agent (@{argLine}), uno que no
+# llega a ejecutar nada, y ficheros de ruta larga. mvn.log (RESCATE_LLAMADAS) apunta cada llamada tal como llega.
+
+# Un escenario con el Maven de m81 y SIN ajuste de MavenCasoDirecto (el valor por defecto de prueba-local.ps1) salvo que $Ajustes lo ponga.
+function Escenario-M81([string]$Nombre, $Casos, [hashtable]$Ajustes = @{}) {
+  $e = Nuevo-Escenario $Nombre $Casos
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm81-mvn.ps1'); SegundosPorLlamada = 60 }
+  foreach ($k in $Ajustes.Keys) { $aj[$k] = $Ajustes[$k] }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  Add-Member -InputObject $e -NotePropertyName DirectoPorDefecto -NotePropertyValue $true
+  return $e
+}
+
+# Lanza con los guiones $Guion de m81-mvn.ps1 y las variables de entorno $Env (nombre -> valor).
+function Prueba-M81($E, [string]$Guion, [string[]]$A = @(), [hashtable]$Env = @{}) {
+  $env:RESCATE_M81 = $Guion
+  foreach ($k in $Env.Keys) { Set-Item -Path "env:$k" -Value ([string]$Env[$k]) }
+  try { return (Prueba $E $A) }
+  finally {
+    $env:RESCATE_M81 = ''
+    foreach ($k in $Env.Keys) { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+  }
+}
+
+# Las llamadas de mvn.log hechas en la copia $Copia cuyos argumentos casan con $Patron, en orden.
+function Mvn-M81($E, [string]$Copia, [string]$Patron) { return @(Mavens-Con $E ('^' + [regex]::Escape($Copia + '|') + '[^|]*\|' + $Patron)) }
+
+# Los tres tipos de llamada de un caso: el test-compile de la copia (el unico que lleva las propiedades de MavenCasoRapido sin ser de un caso), el surefire:test de un caso y el
+# 'test' de un caso (el ciclo entero; el caso vacio del arnes no lleva job).
+$Compila81 = '.* test-compile .*-Dcheckstyle\.skip'
+$Directo81 = '.* surefire:test -Dtest=PruebaLocalTest -Dprueba\.local\.job='
+$Ciclo81 = '.* test -Dtest=PruebaLocalTest -Dprueba\.local\.job='
+
+# La posicion de la primera linea de $Lineas que casa con $Patron, o -1.
+function Primera-M81([string[]]$Lineas, [string]$Patron) {
+  for ($i = 0; $i -lt $Lineas.Count; $i++) { if ($Lineas[$i] -match $Patron) { return $i } }
+  return -1
+}
+
+$Pruebas['m81 (a1) un job de 3 casos iguales: por copia un test-compile y un surefire:test por caso, ningun test por caso; el resultado, el de siempre'] = {
+  $e = Escenario-M81 'm81-a1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba-M81 $e ''
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los tres casos salen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+  Igual 'original: un solo test-compile para los casos' 1 (Mvn-M81 $e $e.CopiaOrig $Compila81).Count
+  Igual 'original: nueve surefire:test (por caso, el de preparar sus entradas, el original y el original-2)' 9 (Mvn-M81 $e $e.CopiaOrig $Directo81).Count
+  Igual 'migrado: un solo test-compile para los casos' 1 (Mvn-M81 $e $e.CopiaMig $Compila81).Count
+  Igual 'migrado: tres surefire:test' 3 (Mvn-M81 $e $e.CopiaMig $Directo81).Count
+  Igual 'ningun test por caso, ni en el original ni en el migrado' 0 ((Mvn-M81 $e $e.CopiaOrig $Ciclo81).Count + (Mvn-M81 $e $e.CopiaMig $Ciclo81).Count)
+  foreach ($c in @($e.CopiaOrig, $e.CopiaMig)) {
+    $todas = @(Mvn-M81 $e $c '.*')
+    Comprueba "el test-compile va antes que el primer caso ($(Split-Path $c -Leaf))" ((Primera-M81 $todas $Compila81) -ge 0 -and (Primera-M81 $todas $Compila81) -lt (Primera-M81 $todas $Directo81)) ($todas -join "`n")
+    $casos = @(Mvn-M81 $e $c $Directo81)
+    Comprueba "cada surefire:test lleva -o, su job y su caso y no lleva -DargLine= ($(Split-Path $c -Leaf))" (@($casos | Where-Object { (Con-O $_) -and $_ -match '-Dprueba\.local\.caso=caso-\d+' -and $_ -notmatch 'argLine' }).Count -eq $casos.Count) ($casos -join "`n")
+  }
+  Comprueba 'el test-compile tambien va con -o' (Con-O @(Mvn-M81 $e $e.CopiaMig $Compila81)[0]) ''
+  Comprueba 'el resultado guardado del migrado es el de siempre' ((Lee $e.Local ('salidas/migrado/cargaJob/caso-02/ficheros/salida/resultado_' + (Hoy) + '.txt')) -match 'importe=20.00 -> aceptado') ''
+  Comprueba 'la consola no dice que vuelva al ciclo entero' ($r.Salida -notmatch 'sigo con mvn test') (Cola $r.Salida)
+}
+
+$Pruebas['m81 (a2) la huella de una copia: cambia si se sustituye un fichero de src por otro con fecha mas vieja, no si cambia lo de un caso; Invoke-Compilar compila una vez por huella y vuelve a la red como los casos'] = {
+  $f = Join-Path $Dir 'm81-huella.ps1'
+  $cuerpo = @'
+param([string]$Raiz)
+$ErrorActionPreference = 'Stop'
+$Casos = 'src/test/resources/prueba-local'
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+$Cfg = @{ MavenCasoRapido = @('-Dcheckstyle.skip') }
+$script:ConRed = @{}
+$script:Compilada = @{}
+$script:ArgLineVacio = @{}
+$script:Tiempos = @()
+$script:Llamadas = @()
+$script:SinRed = $false
+$script:CompilaMal = $false
+function Info([string]$m) { }
+function Get-SegundosTest { return $null }
+function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
+  $script:Llamadas += ($A -join ' ')
+  if ($script:CompilaMal) { return [pscustomobject]@{ Codigo = 1; Salida = @('[ERROR] COMPILATION ERROR'); Tope = $null } }
+  if ($script:SinRed -and $A -contains '-o') { return [pscustomobject]@{ Codigo = 1; Salida = @('[ERROR] Cannot access central (https://repo.maven.apache.org/maven2) in offline mode and the artifact com.acme:lib:jar:1.0 has not been downloaded from it before.'); Tope = $null } }
+  return [pscustomobject]@{ Codigo = 0; Salida = @('[INFO] BUILD SUCCESS'); Tope = $null }
+}
+function Salida([string]$K, $V) { $K + ' ' + $V }
+$copia = Join-Path $Raiz 'copia'
+function Escribe-Copia([string]$Rel, [string]$Texto) {
+  $r = Join-Ruta $copia $Rel
+  [void](New-Item -ItemType Directory -Force -Path (Split-Path $r -Parent))
+  [System.IO.File]::WriteAllText($r, $Texto)
+}
+Escribe-Copia 'pom.xml' '<project/>'
+Escribe-Copia 'src/main/java/A.java' 'class A { }'
+Escribe-Copia 'src/test/java/ATest.java' 'class ATest { int v = 1; }'
+Escribe-Copia "$Casos/job/caso-01/datos.sql" 'select 1;'
+Escribe-Copia "$Casos/job/caso-01/ficheros/entrada/x.txt" 'uno'
+$h0 = Get-HuellaCopia $copia
+Salida 'A' ($h0 -ceq (Get-HuellaCopia $copia))
+Escribe-Copia "$Casos/job/caso-01/datos.sql" 'select 2, 3;'
+Escribe-Copia "$Casos/job/caso-02/datos.sql" 'select 4;'
+Salida 'B' ($h0 -ceq (Get-HuellaCopia $copia))
+$test = Join-Ruta $copia 'src/test/java/ATest.java'
+$antes = (Get-Item -LiteralPath $test).LastWriteTimeUtc
+[System.IO.File]::WriteAllText($test, 'class ATest { int v = 2; }')
+(Get-Item -LiteralPath $test).LastWriteTimeUtc = $antes.AddDays(-30)
+$h1 = Get-HuellaCopia $copia
+Salida 'C' (-not ($h0 -ceq $h1))
+Escribe-Copia 'pom.xml' '<project><x/></project>'
+$h2 = Get-HuellaCopia $copia
+Salida 'D' (-not ($h1 -ceq $h2))
+Escribe-Copia 'src/main/java/B.java' 'class B { }'
+$h3 = Get-HuellaCopia $copia
+Salida 'E' (-not ($h2 -ceq $h3))
+Remove-Item -LiteralPath (Join-Ruta $copia 'src/main/java/B.java')
+Salida 'F' (-not ($h3 -ceq (Get-HuellaCopia $copia)))
+Escribe-Copia 'src/test/resources/prueba-local-esperado/job/caso-01/a.txt' 'esperado'
+Salida 'G' (-not ($h2 -ceq (Get-HuellaCopia $copia)))
+# Invoke-Compilar
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'H' (($null -eq $r) -and $script:Llamadas.Count -eq 1)
+Salida 'I' $script:Llamadas[0]
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'J' (($null -eq $r) -and $script:Llamadas.Count -eq 1)
+Escribe-Copia "$Casos/job/caso-01/datos.sql" 'select 5;'
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'K' $script:Llamadas.Count
+[System.IO.File]::WriteAllText($test, 'class ATest { int v = 3; }')
+(Get-Item -LiteralPath $test).LastWriteTimeUtc = $antes.AddDays(-60)
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'L' $script:Llamadas.Count
+$script:SinRed = $true
+Escribe-Copia 'src/main/java/C.java' 'class C { }'
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'M' (($null -eq $r) -and $script:Llamadas.Count -eq 4 -and $script:Llamadas[2].EndsWith(' -o') -and -not $script:Llamadas[3].EndsWith(' -o') -and $script:ConRed.ContainsKey($copia))
+Escribe-Copia 'src/main/java/D.java' 'class D { }'
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'N' (($null -eq $r) -and $script:Llamadas.Count -eq 5 -and -not $script:Llamadas[4].EndsWith(' -o'))
+$script:CompilaMal = $true
+Escribe-Copia 'src/main/java/E.java' 'class E { '
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'O' (($null -ne $r) -and $r.Codigo -eq 1 -and $script:Llamadas.Count -eq 6)
+$script:CompilaMal = $false
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'P' (($null -eq $r) -and $script:Llamadas.Count -eq 7)
+$filas = @($script:Tiempos)
+Salida 'Q' (($filas.Count -eq 7) -and @($filas | Where-Object { $_.caso -eq '(compilar)' -and $_.modo -eq 'directo' -and $null -eq $_.segundosTest -and $_.lado -eq 'migrado' }).Count -eq 7)
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $Script @('Get-Hash256', 'Sort-Ordinal', 'Get-HuellaCopia', 'Invoke-Compilar', 'Invoke-MavenCaso', 'Test-FalloSinRed')) + "`n" + $cuerpo))
+  $raiz = Join-Path $Dir 'm81-huella'
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $r = Lanzar $f @($raiz)
+  Igual 'el script de la prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`r?`n")) { if ($l -match '^([A-Z]) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual 'A: la huella de una copia sin cambios es la misma' 'True' $v['A']
+  Igual 'B: cambia un datos.sql de un caso, otro caso nuevo: la misma' 'True' $v['B']
+  Igual 'C: un test de src/test/java sustituido por otro del mismo tamano y con fecha mas vieja: otra' 'True' $v['C']
+  Igual 'D: cambia el pom.xml: otra' 'True' $v['D']
+  Igual 'E: un fichero nuevo en src/main: otra' 'True' $v['E']
+  Igual 'F: y borrarlo: otra' 'True' $v['F']
+  Igual 'G: lo de fuera de la carpeta de los casos (prueba-local-esperado) si cuenta' 'True' $v['G']
+  Igual 'H: Invoke-Compilar compila una vez y no devuelve nada' 'True' $v['H']
+  Igual 'I: con test-compile, las propiedades de MavenCasoRapido y -o, como un caso' 'test-compile -Dcheckstyle.skip -o' $v['I']
+  Igual 'J: sin cambios no vuelve a compilar' 'True' $v['J']
+  Igual 'K: tampoco si solo cambia lo de un caso (una llamada, la de antes)' '1' $v['K']
+  Igual 'L: con un test sustituido por otro mas viejo, compila otra vez' '2' $v['L']
+  Igual 'M: sin red Maven no compila: repite con red, apunta la copia como con red y vale' 'True' $v['M']
+  Igual 'N: con la copia ya con red, la siguiente compilacion va sin -o y a la primera' 'True' $v['N']
+  Igual 'O: un error de compilacion de verdad devuelve el Maven que fallo (el caso sale como con mvn test)' 'True' $v['O']
+  Igual 'P: y no se da la copia por compilada: el siguiente caso lo intenta otra vez' 'True' $v['P']
+  Igual 'Q: cada compilacion es una fila de tiempos de caso (compilar), de modo directo y sin segundosTest' 'True' $v['Q']
+}
+
+$Pruebas['m81 (a3) el primer surefire:test sale con @{argLine}: se repite con -DargLine= y el caso vale; la copia sigue con -DargLine= sin volver a fallar'] = {
+  $e = Escenario-M81 'm81-a3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M81 $e 'argline'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  $m = @(Mvn-M81 $e $e.CopiaMig $Directo81)
+  Igual 'migrado: tres surefire:test (el primero sin -DargLine=, su repeticion y el del segundo caso)' '0,1,1' ((@($m | ForEach-Object { if ($_ -match ' -DargLine= ') { 1 } else { 0 } })) -join ',')
+  Comprueba 'la repeticion es del mismo caso que el primero' ((Caso-De $m[0]) -eq 'caso-01' -and (Caso-De $m[1]) -eq 'caso-01' -and (Caso-De $m[2]) -eq 'caso-02') ($m -join "`n")
+  Comprueba 'y lleva -o como el primero' ((Con-O $m[0]) -and (Con-O $m[1])) ($m -join "`n")
+  $o = @(Mvn-M81 $e $e.CopiaOrig $Directo81)
+  Igual 'original: solo el primero falla (los demas ya llevan -DargLine=): 7 surefire:test (6 casos y su repeticion)' 7 $o.Count
+  Igual 'original: uno sin -DargLine=' 1 @($o | Where-Object { $_ -notmatch ' -DargLine= ' }).Count
+  Igual 'ningun test por caso: no hace falta volver al ciclo' 0 ((Mvn-M81 $e $e.CopiaOrig $Ciclo81).Count + (Mvn-M81 $e $e.CopiaMig $Ciclo81).Count)
+  Comprueba 'la consola no dice que vuelva al ciclo' ($r.Salida -notmatch 'sigo con mvn test') (Cola $r.Salida)
+  Comprueba 'el caso vale: su salida esta guardada' (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/estado.txt')) ''
+}
+
+$Pruebas['m81 (a4) el modo directo no llega a ejecutar el caso: ese caso y los demas de esa copia, con test; la linea Info, una vez; la otra copia sigue en directo'] = {
+  $e = Escenario-M81 'm81-a4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M81 $e 'sin-directo-original'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'original: un solo surefire:test, el del primer intento' 1 (Mvn-M81 $e $e.CopiaOrig $Directo81).Count
+  Igual 'original: los dos casos (preparar, original y original-2 de cada uno: seis) con test, el primero de nuevo tras su intento directo' 6 (Mvn-M81 $e $e.CopiaOrig $Ciclo81).Count
+  Igual 'original: un solo test-compile (no se repite al volver al ciclo)' 1 (Mvn-M81 $e $e.CopiaOrig $Compila81).Count
+  Igual 'migrado: sigue en directo, dos surefire:test y ningun test' '2/0' ("$((Mvn-M81 $e $e.CopiaMig $Directo81).Count)/$((Mvn-M81 $e $e.CopiaMig $Ciclo81).Count)")
+  $n = @([regex]::Matches($r.Salida, 'En batch-viejo-prueba-local no puedo ejecutar los casos sin el ciclo de Maven \(\[ERROR\] No tests were executed!.*\): sigo con mvn test, mas lento\.')).Count
+  Igual 'la linea Info del original sale una vez, con la primera linea del error' 1 $n
+  Igual 'y del migrado, ninguna' 0 @([regex]::Matches($r.Salida, 'En batch-nuevo-prueba-local no puedo')).Count
+  $t = @(Tiempos $e | Where-Object { $_.lado -eq 'original' -and $_.caso -ne '(compilar)' } | ForEach-Object { $_.modo })
+  Igual 'en tiempos: el primer intento del original, directo, y los demas, ciclo' 'directo,ciclo,ciclo,ciclo,ciclo,ciclo,ciclo' ($t -join ',')
+}
+
+$Pruebas['m81 (a5) con MavenCasoDirecto en false (ajustes.json): ninguna llamada a test-compile para los casos ni a surefire:test; cada caso con test, como antes'] = {
+  $e = Escenario-M81 'm81-a5' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') }) @{ MavenCasoDirecto = $false }
+  $r = Prueba-M81 $e ''
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'ninguna llamada a surefire:test' 0 ((Mvn-M81 $e $e.CopiaOrig $Directo81).Count + (Mvn-M81 $e $e.CopiaMig $Directo81).Count)
+  Igual 'ningun test-compile con las propiedades de los casos' 0 ((Mvn-M81 $e $e.CopiaOrig $Compila81).Count + (Mvn-M81 $e $e.CopiaMig $Compila81).Count)
+  Igual 'original: seis test por caso (preparar, original y original-2 de cada uno); migrado: dos' '6/2' ("$((Mvn-M81 $e $e.CopiaOrig $Ciclo81).Count)/$((Mvn-M81 $e $e.CopiaMig $Ciclo81).Count)")
+  Comprueba 'sin fila de compilar en los tiempos, todas de modo ciclo' (@(Tiempos $e).Count -eq 8 -and @(Tiempos $e | Where-Object { $_.modo -ne 'ciclo' -or $_.caso -eq '(compilar)' }).Count -eq 0) ((Tiempos $e | ForEach-Object { "$($_.caso)/$($_.modo)" }) -join ' ')
+  Comprueba 'la consola no habla de compilar' ($r.Salida -notmatch 'Compilar:') (Cola $r.Salida)
+}
+
+$Pruebas['m81 (a6) las salidas del original guardadas de antes del cambio (con el ciclo entero) se reutilizan: 0 Maven del original, y el migrado, en directo'] = {
+  $e = Escenario-M81 'm81-a6' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ MavenCasoDirecto = $false }
+  $r = Prueba-M81 $e ''
+  Igual 'el primer lanzamiento, como antes, sale con 0' 0 $r.Codigo
+  $o1 = Orig-Mvn $e
+  Igual 'y hizo nueve Maven del original (preparar, original y original-2 de cada caso)' 9 $o1
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm81-mvn.ps1'); SegundosPorLlamada = 60 }))
+  $r = Prueba-M81 $e ''
+  Igual 'el segundo, con el valor por defecto (directo), sale con 0' 0 $r.Codigo
+  Comprueba 'dice que reutiliza los 3 casos y ejecuta 0' ($r.Salida -match 'Original: se reutilizan las salidas de 3 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'ni un Maven de caso del original mas' $o1 (Orig-Mvn $e)
+  Igual 'ni un test-compile para los casos en el original' 0 (Mvn-M81 $e $e.CopiaOrig $Compila81).Count
+  Igual 'el migrado, tres surefire:test y un test-compile' '3/1' ("$((Mvn-M81 $e $e.CopiaMig $Directo81).Count)/$((Mvn-M81 $e $e.CopiaMig $Compila81).Count)")
+  Igual 'los tres casos siguen iguales' 'igual,igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m81 (a7) prueba-local-tiempos.json: cada fila lleva su modo y la compilacion es una fila (compilar) que no entra en la media por caso; la linea final dice cuantas veces y cuantos segundos'] = {
+  $e = Escenario-M81 'm81-a7' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M81 $e ''
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = @(Tiempos $e)
+  Igual 'diez filas: ocho de casos (6 del original, 2 del migrado) y dos de compilar' 10 $t.Count
+  Comprueba 'todas llevan modo directo' (@($t | Where-Object { $_.modo -ne 'directo' }).Count -eq 0) (($t | ForEach-Object { "$($_.lado)/$($_.caso)/$($_.modo)" }) -join ' ')
+  $c = @($t | Where-Object { $_.caso -eq '(compilar)' })
+  Igual 'las de compilar: una por copia' 'migrado,original' ((@($c | ForEach-Object { $_.lado } | Sort-Object)) -join ',')
+  Comprueba 'con segundosMaven, sin segundosTest y con -o (offline)' (@($c | Where-Object { $null -ne $_.segundosMaven -and $null -eq $_.segundosTest -and $_.offline -eq $true -and $_.cuando }).Count -eq 2) ((ConvertTo-Json -InputObject $c -Compress))
+  $f = @($t | Where-Object { $_.caso -ne '(compilar)' })
+  Comprueba 'las de casos, con su job y su caso y los segundos del test del XML' (@($f | Where-Object { $_.job -ne 'cargaJob' -or $_.caso -notmatch '^caso-0[12]$' -or $null -eq $_.segundosTest }).Count -eq 0) ((ConvertTo-Json -InputObject $f -Compress))
+  $suma = ($c | Measure-Object -Property segundosMaven -Sum).Sum
+  Comprueba 'la linea final nombra la compilacion: 2 veces y los segundos de las dos filas' ($r.Salida -match 'Compilar: 2 veces, ([\d\.]+) s\.' -and [Math]::Abs([double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture) - $suma) -lt 0.06) (Cola $r.Salida)
+  $media = ($f | Measure-Object -Property segundosMaven -Average).Average
+  Comprueba 'y la media por caso no cuenta la compilacion' ($r.Salida -match 'Maven por caso: ([\d\.]+) s de media' -and [Math]::Abs([double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture) - $media) -lt 0.06) (Cola $r.Salida)
+  Comprueba 'con el detalle al final de la linea (el fichero de tiempos)' ($r.Salida -match 'Compilar: [^\r\n]*Detalle: [^\r\n]*prueba-local-tiempos\.json') (Cola $r.Salida)
+  $e1 = Escenario-M81 'm81-a7b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M81 $e1 'sin-directo'
+  Igual 'con un Maven que no ejecuta surefire:test: sale con 0' 0 $r.Codigo
+  Comprueba 'los casos pasan a modo ciclo y siguen los tiempos de casos' (@(Tiempos $e1 | Where-Object { $_.caso -ne '(compilar)' -and $_.modo -eq 'ciclo' }).Count -ge 2) ((Tiempos $e1 | ForEach-Object { "$($_.lado)/$($_.caso)/$($_.modo)" }) -join ' ')
 }
 
 # ================================ LANZADOR ================================
