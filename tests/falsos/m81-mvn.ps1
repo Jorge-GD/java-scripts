@@ -10,6 +10,7 @@
 #   plano                 cada caso deja, en los dos lados, ficheros/a/<M81_CARPETA letras>/resultado_nnnnnnnnnnnnnnnnnnnn_<fecha de hoy>.txt: con la carpeta del
 #                         proyecto corta, no cabe en salidas con nombre corto y si aplanado
 #   sin-plano             cada caso deja, en los dos lados, <M81_CARPETA letras>/dato.txt: la primera carpeta ya es tan larga que ni aplanado cabe
+#   compilar-lento        un test-compile (la compilacion de la copia) tarda 4 s mas que un caso: los tiempos de compilar y los de los casos salen distintos
 $raiz = (Get-Location).Path
 $original = ($raiz -like '*batch-viejo*')
 $guiones = @("$env:RESCATE_M81" -split ';')
@@ -18,6 +19,7 @@ if ($env:RESCATE_LLAMADAS) {
   [void](New-Item -ItemType Directory -Path $env:RESCATE_LLAMADAS -Force)
   [System.IO.File]::AppendAllText((Join-Path $env:RESCATE_LLAMADAS 'mvn.log'), ($raiz + '|' + $env:JAVA_HOME + '|' + ($args -join ' ') + "`n"))
 }
+if ($guiones -contains 'compilar-lento' -and $args -contains 'test-compile') { Start-Sleep -Seconds 4 }
 if ($directo -and $guiones -contains 'argline' -and $args -notcontains '-DargLine=') {
   '[ERROR] Error: Could not find or load main class @{argLine}'
   '[ERROR] The forked VM terminated without properly saying goodbye. VM crash or System.exit called?'

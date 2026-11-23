@@ -8547,8 +8547,13 @@ function Prueba-M83($E, [string]$Guion, [int]$Carpeta = 0) {
 }
 
 # Las letras de la carpeta larga para que la ruta con nombre corto SIN aplanar (ficheros/a/<carpeta>/<fecha-hora>/<nombre corto de 34>) mida $Destino en el
-# calculo de Get-LargoRuta (el de la ruta mas larga de salidas).
-function Carpeta-M83($E, [string]$Job, [int]$Destino) { return ($Destino - ($E.Local.Length + $Job.Length + 41 + 'ficheros/a/'.Length + 1 + 15 + 1 + 34)) }
+# calculo de Get-LargoRuta (el de la ruta mas larga de salidas). Sale de la ruta real de la copia ($E.Local): cuanto mas larga la copia, menos letras de carpeta; con una
+# copia en la que la ruta ya pasa de $Destino sin carpeta larga, queda 1 letra (la ruta sigue pasando de 259). Lo que no se puede mover es el aplanado: ver Aplanado-M83.
+function Carpeta-M83($E, [string]$Job, [int]$Destino) { return [Math]::Max(1, ($Destino - ($E.Local.Length + $Job.Length + 41 + 'ficheros/a/'.Length + 1 + 15 + 1 + 34))) }
+
+# Las letras de la ruta aplanada (ficheros/<nombre corto de 34>) en el calculo de Get-LargoRuta: no depende de la carpeta larga, solo de la ruta de la copia. Si pasa de 259,
+# esta copia esta en una ruta demasiado larga para que este fichero quepa ni aplanado (el caso de m83 b2) y la prueba b1 no se puede hacer en ella.
+function Aplanado-M83($E, [string]$Job) { return ($E.Local.Length + $Job.Length + 41 + 'ficheros/'.Length + 34) }
 
 # Los ficheros de ficheros\ (sin bajar a sus carpetas) de un lado ($Lado: original, original-2, migrado) del caso-01 de cargaJob.
 function Nombres-M83($E, [string]$Lado) {
@@ -8591,7 +8596,11 @@ Salida 'F' (Test-NombreCorto $a)
 $Pruebas['m83 (b1) un fichero en una carpeta larga que no cabe en salidas ni con nombre corto pero si aplanado (ficheros/<nombre corto>) se guarda igual en original, original-2 y migrado: el caso sale igual y su original se reutiliza'] = {
   $e = Escenario-M83 'm83-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
   $c = Carpeta-M83 $e 'cargaJob' 262
-  Comprueba 'la prueba cabe: la carpeta larga mide entre 5 y 200 letras (con nombre corto sin aplanar la ruta pasa de 259)' ($c -ge 5 -and $c -le 200) "c=$c, Local=$($e.Local.Length)"
+  $sinAplanar = $e.Local.Length + 'cargaJob'.Length + 41 + 'ficheros/a/'.Length + $c + 1 + 15 + 1 + 34
+  $aplanado = Aplanado-M83 $e 'cargaJob'
+  Comprueba 'la prueba cabe en la ruta de esta copia: aplanado la ruta cabe en 259 (si no, la copia esta en una ruta demasiado larga para esta prueba)' ($aplanado -le 259) "aplanado=$aplanado, Local=$($e.Local.Length)"
+  Comprueba 'la prueba cabe: la carpeta larga mide entre 1 y 200 letras y con nombre corto sin aplanar la ruta pasa de 259' ($c -ge 1 -and $c -le 200 -and $sinAplanar -gt 259) "c=$c, sin aplanar=$sinAplanar, Local=$($e.Local.Length)"
+  if ($aplanado -gt 259 -or $sinAplanar -le 259) { return }
   $r = Prueba-M83 $e 'plano:/caso-01' $c
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
@@ -8879,7 +8888,7 @@ $Pruebas['m81 (a6) las salidas del original guardadas de antes del cambio (con e
 
 $Pruebas['m81 (a7) prueba-local-tiempos.json: cada fila lleva su modo y la compilacion es una fila (compilar) que no entra en la media por caso; la linea final dice cuantas veces y cuantos segundos'] = {
   $e = Escenario-M81 'm81-a7' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
-  $r = Prueba-M81 $e ''
+  $r = Prueba-M81 $e 'compilar-lento'
   Igual 'sale con 0' 0 $r.Codigo
   $t = @(Tiempos $e)
   Igual 'diez filas: ocho de casos (6 del original, 2 del migrado) y dos de compilar' 10 $t.Count
@@ -8892,7 +8901,14 @@ $Pruebas['m81 (a7) prueba-local-tiempos.json: cada fila lleva su modo y la compi
   $suma = ($c | Measure-Object -Property segundosMaven -Sum).Sum
   Comprueba 'la linea final nombra la compilacion: 2 veces y los segundos de las dos filas' ($r.Salida -match 'Compilar: 2 veces, ([\d\.]+) s\.' -and [Math]::Abs([double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture) - $suma) -lt 0.06) (Cola $r.Salida)
   $media = ($f | Measure-Object -Property segundosMaven -Average).Average
-  Comprueba 'y la media por caso no cuenta la compilacion' ($r.Salida -match 'Maven por caso: ([\d\.]+) s de media' -and [Math]::Abs([double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture) - $media) -lt 0.06) (Cola $r.Salida)
+  $conCompilar = ($t | Measure-Object -Property segundosMaven -Average).Average
+  Comprueba 'los tiempos distinguen: cada compilacion tarda mas de 3.9 s (el falso duerme 4) y la media contando la compilacion se aparta de la de los casos en mas de 0.2 s' (@($c | Where-Object { $_.segundosMaven -lt 3.9 }).Count -eq 0 -and [Math]::Abs($conCompilar - $media) -gt 0.2) "casos=$media, contando la compilacion=$conCompilar, compilar=$(($c | ForEach-Object { $_.segundosMaven }) -join ' ')"
+  $dicho = $null
+  if ($r.Salida -match 'Maven por caso: ([\d\.]+) s de media') { $dicho = [double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture) }
+  Comprueba 'la media por caso de la consola es la de las filas de los casos' ($null -ne $dicho -and [Math]::Abs($dicho - $media) -lt 0.06) "consola=$dicho, casos=$media"
+  Comprueba 'y no la que saldria contando la compilacion' ($null -ne $dicho -and [Math]::Abs($dicho - $conCompilar) -gt 0.1) "consola=$dicho, contando la compilacion=$conCompilar"
+  $test = ($f | Measure-Object -Property segundosTest -Average).Average
+  Comprueba 'el test y el resto de Maven de la linea son los de los casos (el test de media y Maven menos el test)' ($r.Salida -match 'el test ([\d\.]+) s y Maven ([\d\.]+) s \(arranque' -and [Math]::Abs([double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture) - $test) -lt 0.06 -and [Math]::Abs([double]::Parse($Matches[2], [System.Globalization.CultureInfo]::InvariantCulture) - ($media - $test)) -lt 0.06) (Cola $r.Salida)
   Comprueba 'con el detalle al final de la linea (el fichero de tiempos)' ($r.Salida -match 'Compilar: [^\r\n]*Detalle: [^\r\n]*prueba-local-tiempos\.json') (Cola $r.Salida)
   $e1 = Escenario-M81 'm81-a7b' ([ordered]@{ cargaJob = @('importe=10.00') })
   $r = Prueba-M81 $e1 'sin-directo'
