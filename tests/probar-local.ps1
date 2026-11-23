@@ -5084,7 +5084,7 @@ $Pruebas['m56 (a) -RehacerOriginal con los dos arneses guardados y hechos: se es
 
 $Pruebas['m56 (b) un arnes del original sin una tabla del inventario: el aviso, al escribirlo y al usar el guardado, dice que relance con -RehacerOriginal; con la opcion y el test con la tabla, el aviso se va'] = {
   $e = Escenario-M40 'm56-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
-  $aviso = "La base de prueba sigue sin estas tablas: T_A ($SitioTablaM40). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal."
+  $aviso = "La base de prueba sigue sin estas tablas: T_A ($SitioTablaM40). Los casos que las usen saldran FAILED en el original. Anadelas a tu test guardado (prueba-local\arnes\original) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que lo escriba otra vez."
   $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original'
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'el aviso con -RehacerOriginal, una vez' 1 ([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
@@ -6742,7 +6742,7 @@ $Pruebas['m69 (b5) en el ultimo intento no queda peor pero le falta la columna p
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'se rechaza el primero' ($r.Salida.Contains("Arnes del original rechazado: Tu base no crea estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69).")) (Cola $r.Salida)
   Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del original: bien\.') (Cola $r.Salida)
-  $aviso = "La base de tu test sigue sin crear estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal."
+  $aviso = "La base de tu test sigue sin crear estas columnas que usa el codigo: RECIBOS.IMPORTE_NETO ($SitioM69). Los casos que las usen saldran FAILED en el original. Crealas en tu test guardado (prueba-local\arnes\original) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que lo escriba otra vez."
   Comprueba 'con el aviso' ($r.Salida.Contains($aviso)) (Cola $r.Salida)
   Comprueba 'no se vuelve al de antes' ($r.Salida -notmatch 'sigo con el de antes') (Cola $r.Salida)
   Comprueba 'el test guardado es el del segundo intento' ((Test-Guardado $e 'original').Contains('M69_VERSION=v3')) ''
@@ -8586,6 +8586,25 @@ $Pruebas['m80 (c4) la funcion de informe.ps1 que da por buena la prueba en local
   Igual 'prueba-local.json no ha cambiado (hash)' $antes (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
   Igual 'y el cierre sigue sin ver fallos' 0 @(Get-FallosPruebaLocal (Lee-Json $e.Json) $mapa).Count
   Comprueba 'con lo de la rapida si los veria (la prueba es sensible)' (@(Get-FallosPruebaLocal $rapida $mapa).Count -gt 0) ''
+}
+
+$SitioMigradoM80 = 'src/main/java/com/acme/nuevo/Repo.java:4'
+
+$Pruebas['m80 (d1) falta una tabla en la base del test del migrado: el aviso habla del migrado (EXCEPCION, prueba-local\arnes\migrado, -RehacerArnes) y el del original sigue hablando del original; los dos ofrecen primero editar el test guardado'] = {
+  $e = Escenario-M40 'm80-d1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  [void](Commit-En $e.Wt 'src/main/java/com/acme/nuevo/Repo.java' "package com.acme.nuevo;`n`npublic class Repo {`n  static final String A = `"INSERT INTO T_A (ID, NOMBRE) VALUES (?, ?)`";`n}`n" 'repo con sql')
+  $r = Prueba-M40 $e 'tablas=9/T_A:arnes-original;tablas=9/T_A:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  $lineas = @($r.Salida -split "`n" | Where-Object { $_ -match 'sigue sin estas tablas: T_A' })
+  Igual 'dos avisos de tablas: uno por lado' 2 $lineas.Count
+  $mig = @($lineas | Where-Object { $_.Contains($SitioMigradoM80) })
+  $orig = @($lineas | Where-Object { $_.Contains($SitioTablaM40) })
+  Igual 'el del migrado, una vez' 1 $mig.Count
+  Comprueba 'dice EXCEPCION en el migrado' ("$($mig[0])".Contains('Los casos que las usen saldran EXCEPCION en el migrado.')) "$($mig[0])"
+  Comprueba 'ofrece editar el test guardado del migrado y relanzar sin -Rehacer, o con -RehacerArnes' ("$($mig[0])".Contains('Anadelas a tu test guardado (prueba-local\arnes\migrado) y relanza sin -Rehacer, o relanza con -RehacerArnes para que lo escriba otra vez.')) "$($mig[0])"
+  Comprueba 'y no dice nada del original' ("$($mig[0])" -notmatch 'original|FAILED') "$($mig[0])"
+  Igual 'el del original, una vez' 1 $orig.Count
+  Comprueba 'dice FAILED en el original, con su carpeta y -RehacerOriginal' ("$($orig[0])".Contains('Los casos que las usen saldran FAILED en el original. Anadelas a tu test guardado (prueba-local\arnes\original) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que lo escriba otra vez.')) "$($orig[0])"
 }
 
 # ================================ LANZADOR ================================

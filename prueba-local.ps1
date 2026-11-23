@@ -1681,9 +1681,13 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
     Save-CausasVacio (Join-Ruta $Local 'salidas/vacio') $Jobs (Get-CausaCorta $r.Causa)
   }
-  if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Para que lo escriba otra vez con ellas, relanza con -RehacerArnes." }
-  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
-  if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
+  # Los tres avisos dicen el lado que toca y ofrecen primero editar el test guardado ($arreglo) y, si no, escribirlo otra vez con la IA
+  $lado = 'migrado'; $falla = 'EXCEPCION'; $rehaz = '-RehacerArnes'
+  if ($esOrig) { $lado = 'original'; $falla = 'FAILED'; $rehaz = '-RehacerOriginal' }
+  $arreglo = "tu test guardado (prueba-local\arnes\$lado) y relanza sin -Rehacer, o relanza con $rehaz para que lo escriba otra vez."
+  if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Anadelas a $arreglo" }
+  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran $falla en el $lado. Anadelas a $arreglo" }
+  if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Crealas en $arreglo" }
   return ''
 }
 
