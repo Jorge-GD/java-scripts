@@ -16,7 +16,7 @@ y para PowerShell 7.
         configmap-variables   todas las variables, en tandas de 10: cada una con una clave del inventario (de una lista cerrada, sin valores) o
                               'ninguna', y si es secreta
         configmap-entorno     una por entorno (cada carpeta de config\ de la referencia): escribe config\<entorno>\ con la tabla del entorno
-        configmap-plataforma  una por fichero de las carpetas de punto de la referencia (menos .git)
+        configmap-plataforma  una por fichero de las carpetas de punto de la referencia (menos .git; si es un repo git, solo los que git ve: no lo ignorado)
         configmap-revision    una por entorno y una para la plataforma: hallazgos con cita comprobada; si toca un fichero, se deshace
       Lo que no esta en config\ ni en una carpeta de punto se copia con el nombre cambiado y sin IA.
 
@@ -315,7 +315,7 @@ function Get-TextoLegitimoConfigMap([string[]]$Nombres, $Vars, $Inv, [string]$Mi
   foreach ($o in $Inv.Values) {
     foreach ($k in $o.Claves.Keys) { $t.Add($k); if (-not $o.Secretas.ContainsKey($k)) { $t.Add([string]$o.Claves[$k]) } }
   }
-  foreach ($rel in @(Get-FicherosSinGit $Referencia)) {
+  foreach ($rel in @(Get-ListaReferenciaConfigMap $Referencia)) {
     $ruta = Join-Ruta $Referencia $rel
     if ([array]::IndexOf([System.IO.File]::ReadAllBytes($ruta), [byte]0) -lt 0) { $t.Add((Read-TextoConfigMap $ruta)) }
   }
@@ -339,6 +339,31 @@ function Get-ExentosConfigMap($Vars, $Inv) {
 }
 
 # ============================ REFERENCIA ============================
+# Los ficheros de la referencia $Ref (rutas con /, en orden). Si es la raiz de un repo git, los que ve git: los seguidos y los nuevos que no ignora, sin los que
+# ya no estan en disco (lo ignorado, como un __pycache__, ni se copia ni es tarea). Si no es un repo git, o git no contesta, todos los de disco.
+function Get-ListaReferenciaConfigMap([string]$Ref) {
+  if (Test-Path -LiteralPath (Join-Path $Ref '.git')) {
+    $codigo = -1
+    $texto = ''
+    try {
+      $g = Invoke-Proceso 'git' @('ls-files', '-z', '--cached', '--others', '--exclude-standard') $Ref 120
+      $codigo = $g.Codigo
+      $texto = $g.Texto
+    }
+    catch { $texto = $_.Exception.Message }
+    if ($codigo -eq 0) {
+      $lista = New-Object 'System.Collections.Generic.List[string]'
+      foreach ($rel in $texto.Split([char]0)) {
+        if ($rel -and -not $lista.Contains($rel) -and (Test-Path -LiteralPath (Join-Ruta $Ref $rel) -PathType Leaf)) { $lista.Add($rel) }
+      }
+      $lista.Sort([System.StringComparer]::Ordinal)
+      return $lista.ToArray()
+    }
+    Aviso ("No he podido pedirle a git la lista de ficheros de la referencia ($codigo): uso todos los que hay en disco.")
+  }
+  return @(Get-FicherosSinGit $Ref)
+}
+
 # Los ficheros del repo de configmap de referencia: Entornos (carpeta de config\ -> sus ficheros), Punto (los de las carpetas de punto, menos .git) y
 # Sueltos (todo lo demas). Rutas con /.
 function Get-FicherosReferenciaConfigMap([string]$Ref) {
@@ -350,7 +375,7 @@ function Get-FicherosReferenciaConfigMap([string]$Ref) {
   if (Test-Path -LiteralPath $dirConfig -PathType Container) {
     foreach ($d in @(Get-ChildItem -LiteralPath $dirConfig -Directory | Sort-Object Name)) { $entornos[$d.Name] = New-Object 'System.Collections.Generic.List[string]' }
   }
-  foreach ($rel in @(Get-FicherosSinGit $Ref)) {
+  foreach ($rel in @(Get-ListaReferenciaConfigMap $Ref)) {
     $s = $rel.Split('/')
     if ($s[0] -ceq $carpeta -and $s.Count -ge 3 -and $entornos.Contains($s[1])) { $entornos[$s[1]].Add($rel) }
     elseif ($s[0].StartsWith('.') -and $s.Count -ge 2) { $punto.Add($rel) }

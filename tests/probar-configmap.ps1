@@ -1079,4 +1079,46 @@ $Pruebas['c9 (j15) carpeta de los entornos: sale de $Cfg.ConfigMapCarpeta, no de
   Igual 'el valor por defecto de la clave es config' 'config' $antes
 }
 
+# ---- m79: la referencia se lista como la ve git ----
+$IdToolsA = 'configmap-plataforma-tools-a-py'
+
+$Pruebas['m79 (a1) referencia git: lo ignorado (un .pyc) no se copia ni es tarea; lo nuevo sin commit y no ignorado, si; lo que ya no esta en disco, no'] = {
+  $e = Nuevo-Escenario 'm79a1'
+  Escribe $e.Ref '.gitignore' "__pycache__/`n"
+  Escribe $e.Ref '.tools/a.py' "print('a de precios')`n"
+  Inicia-Repo $e.Ref
+  Escribe $e.Ref '.tools/__pycache__/x.pyc' "x`0y"
+  Escribe $e.Ref 'docs/nuevo.txt' "Nuevo de Precios.`n"
+  Remove-Item -LiteralPath (Get-Ruta $e.Ref 'docs/notas.txt') -Force
+  $l = Get-FicherosReferenciaConfigMap $e.Ref
+  $todos = @($l.Punto) + @($l.Sueltos)
+  Comprueba 'el .pyc ignorado no esta en la lista' (@($todos | Where-Object { $_ -like '*.pyc' }).Count -eq 0) ($todos -join ',')
+  Comprueba 'el fichero nuevo sin commit esta' ($l.Sueltos -ccontains 'docs/nuevo.txt') ($l.Sueltos -join ',')
+  Comprueba 'el seguido que ya no esta en disco no esta' ($todos -cnotcontains 'docs/notas.txt')
+  Comprueba 'el .tools/a.py que difiere es de la plataforma' ($l.Punto -ccontains '.tools/a.py') ($l.Punto -join ',')
+  Planes-Buenos $e
+  Plan $e $IdToolsA @{ '.tools/a.py' = "print('a de pedidos')`n" }
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'el .pyc no esta en el repo nuevo' (-not (Existe-Destino $e '.tools/__pycache__/x.pyc'))
+  Comprueba 'el fichero nuevo si, con el nombre cambiado' ((Existe-Destino $e 'docs/nuevo.txt') -and (Lee-Destino $e 'docs/nuevo.txt').Contains('Pedidos'))
+  Comprueba 'y el que ya no esta en disco, no' (-not (Existe-Destino $e 'docs/notas.txt'))
+  Comprueba 'ninguna llamada de Copilot por el .pyc' (-not ((Ids-De $e) -match 'pyc')) (Ids-De $e)
+  Comprueba 'el .tools/a.py si es tarea' ((Ids-De $e) -match [regex]::Escape($IdToolsA)) (Ids-De $e)
+  Comprueba 'el .pyc no sale en configmap.json' (-not [System.IO.File]::ReadAllText((Join-Path $e.Datos 'configmap.json')).Contains('x.pyc'))
+}
+
+$Pruebas['m79 (a2) referencia sin git: lista lo mismo que el disco, con su .gitignore sin efecto'] = {
+  $e = Nuevo-Escenario 'm79a2'
+  Escribe $e.Ref '.gitignore' "__pycache__/`n"
+  Escribe $e.Ref '.tools/y.py' "print('y')`n"
+  Escribe $e.Ref '.tools/__pycache__/z.txt' "z`n"
+  $l = Get-FicherosReferenciaConfigMap $e.Ref
+  $todos = @($l.Punto) + @($l.Sueltos) + @($l.Entornos.Values | ForEach-Object { $_ })
+  $disco = @(Get-FicherosSinGit $e.Ref)
+  Igual 'tantos como el disco' $disco.Count $todos.Count
+  Comprueba 'y todos los del disco' (@($disco | Where-Object { $todos -cnotcontains $_ }).Count -eq 0) ($todos -join ',')
+  Comprueba 'lo de __pycache__ sigue siendo de la plataforma (no hay git que lo ignore)' ($l.Punto -ccontains '.tools/__pycache__/z.txt') ($l.Punto -join ',')
+}
+
 Invoke-Banco $Pruebas 'tests/probar-configmap.ps1'
