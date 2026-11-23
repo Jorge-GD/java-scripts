@@ -57,3 +57,19 @@ Paso 2: abre el fichero de salida del migrado en el caso vacio y en el positivo:
 Paso 3: si es el caso o el test, arreglalo (en los dos tests guardados por igual) para que el original procese el caso positivo. Si es el codigo del migrado (escribe algo que el original no escribiria), dimelo con fichero:linea de los dos y no toques src/main.
 Paso 4: dime tambien que has cambiado en los casos de los otros dos jobs: ficheros creados, borrados o marcados con no-aplica.txt. No borres casos.
 Cuando acabes, sigue con el PROMPT 12.
+
+
+PROMPT 15 (carpeta: la del migrado, en la misma ventana del 12)
+
+Quedan dos diferencias. La prueba en local ejecuta el migrado en el ultimo commit de su rama de rescate, asi que el codigo se arregla en la carpeta de rescate (la que termina en -rescate), nunca en esta.
+1. El asunto del correo: el original ya sale con tilde y el migrado sale sin tilde. Mira en la rama de rescate el valor de esa propiedad (git log -p de su fichero en esa rama: el commit que escapo las tildes, y si ya tiene un revert) y el codigo que compone el asunto. Dime la causa con fichero:linea. Si es ese commit, deshazlo en la carpeta de rescate con git revert --no-edit. Si es otra cosa del codigo, arreglalo alli con un test unitario y su commit.
+2. Los ficheros distintos de tu tabla: para cada caso, dime que fichero difiere y la primera linea distinta, entera, del original y del migrado. Agrupa los casos por causa. Si la causa es el codigo del migrado, arreglalo en la carpeta de rescate copiando lo que hace el original (dime su fichero:linea), con un test unitario y un commit por causa. Si es el test o el caso, dimelo y no lo toques.
+3. Al final, en la carpeta de rescate: mvn test, git status limpio y la lista de commits nuevos.
+
+
+PROMPT 16 (carpeta: la del migrado, en la misma ventana del 8 y el 12)
+
+En el caso vacio, la unica diferencia entre los dos lados es una tabla: el original la deja con una fila y el migrado la deja vacia. Como sale en el caso vacio, saldra en todos los casos.
+Paso 1: busca de donde sale esa fila en el original: su test, o un .sql de src/main/resources o de src/test/resources que se carga al arrancar. Dime por que el migrado no la tiene.
+Paso 2: si viene de un .sql que el original carga al arrancar o del test del original, pon las mismas filas en el test guardado del migrado, como hiciste con la tabla del correo. Si es el codigo del migrado (un job que tendria que escribirla), dimelo con fichero:linea y no toques src/main.
+Paso 3: vuelve a ejecutar el caso vacio de todos los jobs en los dos lados (con IF NOT EXISTS en la copia del datos.sql, como antes) y ensename la misma tabla, con Get-FileHash de cada test guardado y de su copia.
