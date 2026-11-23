@@ -9293,6 +9293,18 @@ $Pruebas['m88 (c) ningun caso de cargaJob trae entradas: coge el primero que no 
   Igual 'remesaJob, con todos no-aplica, queda sin probar en local' 'sin probar en local' "$($x.resultado)"
 }
 
+$Pruebas['m88 (h) un datos.sql vacio y una carpeta vacia en ficheros\ no son entradas: -Rapida sigue cogiendo el caso que si las trae'] = {
+  $e = Nuevo-Escenario 'm88-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-sin-efecto:caso-cargaJob-01'
+  Igual 'la prueba entera sale con 0' 0 $r.Codigo
+  $c1 = Get-Ruta $e.Local 'casos/cargaJob/caso-01'
+  [System.IO.File]::WriteAllText((Join-Path $c1 'datos.sql'), '')
+  [void](New-Item -ItemType Directory -Path (Join-Path $c1 'ficheros/vacia') -Force)
+  Comprueba 'caso-01 lleva un datos.sql de 0 bytes y ficheros\ sin ningun fichero' ((Get-Item -LiteralPath (Join-Path $c1 'datos.sql')).Length -eq 0 -and @(Get-ChildItem -LiteralPath (Join-Path $c1 'ficheros') -Recurse -File).Count -eq 0) ''
+  $r = Prueba $e @('-Rapida')
+  Igual 'los casos de la rapida: el segundo de cargaJob' 'cargaJob/caso-02' (Casos-Rapida-M88 $e)
+}
+
 $Pruebas['m88 (g) -Rapida dos veces: la primera coge caso-01 (nada preparado) y sale no-aplica; la segunda coge caso-02, lo prepara la IA con su entrada y su numero'] = {
   $e = Nuevo-Escenario 'm88-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
   $r = Prueba $e @('-Rapida') 'caso-no-aplica:caso-cargaJob-01'
