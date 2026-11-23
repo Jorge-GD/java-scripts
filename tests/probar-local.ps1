@@ -9352,5 +9352,96 @@ $Pruebas['m86 (g) con cuatro tablas con columnas repetidas en dos jobs: cada tab
   Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
 }
 
+# ===================== M88: -Rapida coge el primer caso con entradas de cada job =====================
+# Sin falsos nuevos: copilot-local.ps1 (caso-no-aplica: solo no-aplica.txt; caso-sin-efecto: solo parametros.properties, o sea sin entradas; ' | SQL ' en la entrada: datos.sql)
+# y el Maven de siempre; el job vacio, con el de m82. -Rapida mira lo preparado de lanzamientos anteriores (prueba-local\casos\<job>\<caso>).
+
+# Los casos de la ultima -Rapida, 'job/caso' ordenados y separados por coma.
+function Casos-Rapida-M88($E) {
+  $f = Join-Path (Split-Path -Parent $E.Json) 'prueba-local-rapida.json'
+  if (-not (Test-Path -LiteralPath $f)) { return '' }
+  return ((@((Lee-Json $f).casos | ForEach-Object { "$($_.job)/$($_.caso)" }) | Sort-Object) -join ',')
+}
+
+$Pruebas['m88 (a, d) el primer caso de cargaJob es no-aplica (preparado de antes): -Rapida coge el segundo y remesaJob sigue con el primero; la consola nombra el caso de cada job'] = {
+  $e = Nuevo-Escenario 'm88-a' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00'); remesaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la prueba entera sale con 0' 0 $r.Codigo
+  Comprueba 'caso-01 de cargaJob quedo como no-aplica' (Test-Path -LiteralPath (Get-Ruta $e.Local 'casos/cargaJob/caso-01/no-aplica.txt')) (Cola $r.Salida)
+  $hash = (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'registros') -Recurse -Force
+  $r = Prueba $e @('-Rapida')
+  Igual 'con -Rapida sale con 0' 0 $r.Codigo
+  Igual 'los casos de la rapida: el segundo de cargaJob y el primero de remesaJob' 'cargaJob/caso-02,remesaJob/caso-01' (Casos-Rapida-M88 $e)
+  Igual 'el migrado ejecuta caso-02 en cargaJob' 'caso-02' (Casos-M77 $e 'migrado' 'cargaJob')
+  Igual 'y caso-01 en remesaJob' 'caso-01' (Casos-M77 $e 'migrado' 'remesaJob')
+  Comprueba 'la consola dice el caso de cada job' ($r.Salida.Contains('Prueba rapida: 2 casos de 5. No vale para -Cierre: cuando salga igual, lanza sin -Rapida. Casos ejecutados: cargaJob caso-02, remesaJob caso-01.')) (Cola $r.Salida)
+  Igual 'prueba-local.json no ha cambiado (hash)' $hash (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+}
+
+$Pruebas['m88 (b) el primer caso solo trae parametros (sin entradas) y el segundo ficheros, o datos.sql: -Rapida coge el segundo'] = {
+  $e = Nuevo-Escenario 'm88-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00'); remesaJob = @('importe=10.00', ' | SQL importe=10.00', 'importe=30.00') })
+  $r = Prueba $e @() 'caso-sin-efecto:caso-cargaJob-01;caso-sin-efecto:caso-remesaJob-01'
+  Igual 'la prueba entera sale con 0' 0 $r.Codigo
+  Comprueba 'el segundo de remesaJob solo trae datos.sql' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'casos/remesaJob/caso-02/datos.sql')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'casos/remesaJob/caso-02/ficheros'))) (Cola $r.Salida)
+  Comprueba 'y el primero solo parametros.properties' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'casos/cargaJob/caso-01/parametros.properties')) -and -not (Test-Path -LiteralPath (Get-Ruta $e.Local 'casos/cargaJob/caso-01/ficheros'))) ''
+  $r = Prueba $e @('-Rapida')
+  Igual 'los casos de la rapida: el segundo de cada job (el de remesaJob, el de datos.sql, no el tercero con ficheros)' 'cargaJob/caso-02,remesaJob/caso-02' (Casos-Rapida-M88 $e)
+}
+
+$Pruebas['m88 (c) ningun caso de cargaJob trae entradas: coge el primero que no es no-aplica; con todos no-aplica en remesaJob, el primero como hoy'] = {
+  $e = Nuevo-Escenario 'm88-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00'); remesaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01;caso-sin-efecto:caso-cargaJob-0[23];caso-no-aplica:caso-remesaJob-0[12]'
+  Comprueba 'la prueba entera acaba (cargaJob sin entradas: sale con 2)' ($r.Codigo -eq 2) (Cola $r.Salida)
+  $r = Prueba $e @('-Rapida')
+  Igual 'los casos de la rapida: el segundo de cargaJob y el primero de remesaJob' 'cargaJob/caso-02,remesaJob/caso-01' (Casos-Rapida-M88 $e)
+  $f = Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'
+  $x = @((Lee-Json $f).casos | Where-Object { $_.job -eq 'remesaJob' })[0]
+  Igual 'remesaJob, con todos no-aplica, queda sin probar en local' 'sin probar en local' "$($x.resultado)"
+}
+
+$Pruebas['m88 (h) un datos.sql vacio y una carpeta vacia en ficheros\ no son entradas: -Rapida sigue cogiendo el caso que si las trae'] = {
+  $e = Nuevo-Escenario 'm88-h' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-sin-efecto:caso-cargaJob-01'
+  Igual 'la prueba entera sale con 0' 0 $r.Codigo
+  $c1 = Get-Ruta $e.Local 'casos/cargaJob/caso-01'
+  [System.IO.File]::WriteAllText((Join-Path $c1 'datos.sql'), '')
+  [void](New-Item -ItemType Directory -Path (Join-Path $c1 'ficheros/vacia') -Force)
+  Comprueba 'caso-01 lleva un datos.sql de 0 bytes y ficheros\ sin ningun fichero' ((Get-Item -LiteralPath (Join-Path $c1 'datos.sql')).Length -eq 0 -and @(Get-ChildItem -LiteralPath (Join-Path $c1 'ficheros') -Recurse -File).Count -eq 0) ''
+  $r = Prueba $e @('-Rapida')
+  Igual 'los casos de la rapida: el segundo de cargaJob' 'cargaJob/caso-02' (Casos-Rapida-M88 $e)
+}
+
+$Pruebas['m88 (g) -Rapida dos veces: la primera coge caso-01 (nada preparado) y sale no-aplica; la segunda coge caso-02, lo prepara la IA con su entrada y su numero'] = {
+  $e = Nuevo-Escenario 'm88-g' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
+  $r = Prueba $e @('-Rapida') 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la primera sale con 1 (ningun caso igual: el unico es no-aplica)' 1 $r.Codigo
+  Igual 'coge caso-01 (nada preparado)' 'cargaJob/caso-01' (Casos-Rapida-M88 $e)
+  $n = @(Llamadas $e | Where-Object { $_.tipo -eq 'caso-local' }).Count
+  Igual 'la IA prepara un caso' 1 $n
+  $r = Prueba $e @('-Rapida') 'caso-no-aplica:caso-cargaJob-01'
+  Igual 'la segunda sale con 0' 0 $r.Codigo
+  Igual 'coge caso-02' 'cargaJob/caso-02' (Casos-Rapida-M88 $e)
+  Igual 'la IA prepara un caso mas, solo uno' ($n + 1) @(Llamadas $e | Where-Object { $_.tipo -eq 'caso-local' }).Count
+  Comprueba 'y es caso-02, con la entrada del segundo caso del guion' ((Lee $e.Local 'casos/cargaJob/caso-02/ficheros/entrada/datos.txt') -match 'importe=20\.00') ''
+  Comprueba 'la tarea del caso-02 es la de su numero' (Test-Path -LiteralPath (Get-Ruta $e.Local 'tareas/caso-cargaJob-02.json')) ((Get-ChildItem -LiteralPath (Get-Ruta $e.Local 'tareas') -Name) -join ',')
+  Igual 'caso-02 sale igual' 'igual' "$(@((Lee-Json (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json')).casos)[0].resultado)"
+}
+
+$Pruebas['m88 (e, f) job vacio: con -Rapida el mensaje en rojo dice que solo se ha ejecutado un caso de ese job y que lo confirme sin -Rapida; sin -Rapida sale como siempre'] = {
+  $e = Escenario-M82 'm88-e'
+  $r = Prueba-M82 $e @('-Rapida')
+  Igual 'con -Rapida sale con 2' 2 $r.Codigo
+  Igual 'la linea del job vacio de siempre sale una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($LineaM82))).Count
+  $aviso = ' Con -Rapida solo se ha ejecutado un caso de este job (caso-01): confirmalo lanzando sin -Rapida.'
+  Igual 'y acaba con el aviso de que es un solo caso, una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($LineaM82 + $aviso))).Count
+  Igual 'el aviso sale una sola vez en toda la consola (cargaJob no es vacio)' 1 @([regex]::Matches($r.Salida, 'solo se ha ejecutado un caso de este job')).Count
+  $r = Prueba-M82 $e
+  Igual 'sin -Rapida sale con 2' 2 $r.Codigo
+  Igual 'la linea del job vacio sale una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($LineaM82))).Count
+  Comprueba 'y no dice nada de -Rapida' ($r.Salida -notmatch 'Con -Rapida solo se ha ejecutado') (Cola $r.Salida)
+  Comprueba 'la linea acaba donde siempre' (@($r.Salida -split "`n" | Where-Object { $_.Contains($LineaM82) } | ForEach-Object { $_.TrimEnd().EndsWith($LineaM82) }) -notcontains $false) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

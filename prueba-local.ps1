@@ -135,10 +135,13 @@ QUE HACE
      cambia. Antes del commit se prueba en una copia desechable (<Migrado>-regresion): pasa, y con un byte cambiado falla; un caso
      que no pasa o que lleva la fecha, la hora o la ruta de hoy se quita (datos\regresion.json lo cuenta). No cambia la salida.
   9. Solo con -Rapida (no se combina con -Reparar, -Regresion ni -Desde): para saber en minutos si un arreglo vale, sin esperar a todos los casos. Mismo arranque (las copias, los
-     arneses, las comprobaciones y el caso vacio) y, de cada job, solo el primer caso (en el orden de siempre). Al acabar, la tabla y los grupos de esos casos y una linea: 'Prueba
-     rapida: N casos de M. No vale para -Cierre'. No escribe ni borra datos\prueba-local.json (lo que lee -Cierre; ni prueba-local-grupos.jsonl): deja su resultado en
-     datos\prueba-local-rapida.json. Un job cuyo caso deja lo mismo que el caso vacio se trata como en el paso 5, en ese json. Las salidas del original que
-     guarda se reutilizan en la prueba entera (la clave de cada original ya cuenta lo que entra en su ejecucion).
+     arneses, las comprobaciones y el caso vacio) y, de cada job, solo un caso: el primero sin no-aplica.txt que traiga entradas (algo en ficheros\ o un datos.sql; no cuenta
+     parametros.properties) entre los ya preparados de otros lanzamientos; si ninguno las trae, el primero sin no-aplica.txt; si todos son no-aplica, o aun no hay ninguno preparado,
+     el primero (conserva su numero: caso-03 sigue siendo caso-03). Al acabar, la tabla y los grupos de esos casos y una linea: 'Prueba rapida: N casos de M. No vale para
+     -Cierre' y los casos que se han ejecutado en cada job. No escribe ni borra datos\prueba-local.json (lo que lee -Cierre; ni prueba-local-grupos.jsonl): deja su resultado en
+     datos\prueba-local-rapida.json. Un job cuyo caso deja lo mismo que el caso vacio se trata como en el paso 5, en ese json, y el aviso en rojo dice que con -Rapida solo se ha
+     ejecutado un caso de ese job y que lo confirmes sin -Rapida. Las salidas del original que guarda se reutilizan en la prueba entera (la clave de cada original ya cuenta lo
+     que entra en su ejecucion).
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
@@ -158,7 +161,7 @@ USO
   .\prueba-local.ps1 ... -Modelo <id>          # sin esto, el que uso migracion.ps1
   .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven
   .\prueba-local.ps1 ... -Job cargaRecibosJob  # solo los casos de ese job
-  .\prueba-local.ps1 ... -Rapida              # solo el primer caso de cada job, en minutos: para comprobar un arreglo (no vale para -Cierre ni deja prueba-local.json)
+  .\prueba-local.ps1 ... -Rapida              # un caso por job (el primero con entradas), en minutos: para comprobar un arreglo (no vale para -Cierre ni deja prueba-local.json)
   .\prueba-local.ps1 ... -Si                   # no pregunta antes de llamar a Copilot
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
@@ -179,7 +182,7 @@ param(
   [string]$Modelo = '',       # id del modelo de Copilot; sin esto, el de migracion.ps1 ('' = el que tenga Copilot)
   [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original
   [string]$Job = '',          # solo los casos de este job
-  [switch]$Rapida,            # solo el primer caso de cada job; su resultado va a prueba-local-rapida.json y no toca prueba-local.json (no con -Reparar, -Regresion ni -Desde)
+  [switch]$Rapida,            # un caso por job (el primero con entradas); su resultado va a prueba-local-rapida.json y no toca prueba-local.json (no con -Reparar, -Regresion ni -Desde)
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
@@ -2226,8 +2229,37 @@ function Get-ContextoCaso($JobMapa) {
   return [pscustomobject]@{ Pasos = $c.Pasos; Datos = $c.Datos; Leer = $leer }
 }
 
+# El nombre de un caso: su numero en el guion de su job (caso-01, caso-02...).
+function Get-NombreCaso([int]$N) { return 'caso-' + $N.ToString('00') }
+
+# Lo que trae de entrada un caso ya preparado, en su carpeta $Dir (prueba-local\casos\<job>\<caso>): algun fichero en ficheros\ (las carpetas vacias no cuentan) o un
+# datos.sql con algo. parametros.properties no cuenta: solo da parametros al job, y un caso que solo los trae sale como el caso vacio (como sin-entrada.txt).
+function Test-CasoConEntradas([string]$Dir) {
+  $sql = Join-Path $Dir 'datos.sql'
+  if ((Test-Path -LiteralPath $sql -PathType Leaf) -and (Get-Item -LiteralPath $sql).Length -gt 0) { return $true }
+  $ficheros = Join-Path $Dir 'ficheros'
+  return ((Test-Path -LiteralPath $ficheros -PathType Container) -and @(Get-ChildItem -LiteralPath $ficheros -Recurse -File -Force -ErrorAction SilentlyContinue).Count -gt 0)
+}
+
+# El caso de un job que ejecuta -Rapida: el primero sin no-aplica.txt que traiga entradas (Test-CasoConEntradas); si ninguno las trae, el primero sin no-aplica.txt; si todos
+# son no-aplica, el primero (como siempre). Mira lo preparado en lanzamientos anteriores (prueba-local\casos\<job>\<caso>, como Get-Resultado): uno que aun no se ha
+# preparado cuenta como sin entradas y sin no-aplica. Devuelve su numero (el de caso-NN en el guion del job).
+function Get-NumeroCasoRapido($Prueba) {
+  $sinEntradas = 0
+  $n = 0
+  foreach ($c in @($Prueba.casos)) {
+    $n++
+    $dir = Join-Ruta $Local "casos/$($Prueba.job)/$(Get-NombreCaso $n)"
+    if (Test-Path -LiteralPath (Join-Path $dir 'no-aplica.txt')) { continue }
+    if (Test-CasoConEntradas $dir) { return $n }
+    if ($sinEntradas -eq 0) { $sinEntradas = $n }
+  }
+  if ($sinEntradas -gt 0) { return $sinEntradas }
+  return 1
+}
+
 # Las tareas de los casos de un job (caso-01, caso-02... en el orden del guion), o las hechas de antes si sus entradas
-# no han cambiado.
+# no han cambiado. Con -Rapida, el job lleva un solo caso y su numero (numeroCaso, Get-NumeroCasoRapido): sigue siendo el suyo.
 function Get-TareasCasos($Prueba, $JobMapa) {
   $ctx = Get-ContextoCaso $JobMapa
   $leer = '(No se sabe que clases leen la entrada de este job: buscalas tu en src/main.)'
@@ -2235,9 +2267,10 @@ function Get-TareasCasos($Prueba, $JobMapa) {
   if (-not $ctx.Datos) { $ctx.Datos = '(No hay hechos de este job.)' }
   $tareas = @()
   $n = 0
+  if ($Prueba.PSObject.Properties['numeroCaso']) { $n = [int]$Prueba.numeroCaso - 1 }
   foreach ($c in @($Prueba.casos)) {
     $n++
-    $caso = 'caso-' + $n.ToString('00')
+    $caso = Get-NombreCaso $n
     $carpeta = "$Casos/$($Prueba.job)/$caso"
     $prompt = [pscustomobject]@{ JOB = $Prueba.job; CASO = $caso; CARPETA = $carpeta; TITULO = [string]$c.titulo; ENTRADA = [string]$c.entrada; ESPERADO = [string]$c.esperado; PASOS = $ctx.Pasos; HECHOS = $ctx.Datos; LEER = $leer }
     $huella = Get-Hash8 ((@([string]$c.titulo, [string]$c.entrada, [string]$c.esperado, $ctx.Pasos, $ctx.Datos, $leer, $HeadOrig)) -join "`n")
@@ -4193,7 +4226,7 @@ $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original.' }
 if ($Reparar -and ($Desde -or $Deshacer)) { Stop-Arranque '-Reparar no se combina con -Desde ni con -Deshacer: o buscas el commit que rompe un caso, o arreglas lo que venia mal de la migracion.' }
-if ($Rapida -and ($Reparar -or $Regresion -or $Desde)) { Stop-Arranque '-Rapida no se combina con -Reparar, -Regresion ni -Desde: la prueba rapida solo ejecuta el primer caso de cada job y no deja resultado para -Cierre, y esas opciones necesitan todos los casos.' }
+if ($Rapida -and ($Reparar -or $Regresion -or $Desde)) { Stop-Arranque '-Rapida no se combina con -Reparar, -Regresion ni -Desde: la prueba rapida solo ejecuta un caso de cada job y no deja resultado para -Cierre, y esas opciones necesitan todos los casos.' }
 $NombreJson = 'prueba-local.json'   # donde deja su resultado: con -Rapida otro, para no pisar el que lee -Cierre
 if ($Rapida) { $NombreJson = 'prueba-local-rapida.json' }
 if ($Deshacer -and -not $Desde) { Stop-Arranque '-Deshacer solo vale con -Desde <commit>: dime desde que commit tengo que buscar lo que rompe.' }
@@ -4231,7 +4264,14 @@ if ($Job) {
 }
 $casosEnTotal = @($pruebas | ForEach-Object { @($_.casos) } | Where-Object { $_ }).Count
 if ($casosEnTotal -eq 0) { Stop-Arranque 'Los guiones de migracion.ps1 no traen ningun caso que probar.' }
-if ($Rapida) { foreach ($unJob in $pruebas) { $unJob.casos = @(@($unJob.casos) | Select-Object -First 1) } }
+if ($Rapida) {   # un caso por job (Get-NumeroCasoRapido), con su numero para que siga siendo caso-NN
+  foreach ($unJob in $pruebas) {
+    if (@($unJob.casos).Count -eq 0) { continue }
+    $numero = Get-NumeroCasoRapido $unJob
+    $unJob.casos = @(@($unJob.casos)[$numero - 1])
+    Add-Member -InputObject $unJob -NotePropertyName numeroCaso -NotePropertyValue $numero -Force
+  }
+}
 $mapa = $null
 if (Test-Path -LiteralPath (Join-Path $DatosMig 'mapa.json')) { $mapa = Read-Json (Join-Path $DatosMig 'mapa.json') }
 
@@ -4423,10 +4463,14 @@ try {
   }
   foreach ($f in @(Get-JobsFalloOriginal $res)) { Aviso (Format-LineaOriginal $f.job $f.fallo) }   # una linea por job donde el original falla igual en todos los casos
   Show-Tiempos
-  if ($Rapida) { Info "Prueba rapida: $($res.Count) casos de $casosEnTotal. No vale para -Cierre: cuando salga igual, lanza sin -Rapida." }
+  if ($Rapida) { Info "Prueba rapida: $($res.Count) casos de $casosEnTotal. No vale para -Cierre: cuando salga igual, lanza sin -Rapida. Casos ejecutados: $(@($res | ForEach-Object { "$($_.job) $($_.caso)" }) -join ', ')." }
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig $NombreJson)"
   Info $NoPromete
-  foreach ($v in $vacios) { Fallo ((Get-FraseSinEntradas $v) + ' Arreglalo en tus tests guardados (prueba-local\arnes\original y arnes\migrado) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que la IA los escriba otra vez (el del original y, con el, el del migrado).') }
+  foreach ($v in $vacios) {
+    $soloUno = ''   # con -Rapida el job se ha juzgado con un solo caso: puede que otro si deje algo
+    if ($Rapida) { $soloUno = " Con -Rapida solo se ha ejecutado un caso de este job ($(@($res | Where-Object { $_.job -ceq $v })[0].caso)): confirmalo lanzando sin -Rapida." }
+    Fallo ((Get-FraseSinEntradas $v) + ' Arreglalo en tus tests guardados (prueba-local\arnes\original y arnes\migrado) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que la IA los escriba otra vez (el del original y, con el, el del migrado).' + $soloUno)
+  }
 
   # Lo que no se podia tocar sigue igual
   $H1 = @($intocables | ForEach-Object { Get-Huella $_ })
