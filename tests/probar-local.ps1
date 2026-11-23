@@ -9019,6 +9019,16 @@ $Pruebas['m82 (a1) un job vacio y otro con un caso distinto: no para, prueba-loc
   Comprueba 'ya no para con el mensaje de invalidar' ($r.Salida -notmatch 'invalidados|arnes-invalidado') (Cola $r.Salida)
 }
 
+$Pruebas['m82 (a6) un job vacio y el otro con todos sus casos iguales: sale con 2 igual (no con 0), por el job vacio'] = {
+  $e = Nuevo-Escenario 'm82-a6' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) 'minimo=5.00' 'minimo=5.00'
+  $aj = [ordered]@{ CopilotExe = (Join-Path $falsos 'copilot-local.ps1'); MvnExe = (Join-Path $falsos 'm82-mvn.ps1'); SegundosPorLlamada = 60 }
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject $aj)
+  $r = Prueba-M82 $e
+  Igual 'cargaJob sale todo igual' 'igual,igual' ((@('caso-01', 'caso-02') | ForEach-Object { (Caso $e 'cargaJob' $_).resultado }) -join ',')
+  Igual 'sale con 2 por el job vacio' 2 $r.Codigo
+  Igual 'la linea del job vacio sale una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($LineaM82))).Count
+}
+
 $Pruebas['m82 (a2) los tests guardados siguen en arnes\<lado> (mismo hash de cada fichero), sus tareas quedan hechas, no hay arnes-invalidado\ y relanzar no llama a la IA'] = {
   $e = Escenario-M82 'm82-a2'
   $r = Prueba-M82 $e
