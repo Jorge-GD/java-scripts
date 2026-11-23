@@ -56,3 +56,22 @@ c) Si cambias el test del original, lanza un mismo caso con el test de antes y c
 d) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza el mismo caso de cada job que en tu tabla anterior, y los casos que hayas tocado. Usa el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
 e) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 f) Get-FileHash de cada test guardado y de su copia: coinciden. git status de los repos y los commits nuevos de rescate.
+
+
+PROMPT 22 (misma carpeta de siempre, no la de rescate; en la ventana de Copilot de este batch)
+
+La prueba completa da 22 casos iguales, 2 distintos y 1 sin probar. Antes de tocar nada, confirma leyendo el codigo de que lado sale cada cosa.
+1. Caso 22: el original acaba FAILED con NullPointerException y el migrado acaba COMPLETED, manda el correo y escribe filas. Dame la linea del original donde salta, que valor es null y de donde viene. Mira el mismo punto en el migrado y dime por que alli no falla (una comprobacion de null, otra consulta, otro camino) y desde que commit.
+   - En cualquier caso, el caso tiene que probar lo que dice su nombre: completa sus entradas con datos inventados y coherentes para que el original no llegue a ese null. El caso es el mismo para los dos lados.
+   - Si ese null puede llegar en produccion y el migrado lo trata y el original no, no toques el codigo: dame las lineas de los dos lados para apuntarlo en la PR.
+2. Casos 03 y 05 (rellenar datos de un control): el caso 03 da dos salidas distintas en dos ejecuciones del original, y en el 05 el original y el migrado eligen filas distintas. Busca que codigo elige entre varias filas candidatas (consulta sin ORDER BY, HashMap o HashSet, stream sin orden...).
+   - Si la eleccion es arbitraria en los dos lados, deja en las entradas de esos dos casos una sola fila candidata para cada control, y dame la linea del codigo para apuntarlo en la PR.
+   - Si el migrado ordena distinto que el original por su codigo (otra consulta, otro ORDER BY), arreglalo en la carpeta de rescate con un test unitario y haz commit.
+3. No toques los tests guardados salvo que el fallo este en ellos.
+
+Comprobacion final:
+a) Si has cambiado un test guardado, copialo a su copia y compila los dos lados.
+b) Caso vacio de TODOS los jobs, en los dos lados: estado.txt y ningun error.txt.
+c) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza los casos 03, 05 y 22, el 03 dos veces en el original, con el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
+d) Tabla: caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado), igual entre los dos (si/no y por que) y, en el 03, si las dos ejecuciones del original salen iguales.
+e) git status de los repos y los commits nuevos de rescate.
