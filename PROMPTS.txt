@@ -1,39 +1,4 @@
-PROMPT 8 (carpeta: la del migrado, la que tiene dentro migracion-*; no la de rescate)
-
-La prueba local ha rechazado el test guardado del migrado (prueba-local\arnes\migrado, dentro de migracion-*) y lo iba a escribir otra vez: con un caso vacio (una carpeta sin nada), un job acaba con error.txt: JdbcSQLIntegrityConstraintViolationException, una columna NOT NULL recibe NULL. Pasa desde el ultimo arreglo de los dos tests (las filas por defecto de la tabla con la configuracion del correo). El test del original si pasa su caso vacio.
-Paso 1: mira el registro de Maven mas reciente de ese caso vacio (migracion-*\registros\mvn-*-arnes-migrado--caso-vacio.log) y dime que INSERT o MERGE mete el NULL y en que tabla: el del test o el del codigo del job.
-Paso 2: si es el test, corrigelo en el test guardado del migrado para que esa columna lleve un valor. Comprueba que esa tabla tiene la misma definicion en los dos tests (columnas, tipos y NOT NULL) y las mismas filas por defecto; si el del original tiene que cambiar, cambialo igual. Si es el codigo del migrado, dimelo y no toques nada.
-Paso 3: ejecuta el caso vacio de TODOS los jobs con cada test en su copia: el del migrado en la carpeta del migrado terminada en -prueba-local, y el del original en la carpeta del original terminada en -prueba-local (no los mezcles). Copia el test, crea src/test/resources/prueba-local/JOB/vacio como carpeta vacia y lanza mvn test -Dtest=PruebaLocalTest -Dprueba.local.job=JOB -Dprueba.local.caso=vacio. Cada job tiene que dejar estado.txt y ningun error.txt en los dos lados. Ensename una tabla con job, estado del original y estado del migrado.
-Paso 4: Get-FileHash de cada test guardado y de su copia. No toques src/main ni los casos.
-
-
-PROMPT 9 (carpeta: la del migrado, la que tiene dentro migracion-*; no la de rescate)
-
-Lo que te dije antes estaba al reves. El texto con tildes sale bien en el migrado y roto en el original: el original lee su .properties, que esta en UTF-8, como ISO-8859-1, y la a con tilde sale como dos caracteres raros. El migrado esta bien y no hay que tocarlo. Es un fallo del original que el migrado ya corrige, pero hace que muchos casos salgan distintos solo por eso.
-Arreglalo en el test guardado del original (prueba-local\arnes\original, dentro de migracion-*), no en el codigo:
-Paso 1: busca en los .properties de src/main/resources del original los valores con caracteres que no son ASCII. Dime cuales son y donde los usa el codigo.
-Paso 2: en el test guardado del original, antes de que arranque Spring, vuelve a leer ese .properties en UTF-8 y anade solo esas propiedades con la maxima prioridad (por ejemplo, con un ApplicationContextInitializer en el test). Asi el original usa el mismo texto que el migrado. No cambies nada mas del test.
-Paso 3: en la copia del original (la carpeta del original terminada en -prueba-local), ejecuta con ese test un caso que envie el correo y ensename el asunto, ya sin caracteres raros. Ejecuta tambien el caso vacio de todos los jobs: cada uno deja estado.txt y ningun error.txt.
-Paso 4: Get-FileHash del test guardado y de su copia. No toques src/main, ni el test del migrado, ni los casos.
-
-
-PROMPT 10 (carpeta: la del migrado, la que tiene dentro migracion-*; no la de rescate)
-
-La prueba rapida dice que en un job ningun caso deja nada distinto del caso vacio: su caso sale "no se pudo preparar" y el log del job dice que no comprueba ficheros porque le falta un parametro de fecha. El job esta en migracion-*\datos\prueba-local-rapida.json (el que tiene "no se pudo preparar").
-Paso 1: mira en el codigo del original que parametro de fecha lee ese job: su nombre, su formato y como lo usa para elegir los ficheros de entrada.
-Paso 2: mira los casos de ese job (prueba-local\casos\JOB\caso-*): si tienen parametros.properties con ese parametro y una fecha que case con sus ficheros de entrada. Mira tambien si los dos tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) le pasan al job lo que hay en parametros.properties.
-Paso 3: arreglalo donde falle. Si es el caso, anade el parametro a cada caso de ese job, con la fecha que piden sus ficheros. Si es el test, corrigelo igual en los dos tests guardados.
-Paso 4: ejecuta caso-01 de ese job con cada test en su copia (el del migrado en la carpeta del migrado terminada en -prueba-local, el del original en la del original; no los mezcles) y ensename que ninguno de los dos sale igual que su caso vacio. Get-FileHash de cada test guardado y de su copia. No toques src/main.
-
-
-PROMPT 11 (carpeta: la del migrado, en la misma ventana de Copilot que te hizo la ultima tabla de casos por job)
-
-En tu ultima tabla, un job sale igual que el caso vacio en los dos lados, y otros dos salen igual que el caso vacio en el original pero distintos en el migrado. La prueba en local marcara el primero como "no se pudo preparar" y los otros dos como distintos. Antes de relanzar, mira por que en cada uno: el caso no trae entradas para ese job, el test no se las pasa (base de datos, ficheros o SQL) o el job del original no hace nada con ellas.
-Si es el test o el caso, arreglalo (en los dos tests guardados por igual) y vuelve a ejecutar esos casos con cada test en su copia. Si el original no hace nada con esas entradas y el migrado si, dimelo y no toques nada.
-Ensename la misma tabla y Get-FileHash de cada test guardado y de su copia. No toques src/main.
-
-
-PROMPT 12 (comprobacion final: pegalo en cada ventana de los prompts 9, 10 y 11 cuando acabe; misma carpeta)
+PROMPT 12 (comprobacion final: pegalo en la ventana de Copilot que acabe de cambiar un test guardado o un caso, cuando acabe; misma carpeta)
 
 Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en local:
 1. Copia cada test guardado a su copia: el del original a la carpeta del original terminada en -prueba-local y el del migrado a la del migrado. No los mezcles. Compilan los dos.
@@ -42,34 +7,3 @@ Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en lo
 4. Antes de ejecutar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia: es lo que hace la prueba en local, y sin eso H2 dice que la tabla ya existe. El caso guardado no se toca. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
 5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
-
-
-PROMPT 13 (respuesta a la pregunta de Copilot sobre error.txt y datos.sql: elige "Other" y pega esto)
-
-No cambies los tests. La prueba en local, antes de ejecutar un caso, pone IF NOT EXISTS en cada CREATE de su datos.sql (y en cada ALTER TABLE ... ADD) en la copia que ejecuta; el caso guardado no cambia. Haz tu lo mismo en la copia de esos casos, vuelve a ejecutarlos en los dos lados y sigue con la comprobacion.
-
-
-PROMPT 14 (carpeta: la del migrado, en la misma ventana del PROMPT 11)
-
-En tu tabla, en un job el original no hace nada ni con el caso positivo, y el migrado escribe su fichero de salida incluso con el caso vacio. Asi ese job no se puede comparar.
-Paso 1: mira en el codigo del original que necesita ese job para hacer algo (que coleccion, tabla, fichero o parametro lee, y con que filtro) y dime por que con el caso positivo no hace nada: le falta algo al caso o el test del original no se lo da.
-Paso 2: abre el fichero de salida del migrado en el caso vacio y en el positivo: dime que lleva cada uno y si son iguales. Mira en el codigo del migrado por que lo escribe aunque no haya nada, y si el original lo escribiria igual.
-Paso 3: si es el caso o el test, arreglalo (en los dos tests guardados por igual) para que el original procese el caso positivo. Si es el codigo del migrado (escribe algo que el original no escribiria), dimelo con fichero:linea de los dos y no toques src/main.
-Paso 4: dime tambien que has cambiado en los casos de los otros dos jobs: ficheros creados, borrados o marcados con no-aplica.txt. No borres casos.
-Cuando acabes, sigue con el PROMPT 12.
-
-
-PROMPT 15 (carpeta: la del migrado, en la misma ventana del 12)
-
-Quedan dos diferencias. La prueba en local ejecuta el migrado en el ultimo commit de su rama de rescate, asi que el codigo se arregla en la carpeta de rescate (la que termina en -rescate), nunca en esta.
-1. El asunto del correo: el original ya sale con tilde y el migrado sale sin tilde. Mira en la rama de rescate el valor de esa propiedad (git log -p de su fichero en esa rama: el commit que escapo las tildes, y si ya tiene un revert) y el codigo que compone el asunto. Dime la causa con fichero:linea. Si es ese commit, deshazlo en la carpeta de rescate con git revert --no-edit. Si es otra cosa del codigo, arreglalo alli con un test unitario y su commit.
-2. Los ficheros distintos de tu tabla: para cada caso, dime que fichero difiere y la primera linea distinta, entera, del original y del migrado. Agrupa los casos por causa. Si la causa es el codigo del migrado, arreglalo en la carpeta de rescate copiando lo que hace el original (dime su fichero:linea), con un test unitario y un commit por causa. Si es el test o el caso, dimelo y no lo toques.
-3. Al final, en la carpeta de rescate: mvn test, git status limpio y la lista de commits nuevos.
-
-
-PROMPT 16 (carpeta: la del migrado, en la misma ventana del 8 y el 12)
-
-En el caso vacio, la unica diferencia entre los dos lados es una tabla: el original la deja con una fila y el migrado la deja vacia. Como sale en el caso vacio, saldra en todos los casos.
-Paso 1: busca de donde sale esa fila en el original: su test, o un .sql de src/main/resources o de src/test/resources que se carga al arrancar. Dime por que el migrado no la tiene.
-Paso 2: si viene de un .sql que el original carga al arrancar o del test del original, pon las mismas filas en el test guardado del migrado, como hiciste con la tabla del correo. Si es el codigo del migrado (un job que tendria que escribirla), dimelo con fichero:linea y no toques src/main.
-Paso 3: vuelve a ejecutar el caso vacio de todos los jobs en los dos lados (con IF NOT EXISTS en la copia del datos.sql, como antes) y ensename la misma tabla, con Get-FileHash de cada test guardado y de su copia.
