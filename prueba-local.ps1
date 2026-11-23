@@ -73,6 +73,11 @@ QUE HACE
      no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
      de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
      acabar, dice cuanto es test y cuanto Maven.
+     En cuanto acaba el migrado de un caso, la consola dice una linea (Format-VeredictoCaso): 'caso-07: el migrado acaba EXCEPCION (<clase>: <causa>); el original, COMPLETED' o
+     'caso-07: los dos acaban COMPLETED (la comparacion de ficheros, al final)' (sale de los estado.txt y de la causa de Maven; no adelanta la comparacion de ficheros). Si los
+     3 primeros casos de un job ($CasosParaParar) acaban en el migrado FAILED o EXCEPCION con la misma causa (Get-FirmaFallo, como el original) y el original de ninguno falla con ella,
+     los demas casos del job no se ejecutan en el migrado: salen sin probar, con su motivo, la consola lo dice una vez y prueba-local.json lleva su falloIgual con lado 'migrado'.
+     Un job de menos de 3 casos no se para.
   5. Compara cada caso (estado.txt, ficheros\, tablas\ y envios\; no los ficheros de CompararIgnorar, por defecto los .log, el log por job del
      framework nuevo, ni cuentan como sin guardar si no se pudieron copiar), sin contar las horas sueltas ni las fechas con hora
      de la ejecucion (hoy, en hora local y en UTC; una fecha con hora de otro dia es un dato del negocio y cuenta) ni la
@@ -121,6 +126,11 @@ QUE HACE
      (sin las tablas BATCH_ ni TASK_), el arnes del migrado y RegresionLocalTest, que corre despues y falla si lo que sale
      cambia. Antes del commit se prueba en una copia desechable (<Migrado>-regresion): pasa, y con un byte cambiado falla; un caso
      que no pasa o que lleva la fecha, la hora o la ruta de hoy se quita (datos\regresion.json lo cuenta). No cambia la salida.
+  9. Solo con -Rapida (no se combina con -Reparar, -Regresion ni -Desde): para saber en minutos si un arreglo vale, sin esperar a todos los casos. Mismo arranque (las copias, los
+     arneses, las comprobaciones y el caso vacio) y, de cada job, solo el primer caso (en el orden de siempre). Al acabar, la tabla y los grupos de esos casos y una linea: 'Prueba
+     rapida: N casos de M. No vale para -Cierre'. No escribe ni borra datos\prueba-local.json (lo que lee -Cierre; ni prueba-local-grupos.jsonl): deja su resultado en
+     datos\prueba-local-rapida.json. No corre Stop-Vacios: si el caso deja lo mismo que el caso vacio, lo avisa y deja los tests guardados donde estan. Las salidas del original que
+     guarda se reutilizan en la prueba entera (la clave de cada original ya cuenta lo que entra en su ejecucion).
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
@@ -139,6 +149,7 @@ USO
   .\prueba-local.ps1 ... -Modelo <id>          # sin esto, el que uso migracion.ps1
   .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven
   .\prueba-local.ps1 ... -Job cargaRecibosJob  # solo los casos de ese job
+  .\prueba-local.ps1 ... -Rapida              # solo el primer caso de cada job, en minutos: para comprobar un arreglo (no vale para -Cierre ni deja prueba-local.json)
   .\prueba-local.ps1 ... -Si                   # no pregunta antes de llamar a Copilot
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
@@ -159,6 +170,7 @@ param(
   [string]$Modelo = '',       # id del modelo de Copilot; sin esto, el de migracion.ps1 ('' = el que tenga Copilot)
   [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original
   [string]$Job = '',          # solo los casos de este job
+  [switch]$Rapida,            # solo el primer caso de cada job; su resultado va a prueba-local-rapida.json y no toca prueba-local.json (no con -Reparar, -Regresion ni -Desde)
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
@@ -201,6 +213,8 @@ $MotivoVacio = 'Sale lo mismo que con el caso vacio del arnes: si el caso tiene 
 $MotivoNoArranca = 'el migrado no arranca el job con este test'
 # Lo que dice un caso que no se ejecuta porque el original de su job falla igual en los primeros $CasosParaParar casos (Invoke-Originales); Get-Resultado lo pone como motivo.
 $MotivoNoArrancaOriginal = 'el original falla igual en los primeros casos de este job con este test y no se ejecutan los demas: relanza con -RehacerOriginal'
+# Lo mismo con el migrado (Invoke-Salidas): sus primeros $CasosParaParar casos fallan igual y el original de esos casos no falla con esa causa.
+$MotivoMigradoFallaIgual = 'el migrado falla igual en los primeros casos de este job con este test y no se ejecutan los demas: arreglalo y relanza (con -Rapida para comprobarlo)'
 # Los errores del CODIGO del migrado que hacen que su job no arranque (Get-ErrorCodigo): otro test no los arregla. Cada uno con el patron de su clase o su causa, la regla del
 # paso de calidad de rescate.ps1 que lo detecta y una frase. Las fuentes (spring-framework, descargadas en fuentes-m77): 'Cannot subclass final class' es el texto de
 # Enhancer (cglib/Enhancer.java:653, y CglibAopProxy.java:221-223 lo envuelve en 'Common causes of this problem include using a final class'); BeanCurrentlyInCreationException
@@ -836,6 +850,27 @@ function Format-Fallo($F, [switch]$ConRegistro) {
   if ($F.causa) { return "${que}: $($F.causa)" }
   if ($ConRegistro -and $F.registro) { return "${que}: sin causa en la salida de Maven: mira $($F.registro)" }
   return $que
+}
+
+# La causa de un fallo $F de Get-FalloLado como la dicen la consola y el veredicto de cada caso: 'clase: causa' si es una excepcion, la causa si no; '' si no dice nada.
+function Format-DetalleFallo($F) {
+  if ($F.clase -and $F.causa) { return "$($F.clase): $($F.causa)" }
+  if ($F.clase) { return [string]$F.clase }
+  return [string]$F.causa
+}
+
+# La linea de un caso del migrado en cuanto acaba su Maven (Invoke-Salidas), sin esperar a la comparacion de ficheros: como acaba el migrado (con el detalle de su fallo $Fallo,
+# el de Get-FalloLado, o $null si acaba bien) y como acaba el original (su estado.txt, que ya esta: el original se ejecuta antes que el migrado o se reutiliza). Si los dos acaban
+# igual y bien, lo dice y deja la comparacion para el final. Un original sin estado.txt no se ha probado.
+function Format-VeredictoCaso([string]$Job, [string]$Caso, $Fallo) {
+  $m = Get-Estado (Join-Ruta $Local "salidas/migrado/$Job/$Caso")
+  if (-not $m) { $m = 'sin estado.txt' }
+  $o = Get-Estado (Join-Ruta $Local "salidas/original/$Job/$Caso")
+  if (-not $o) { $o = 'sin probar (no ha dejado estado.txt)' }
+  if (-not $Fallo -and $m -ceq $o) { return "${Caso}: los dos acaban $m (la comparacion de ficheros, al final)" }
+  $detalle = ''
+  if ($Fallo -and (Format-DetalleFallo $Fallo)) { $detalle = " ($(Format-DetalleFallo $Fallo))" }
+  return "${Caso}: el migrado acaba $m$detalle; el original, $o"
 }
 
 # Lo que se le dice a la IA de un caso cuyo original no arranca ($Clase es lo de Get-Excepcion de $Sal): la primera linea de la causa (error.txt),
@@ -1646,9 +1681,13 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
     Save-CausasVacio (Join-Ruta $Local 'salidas/vacio') $Jobs (Get-CausaCorta $r.Causa)
   }
-  if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Para que lo escriba otra vez con ellas, relanza con -RehacerArnes." }
-  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
-  if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Para que lo escriba otra vez con ellas, relanza con -RehacerOriginal." }
+  # Los tres avisos dicen el lado que toca y ofrecen primero editar el test guardado ($arreglo) y, si no, escribirlo otra vez con la IA
+  $lado = 'migrado'; $falla = 'EXCEPCION'; $rehaz = '-RehacerArnes'
+  if ($esOrig) { $lado = 'original'; $falla = 'FAILED'; $rehaz = '-RehacerOriginal' }
+  $arreglo = "tu test guardado (prueba-local\arnes\$lado) y relanza sin -Rehacer, o relanza con $rehaz para que lo escriba otra vez."
+  if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Anadelas a $arreglo" }
+  if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran $falla en el $lado. Anadelas a $arreglo" }
+  if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Crealas en $arreglo" }
   return ''
 }
 
@@ -2193,11 +2232,25 @@ function Invoke-Casos($Tareas) {
 }
 
 # ================================ EJECUCION ================================
+# El fallo del primero de los casos $Nombres de un job (sus fallos en el migrado, $Fallos, en el mismo orden: Get-FalloLado) si los $CasosParaParar acaban FAILED o EXCEPCION con la
+# misma causa (Get-FirmaFallo) y el original de ninguno de ellos falla con ella (si el original falla igual en alguno, es lo que hace ese caso y no una prueba de que el migrado
+# este roto: o lo para Invoke-Originales o se ejecutan todos); $null si no.
+function Get-ParadaMigrado([string]$Job, [string[]]$Nombres, $Fallos) {
+  $firmas = @(0..($Nombres.Count - 1) | ForEach-Object { Get-FirmaFallo $Fallos[$_] $Nombres[$_] })
+  if (-not $firmas[0] -or @($firmas | Where-Object { $_ -cne $firmas[0] }).Count -gt 0) { return $null }
+  $delOriginal = @(0..($Nombres.Count - 1) | ForEach-Object { Get-FirmaFallo (Get-FalloLado 'original' $Job $Nombres[$_]) $Nombres[$_] })
+  if ($delOriginal -ccontains $firmas[0]) { return $null }
+  return $Fallos[0]
+}
+
 # Ejecuta en una copia los casos de $Listas, uno a uno, y guarda lo que dejan en prueba-local\salidas\<Nombre>\<job>. Con $Limpiar
 # en $false no se borra antes lo que ya hubiera en salidas\<Nombre> (-Reparar mide en dos veces lo de un mismo arreglo). De un job del migrado cuyo test se
 # acepto con el aviso de que no arranca ($script:NoArranca) se ejecuta solo el primer caso: si acaba EXCEPCION con la misma clase que su caso vacio, los demas
 # no se ejecutan y salen sin probar ($script:SinProbar, con $MotivoNoArranca); si arranca, sigue como siempre. Los casos de un job del original que Invoke-Originales dejo
 # sin probar ($script:SinProbar['original|job|caso'], con $MotivoNoArrancaOriginal) no se ejecutan en ningun lado.
+# En la prueba de siempre (Nombre 'migrado'; no en la busqueda de -Desde ni en -Reparar) la consola dice, en cuanto acaba cada caso, como acaba el migrado y el original
+# (Format-VeredictoCaso) y, si los primeros $CasosParaParar casos de un job acaban en el migrado FAILED o EXCEPCION con la misma causa y el original de ninguno falla con ella
+# (Get-ParadaMigrado), los demas casos del job no se ejecutan: salen sin probar ($script:SinProbar, con $MotivoMigradoFallaIgual) y el job queda en $script:ParadaMigrado.
 function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Listas, [bool]$Limpiar = $true) {
   $dest = Join-Ruta $Local "salidas/$Nombre"
   if ($Limpiar) { Remove-Carpeta $dest }
@@ -2205,11 +2258,31 @@ function Invoke-Salidas([string]$Dir, [bool]$EsOriginal, [string]$Nombre, $Lista
     Info "Ejecutando los casos de $j ($Nombre)..."
     $primero = $true
     $noArranca = $false
+    $parada = $false
+    $vistos = @()    # los primeros casos del job (hasta $CasosParaParar) y como acabo cada uno en el migrado
+    $fallos = @()
     foreach ($t in @($Listas | Where-Object { $_.entradas.job -eq $j })) {
       $c = $t.entradas.caso
       if ($script:SinProbar.ContainsKey("original|$j|$c")) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoNoArrancaOriginal; continue }
       if ($noArranca) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoNoArranca; continue }
+      if ($parada) { $script:SinProbar["$Nombre|$j|$c"] = $MotivoMigradoFallaIgual; continue }
       Invoke-SalidaCaso $Dir $EsOriginal $Nombre $j $c
+      if ($Nombre -ceq 'migrado') {
+        $fallo = Get-FalloLado $Nombre $j $c
+        $linea = '  ' + (Format-VeredictoCaso $j $c $fallo)
+        if ($fallo) { Aviso $linea } else { Info $linea }
+        if ($vistos.Count -lt $CasosParaParar) {
+          $vistos += $c
+          $fallos += , $fallo
+          $primerFallo = $null
+          if ($vistos.Count -eq $CasosParaParar) { $primerFallo = Get-ParadaMigrado $j $vistos $fallos }
+          if ($primerFallo) {
+            $parada = $true
+            $script:ParadaMigrado[$j] = $primerFallo
+            Aviso "El migrado falla igual en los $CasosParaParar primeros casos del job $j ($(Format-DetalleFallo $primerFallo)): no ejecuto sus demas casos. Arreglalo y relanza (con -Rapida para comprobarlo en minutos)."
+          }
+        }
+      }
       if ($primero -and $Nombre -ceq 'migrado' -and $script:NoArranca.ContainsKey($j)) {
         $noArranca = ((Get-Excepcion (Join-Ruta $Local "salidas/$Nombre/$j/$c")) -ceq $script:NoArranca[$j].clase)
         if ($noArranca) { Info "El migrado no arranca el job $j con este test ($($script:NoArranca[$j].clase)): no ejecuto sus demas casos." }
@@ -3833,7 +3906,8 @@ function Stop-Vacios([string[]]$Jobs) {
 # Por job: sus casos, iguales, distintos y sin probar y, si no arranca o falla igual en todos sus casos, 'falloIgual' (para quien lea el json despues): el lado (original o
 # migrado), el estado, la clase de la excepcion (Get-ClaseFallo), la causa del primer caso, la regla del paso de calidad si es un error del codigo del migrado
 # (Get-ErrorCodigo) y si no se ejecutaron todos sus casos ('parado': Invoke-Originales dejo los demas sin probar, o su test del migrado no arranca y solo se ejecuto el
-# primero, Invoke-Salidas). Son los jobs de Get-JobsFalloOriginal y los de Get-JobsMigradoNoArranca con un error del codigo.
+# primero, o el migrado fallo igual en los primeros casos y Invoke-Salidas dejo los demas sin probar). Son los jobs de Get-JobsFalloOriginal, los de Get-JobsMigradoNoArranca con
+# un error del codigo y los que Invoke-Salidas paro porque el migrado falla igual ($script:ParadaMigrado: el estado, la clase y la causa de su primer caso).
 function Get-PorJob($Res, $Grupos) {
   $originales = @(Get-JobsFalloOriginal $Res)
   $migrados = @(Get-JobsMigradoNoArranca $Res $Grupos | Where-Object { $_.error })
@@ -3846,7 +3920,8 @@ function Get-PorJob($Res, $Grupos) {
     $orig = @($originales | Where-Object { $_.job -ceq $p.job })[0]
     $mig = @($migrados | Where-Object { $_.job -ceq $p.job })[0]
     if ($orig) { $o.falloIgual = [ordered]@{ lado = 'original'; estado = $orig.fallo.estado; clase = (Get-ClaseFallo $orig.fallo); causa = [string]$orig.fallo.causa; parado = $script:ParadaOriginal.ContainsKey($p.job) } }
-    elseif ($mig) { $o.falloIgual = [ordered]@{ lado = 'migrado'; estado = 'EXCEPCION'; clase = $mig.clase; causa = $mig.causa; regla = $mig.error.regla; parado = $script:NoArranca.ContainsKey($p.job) } }
+    elseif ($mig) { $o.falloIgual = [ordered]@{ lado = 'migrado'; estado = 'EXCEPCION'; clase = $mig.clase; causa = $mig.causa; regla = $mig.error.regla; parado = ($script:NoArranca.ContainsKey($p.job) -or $script:ParadaMigrado.ContainsKey($p.job)) } }
+    elseif ($script:ParadaMigrado.ContainsKey($p.job)) { $f = $script:ParadaMigrado[$p.job]; $o.falloIgual = [ordered]@{ lado = 'migrado'; estado = $f.estado; clase = (Get-ClaseFallo $f); causa = [string]$f.causa; parado = $true } }
     $porJob += $o
   }
   return $porJob
@@ -3884,7 +3959,8 @@ function Merge-OtrosJobs($O) {
   return $f
 }
 
-# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo de este lanzamiento.
+# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo de este lanzamiento. Con -Rapida lo escribe en
+# datos\prueba-local-rapida.json ($NombreJson) y deja prueba-local.json como esta.
 # Con -Job, el fichero lleva ademas lo de los otros jobs (Merge-OtrosJobs); lo devuelto, solo lo de ahora: es lo que ensena la consola.
 function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   $grupos = @(Get-Grupos $Res)
@@ -3905,8 +3981,8 @@ function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
   if ($Reparar) { $o.reparaciones = @($Reparaciones) }
   $f = $o
-  if ($Job) { $f = Merge-OtrosJobs $o }
-  Write-Json (Join-Path $DatosMig 'prueba-local.json') $f
+  if ($Job -and -not $Rapida) { $f = Merge-OtrosJobs $o }
+  Write-Json (Join-Path $DatosMig $NombreJson) $f
   return $o
 }
 
@@ -3915,6 +3991,9 @@ $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original.' }
 if ($Reparar -and ($Desde -or $Deshacer)) { Stop-Arranque '-Reparar no se combina con -Desde ni con -Deshacer: o buscas el commit que rompe un caso, o arreglas lo que venia mal de la migracion.' }
+if ($Rapida -and ($Reparar -or $Regresion -or $Desde)) { Stop-Arranque '-Rapida no se combina con -Reparar, -Regresion ni -Desde: la prueba rapida solo ejecuta el primer caso de cada job y no deja resultado para -Cierre, y esas opciones necesitan todos los casos.' }
+$NombreJson = 'prueba-local.json'   # donde deja su resultado: con -Rapida otro, para no pisar el que lee -Cierre
+if ($Rapida) { $NombreJson = 'prueba-local-rapida.json' }
 if ($Deshacer -and -not $Desde) { Stop-Arranque '-Deshacer solo vale con -Desde <commit>: dime desde que commit tengo que buscar lo que rompe.' }
 $ajustes = Read-CfgFile (Get-RutaAjustes) @('Plantilla') $false
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro git en el PATH." }
@@ -3948,7 +4027,9 @@ if ($Job) {
   $pruebas = @($pruebas | Where-Object { $_.job -ceq $Job })
   if ($pruebas.Count -eq 0) { Stop-Arranque ("-Job ${Job}: no hay casos de ese job. Hay de: " + ($todosJobs -join ', ')) }
 }
-if (@($pruebas | ForEach-Object { @($_.casos) } | Where-Object { $_ }).Count -eq 0) { Stop-Arranque 'Los guiones de migracion.ps1 no traen ningun caso que probar.' }
+$casosEnTotal = @($pruebas | ForEach-Object { @($_.casos) } | Where-Object { $_ }).Count
+if ($casosEnTotal -eq 0) { Stop-Arranque 'Los guiones de migracion.ps1 no traen ningun caso que probar.' }
+if ($Rapida) { foreach ($unJob in $pruebas) { $unJob.casos = @(@($unJob.casos) | Select-Object -First 1) } }
 $mapa = $null
 if (Test-Path -LiteralPath (Join-Path $DatosMig 'mapa.json')) { $mapa = Read-Json (Join-Path $DatosMig 'mapa.json') }
 
@@ -3981,6 +4062,7 @@ $script:Maven = @{}
 $script:NoGuardados = @{}   # por (lado|job|caso): los ficheros que no se pudieron guardar en salidas (Copy-Salida)
 $script:NoArranca = @{}   # por job: su test del migrado se rechazo porque con el caso vacio el migrado no arranca y el original si, y se acepto en el ultimo intento (clase, veces escrito)
 $script:ParadaOriginal = @{}   # por job: el fallo del primero de los casos (Get-FalloLado) de un job cuyos primeros casos fallan igual en el original y que por eso no ejecuta los demas (Invoke-Originales)
+$script:ParadaMigrado = @{}   # por job: el fallo del primero de los casos (Get-FalloLado) de un job cuyos primeros casos fallan igual en el migrado y que por eso no ejecuta los demas (Invoke-Salidas)
 $script:SinProbar = @{}   # por (lado|job|caso): el motivo de un caso que no se ha ejecutado porque su job no arranca con ese test (Invoke-Salidas)
 $script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sale una sola vez
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
@@ -4098,9 +4180,10 @@ try {
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
   $res = @(Confirm-OriginalesDeOtroDia $tareasCasos $res)
   $vacios = @(Get-JobsVacios $res)
-  if ($vacios.Count -gt 0) { Stop-Vacios $vacios }
+  if ($vacios.Count -gt 0 -and $Rapida) { foreach ($v in $vacios) { Aviso "En $v, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job. Con -Rapida no invalido los tests guardados: lanza sin -Rapida para decidirlo." } }
+  elseif ($vacios.Count -gt 0) { Stop-Vacios $vacios }
   $o = Save-Resultado $res @()
-  foreach ($g in @($o.grupos)) {   # una linea por grupo y lanzamiento: cuantas causas hay y de que clase
+  foreach ($g in @($o.grupos | Where-Object { -not $Rapida })) {   # una linea por grupo y lanzamiento (no de una -Rapida: son pocos casos): cuantas causas hay y de que clase
     $linea = [ordered]@{ fecha = (Get-Date).ToString('s'); numero = $g.numero; tipo = $g.tipo; firma = $g.firma; casos = @($g.casos).Count; hechos = @($g.hechos) }
     [System.IO.File]::AppendAllText((Join-Path $DatosMig 'prueba-local-grupos.jsonl'), ((ConvertTo-Json -InputObject $linea -Compress) + "`n"), $Utf8)
   }
@@ -4135,7 +4218,8 @@ try {
   }
   foreach ($f in @(Get-JobsFalloOriginal $res)) { Aviso (Format-LineaOriginal $f.job $f.fallo) }   # una linea por job donde el original falla igual en todos los casos
   Show-Tiempos
-  Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
+  if ($Rapida) { Info "Prueba rapida: $($res.Count) casos de $casosEnTotal. No vale para -Cierre: cuando salga igual, lanza sin -Rapida." }
+  Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig $NombreJson)"
   Info $NoPromete
 
   # Lo que no se podia tocar sigue igual
