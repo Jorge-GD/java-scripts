@@ -9268,9 +9268,9 @@ $Pruebas['m87 (a) dos jobs sin estado.txt en el caso vacio del original: el rech
   $e = Escenario-M87 'm87-a' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
   $r = Prueba-M87 $e '^(cargaJob|remesaJob)$' 1
   Igual 'sale con 0' 0 $r.Codigo
-  Comprueba 'la consola rechaza el primer intento del original' ($r.Salida.Contains('Arnes del original rechazado: ' + (Sin-Estado87 'cargaJob'))) (Cola $r.Salida)
+  Comprueba 'la consola rechaza el primer intento del original con una linea que nombra los dos jobs' ($r.Salida.Contains('Arnes del original rechazado: Con un caso vacio fallan 2 jobs: cargaJob, remesaJob.')) (Cola $r.Salida)
   $p = Registro-Arnes $e 'original' 2
-  Comprueba 'el reintento recibe los dos motivos, uno por parrafo' ($p.Contains((Sin-Estado87 'cargaJob') + "`n`n" + (Sin-Estado87 'remesaJob'))) (Cola $p)
+  Comprueba 'el reintento recibe esa linea y los dos motivos, uno por parrafo' ($p.Contains('Con un caso vacio fallan 2 jobs: cargaJob, remesaJob.' + "`n`n" + (Sin-Estado87 'cargaJob') + "`n`n" + (Sin-Estado87 'remesaJob'))) (Cola $p)
   Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
 }
 
@@ -9287,9 +9287,9 @@ $Pruebas['m87 (c) dos jobs donde el original arranca y el migrado no: el rechazo
   $e = Escenario-M87 'm87-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00') })
   $r = Prueba-M87 $e '' 0 'vacio-excepcion-mig:/vacio' @{ M48_VACIOS = 2 }
   Igual 'sale con 0' 0 $r.Codigo
-  Comprueba 'la consola rechaza el primer intento del migrado' ($r.Salida.Contains('Arnes del migrado rechazado: ' + (No-Arranca87 'cargaJob'))) (Cola $r.Salida)
+  Comprueba 'la consola rechaza el primer intento del migrado con una linea que nombra los dos jobs' ($r.Salida.Contains('Arnes del migrado rechazado: Con un caso vacio, el original arranca 2 jobs que con tu test el migrado no: cargaJob, remesaJob.')) (Cola $r.Salida)
   $p = Registro-Arnes $e 'migrado' 2
-  Comprueba 'el reintento recibe los dos motivos, uno por parrafo' ($p.Contains((No-Arranca87 'cargaJob') + "`n`n" + (No-Arranca87 'remesaJob'))) (Cola $p)
+  Comprueba 'el reintento recibe esa linea y los dos motivos, uno por parrafo' ($p.Contains('Con un caso vacio, el original arranca 2 jobs que con tu test el migrado no: cargaJob, remesaJob.' + "`n`n" + (No-Arranca87 'cargaJob') + "`n`n" + (No-Arranca87 'remesaJob'))) (Cola $p)
   Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
   Igual 'los casos salen iguales' 'igual,igual,igual,igual' ((Resultados $e) -join ',')
 }

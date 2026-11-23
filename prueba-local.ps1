@@ -1779,6 +1779,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   }
   # Todos los jobs que fallan, un parrafo por job y en el orden de $Jobs: el usuario no arregla uno y relanza para ver el siguiente (M87)
   $malos = @()
+  $jobsMalos = @()
   foreach ($j in $Jobs) {
     $sal = Join-Ruta $dir "target/prueba-local/$j/vacio"
     if (-not (Test-Path -LiteralPath (Join-Path $sal 'estado.txt'))) {
@@ -1787,10 +1788,13 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
       $pista = Get-PistaArnes $T (@($r.Salida) + @($r.Causa) + @($porque -split "`n"))   # en el orden de la salida de Maven: es el de las claves de la pista de la propiedad
       if ($pista) { $m += "`n$pista" }
       $malos += $m
+      $jobsMalos += $j
       continue
     }
-    if (Test-Path -LiteralPath (Join-Ruta $dir "target/prueba-local/$j/otro")) { $malos += "Con -Dprueba.local.caso=vacio, el test ha ejecutado tambien $Casos/$j/otro. Si la propiedad prueba.local.caso tiene valor, ejecuta solo los casos con ese nombre: cada caso se lanza en su propio Maven." }
+    if (Test-Path -LiteralPath (Join-Ruta $dir "target/prueba-local/$j/otro")) { $malos += "Con -Dprueba.local.caso=vacio, el test ha ejecutado tambien $Casos/$j/otro. Si la propiedad prueba.local.caso tiene valor, ejecuta solo los casos con ese nombre: cada caso se lanza en su propio Maven."; $jobsMalos += $j }
   }
+  # Con varios, una primera linea con todos: la consola solo ensena la primera linea del motivo
+  if ($malos.Count -gt 1) { $malos = @("Con un caso vacio fallan $($malos.Count) jobs: $($jobsMalos -join ', ').") + $malos }
   if ($malos.Count -gt 0) { return ($malos -join "`n`n") }
   # Con un caso vacio, el original arranca el job y el migrado no (estado=EXCEPCION): el test del migrado no simula lo que el job necesita, o le pasa
   # mal las propiedades. Como la puerta de las tablas: se rechaza mientras quedan intentos y, en el ultimo o con un test guardado, se acepta con un
@@ -1798,6 +1802,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   # (Get-ErrorCodigo), no se rechaza nunca y siempre se apunta (ver abajo). El rechazo lleva todos los jobs que no arrancan, un parrafo por job (M87).
   if (-not $esOrig) {
     $rotos = @()
+    $jobsRotos = @()
     foreach ($j in $Jobs) {
       $estadoOrig = Get-Estado (Join-Ruta $Local "salidas/vacio/$j")
       $clase = Get-Excepcion (Join-Ruta $dir "target/prueba-local/$j/vacio")
@@ -1814,11 +1819,12 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
         continue
       }
       $roto = "Con un caso vacio, el original arranca el job $j (estado=$estadoOrig) y con tu test el migrado no: $detalle. Revisa lo que simula el test y las propiedades que le pasa."
-      if (-not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) { $rotos += $roto; continue }
+      if (-not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) { $rotos += $roto; $jobsRotos += $j; continue }
       Aviso $roto
       # Aceptado en el ultimo intento tras rechazarlo por esto (no uno guardado): el job se prueba con un solo caso (Invoke-Salidas) y la consola dice cuantas veces se escribio
       if (-not $SoloAviso -and $T.motivo.Contains("el original arranca el job $j (estado=")) { $script:NoArranca[$j] = [pscustomobject]@{ clase = $clase; veces = $T.intentos + 1 } }
     }
+    if ($rotos.Count -gt 1) { $rotos = @("Con un caso vacio, el original arranca $($rotos.Count) jobs que con tu test el migrado no: $($jobsRotos -join ', ').") + $rotos }
     if ($rotos.Count -gt 0) { return ($rotos -join "`n`n") }
   }
   $faltanOrig = @()
