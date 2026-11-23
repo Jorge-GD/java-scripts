@@ -1232,7 +1232,7 @@ $Pruebas['63 m20b (j): la huella cambia y el test guardado del original ya no co
   Igual 'la primera vez sale con 0' 0 $r.Codigo
   $n = @(Llamadas $e).Count
   foreach ($lado in @('original', 'migrado')) { Cambia-Huella $e $lado }
-  Rompe-Arnes-Guardado $e 'original'
+  Rompe-Arnes-Guardado $e 'original'; Apunta-Escrito-M91 $e 'original'   # lo rompe el commit, no el usuario (M91)
   $r = Prueba $e
   Igual 'sale con 0' 0 $r.Codigo
   Igual 'dos llamadas: el arnes del original y el del migrado (que traduce el nuevo, aunque el suyo siga valiendo)' ($n + 2) @(Llamadas $e).Count
@@ -1260,7 +1260,7 @@ $Pruebas['65 m20b (l): una tarea de arnes hecha cuyo test guardado ya no vale: s
   $r = Prueba $e
   Igual 'la primera vez sale con 0' 0 $r.Codigo
   $n = @(Llamadas $e).Count
-  Rompe-Arnes-Guardado $e 'original'
+  Rompe-Arnes-Guardado $e 'original'; Apunta-Escrito-M91 $e 'original'   # lo rompe el commit, no el usuario (M91)
   $r = Prueba $e
   Igual 'sale con 0' 0 $r.Codigo
   Comprueba 'dice que el test del original ya no vale y que se vuelve a escribir' ($r.Salida -match 'Arnes|test PruebaLocalTest del original de otro lanzamiento ya no vale' -and $r.Salida -match 'se vuelve a escribir') (Cola $r.Salida)
@@ -3061,7 +3061,7 @@ $Pruebas['m37 (m) el arnes del original guardado ya no vale en este commit: se e
   $migrado = Test-Guardado $e 'migrado'
   Igual 'la tarea del original guarda la plantilla de ahora' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'original')
   Igual 'y la del migrado' (Plantilla-Ahora-M37) (Plantilla-Tarea-M37 $e 'migrado')
-  Rompe-Arnes-Guardado $e 'original'
+  Rompe-Arnes-Guardado $e 'original'; Apunta-Escrito-M91 $e 'original'   # lo rompe el commit, no el usuario (M91)
   $r = Prueba $e
   Igual 'el segundo lanzamiento sale con 0' 0 $r.Codigo
   Comprueba 'dice que el del original ya no vale en este commit' ($r.Salida -match 'PruebaLocalTest del original de otro lanzamiento ya no vale en este commit') (Cola $r.Salida)
@@ -8273,6 +8273,7 @@ $Pruebas['m77 (g2) el test de antes no dejaba ningun job asi (solo fallaba el mi
   Comprueba 'y ninguna Info de que se queda el nuevo' (-not $r.Salida.Contains('Me quedo con el test nuevo del original')) (Cola $r.Salida)
   Igual 'arnes/original es el de antes, byte a byte' $v.original (Test-Guardado $e 'original')
   Igual 'salidas/vacio es el de antes, entero' $v.vacio (Foto-Carpeta $e 'salidas/vacio')
+  Igual 'la tarea del original ya no dice que el script lo escribio (el de antes puede ser del usuario: M91)' '' (Hash-Escrito-M91 $e 'original')
 }
 
 $Pruebas['m77 (g3) un solo caso del job con el original FAILED en el prueba-local.json de antes no basta (2 como minimo, como en (b)): se vuelve al de antes'] = {
@@ -8315,7 +8316,7 @@ function Relanza-M78([string]$Nombre, [bool]$RompeMigrado) {
   $r = Prueba $e
   Igual 'la primera vez sale con 0' 0 $r.Codigo
   Retoca-M78 $e 'original' '// retocado a mano'
-  if ($RompeMigrado) { Rompe-Arnes-Guardado $e 'migrado' }
+  if ($RompeMigrado) { Rompe-Arnes-Guardado $e 'migrado'; Apunta-Escrito-M91 $e 'migrado' }   # lo rompe el commit, no el usuario (M91)
   $n = @(Llamadas-Arnes $e 'migrado').Count
   $r = Prueba $e
   return [pscustomobject]@{ e = $e; r = $r; n = $n }
@@ -9635,6 +9636,193 @@ $Pruebas['m87 (d) dos jobs rechazados por no arrancar y aceptados en el ultimo i
     Comprueba "$j : solo se ejecuta su primer caso" ($r.Salida.Contains("El migrado no arranca el job $j con este test (BeanCreationException): no ejecuto sus demas casos.")) (Cola $r.Salida)
     Comprueba "$j : el resumen dice que el test se escribio 2 veces" ($r.Salida.Contains("El migrado no arranca el job $j (BeanCreationException: java.lang.IllegalStateException: sin correo). El test ya se escribio 2 veces con este error")) (Cola $r.Salida)
   }
+}
+
+# ============ M91: la prueba en local no reescribe con la IA un test guardado que ha cambiado el usuario ============
+# Un test guardado que ya no vale en este commit y que no es tal cual lo escribio la IA (su hash no es el que apunta la tarea en entradas.hashEscrito, o no hay tal dato) para el
+# arranque antes de llamar a Copilot. Con Rompe-Arnes-Guardado el test guardado ya no compila; Retoca-M78 es el usuario que lo cambia a mano; Apunta-Escrito-M91 deja la tarea
+# diciendo que lo que hay guardado es lo que escribio la IA (aunque ya no compile: es el commit el que lo rompe).
+
+# El hash de la carpeta $Rel de prueba-local como lo calcula Get-HashCarpeta de prueba-local.ps1: el SHA-256 de las lineas 'ruta=hash del fichero' (y 'ruta/' por cada carpeta), en orden
+# ordinal y unidas con saltos de linea. '' si la carpeta no esta.
+function Hash-Carpeta-M91($E, [string]$Rel) {
+  $d = Get-Ruta $E.Local $Rel
+  if (-not (Test-Path -LiteralPath $d)) { return '' }
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $hex = { param([byte[]]$Bytes) ((@($sha.ComputeHash($Bytes)) | ForEach-Object { $_.ToString('x2') }) -join '') }
+  $l = @(Get-ChildItem -LiteralPath $d -Recurse | ForEach-Object {
+      $rel = $_.FullName.Substring($d.Length).TrimStart('\', '/').Replace('\', '/')
+      if ($_.PSIsContainer) { $rel + '/' } else { $rel + '=' + (& $hex ([System.IO.File]::ReadAllBytes($_.FullName))) }
+    })
+  $a = [string[]]@($l)
+  [System.Array]::Sort($a, [System.StringComparer]::Ordinal)
+  return (& $hex ((New-Object System.Text.UTF8Encoding($false)).GetBytes($a -join "`n")))
+}
+
+# Lo que dice la tarea del arnes del $Lado que escribio el script (entradas.hashEscrito), o '(sin dato)'.
+function Hash-Escrito-M91($E, [string]$Lado) {
+  $t = Tarea-Arnes $E $Lado
+  if (-not $t.entradas.PSObject.Properties['hashEscrito']) { return '(sin dato)' }
+  return [string]$t.entradas.hashEscrito
+}
+
+# La tarea del arnes del $Lado pasa a decir que el test guardado es tal cual lo escribio la IA (el hash de arnes\<lado> de ahora).
+function Apunta-Escrito-M91($E, [string]$Lado) {
+  $f = Get-Ruta $E.Local "tareas/arnes-$Lado.json"
+  $t = Lee-Json $f
+  $t.entradas | Add-Member -NotePropertyName hashEscrito -NotePropertyValue (Hash-Carpeta-M91 $E "arnes/$Lado") -Force
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+}
+
+# La tarea del arnes del $Lado como las de antes de M91: sin el dato hashEscrito.
+function Quita-Escrito-M91($E, [string]$Lado) {
+  $f = Get-Ruta $E.Local "tareas/arnes-$Lado.json"
+  $t = Lee-Json $f
+  [void]$t.entradas.PSObject.Properties.Remove('hashEscrito')
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+}
+
+# La primera frase de la parada del test guardado del $Lado.
+function Frase-M91([string]$Lado) { return "Tu test guardado del $Lado (prueba-local\arnes\$Lado) ya no vale en este commit y lo has cambiado tu: no lo reescribo con la IA para no perder tus cambios." }
+
+# El job sale bien una vez (la IA escribe los dos tests).
+function Primera-M91([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera vez sale con 0' 0 $r.Codigo
+  return $e
+}
+
+# El usuario cambia a mano el test guardado del $Lado y lo deja sin compilar; se relanza con $A. Devuelve la salida, las llamadas de antes y lo guardado de los dos lados antes de relanzar.
+function Relanza-M91($E, [string[]]$Lados, [string[]]$A = @()) {
+  foreach ($l in $Lados) { Retoca-M78 $E $l '// retocado a mano'; Rompe-Arnes-Guardado $E $l }
+  $antes = [pscustomobject]@{ n = @(Llamadas $E).Count; original = (Hashes-Carpeta-M78 $E 'arnes/original'); migrado = (Hashes-Carpeta-M78 $E 'arnes/migrado') }
+  $antes | Add-Member -NotePropertyName r -NotePropertyValue (Prueba $E $A)
+  return $antes
+}
+
+$Pruebas['m91 (a) el test del migrado lo ha cambiado el usuario y ya no compila: para con 1 antes de llamar a Copilot, dice la frase, el motivo entero y -RehacerArnes; arnes\migrado igual y sin arnes-anterior'] = {
+  $e = Primera-M91 'm91-a'
+  $v = Relanza-M91 $e @('migrado')
+  $r = $v.r
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'la consola lleva la frase' ($r.Salida.Contains((Frase-M91 'migrado'))) (Cola $r.Salida)
+  Comprueba 'y el motivo de Test-Arnes, entero (las lineas de Maven)' ($r.Salida.Contains('El test no compila (mvn test-compile)') -and $r.Salida.Contains('COMPILATION ERROR') -and $r.Salida.Contains('PruebaLocalTest.java:[1,1] simbolo de mentira no encontrado')) (Cola $r.Salida)
+  Comprueba 'y como seguir, con -RehacerArnes' ($r.Salida.Contains('relanza sin -Rehacer. Si prefieres que la IA lo escriba otra vez, relanza con -RehacerArnes (el tuyo pasa a prueba-local\arnes-anterior\migrado).')) (Cola $r.Salida)
+  Comprueba 'sin nombrar el del original' (-not $r.Salida.Contains('Tu test guardado del original') -and -not $r.Salida.Contains('-RehacerOriginal')) (Cola $r.Salida)
+  Comprueba 'el aviso de M78 no sale: no se vuelve a escribir' (-not $r.Salida.Contains('se vuelve a escribir')) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $v.n @(Llamadas $e).Count
+  Igual 'arnes\migrado sigue igual, fichero a fichero' $v.migrado (Hashes-Carpeta-M78 $e 'arnes/migrado')
+  Igual 'y arnes\original' $v.original (Hashes-Carpeta-M78 $e 'arnes/original')
+  Comprueba 'no hay arnes-anterior\migrado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior/migrado')))
+}
+
+$Pruebas['m91 (b) el test del migrado tal cual lo escribio la IA ya no compila en el commit de ahora: se escribe otra vez como hoy (el aviso de M78, una llamada para el migrado, sale con 0)'] = {
+  $e = Primera-M91 'm91-b'
+  Rompe-Arnes-Guardado $e 'migrado'
+  Apunta-Escrito-M91 $e 'migrado'
+  $n = @(Llamadas-Arnes $e 'migrado').Count
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'el aviso dice que el test del migrado ya no vale en este commit y que se vuelve a escribir' ($r.Salida -match "PruebaLocalTest del migrado de otro lanzamiento $AvisoM78 \(.*\): se vuelve a escribir\.") (Cola $r.Salida)
+  Comprueba 'sin la parada' (-not $r.Salida.Contains('Tu test guardado')) (Cola $r.Salida)
+  Igual 'el del migrado se escribe otra vez: una llamada mas' ($n + 1) @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el nuevo compila' (-not (Test-Guardado $e 'migrado').Contains('NO_COMPILA')) ''
+  Igual 'la tarea del migrado queda hecha' 'hecha' (Tarea-Arnes $e 'migrado').estado
+}
+
+$Pruebas['m91 (c) el test del original lo ha cambiado el usuario y ya no vale: para con 1, la frase con -RehacerOriginal, ninguna llamada y los dos arnes\ intactos'] = {
+  $e = Primera-M91 'm91-c'
+  $v = Relanza-M91 $e @('original')
+  $r = $v.r
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'la consola lleva la frase del original' ($r.Salida.Contains((Frase-M91 'original'))) (Cola $r.Salida)
+  Comprueba 'y -RehacerOriginal' ($r.Salida.Contains('relanza con -RehacerOriginal (el tuyo pasa a prueba-local\arnes-anterior\original).')) (Cola $r.Salida)
+  Comprueba 'el motivo de Test-Arnes' ($r.Salida.Contains('El test no compila (mvn test-compile)')) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $v.n @(Llamadas $e).Count
+  Igual 'arnes\original sigue igual' $v.original (Hashes-Carpeta-M78 $e 'arnes/original')
+  Igual 'y arnes\migrado' $v.migrado (Hashes-Carpeta-M78 $e 'arnes/migrado')
+  Comprueba 'sin arnes-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')))
+}
+
+$Pruebas['m91 (d) el test del migrado lo ha cambiado el usuario y sigue valiendo (con su tarea no hecha): bien, sin llamadas y sin parar; la tarea sigue diciendo lo que escribio la IA, no lo del usuario'] = {
+  $e = Primera-M91 'm91-d'
+  $escrito = Hash-Escrito-M91 $e 'migrado'
+  Retoca-M78 $e 'migrado' '// retocado a mano'
+  Cambia-Huella $e 'migrado'
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'sin parada ni aviso' (-not $r.Salida.Contains('Tu test guardado') -and -not $r.Salida.Contains($AvisoM78)) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'la tarea nueva hereda lo que escribio la IA (la huella cambio)' ($escrito -ne '(sin dato)' -and $escrito -ne '' -and $escrito -ceq (Hash-Escrito-M91 $e 'migrado')) "antes '$escrito' y ahora '$(Hash-Escrito-M91 $e 'migrado')'"
+  Comprueba 'y no es el hash de lo que hay guardado, que lo ha cambiado el usuario' ((Hash-Escrito-M91 $e 'migrado') -cne (Hash-Carpeta-M91 $e 'arnes/migrado'))
+}
+
+$Pruebas['m91 (e) el usuario cambia el test del original (sigue valiendo) y el del migrado, tal cual lo escribio la IA, ya no compila: se escribe otra vez con la IA sin parar, y la tarea apunta el nuevo'] = {
+  $v = Relanza-M78 'm91-e' $true
+  $e = $v.e; $r = $v.r
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'sin parada' (-not $r.Salida.Contains('Tu test guardado')) (Cola $r.Salida)
+  Comprueba 'el aviso de M78' ($r.Salida -match "PruebaLocalTest del migrado de otro lanzamiento $AvisoM78 \(.*\): se vuelve a escribir\.") (Cola $r.Salida)
+  Igual 'el del migrado: una llamada mas' ($v.n + 1) @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el del migrado guardado es el nuevo, que compila' (-not (Test-Guardado $e 'migrado').Contains('NO_COMPILA')) ''
+  Igual 'la tarea del migrado apunta el hash del nuevo' (Hash-Carpeta-M91 $e 'arnes/migrado') (Hash-Escrito-M91 $e 'migrado')
+  Igual 'y el test del original, el del usuario, no se ha tocado' 'hecha' (Tarea-Arnes $e 'original').estado
+}
+
+$Pruebas['m91 (f) un test guardado sin hashEscrito (tarea de antes de M91) que ya no vale: para como en (a), sin tocar nada'] = {
+  $e = Primera-M91 'm91-f'
+  Rompe-Arnes-Guardado $e 'migrado'
+  Quita-Escrito-M91 $e 'migrado'
+  Igual 'la tarea no lleva el dato' '(sin dato)' (Hash-Escrito-M91 $e 'migrado')
+  $n = @(Llamadas $e).Count
+  $antes = Hashes-Carpeta-M78 $e 'arnes/migrado'
+  $r = Prueba $e
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'la consola lleva la frase' ($r.Salida.Contains((Frase-M91 'migrado'))) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $n @(Llamadas $e).Count
+  Igual 'arnes\migrado sigue igual' $antes (Hashes-Carpeta-M78 $e 'arnes/migrado')
+  Comprueba 'no hay arnes-anterior' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-anterior')))
+}
+
+$Pruebas['m91 (g) con -RehacerArnes y un test del migrado cambiado a mano que ya no vale: se escribe otra vez sin parar, y el del usuario pasa a arnes-anterior'] = {
+  $e = Primera-M91 'm91-g'
+  $v = Relanza-M91 $e @('migrado') @('-RehacerArnes')
+  $r = $v.r
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'sin parada' (-not $r.Salida.Contains('Tu test guardado')) (Cola $r.Salida)
+  Igual 'una llamada mas para el migrado' 2 @(Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el test del usuario esta en arnes-anterior\migrado' ((Test-Anterior $e 'migrado').Contains('// retocado a mano')) ''
+  Comprueba 'y el guardado es el nuevo, que compila' (-not (Test-Guardado $e 'migrado').Contains('NO_COMPILA') -and -not (Test-Guardado $e 'migrado').Contains('retocado a mano')) ''
+  Igual 'el del original no se ha tocado' $v.original (Hashes-Carpeta-M78 $e 'arnes/original')
+}
+
+$Pruebas['m91 (h) los dos tests cambiados a mano y rotos: un solo mensaje con los dos (primero el original), sale con 1, ninguna llamada y los dos arnes\ intactos'] = {
+  $e = Primera-M91 'm91-h'
+  $v = Relanza-M91 $e @('original', 'migrado')
+  $r = $v.r
+  Igual 'sale con 1' 1 $r.Codigo
+  $o = $r.Salida.IndexOf((Frase-M91 'original'))
+  $m = $r.Salida.IndexOf((Frase-M91 'migrado'))
+  Comprueba 'la frase del original esta, y antes que la del migrado' ($o -ge 0 -and $m -gt $o) "original $o, migrado $m"
+  Comprueba 'con -RehacerOriginal para el original y -RehacerArnes para el migrado' ($r.Salida.Contains('relanza con -RehacerOriginal (el tuyo pasa a prueba-local\arnes-anterior\original).') -and $r.Salida.Contains('relanza con -RehacerArnes (el tuyo pasa a prueba-local\arnes-anterior\migrado).')) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $v.n @(Llamadas $e).Count
+  Igual 'arnes\original sigue igual' $v.original (Hashes-Carpeta-M78 $e 'arnes/original')
+  Igual 'y arnes\migrado' $v.migrado (Hashes-Carpeta-M78 $e 'arnes/migrado')
+}
+
+$Pruebas['m91 (i) Save-Arnes apunta el hash de lo que escribe la IA, y lo apunta otra vez con cada test nuevo'] = {
+  $e = Primera-M91 'm91-i'
+  foreach ($lado in @('original', 'migrado')) {
+    Comprueba "la tarea del $lado lleva el hash de arnes\$lado" ((Hash-Escrito-M91 $e $lado) -ceq (Hash-Carpeta-M91 $e "arnes/$lado") -and (Hash-Escrito-M91 $e $lado) -match '^[0-9a-f]{64}$') "$(Hash-Escrito-M91 $e $lado)"
+  }
+  $original = Hash-Escrito-M91 $e 'original'
+  $r = Prueba $e @('-RehacerArnes')
+  Igual 'con -RehacerArnes sale con 0' 0 $r.Codigo
+  Comprueba 'el del migrado apunta el hash del nuevo' ((Hash-Escrito-M91 $e 'migrado') -ceq (Hash-Carpeta-M91 $e 'arnes/migrado')) "$(Hash-Escrito-M91 $e 'migrado')"
+  Igual 'y el del original sigue siendo el mismo' $original (Hash-Escrito-M91 $e 'original')
 }
 
 # ================================ LANZADOR ================================
