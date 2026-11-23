@@ -39,6 +39,21 @@ Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en lo
 1. Copia cada test guardado a su copia: el del original a la carpeta del original terminada en -prueba-local y el del migrado a la del migrado. No los mezcles. Compilan los dos.
 2. Caso vacio de TODOS los jobs, en los dos lados: cada job deja estado.txt y ningun error.txt. Si falta estado.txt o hay error.txt, arreglalo antes de seguir: la prueba en local no acepta un test asi. Un job que acaba FAILED con estado.txt y sin error.txt vale si el original y el migrado acaban igual y es porque no tienen entradas: no cambies los tests para que salga COMPLETED. Dime por que acaba FAILED cada uno, con la linea del log.
 3. Si has cambiado el test del original, ejecuta un mismo caso con el test de antes (el de git o el de la ultima copia) y con el de ahora, y dime que cambia en su salida. Solo puede cambiar lo que querias arreglar.
-4. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
+4. Antes de ejecutar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia: es lo que hace la prueba en local, y sin eso H2 dice que la tabla ya existe. El caso guardado no se toca. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
 5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
+
+
+PROMPT 13 (respuesta a la pregunta de Copilot sobre error.txt y datos.sql: elige "Other" y pega esto)
+
+No cambies los tests. La prueba en local, antes de ejecutar un caso, pone IF NOT EXISTS en cada CREATE de su datos.sql (y en cada ALTER TABLE ... ADD) en la copia que ejecuta; el caso guardado no cambia. Haz tu lo mismo en la copia de esos casos, vuelve a ejecutarlos en los dos lados y sigue con la comprobacion.
+
+
+PROMPT 14 (carpeta: la del migrado, en la misma ventana del PROMPT 11)
+
+En tu tabla, en un job el original no hace nada ni con el caso positivo, y el migrado escribe su fichero de salida incluso con el caso vacio. Asi ese job no se puede comparar.
+Paso 1: mira en el codigo del original que necesita ese job para hacer algo (que coleccion, tabla, fichero o parametro lee, y con que filtro) y dime por que con el caso positivo no hace nada: le falta algo al caso o el test del original no se lo da.
+Paso 2: abre el fichero de salida del migrado en el caso vacio y en el positivo: dime que lleva cada uno y si son iguales. Mira en el codigo del migrado por que lo escribe aunque no haya nada, y si el original lo escribiria igual.
+Paso 3: si es el caso o el test, arreglalo (en los dos tests guardados por igual) para que el original procese el caso positivo. Si es el codigo del migrado (escribe algo que el original no escribiria), dimelo con fichero:linea de los dos y no toques src/main.
+Paso 4: dime tambien que has cambiado en los casos de los otros dos jobs: ficheros creados, borrados o marcados con no-aplica.txt. No borres casos.
+Cuando acabes, sigue con el PROMPT 12.
