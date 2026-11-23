@@ -29,7 +29,7 @@ if ($caso -ne 'vacio' -and (Test-Path -LiteralPath $sql)) {
   }
   $test = @(Get-ChildItem -LiteralPath (Join-Path $raiz 'src') -Recurse -File -Filter 'PruebaLocalTest.java')
   $base = @()
-  if ($test.Count -gt 0) { $base = @(([regex]::Match([System.IO.File]::ReadAllText($test[0].FullName), '(?m)^// BASE_TABLAS=(\S+)').Groups[1].Value) -split ',') }
+  if ($test.Count -gt 0) { $base = @(([regex]::Match([System.IO.File]::ReadAllText($test[0].FullName), '(?m)^// BASE_TABLAS=(\S+)').Groups[1].Value) -split ',' | ForEach-Object { ($_ -split '~')[0] }) }
   $ya = ''
   foreach ($m in [regex]::Matches($texto, '(?i)\bCREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS\b)(\w+)')) {
     if (-not $ya -and $base -contains $m.Groups[1].Value.ToUpperInvariant()) { $ya = $m.Groups[1].Value.ToUpperInvariant() }

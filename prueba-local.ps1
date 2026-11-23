@@ -1702,6 +1702,34 @@ function Get-TablasOriginal([string[]]$Jobs) {
   return @(Sort-Ordinal @($n.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' }))
 }
 
+# Las tablas que estan en el caso vacio del original (salidas\vacio\<job>) y en el del migrado de $Dir (target\prueba-local\<job>\vacio), de algun job de $Jobs, con otras
+# columnas en la cabecera de su .csv: se compara el conjunto, sin distinguir mayusculas ni el orden. No cuentan las de Spring Batch ni de Spring Cloud Task (como Get-TablasOriginal)
+# ni las que no tienen cabecera en un lado. Una vez por tabla, por orden de nombre: objetos con la tabla y sus columnas en el original y en el migrado, en el orden de su .csv y con ', '.
+function Get-TablasOtrasColumnas([string]$Dir, [string[]]$Jobs) {
+  $otras = @{}
+  foreach ($j in $Jobs) {
+    $orig = Get-NombresTablas @(Join-Ruta $Local "salidas/vacio/$j/tablas")
+    $mig = Get-NombresTablas @(Join-Ruta $Dir "target/prueba-local/$j/vacio/tablas")
+    foreach ($t in @($orig.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' -and $mig.ContainsKey($_) -and -not $otras.ContainsKey($_) })) {
+      $co = @(Get-Columnas $orig[$t])
+      $cm = @(Get-Columnas $mig[$t])
+      if ($co.Count -eq 0 -or $cm.Count -eq 0) { continue }
+      $conjuntoO = @(Sort-Ordinal @($co | ForEach-Object { $_.ToUpperInvariant() } | Select-Object -Unique))
+      $conjuntoM = @(Sort-Ordinal @($cm | ForEach-Object { $_.ToUpperInvariant() } | Select-Object -Unique))
+      if (($conjuntoO -join ';') -ceq ($conjuntoM -join ';')) { continue }
+      $otras[$t] = [pscustomobject]@{ tabla = $t; original = ($co -join ', '); migrado = ($cm -join ', ') }
+    }
+  }
+  return @(Sort-Ordinal @($otras.Keys) | ForEach-Object { $otras[$_] })
+}
+
+# Las tablas de Get-TablasOtrasColumnas para un motivo o un aviso: 'T_A (original: ID, NOMBRE; tu test: ID, CORREO)', las tres primeras con detalle y las demas con ' y N mas'.
+function Get-ListaOtrasColumnas($Tablas) {
+  $l = (@($Tablas | Select-Object -First 3 | ForEach-Object { "$($_.tabla) (original: $($_.original); tu test: $($_.migrado))" }) -join ', ')
+  if (@($Tablas).Count -gt 3) { $l += " y $(@($Tablas).Count - 3) mas" }
+  return $l
+}
+
 # Comprueba el arnes que acaba de escribir la IA en su copia. Antes lo deja en lo que se puede probar: lo que cambio fuera de lo que
 # puede escribir (Get-Permitidos) se deshace (Undo-Fuera) y el pom.xml del original queda como estaba con sus dependencias nuevas de test
 # (Repair-PomSoloTest), y cada cosa se dice. Despues, Test-ArnesEscrito. Devuelve '' o el motivo; si hubo algo que deshacer, el motivo
@@ -1728,7 +1756,8 @@ function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 # '' si el arnes de la copia, ya sin lo de fuera, vale; si no, el motivo: escrito el test, compila y, con un caso vacio por job, cada job
 # deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso) y la base de prueba tiene las
 # tablas que usa el codigo (Get-TablasFaltan) y, en el del migrado, las que tiene la base del test del original (Get-TablasOriginal): la que el codigo arma en
-# tiempo de ejecucion no sale del inventario, pero el original ya la crea. Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
+# tiempo de ejecucion no sale del inventario, pero el original ya la crea; y con las mismas columnas que el original en las que tienen los dos (Get-TablasOtrasColumnas).
+# Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
 # ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
 # Un test del original que se escribe otra vez (hay uno de antes en salidas\vacio-anterior: Save-Anterior) tampoco puede dejar el caso vacio peor que el de antes
 # (estado, tablas y columnas: Get-PeorQueAntes) ni sin las columnas que el prueba-local.json de antes decia que no creaba (Get-ColumnasPedidas); en el ultimo intento, si
@@ -1787,11 +1816,16 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     }
   }
   $faltanOrig = @()
+  $otrasCols = @()
   if (-not $esOrig) {
     $hay = Get-NombresTablas @($Jobs | ForEach-Object { Join-Ruta $dir "target/prueba-local/$_/vacio/tablas" })
     $faltanOrig = @(Get-TablasOriginal $Jobs | Where-Object { -not $hay.ContainsKey($_) })
     if ($faltanOrig.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
       return "La base de tu test no tiene estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Crealas con las mismas columnas que en el test del original."
+    }
+    $otrasCols = @(Get-TablasOtrasColumnas $dir $Jobs)
+    if ($otrasCols.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
+      return "En tu test estas tablas tienen otras columnas que en el test del original: $(Get-ListaOtrasColumnas $otrasCols). Usa las mismas columnas que en el test del original."
     }
   }
   $faltan = @(Get-TablasFaltan $dir $Jobs)
@@ -1830,11 +1864,12 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
     foreach ($j in $Jobs) { [void](Copy-Salida (Join-Ruta $dir "target/prueba-local/$j/vacio") (Join-Ruta $Local "salidas/vacio/$j") $j "$j/vacio" @(Get-Hoy $desdeVacio (Get-Date))) }
     Save-CausasVacio (Join-Ruta $Local 'salidas/vacio') $Jobs (Get-CausaCorta $r.Causa)
   }
-  # Los tres avisos dicen el lado que toca y ofrecen primero editar el test guardado ($arreglo) y, si no, escribirlo otra vez con la IA
+  # Los avisos dicen el lado que toca y ofrecen primero editar el test guardado ($arreglo) y, si no, escribirlo otra vez con la IA
   $lado = 'migrado'; $falla = 'EXCEPCION'; $rehaz = '-RehacerArnes'
   if ($esOrig) { $lado = 'original'; $falla = 'FAILED'; $rehaz = '-RehacerOriginal' }
   $arreglo = "tu test guardado (prueba-local\arnes\$lado) y relanza sin -Rehacer, o relanza con $rehaz para que lo escriba otra vez."
   if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Anadelas a $arreglo" }
+  if ($otrasCols.Count -gt 0) { Aviso "La base de tu test tiene otras columnas que la del test del original en estas tablas: $(Get-ListaOtrasColumnas $otrasCols). Los casos que las usen saldran distintos. Igualalas en $arreglo" }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran $falla en el $lado. Anadelas a $arreglo" }
   if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Crealas en $arreglo" }
   return ''
