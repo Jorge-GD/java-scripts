@@ -9245,5 +9245,96 @@ $Pruebas['m85 (e) con cinco tablas con otras columnas en dos jobs: cada tabla sa
   Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
 }
 
+# ===================== M86: un test no exporta una tabla con una columna repetida =====================
+# Estos escenarios usan los de m68. 'tablas=<n>/T_A~COL_A~COL_A~COL_B' de m40-copilot.ps1 deja esa cabecera ('COL_A;COL_A;COL_B') en el .csv de la tabla del caso vacio de ese lado.
+# Se compara sin mayusculas. Valen los dos lados. No cuentan las tablas de Spring Batch ni de Spring Cloud Task.
+
+$MotivoRepetidas86 = 'Al exportar tablas/<TABLA>.csv tu test repite columnas en estas tablas: {0}. Saca las columnas de la misma SELECT que lees (ResultSetMetaData), una vez cada una: si la tabla esta en dos esquemas, la de la base que usa el job.'
+
+$Pruebas['m86 (a) el migrado deja T_A con columnas repetidas: el primer intento se rechaza con la tabla y sus columnas (una vez cada una), y el segundo, que no las repite, se acepta'] = {
+  $e = Escenario-M68 'm86-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=2/T_A~COL_A~COL_B:arnes-migrado;tablas=1/T_A~COL_A~COL_A~COL_B~COL_B:arnes-migrado'
+  $motivo = $MotivoRepetidas86 -f 'T_A (COL_A, COL_B)'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del migrado con el motivo' ($r.Salida.Contains("Arnes del migrado rechazado: $motivo")) (Cola $r.Salida)
+  Igual 'hay dos llamadas del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'migrado' 2).Contains($motivo)) (Cola (Registro-Arnes $e 'migrado' 2))
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'el segundo se acepta sin aviso de columnas repetidas' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -notmatch 'repite columnas al exportar') (Cola $r.Salida)
+}
+
+$Pruebas['m86 (b) el original deja T_A con una columna repetida: el primer intento se rechaza igual, y el segundo se acepta'] = {
+  $e = Escenario-M68 'm86-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=2/T_A~COL_A~COL_B:arnes-original;tablas=1/T_A~COL_A~COL_A~COL_B:arnes-original;tablas=1/T_A~COL_A~COL_B:arnes-migrado'
+  $motivo = $MotivoRepetidas86 -f 'T_A (COL_A)'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del original con el motivo' ($r.Salida.Contains("Arnes del original rechazado: $motivo")) (Cola $r.Salida)
+  Igual 'hay dos llamadas del original' 2 (Llamadas-Arnes $e 'original').Count
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Comprueba 'lo que se guarda del caso vacio del original no repite la columna' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv') -match '^COL_A;COL_B\s*$') (Lee $e.Local 'salidas/vacio/cargaJob/tablas/T_A.csv')
+}
+
+$Pruebas['m86 (c1) en el ultimo intento, y con un test guardado, el migrado con columnas repetidas se acepta con un aviso (una vez) que dice el lado'] = {
+  $e = Escenario-M68 'm86-c1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/T_A~COL_A~COL_A:arnes-migrado'
+  $aviso = 'Tu test del migrado repite columnas al exportar estas tablas: T_A (COL_A). Los casos que las usen saldran distintos o el test fallara al exportar. Corrigelo en tu test guardado (prueba-local\arnes\migrado)'
+  $motivo = $MotivoRepetidas86 -f 'T_A (COL_A)'
+  Igual 'el primer intento se rechaza' 1 @([regex]::Matches($r.Salida, [regex]::Escape("Arnes del migrado rechazado: $motivo"))).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'con el aviso, una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Igual 'la tarea queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  $n = @(Llamadas $e).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M68 $e '' 'tablas=1/T_A~COL_A~COL_A:arnes-migrado'
+  Igual 'con el test guardado, sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Comprueba 'no lo rechaza' ($r.Salida -notmatch 'Arnes del migrado rechazado') (Cola $r.Salida)
+  Igual 'y avisa de las columnas repetidas, una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+}
+
+$Pruebas['m86 (c2) en el ultimo intento, el original con columnas repetidas se acepta con un aviso que dice que es el original'] = {
+  $e = Escenario-M68 'm86-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/T_A~COL_A~COL_A:arnes-original;tablas=1/T_A~COL_A:arnes-migrado'
+  $aviso = 'Tu test del original repite columnas al exportar estas tablas: T_A (COL_A). Los casos que las usen saldran distintos o el test fallara al exportar. Corrigelo en tu test guardado (prueba-local\arnes\original)'
+  Igual 'el primer intento se rechaza' 1 @([regex]::Matches($r.Salida, [regex]::Escape("Arnes del original rechazado: $($MotivoRepetidas86 -f 'T_A (COL_A)')"))).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del original: bien\.') (Cola $r.Salida)
+  Igual 'con el aviso, una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Igual 'la tarea queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m86 (d) sin columnas repetidas, en los dos lados: se aceptan a la primera, sin rechazo ni aviso'] = {
+  $e = Escenario-M68 'm86-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/T_A~COL_A~COL_B,T_B~ID~NOMBRE:arnes-original;tablas=1/T_A~COL_A~COL_B,T_B~ID~NOMBRE:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la tarea del original queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de columnas repetidas' ($r.Salida -notmatch 'repite columnas') (Cola $r.Salida)
+}
+
+$Pruebas['m86 (e) una columna que solo cambia de mayusculas (Col_A y COL_A) cuenta como repetida, y se dice una vez'] = {
+  $e = Escenario-M68 'm86-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=2/T_A~COL_A~COL_B:arnes-migrado;tablas=1/T_A~Col_A~COL_A~col_a~COL_B:arnes-migrado'
+  Comprueba 'la consola rechaza el primer intento con T_A (COL_A)' ($r.Salida.Contains("Arnes del migrado rechazado: $($MotivoRepetidas86 -f 'T_A (COL_A)')")) (Cola $r.Salida)
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+}
+
+$Pruebas['m86 (f) una tabla de Spring Batch o de Spring Cloud Task con columnas repetidas no cuenta: el migrado se acepta a la primera'] = {
+  $e = Escenario-M68 'm86-f' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/BATCH_X~COL_A~COL_A,task_y~COL_A~COL_A,T_A~COL_A~COL_B:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de columnas repetidas' ($r.Salida -notmatch 'repite columnas') (Cola $r.Salida)
+}
+
+$Pruebas['m86 (g) con cuatro tablas con columnas repetidas en dos jobs: cada tabla sale una vez, por orden de nombre, con detalle las tres primeras y la otra con y 1 mas'] = {
+  $e = Escenario-M68 'm86-g' ([ordered]@{ cargaJob = @('importe=10.00'); otroJob = @('importe=20.00') })
+  $r = Prueba-M68 $e '' 'tablas=2/T_1~A,T_2~A,T_3~A,T_4~A:arnes-migrado;tablas=1/T_4~A~A~B~B,T_3~A~A,T_2~B~A~B,T_1~A~A:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  $motivo = $MotivoRepetidas86 -f 'T_1 (A), T_2 (B), T_3 (A) y 1 mas'
+  Comprueba 'la consola rechaza el primer intento con las tres primeras y y 1 mas' ($r.Salida.Contains("Arnes del migrado rechazado: $motivo")) (Cola $r.Salida)
+  Igual 'cada tabla una vez en el motivo' 1 @([regex]::Matches((Registro-Arnes $e 'migrado' 2), 'T_1 \(')).Count
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

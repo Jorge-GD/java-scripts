@@ -1730,6 +1730,33 @@ function Get-ListaOtrasColumnas($Tablas) {
   return $l
 }
 
+# Las tablas del caso vacio de $Dir (target\prueba-local\<job>\vacio\tablas, de algun job de $Jobs) con una columna repetida en la cabecera de su .csv, sin distinguir mayusculas:
+# el test exporta las columnas de los metadatos sin filtrar por esquema y la tabla esta en dos esquemas; con filas, la exportacion falla. No cuentan las de Spring Batch ni de Spring Cloud
+# Task (como Get-TablasOtrasColumnas). Una vez por tabla, por orden de nombre: objetos con la tabla y sus columnas repetidas, cada una una vez, en mayusculas, en el orden en que salen y con ', '.
+function Get-TablasColumnasRepetidas([string]$Dir, [string[]]$Jobs) {
+  $rep = @{}
+  foreach ($j in $Jobs) {
+    $hay = Get-NombresTablas @(Join-Ruta $Dir "target/prueba-local/$j/vacio/tablas")
+    foreach ($t in @($hay.Keys | Where-Object { $_ -cnotmatch '^(BATCH|TASK)_' -and -not $rep.ContainsKey($_) })) {
+      $vistas = @{}
+      $repetidas = @()
+      foreach ($c in @(Get-Columnas $hay[$t] | ForEach-Object { $_.ToUpperInvariant() })) {
+        if ($vistas.ContainsKey($c) -and $repetidas -cnotcontains $c) { $repetidas += $c }
+        $vistas[$c] = $true
+      }
+      if ($repetidas.Count -gt 0) { $rep[$t] = [pscustomobject]@{ tabla = $t; columnas = ($repetidas -join ', ') } }
+    }
+  }
+  return @(Sort-Ordinal @($rep.Keys) | ForEach-Object { $rep[$_] })
+}
+
+# Las tablas de Get-TablasColumnasRepetidas para un motivo o un aviso: 'T_A (COL_A, COL_B)', las tres primeras con detalle y las demas con ' y N mas'.
+function Get-ListaColumnasRepetidas($Tablas) {
+  $l = (@($Tablas | Select-Object -First 3 | ForEach-Object { "$($_.tabla) ($($_.columnas))" }) -join ', ')
+  if (@($Tablas).Count -gt 3) { $l += " y $(@($Tablas).Count - 3) mas" }
+  return $l
+}
+
 # Comprueba el arnes que acaba de escribir la IA en su copia. Antes lo deja en lo que se puede probar: lo que cambio fuera de lo que
 # puede escribir (Get-Permitidos) se deshace (Undo-Fuera) y el pom.xml del original queda como estaba con sus dependencias nuevas de test
 # (Repair-PomSoloTest), y cada cosa se dice. Despues, Test-ArnesEscrito. Devuelve '' o el motivo; si hubo algo que deshacer, el motivo
@@ -1756,8 +1783,8 @@ function Test-Arnes($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
 # '' si el arnes de la copia, ya sin lo de fuera, vale; si no, el motivo: escrito el test, compila y, con un caso vacio por job, cada job
 # deja estado.txt (la salida del vacio del original se guarda en salidas\vacio: se compara con la de cada caso) y la base de prueba tiene las
 # tablas que usa el codigo (Get-TablasFaltan) y, en el del migrado, las que tiene la base del test del original (Get-TablasOriginal): la que el codigo arma en
-# tiempo de ejecucion no sale del inventario, pero el original ya la crea; y con las mismas columnas que el original en las que tienen los dos (Get-TablasOtrasColumnas).
-# Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
+# tiempo de ejecucion no sale del inventario, pero el original ya la crea; y con las mismas columnas que el original en las que tienen los dos (Get-TablasOtrasColumnas); y, en los dos lados, ninguna tabla con una columna repetida
+# en la cabecera de su .csv (Get-TablasColumnasRepetidas). Esas puertas rechazan el intento mientras queden otros, y no el ultimo ni uno guardado
 # ($SoloAviso): el inventario es aproximado y puede dar tablas que no son, asi que un arnes sin ellas se acepta con un aviso.
 # Un test del original que se escribe otra vez (hay uno de antes en salidas\vacio-anterior: Save-Anterior) tampoco puede dejar el caso vacio peor que el de antes
 # (estado, tablas y columnas: Get-PeorQueAntes) ni sin las columnas que el prueba-local.json de antes decia que no creaba (Get-ColumnasPedidas); en el ultimo intento, si
@@ -1815,6 +1842,12 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
       if (-not $SoloAviso -and $T.motivo.Contains("el original arranca el job $j (estado=")) { $script:NoArranca[$j] = [pscustomobject]@{ clase = $clase; veces = $T.intentos + 1 } }
     }
   }
+  # Una tabla con una columna repetida en la cabecera de su .csv (los dos lados): el test saca las columnas de los metadatos sin filtrar por esquema. Se rechaza mientras quedan
+  # intentos y, en el ultimo o con un test guardado, se acepta con un aviso.
+  $repetidas = @(Get-TablasColumnasRepetidas $dir $Jobs)
+  if ($repetidas.Count -gt 0 -and -not $SoloAviso -and ($T.intentos + 1) -lt [int]$Cfg.Intentos) {
+    return "Al exportar tablas/<TABLA>.csv tu test repite columnas en estas tablas: $(Get-ListaColumnasRepetidas $repetidas). Saca las columnas de la misma SELECT que lees (ResultSetMetaData), una vez cada una: si la tabla esta en dos esquemas, la de la base que usa el job."
+  }
   $faltanOrig = @()
   $otrasCols = @()
   if (-not $esOrig) {
@@ -1870,6 +1903,7 @@ function Test-ArnesEscrito($T, [string[]]$Jobs, [bool]$SoloAviso = $false) {
   $arreglo = "tu test guardado (prueba-local\arnes\$lado) y relanza sin -Rehacer, o relanza con $rehaz para que lo escriba otra vez."
   if ($faltanOrig.Count -gt 0) { Aviso "La base de tu test sigue sin estas tablas que si tiene la del test del original: $($faltanOrig -join ', '). Los casos que las usen saldran EXCEPCION en el migrado. Anadelas a $arreglo" }
   if ($otrasCols.Count -gt 0) { Aviso "La base de tu test tiene otras columnas que la del test del original en estas tablas: $(Get-ListaOtrasColumnas $otrasCols). Los casos que las usen saldran distintos. Igualalas en $arreglo" }
+  if ($repetidas.Count -gt 0) { Aviso "Tu test del $lado repite columnas al exportar estas tablas: $(Get-ListaColumnasRepetidas $repetidas). Los casos que las usen saldran distintos o el test fallara al exportar. Corrigelo en $arreglo" }
   if ($faltan.Count -gt 0) { Aviso "La base de prueba sigue sin estas tablas: $(Get-ListaTablas $faltan). Los casos que las usen saldran $falla en el $lado. Anadelas a $arreglo" }
   if ($sinCrear.Count -gt 0) { Aviso "La base de tu test sigue sin crear estas columnas que usa el codigo: $(Get-ListaColumnas $sinCrear). Los casos que las usen saldran FAILED en el original. Crealas en $arreglo" }
   return ''
