@@ -248,7 +248,7 @@ El batch migrado lee sus variables (`${...}`) de un configmap que vive en otro r
 ```
 
 - `-Inventario`: la carpeta del inventario del original, con una carpeta por entorno y sus `.properties`. De ahí salen los valores. No lee nada más: ni el vault ni otros ficheros.
-- `-ConfigMapReferencia`: el repo de configmap de referencia. Si no lo das, te lo pregunta la primera vez y lo guarda en `ajustes.json`.
+- `-ConfigMapReferencia`: el repo de configmap de referencia. Si no lo das, te lo pregunta la primera vez y lo guarda en `ajustes.json`. Si tiene `.git`, solo cuenta lo que ve git (lo seguido y lo nuevo que no ignora): un `__pycache__` ignorado ni se copia ni es tarea. Cada fichero de sus carpetas de punto (`.github`…) es una tarea de la IA: si alguna no debe ir al repo nuevo, pásale una copia de la referencia sin esa carpeta, con la misma última carpeta (de ella sale el nombre del repo nuevo).
 - El inventario y el modelo quedan en `datos\configmap.json`: para relanzar basta `-ConfigMap`. Lo atascado se repite con `-Reintentar`.
 - No hace `git init`, commit ni push: eso es tuyo.
 - Se lanza solo, sin `-Cierre`, `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas` ni `-RevisarTodo`. Aparte, si ya tiene el inventario y la referencia, `-Cierre` lo hace al final. Nunca para el cierre: si falla, avisa con la ruta de `registros\configmap-error.log`.
