@@ -338,6 +338,14 @@ function Test-CopiaDe([string]$Repo, [string]$Dir) {
   return ((Get-GitDir $f $Dir) -replace '\\', '/').ToLowerInvariant().StartsWith($base)
 }
 
+# Avisa (en amarillo, sin parar) si $Dir tiene cambios sin commit en src o pom.xml: la copia de la prueba sale de su ultimo commit ($Head) y no los ve.
+# Lo de fuera de src y pom.xml (migracion-*/, ficheros sueltos) no cuenta.
+function Write-AvisoSinCommit([string]$Dir, [string]$Head) {
+  $r = Invoke-Git $Dir @('status', '--porcelain', '--', 'src', 'pom.xml')
+  if ($r.Codigo -ne 0 -or @($r.Salida | Where-Object { $_ }).Count -eq 0) { return }
+  Aviso "$Dir tiene cambios sin commit en src o pom.xml: la prueba usa su ultimo commit ($($Head.Substring(0, [Math]::Min(7, $Head.Length)))) y no los ve. Si son parte del arreglo, haz commit y vuelve a lanzar."
+}
+
 # Rehace la copia desechable $Dir de $Repo en $Commit (un worktree sin rama). Una carpeta que ya existe solo se borra
 # si es un worktree de ese mismo repo. La copia no trae lo que git no tiene: de .mvn/wrapper/ (maven-wrapper.properties suele no estar
 # en git) se llevan los ficheros de $Repo que la copia no tiene, para que su mvnw arranque sin bajarse nada. Devuelve '' o el motivo.
@@ -4212,6 +4220,7 @@ try {
   $HeadOrig = Get-Head $LegacyRoot
   $headMig = Get-Head $MigradoRoot
   if ($hayRescate) { $headMig = Get-Head $dirRescate; Info "El migrado se prueba en el ultimo commit de su rama de rescate ($(Get-Rama $dirRescate))." }
+  foreach ($x in @(@($LegacyRoot, $HeadOrig), @($DirRama, $headMig))) { Write-AvisoSinCommit $x[0] $x[1] }
   $DesdeCommit = ''
   if ($Desde) {
     $DesdeCommit = ((Invoke-Git $DirRama @('rev-parse', '--verify', '-q', ($Desde + '^{commit}'))).Salida -join '').Trim()
