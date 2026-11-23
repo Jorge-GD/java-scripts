@@ -9825,5 +9825,19 @@ $Pruebas['m91 (i) Save-Arnes apunta el hash de lo que escribe la IA, y lo apunta
   Igual 'y el del original sigue siendo el mismo' $original (Hash-Escrito-M91 $e 'original')
 }
 
+$Pruebas['m91 (j) como (h), pero la tarea del original no estaba hecha (un lanzamiento anterior la dejo pendiente): tambien dice los dos y no da por perdido el del migrado'] = {
+  $e = Primera-M91 'm91-j'
+  $f = Get-Ruta $e.Local 'tareas/arnes-original.json'
+  $t = Lee-Json $f
+  $t.estado = 'pendiente'
+  [System.IO.File]::WriteAllText($f, (ConvertTo-Json -InputObject $t -Depth 8))
+  $v = Relanza-M91 $e @('original', 'migrado')
+  $r = $v.r
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'la parada lleva el original y el migrado' ($r.Salida.Contains((Frase-M91 'original')) -and $r.Salida.Contains((Frase-M91 'migrado'))) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $v.n @(Llamadas $e).Count
+  Igual 'arnes\migrado sigue igual' $v.migrado (Hashes-Carpeta-M78 $e 'arnes/migrado')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
