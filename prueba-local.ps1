@@ -633,7 +633,11 @@ function Invoke-MavenCaso([string]$Dir, [bool]$EsOriginal, [string]$Job, [string
   $r = Invoke-Maven $Dir $EsOriginal $a $Que
   $segundos = [Math]::Round($cron.Elapsed.TotalSeconds, 1)
   $segundosTest = $null
-  if ($Modo -ne 'compilar') { $segundosTest = Get-SegundosTest $Dir $desde }
+  if ($Modo -ne 'compilar') {
+    $segundosTest = Get-SegundosTest $Dir $desde
+    # Informe: surefire escribio el informe de PruebaLocalTest desde que empezo este Maven, es decir, el test llego a ejecutarse (Invoke-Job lo usa en el modo directo).
+    Add-Member -InputObject $r -NotePropertyName Informe -NotePropertyValue ($null -ne $segundosTest) -Force
+  }
   $script:Tiempos += [pscustomobject][ordered]@{ lado = $lado; job = $Job; caso = $Caso; modo = $modoFila; segundosMaven = $segundos; segundosTest = $segundosTest; offline = $SinRed; cuando = (Get-Date).ToString('s') }
   return $r
 }
@@ -662,9 +666,14 @@ function Get-HuellaCopia([string]$Dir) {
 # cambie en src\ o en el pom.xml se compila otra vez antes del siguiente caso. Si sin red Maven no compila y su salida dice que es por la red (Test-FalloSinRed), otra vez con red y
 # esa copia sigue con red (como en Invoke-Job). Devuelve $null si la copia queda compilada, o el Maven que ha fallado (un error de compilacion, el tope): el caso sale como saldria con
 # mvn test, y la copia no queda como compilada.
+# Solo cuando compila de verdad, y justo antes del test-compile, borra target\classes, target\test-classes y target\maven-status de la copia (nada mas de target: ni
+# target\prueba-local ni los informes de surefire): Copy-Fichero conserva la fecha de un fichero (Copy-Item en Windows), asi que un test guardado con fecha vieja que se copia
+# encima de otro ya compilado cambia la huella, pero el maven-compiler-plugin solo recompila una fuente mas nueva que su .class y dejaria la clase de antes: se ejecutaria un
+# test que no es el que hay en src\ sin que nadie lo viera. Sin las clases ni el estado del compilador, Maven lo compila todo.
 function Invoke-Compilar([string]$Dir, [bool]$EsOriginal, [string]$Que) {
   $huella = Get-HuellaCopia $Dir
   if ($script:Compilada[$Dir] -ceq $huella) { return $null }
+  foreach ($c in @('target/classes', 'target/test-classes', 'target/maven-status')) { Remove-Carpeta (Join-Ruta $Dir $c) }
   $sinRed = -not $script:ConRed.ContainsKey($Dir)
   $r = Invoke-MavenCaso $Dir $EsOriginal '' '' $sinRed $Que 'compilar'
   if ($sinRed -and $r.Codigo -ne 0 -and -not $r.Tope -and (Test-FalloSinRed $r)) {
@@ -682,6 +691,10 @@ function Invoke-Compilar([string]$Dir, [bool]$EsOriginal, [string]$Que) {
 
 # Ha llegado Maven a ejecutar el test del caso? Si, si ha dejado su estado.txt (aunque el job acabe FAILED) o su error.txt.
 function Test-CasoEjecutado([string]$Sal) { return ((Test-Path -LiteralPath (Join-Path $Sal 'estado.txt')) -or (Test-Path -LiteralPath (Join-Path $Sal 'error.txt'))) }
+
+# Ha llegado el surefire:test del caso a ejecutar el test? Si Maven se paro por el tope (colgado: no se repite), si surefire escribio el informe de PruebaLocalTest desde que empezo
+# ese Maven ($R.Informe, Invoke-MavenCaso) o si el caso dejo su estado.txt o su error.txt. Sin ninguna de las tres cosas el test no corrio (la JVM no arranco, no hay nada que ejecutar).
+function Test-DirectoEjecutado($R, [string]$Sal) { return [bool]($R.Tope -or $R.Informe -or (Test-CasoEjecutado $Sal)) }
 
 # Dice la salida de Maven que ha fallado por estar sin red (-o)? Lo dice con 'Cannot access <repo> in offline mode and the artifact ... has not
 # been downloaded from it before' o con 'The repository system is offline but the artifact ... is not available'. Sin esa palabra el fallo es
@@ -709,10 +722,12 @@ function Invoke-CasoConRed([string]$Dir, [bool]$EsOriginal, [string]$Job, [strin
 # un contador) pasaria de un caso al siguiente. Va sin red (-o: no mira los repositorios remotos) y sin los plugins de
 # $Cfg.MavenCasoRapido (Invoke-CasoConRed).
 # Con $Cfg.MavenCasoDirecto (por defecto), el caso va con mvn surefire:test, sin el ciclo de Maven, sobre lo que Invoke-Compilar ha dejado compilado en la copia. Si el caso no
-# llega a ejecutarse (ni estado.txt ni error.txt, ni tope de Maven, ni fallo por la red): si la salida de Maven lleva @{argLine} (surefire lo deja sin sustituir cuando la propiedad
-# argLine no existe, como con JaCoCo sin prepare-agent, y la JVM no arranca), una vez mas con -DargLine= (la propiedad no existia: no se pierde nada) y la copia sigue con
-# -DargLine= ($script:ArgLineVacio); si sigue sin ejecutarse, ese caso va con mvn test como siempre y esa copia sigue con mvn test el resto del lanzamiento ($script:ConCiclo), con
-# una Info una sola vez. Un test-compile que falla (Invoke-Compilar) es el resultado del caso: mvn test fallaria igual.
+# llega a ejecutarse (Test-DirectoEjecutado: ni informe de surefire de PruebaLocalTest, ni estado.txt, ni error.txt, ni tope de Maven, ni fallo por la red): si la salida de Maven
+# lleva @{argLine} (surefire lo deja sin sustituir cuando la propiedad argLine no existe, como con JaCoCo sin prepare-agent, y la JVM no arranca: no hay informe), una vez mas con
+# -DargLine= (la propiedad no existia: no se pierde nada) y la copia sigue con -DargLine= ($script:ArgLineVacio); si sigue sin ejecutarse, ese caso va con mvn test como siempre y
+# esa copia sigue con mvn test el resto del lanzamiento ($script:ConCiclo), con una Info una sola vez. Si hay informe, el test se ejecuto (un contexto de Spring del migrado que no
+# arranca deja el informe y ni estado.txt ni error.txt): el resultado vale tal cual, con mvn test saldria lo mismo, y la copia sigue en directo. Un test-compile que falla
+# (Invoke-Compilar) es el resultado del caso: mvn test fallaria igual.
 # Mientras Maven ejecuta el caso, su datos.sql lleva IF NOT EXISTS en cada CREATE y ADD que lo acepta (Edit-DatosSql); al acabar queda como estaba.
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
@@ -725,12 +740,12 @@ function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso
       $r = Invoke-Compilar $Dir $EsOriginal 'compilar para los casos'
       if ($null -eq $r) {
         $r = Invoke-CasoConRed $Dir $EsOriginal $Job $Caso $Que 'directo'
-        if (-not ($r.Tope -or (Test-CasoEjecutado $sal)) -and -not $script:ArgLineVacio.ContainsKey($Dir) -and @($r.Salida | Where-Object { ([string]$_).Contains('@{argLine}') }).Count -gt 0) {
+        if (-not (Test-DirectoEjecutado $r $sal) -and -not $script:ArgLineVacio.ContainsKey($Dir) -and @($r.Salida | Where-Object { ([string]$_).Contains('@{argLine}') }).Count -gt 0) {
           $script:ArgLineVacio[$Dir] = $true
           Remove-Carpeta $sal
           $r = Invoke-CasoConRed $Dir $EsOriginal $Job $Caso $Que 'directo'
         }
-        if (-not ($r.Tope -or (Test-CasoEjecutado $sal))) {
+        if (-not (Test-DirectoEjecutado $r $sal)) {
           $script:ConCiclo[$Dir] = $true
           $linea = [string](@((Get-FalloMaven $r) -split "`n") | Where-Object { $_.Trim() } | Select-Object -First 1)
           if (-not $linea) { $linea = 'sin mensaje de Maven' }

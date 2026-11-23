@@ -5,6 +5,8 @@
 #                         sale con 1 y no deja nada; con -DargLine= va bien
 #   sin-directo           un surefire:test no llega a ejecutar ningun test (sale con 1 y no deja nada); 'test' va bien
 #   sin-directo-original  como sin-directo, solo en la copia del original (batch-viejo)
+#   sin-estado-migrado    un surefire:test del migrado (batch-nuevo) ejecuta el test (deja TEST-<paquete>.PruebaLocalTest.xml) pero el contexto de Spring no arranca:
+#                         no deja estado.txt ni error.txt y sale con 1 (el informe de surefire existe: el test llego a correr)
 #   plano                 cada caso deja, en los dos lados, ficheros/a/<M81_CARPETA letras>/resultado_nnnnnnnnnnnnnnnnnnnn_<fecha de hoy>.txt: con la carpeta del
 #                         proyecto corta, no cabe en salidas con nombre corto y si aplanado
 #   sin-plano             cada caso deja, en los dos lados, <M81_CARPETA letras>/dato.txt: la primera carpeta ya es tan larga que ni aplanado cabe
@@ -23,6 +25,14 @@ if ($directo -and $guiones -contains 'argline' -and $args -notcontains '-DargLin
 }
 if ($directo -and ($guiones -contains 'sin-directo' -or ($guiones -contains 'sin-directo-original' -and $original))) {
   '[ERROR] No tests were executed!  (Set -Dsurefire.failIfNoSpecifiedTests=false to ignore this error.)'
+  exit 1
+}
+if ($directo -and $guiones -contains 'sin-estado-migrado' -and -not $original) {
+  $informe = [System.IO.Path]::Combine([string[]]@($raiz, 'target', 'surefire-reports', 'TEST-com.acme.nuevo.PruebaLocalTest.xml'))
+  [void](New-Item -ItemType Directory -Path (Split-Path $informe -Parent) -Force)
+  [System.IO.File]::WriteAllText($informe, ('<?xml version="1.0" encoding="UTF-8"?>' + "`n" + '<testsuite name="com.acme.nuevo.PruebaLocalTest" time="0.3" tests="1" errors="1" skipped="0" failures="0"/>' + "`n"))
+  '[ERROR] Tests run: 1, Failures: 0, Errors: 1, Skipped: 0'
+  '[ERROR] Failed to load ApplicationContext'
   exit 1
 }
 $a = @($args | ForEach-Object { if ("$_" -eq 'surefire:test') { 'test' } else { "$_" } })

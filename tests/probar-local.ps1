@@ -8566,7 +8566,7 @@ Salida 'P' (($null -eq $r) -and $script:Llamadas.Count -eq 7)
 $filas = @($script:Tiempos)
 Salida 'Q' (($filas.Count -eq 7) -and @($filas | Where-Object { $_.caso -eq '(compilar)' -and $_.modo -eq 'directo' -and $null -eq $_.segundosTest -and $_.lado -eq 'migrado' }).Count -eq 7)
 '@
-  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $Script @('Get-Hash256', 'Sort-Ordinal', 'Get-HuellaCopia', 'Invoke-Compilar', 'Invoke-MavenCaso', 'Test-FalloSinRed')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $Script @('Get-Hash256', 'Sort-Ordinal', 'Get-HuellaCopia', 'Invoke-Compilar', 'Invoke-MavenCaso', 'Test-FalloSinRed', 'Remove-Carpeta')) + "`n" + $cuerpo))
   $raiz = Join-Path $Dir 'm81-huella'
   if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
   $r = Lanzar $f @($raiz)
@@ -8674,6 +8674,82 @@ $Pruebas['m81 (a7) prueba-local-tiempos.json: cada fila lleva su modo y la compi
   $r = Prueba-M81 $e1 'sin-directo'
   Igual 'con un Maven que no ejecuta surefire:test: sale con 0' 0 $r.Codigo
   Comprueba 'los casos pasan a modo ciclo y siguen los tiempos de casos' (@(Tiempos $e1 | Where-Object { $_.caso -ne '(compilar)' -and $_.modo -eq 'ciclo' }).Count -ge 2) ((Tiempos $e1 | ForEach-Object { "$($_.lado)/$($_.caso)/$($_.modo)" }) -join ' ')
+}
+
+$Pruebas['m81 (a8) Invoke-Compilar borra target/classes, target/test-classes y target/maven-status justo antes de compilar de verdad (una clase vieja no se ejecuta sin que nadie lo vea) y nada mas de target; sin cambios no borra'] = {
+  $f = Join-Path $Dir 'm81-limpia.ps1'
+  $cuerpo = @'
+param([string]$Raiz)
+$ErrorActionPreference = 'Stop'
+$Casos = 'src/test/resources/prueba-local'
+$Utf8 = New-Object System.Text.UTF8Encoding($false)
+$Cfg = @{ MavenCasoRapido = @() }
+$script:ConRed = @{}
+$script:Compilada = @{}
+$script:ArgLineVacio = @{}
+$script:Tiempos = @()
+$script:Vio = @()
+function Info([string]$m) { }
+function Aviso([string]$m) { }
+function Get-SegundosTest { return $null }
+$copia = Join-Path $Raiz 'copia'
+function Escribe-Copia([string]$Rel, [string]$Texto) {
+  $r = Join-Ruta $copia $Rel
+  [void](New-Item -ItemType Directory -Force -Path (Split-Path $r -Parent))
+  [System.IO.File]::WriteAllText($r, $Texto)
+}
+function Existe([string]$Rel) { return (Test-Path -LiteralPath (Join-Ruta $copia $Rel)) }
+# Lo que hay en target cuando Maven recibe test-compile (clases, clases de test y estado del compilador: lo que un Maven de verdad deja y reutiliza), y lo que deja al acabar
+function Invoke-Maven([string]$Dir, [bool]$EsOriginal, [string[]]$A, [string]$Que) {
+  $script:Vio += ((@('target/classes/Viejo.class', 'target/test-classes/Viejo.class', 'target/maven-status/lista.lst', 'target/prueba-local/job/caso-01/estado.txt', 'target/surefire-reports/TEST-x.xml', 'target/generated-sources/g.java') | ForEach-Object { Existe $_ }) -join ',')
+  Escribe-Copia 'target/classes/Nuevo.class' 'n'
+  Escribe-Copia 'target/test-classes/Nuevo.class' 'n'
+  return [pscustomobject]@{ Codigo = 0; Salida = @('[INFO] BUILD SUCCESS'); Tope = $null }
+}
+function Salida([string]$K, $V) { $K + ' ' + $V }
+Escribe-Copia 'pom.xml' '<project/>'
+Escribe-Copia 'src/test/java/ATest.java' 'class ATest { int v = 1; }'
+foreach ($rel in @('target/classes/Viejo.class', 'target/test-classes/Viejo.class', 'target/maven-status/lista.lst', 'target/prueba-local/job/caso-01/estado.txt', 'target/surefire-reports/TEST-x.xml', 'target/generated-sources/g.java')) { Escribe-Copia $rel 'v' }
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'A' ($script:Vio -join ';')
+Salida 'B' ((Existe 'target/classes/Nuevo.class') -and (Existe 'target/test-classes/Nuevo.class'))
+Escribe-Copia 'target/test-classes/Viejo.class' 'otra vez una clase vieja'
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'C' (($script:Vio.Count -eq 1) -and (Existe 'target/test-classes/Viejo.class') -and ($null -eq $r))
+$test = Join-Ruta $copia 'src/test/java/ATest.java'
+$antes = (Get-Item -LiteralPath $test).LastWriteTimeUtc
+[System.IO.File]::WriteAllText($test, 'class ATest { int v = 2; }')
+(Get-Item -LiteralPath $test).LastWriteTimeUtc = $antes.AddDays(-30)
+$r = Invoke-Compilar $copia $false 'compilar para los casos'
+Salida 'D' ($script:Vio -join ';')
+Salida 'E' ((-not (Existe 'target/test-classes/Viejo.class')) -and (Existe 'target/test-classes/Nuevo.class') -and (Existe 'target/prueba-local/job/caso-01/estado.txt'))
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'comun.ps1') @('Get-Rel', 'Join-Ruta')) + "`n" + (Texto-De-Funciones $Script @('Get-Hash256', 'Sort-Ordinal', 'Get-HuellaCopia', 'Invoke-Compilar', 'Invoke-MavenCaso', 'Test-FalloSinRed', 'Remove-Carpeta')) + "`n" + $cuerpo))
+  $raiz = Join-Path $Dir 'm81-limpia'
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  $r = Lanzar $f @($raiz)
+  Igual 'el script de la prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`r?`n")) { if ($l -match '^([A-Z]) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  Igual "A: al recibir test-compile, ni target/classes, ni target/test-classes ni target/maven-status (clases viejas); siguen el estado de los casos, los informes y lo generado" 'False,False,False,True,True,True' $v['A']
+  Igual 'B: Maven deja lo suyo despues (lo que se compila de nuevo no se borra)' 'True' $v['B']
+  Igual 'C: sin cambios en src ni pom no compila ni borra' 'True' $v['C']
+  Igual 'D: con un test sustituido por otro mas viejo, otra compilacion limpia: borrado lo anterior (una clase vieja puesta a mano) y lo demas intacto' 'False,False,False,True,True,True' (($v['D'] -split ';')[-1])
+  Igual 'E: despues, solo lo que ha dejado Maven; el estado de los casos sigue' 'True' $v['E']
+}
+
+$Pruebas['m81 (a9) surefire:test que ejecuta el test (deja su informe) pero no deja estado.txt (el contexto de Spring del migrado no arranca): el resultado vale tal cual, sin reintento, sin mvn test, sin la Info y la copia sigue en directo'] = {
+  $e = Escenario-M81 'm81-a9' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M81 $e 'sin-estado-migrado'
+  $m = @(Mvn-M81 $e $e.CopiaMig $Directo81)
+  $porCaso = @($m | ForEach-Object { Caso-De $_ } | Group-Object | ForEach-Object { "$($_.Name)=$($_.Count)" })
+  Igual 'migrado: una llamada surefire:test por caso, sin repeticiones (ni -DargLine=)' 'caso-01=1,caso-02=1' ($porCaso -join ',')
+  Igual 'migrado: ningun test por caso' 0 (Mvn-M81 $e $e.CopiaMig $Ciclo81).Count
+  Igual 'migrado: ninguna llamada con -DargLine=' 0 @($m | Where-Object { $_ -match 'argLine' }).Count
+  Igual 'migrado: un solo test-compile para los casos' 1 (Mvn-M81 $e $e.CopiaMig $Compila81).Count
+  Comprueba 'la consola no dice que siga con mvn test' ($r.Salida -notmatch 'sin el ciclo de Maven') (Cola $r.Salida)
+  Comprueba 'las filas de tiempos del migrado: modo directo, con los segundos del test del informe' (@(Tiempos $e | Where-Object { $_.lado -eq 'migrado' -and $_.caso -ne '(compilar)' }).Count -eq 2 -and @(Tiempos $e | Where-Object { $_.lado -eq 'migrado' -and $_.caso -ne '(compilar)' -and $_.modo -eq 'directo' -and $_.segundosTest -eq 0.3 }).Count -eq 2) ((Tiempos $e | ForEach-Object { "$($_.lado)/$($_.caso)/$($_.modo)/$($_.segundosTest)" }) -join ' ')
+  Igual 'el original no se ve afectado: sus casos igual, en directo' 0 (Mvn-M81 $e $e.CopiaOrig $Ciclo81).Count
 }
 
 # ================================ LANZADOR ================================
