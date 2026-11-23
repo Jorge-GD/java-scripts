@@ -8,7 +8,7 @@
 #      logs      el migrado (batch-nuevo) deja el log por job del framework nuevo: ficheros/logs/job-<job>-a1b2c3.log y ficheros/logs/jobs/<job>/ejecucion.log
 #      logs-orig lo mismo en el original (batch-viejo)
 #      txt       el migrado deja ademas ficheros/extra.txt (un fichero que no es un log)
-#      sin-sitio los dos lados dejan ficheros/<100 letras>/<100 letras>/dato.log: ni con nombre corto cabe en salidas\ (no se guarda)
+#      sin-sitio los dos lados dejan <200 letras>/<100 letras>/dato.log: ni con nombre corto aplanado cabe en salidas\ (no se guarda)
 $raiz = (Get-Location).Path
 $job = ''; $caso = ''
 foreach ($a in $args) {
@@ -58,7 +58,7 @@ if (Test-Path -LiteralPath $dir) {
     [System.IO.File]::WriteAllText((Join-Path (Join-Path $dir 'ficheros') 'extra.txt'), "solo el migrado`n")
   }
   if ($banderas -contains 'sin-sitio') {
-    $f = [System.IO.Path]::Combine($dir, 'ficheros', ('a' * 100), ('b' * 100), 'dato.log')
+    $f = [System.IO.Path]::Combine($dir, ('a' * 200), ('b' * 100), 'dato.log')
     [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
     [System.IO.File]::WriteAllText($f, "un log de una ruta tan larga que ni con nombre corto cabe en salidas`n")
   }

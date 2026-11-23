@@ -136,7 +136,8 @@ QUE HACE
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
   el migrado y a comparar, y el original solo si ha cambiado algo de lo que entra en su ejecucion.
   Rutas largas: un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto (20 letras, ~ y un hash), el mismo en todos los
-  lados; uno que ni asi cabe no se guarda y su caso sale distinto, con ese fichero. Cuando un lado de un caso acaba FAILED, EXCEPCION o sin
+  lados, y si ni asi cabe, sin las carpetas de en medio (<primera carpeta>/<nombre corto>); uno que ni asi cabe no se guarda y su caso sale distinto,
+  con ese fichero. Cuando un lado de un caso acaba FAILED, EXCEPCION o sin
   estado.txt, el resultado (campo fallos), la consola, la pagina 3 y el prompt de -Reparar llevan la causa que dejo su Maven (nunca la de una linea
   de aviso: TRACE, DEBUG, INFO, WARN o WARNING, salvo el aviso de Spring 'cancelling refresh attempt: <excepcion>' de un contexto que no arranca; sin
   excepcion, el mensaje del '[ERROR] Failed to execute goal'; sin estado.txt y con Maven en 0, que el test no ha dejado salida); sin causa, la consola dice
@@ -415,12 +416,14 @@ function Copy-Carpeta([string]$De, [string]$A) {
 # ============================ NOMBRES DE SALIDAS ============================
 # Lo que se guarda en prueba-local\salidas\<lado>\<job>\<caso>\ puede pasar de 259 letras: el job escribe un fichero con la fecha en el nombre y la carpeta
 # del usuario ya es profunda. Un fichero que no cabe se guarda en la misma carpeta con un nombre corto, '<20 primeras letras del nombre>~<hash de
-# su ruta><extension>', y uno que ni asi cabe no se guarda: se apunta y el caso sale distinto (Copy-Salida y Get-Resultado).
+# su ruta><extension>'; si ni asi cabe, aplanado, sin las carpetas de en medio: '<primera carpeta de la ruta>/<ese mismo nombre corto>' (un job que escribe en
+# ficheros/<carpeta>/<nombre del job>/<fecha-hora>/<hash>.xlsx deja de depender de lo larga que sea esa ruta); y uno que ni asi cabe no se guarda: se apunta y
+# el caso sale distinto (Copy-Salida y Get-Resultado).
 # LA MISMA REGLA EN TODOS LOS LADOS: lo que decide si un fichero cabe no es el lado donde se guarda (original, original-2, migrado, vacio...),
 # sino la ruta mas larga que puede tener en salidas: salidas\culpable\<12 letras>\<job>\caso-000\<ruta>. Si cabe ahi, cabe en todos y se guarda
 # con su nombre; si no, se guarda con el nombre corto en todos. Asi un mismo fichero tiene el mismo nombre en todos los lados y se empareja
 # al comparar. El hash y el prefijo salen de la ruta ya normalizada (Get-Normal, con los dias de la ejecucion que dejo el fichero): un original de
-# otro dia y el migrado de hoy, con la fecha de su dia en el nombre, dan el mismo nombre corto.
+# otro dia y el migrado de hoy, con la fecha de su dia en el nombre (o en una carpeta que el aplanado quita), dan el mismo nombre corto.
 # Coste: un fichero que cabria en original o migrado pero no en esa ruta (hasta ~12 letras de margen) tambien se guarda con el nombre corto.
 
 # Las letras de la ruta mas larga de salidas de un fichero de $Rel del job $Job, con el prefijo de la carpeta del proyecto ($Local).
@@ -429,8 +432,9 @@ function Get-LargoRuta([string]$Job, [string]$Rel) {
 }
 
 # $Rel con su nombre acortado: '<20 primeras letras del nombre normalizado, sin los signos que Windows no admite>~<Get-Hash8 de la ruta normalizada>
-# <extension>' (la extension, si no pasa de 10 letras). $Dias son los dias de la ejecucion que dejo el fichero (Get-Normal).
-function Get-NombreCorto([string]$Rel, $Dias) {
+# <extension>' (la extension, si no pasa de 10 letras), en su carpeta; con $Plano, solo en la primera carpeta de $Rel (sin las de en medio). $Dias son los
+# dias de la ejecucion que dejo el fichero (Get-Normal).
+function Get-NombreCorto([string]$Rel, $Dias, [bool]$Plano = $false) {
   $normal = Get-Normal $Rel $Dias
   $i = $normal.LastIndexOf('/')
   $nombre = $normal.Substring($i + 1)
@@ -443,17 +447,21 @@ function Get-NombreCorto([string]$Rel, $Dias) {
   if ($nombre.Length -gt 20) { $nombre = $nombre.Substring(0, 20) }
   if ($ext.Length -gt 11) { $ext = '' }
   $j = $Rel.LastIndexOf('/')
+  if ($Plano) { $j = [Math]::Min($j, $Rel.IndexOf('/')) }
   return ($Rel.Substring(0, $j + 1) + $nombre + '~' + (Get-Hash8 $normal) + $ext)
 }
 
-# Es $Rel un nombre de los de Get-NombreCorto? (regresion.ps1: ese fichero no se puede dejar como test, ver Get-MotivoCambiante)
+# Es $Rel un nombre de los de Get-NombreCorto (con sus carpetas o aplanado)? (regresion.ps1: ese fichero no se puede dejar como test, ver Get-MotivoCambiante)
 function Test-NombreCorto([string]$Rel) { return ($Rel -cmatch '~[0-9a-f]{8}(\.[^/.]*)?$') }
 
-# La ruta con la que se guarda en salidas el fichero $Rel del job $Job: la misma si cabe (ver arriba), la del nombre corto si no, o $null si ni asi.
+# La ruta con la que se guarda en salidas el fichero $Rel del job $Job: la misma si cabe (ver arriba), la del nombre corto si no, el nombre corto en la
+# primera carpeta si ni asi, o $null si ni aplanado. El hash es el de la ruta entera: dos ficheros distintos no chocan al aplanar.
 function Get-RelSalida([string]$Job, [string]$Rel, $Dias) {
   if ((Get-LargoRuta $Job $Rel) -le $LimiteRuta) { return $Rel }
   $corto = Get-NombreCorto $Rel $Dias
   if ((Get-LargoRuta $Job $corto) -le $LimiteRuta) { return $corto }
+  $plano = Get-NombreCorto $Rel $Dias $true
+  if ((Get-LargoRuta $Job $plano) -le $LimiteRuta) { return $plano }
   return $null
 }
 
@@ -469,7 +477,7 @@ function Copy-Salida([string]$De, [string]$A, [string]$Job, [string]$Donde, $Dia
     $destino = Get-RelSalida $Job $rel $Dias
     $motivo = ''
     if ($null -eq $destino) {
-      $motivo = 'ruta de ' + (Get-LargoRuta $Job (Get-NombreCorto $rel $Dias)) + ' letras'
+      $motivo = 'ruta de ' + (Get-LargoRuta $Job (Get-NombreCorto $rel $Dias $true)) + ' letras'
       if (-not $script:AvisoCarpetaCorta) {
         $script:AvisoCarpetaCorta = $true
         Aviso "Hay ficheros que no caben en una ruta de $LimiteRuta letras ni con nombre corto. Mueve el proyecto a una carpeta mas corta (o usa un -Migrado con una ruta menos profunda) y repite."

@@ -3874,7 +3874,7 @@ $Pruebas['m47 (j) con -Job las salidas de los otros jobs se quedan, y el siguien
 
 # ===================== M48: un fichero largo no tumba la prueba, un caso que falla dice por que y un test del migrado roto no se acepta =====================
 # m48-mvn.ps1 (sobre m33-mvn.ps1) deja, segun el guion de RESCATE_M48 ('guion:regex sobre job/caso', separados por ';'): ficheros de nombre largo
-# (M48_LARGO letras), un fichero que no cabe ni con nombre corto, un migrado FAILED o EXCEPCION (con su 'Caused by:' en la salida de Maven), un original
+# (M48_LARGO letras), un fichero que no cabe ni con nombre corto aplanado, un migrado FAILED o EXCEPCION (con su 'Caused by:' en la salida de Maven), un original
 # EXCEPCION, el caso vacio del migrado EXCEPCION (las primeras M48_VACIOS veces) y un fichero donde va una carpeta (M48_OBSTACULO).
 
 # Un escenario con el Copilot de m25 y el Maven de m48; $Mas son otras claves de ajustes.json.
@@ -3963,7 +3963,7 @@ Salida 'B' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261120.log') @($hoy))
 Salida 'C' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261120.log') @($ayer, $hoy))
 Salida 'D' (Get-RelSalida 'cargaJob' 'ficheros/salida/resultado_20261120.txt' @($hoy))
 Salida 'E' (Get-RelSalida 'cargaJob' ($dir + $resto + '_20261121.log') @($hoy))
-Salida 'F' (Get-RelSalida 'cargaJob' ('ficheros/' + ('a' * 100) + '/' + ('b' * 100) + '/dato.txt') @($hoy))
+Salida 'F' (Get-RelSalida 'cargaJob' (('a' * 200) + '/' + ('b' * 100) + '/dato.txt') @($hoy))
 $k = 259 - $Local.Length - 'cargaJob'.Length - 43
 Salida 'G' (Get-RelSalida 'cargaJob' ('a/' + ('b' * $k)) @($hoy)).Length
 Salida 'H' (Get-RelSalida 'cargaJob' ('a/' + ('b' * ($k + 1))) @($hoy))
@@ -3984,7 +3984,7 @@ Salida 'N' ($k + 2)
   Igual 'C: con los dos dias en la lista, el mismo' $v['A'] $v['C']
   Igual 'D: lo que cabe se queda como estaba' 'ficheros/salida/resultado_20261120.txt' $v['D']
   Comprueba 'E: una fecha que no es de los dias de la ejecucion es otro dato: otro nombre' ($v['E'] -cmatch '~[0-9a-f]{8}\.log$' -and $v['E'] -cne $v['A']) $r.Salida
-  Igual 'F: ni con nombre corto cabe (la carpeta ya mide demas): no se guarda' '(null)' $v['F']
+  Igual 'F: ni con nombre corto aplanado cabe (la primera carpeta ya mide demas): no se guarda' '(null)' $v['F']
   Igual 'G: justo en 259 letras (la ruta mas larga de salidas) cabe y se queda' $v['N'] $v['G']
   Comprueba 'H: con una letra mas ya no cabe y se acorta' ($v['H'] -cmatch '^a/b{20}~[0-9a-f]{8}$') $r.Salida
   Igual 'I y J: el prefijo sale del nombre normalizado: la fecha de otro dia no cambia el nombre corto' $v['I'] $v['J']
@@ -3995,7 +3995,7 @@ Salida 'N' ($k + 2)
 
 $Pruebas['m48 (b) un fichero que no cabe ni con nombre corto no se guarda: el lanzamiento sigue, el caso sale distinto con el fichero y el motivo, la consola sugiere una carpeta mas corta una sola vez, no queda como original reutilizable y -Reparar no lo toca'] = {
   $e = Escenario-M48 'm48-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00') })
-  $rel = 'ficheros/' + ('a' * 100) + '/' + ('b' * 100) + '/dato.txt'
+  $rel = ('a' * 200) + '/' + ('b' * 100) + '/dato.txt'
   $r = Prueba-M48 $e 'sin-sitio:^cargaJob/caso-01$' @('-Reparar')
   Igual 'el lanzamiento acaba: sale con 2 (un caso distinto)' 2 $r.Codigo
   Igual 'el caso con el fichero sale distinto y los demas, iguales' 'distinto,igual,igual' ((Resultados $e) -join ',')
@@ -4004,7 +4004,7 @@ $Pruebas['m48 (b) un fichero que no cabe ni con nombre corto no se guarda: el la
   Comprueba 'con el motivo: no se ha podido guardar y la ruta de tantas letras' ("$($d[0].original)" -match '^no se ha podido guardar: ruta de \d+ letras$' -and "$($d[0].migrado)" -match '^no se ha podido guardar: ruta de \d+ letras$') "$($d[0].original) | $($d[0].migrado)"
   Comprueba 'la consola dice el fichero y el motivo' ($r.Salida.Contains($rel) -and $r.Salida -match 'no se ha podido guardar: ruta de \d+ letras') (Cola $r.Salida)
   Igual 'y sugiere una carpeta mas corta una sola vez (aunque falle en tres lados)' 1 @([regex]::Matches($r.Salida, 'carpeta mas corta')).Count
-  Comprueba 'el fichero no esta en ningun lado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local ('salidas/original/cargaJob/caso-01/ficheros/' + ('a' * 100))))) ''
+  Comprueba 'el fichero no esta en ningun lado' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local ('salidas/original/cargaJob/caso-01/' + ('a' * 200))))) ''
   Comprueba 'lo demas del caso se guarda (estado.txt en los tres lados)' ((Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original/cargaJob/caso-01/estado.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/original-2/cargaJob/caso-01/estado.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.Local 'salidas/migrado/cargaJob/caso-01/estado.txt'))) ''
   $j = @((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos | ForEach-Object { "$($_.job)/$($_.caso)" })
   Igual 'el caso con un fichero sin guardar no queda como original reutilizable (los otros dos, si)' 'cargaJob/caso-02,remesaJob/caso-01' ($j -join ',')
@@ -8610,6 +8610,119 @@ $Pruebas['m80 (d1) falta una tabla en la base del test del migrado: el aviso hab
   Comprueba 'y no dice nada del original' ("$($mig[0])" -notmatch 'original|FAILED') "$($mig[0])"
   Igual 'el del original, una vez' 1 $orig.Count
   Comprueba 'dice FAILED en el original, con su carpeta y -RehacerOriginal' ("$($orig[0])".Contains('Los casos que las usen saldran FAILED en el original. Anadelas a tu test guardado (prueba-local\arnes\original) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que lo escriba otra vez.')) "$($orig[0])"
+}
+
+# ===================== M83: un fichero de salida con una ruta muy larga se guarda igual (<primera carpeta>/<nombre corto>) =====================
+# m83-mvn.ps1 (sobre m33-mvn.ps1) deja, segun el guion de RESCATE_M83 ('guion:regex sobre job/caso'): 'plano' = ficheros/a/<M83_CARPETA letras>/<fecha-hora>/
+# informe-resumen-recibos-cobrados.xlsx (no cabe con nombre corto, si aplanado) y 'sin-sitio' = <200 letras>/a/informe-resumen-recibos-cobrados.xlsx (ni aplanado).
+
+function Escenario-M83([string]$Nombre, $Casos) {
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes @{ MvnExe = (Join-Path $falsos 'm83-mvn.ps1') })
+}
+
+# Lanza con el guion $Guion de m83-mvn.ps1 y la carpeta larga de $Carpeta letras.
+function Prueba-M83($E, [string]$Guion, [int]$Carpeta = 0) {
+  $env:RESCATE_M83 = $Guion
+  $env:M83_CARPETA = [string]$Carpeta
+  try { return (Prueba $E) }
+  finally { $env:RESCATE_M83 = ''; $env:M83_CARPETA = '' }
+}
+
+# Las letras de la carpeta larga para que la ruta con nombre corto SIN aplanar (ficheros/a/<carpeta>/<fecha-hora>/<nombre corto de 34>) mida $Destino en el
+# calculo de Get-LargoRuta (el de la ruta mas larga de salidas).
+function Carpeta-M83($E, [string]$Job, [int]$Destino) { return ($Destino - ($E.Local.Length + $Job.Length + 41 + 'ficheros/a/'.Length + 1 + 15 + 1 + 34)) }
+
+# Los ficheros de ficheros\ (sin bajar a sus carpetas) de un lado ($Lado: original, original-2, migrado) del caso-01 de cargaJob.
+function Nombres-M83($E, [string]$Lado) {
+  $d = Get-Ruta $E.Local "salidas/$Lado/cargaJob/caso-01/ficheros"
+  if (-not (Test-Path -LiteralPath $d)) { return @() }
+  return @(Get-ChildItem -LiteralPath $d -File | ForEach-Object { $_.Name })
+}
+
+# Lo que dan Get-RelSalida y Test-NombreCorto con Local de 150 letras, el job cargaJob y estas rutas ($Fecha: la carpeta de fecha y hora; $c: 60 letras de carpeta
+# larga, que con nombre corto sin aplanar dan 321 letras y aplanado, 242): 'A' original de ayer, 'B' migrado de hoy (el mismo fichero con otro dia),
+# 'C' otro fichero (otra carpeta de en medio), 'D' un fichero cuya primera carpeta ya mide 200 letras (ni aplanado cabe), 'E' un nombre normal, 'F' el
+# aplanado de A. Devuelve un hashtable letra -> valor.
+function Salidas-M83 {
+  $f = Join-Path $Dir 'm83-plano.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @(); $Hoy = @()
+$LimiteRuta = 259
+$Local = 'x' * 150
+$ayer = [datetime]'2026-11-19'; $hoy = [datetime]'2026-11-20'
+$c = 'c' * 60
+$nombre = 'informe-resumen-recibos-cobrados.xlsx'
+function Salida([string]$K, $V) { if ($null -eq $V) { $V = '(null)' }; $K + ' ' + $V }
+$a = Get-RelSalida 'cargaJob' ('ficheros/a/' + $c + '/20261119-101500/' + $nombre) @($ayer)
+Salida 'A' $a
+Salida 'B' (Get-RelSalida 'cargaJob' ('ficheros/a/' + $c + '/20261120-093000/' + $nombre) @($hoy))
+Salida 'C' (Get-RelSalida 'cargaJob' ('ficheros/b/' + $c + '/20261119-101500/' + $nombre) @($ayer))
+Salida 'D' (Get-RelSalida 'cargaJob' (('d' * 200) + '/a/' + $nombre) @($hoy))
+Salida 'E' (Test-NombreCorto 'ficheros/salida/resultado_20261120.txt')
+Salida 'F' (Test-NombreCorto $a)
+'@
+  [System.IO.File]::WriteAllText($f, ('param([string]$Raiz)' + "`n" + (Texto-De-Funciones $Script @('Get-LargoRuta', 'Get-RelSalida', 'Get-NombreCorto', 'Test-NombreCorto', 'Get-Normal')) + "`n" + (Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'tareas.ps1') @('Get-Hash8')) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  Igual 'el script de la prueba sale con 0' 0 $r.Codigo
+  $v = @{}
+  foreach ($l in ($r.Salida -split "`r?`n")) { if ($l -match '^([A-Z]) (.*)$') { $v[$Matches[1]] = $Matches[2] } }
+  return $v
+}
+
+$Pruebas['m83 (b1) un fichero en una carpeta larga que no cabe en salidas ni con nombre corto pero si aplanado (ficheros/<nombre corto>) se guarda igual en original, original-2 y migrado: el caso sale igual y su original se reutiliza'] = {
+  $e = Escenario-M83 'm83-b1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $c = Carpeta-M83 $e 'cargaJob' 262
+  Comprueba 'la prueba cabe: la carpeta larga mide entre 5 y 200 letras (con nombre corto sin aplanar la ruta pasa de 259)' ($c -ge 5 -and $c -le 200) "c=$c, Local=$($e.Local.Length)"
+  $r = Prueba-M83 $e 'plano:/caso-01' $c
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  $n = @{}
+  foreach ($lado in @('original', 'original-2', 'migrado')) {
+    $n[$lado] = @(Nombres-M83 $e $lado)
+    Comprueba "$lado guarda un solo fichero en ficheros\, con el nombre corto (20 letras, ~, 8 de hash y la extension)" ($n[$lado].Count -eq 1 -and $n[$lado][0] -cmatch '^informe-resumen-reci~[0-9a-f]{8}\.xlsx$') ($n[$lado] -join ',')
+    Comprueba "$lado no guarda la carpeta larga ni la de fecha y hora" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "salidas/$lado/cargaJob/caso-01/ficheros/a"))) ''
+  }
+  Comprueba 'el mismo nombre en los tres lados' (($n['original'] -join ',') -ceq ($n['original-2'] -join ',') -and ($n['original'] -join ',') -ceq ($n['migrado'] -join ',')) "$($n['original']) | $($n['original-2']) | $($n['migrado'])"
+  Igual 'el contenido del fichero guardado es el que dejo el job' "ok`n" (Lee $e.Local ('salidas/migrado/cargaJob/caso-01/ficheros/' + $n['migrado'][0]))
+  Comprueba 'la consola no dice que algun fichero no se guarde' ($r.Salida -notmatch 'no se ha podido guardar' -and $r.Salida -notmatch 'carpeta mas corta') (Cola $r.Salida)
+  Igual 'los dos casos quedan como originales reutilizables' 2 @((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos).Count
+  $o1 = Orig-Mvn $e
+  $r = Prueba-M83 $e 'plano:/caso-01' $c
+  Comprueba 'el siguiente lanzamiento reutiliza los 2 originales' ($r.Salida -match 'Original: se reutilizan las salidas de 2 caso\(s\) y se ejecutan 0\.') (Cola $r.Salida)
+  Igual 'sin otro Maven del original' $o1 (Orig-Mvn $e)
+  Igual 'y sigue igual' 'igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m83 (b1b) el nombre aplanado sale de la ruta normalizada entera: el original de otro dia y el migrado de hoy (con la fecha y la hora en una carpeta) dan el mismo nombre; otro fichero con el mismo nombre en otra carpeta, otro'] = {
+  $v = Salidas-M83
+  Comprueba 'A: ficheros/<nombre corto>, sin las carpetas de en medio' ($v['A'] -cmatch '^ficheros/informe-resumen-reci~[0-9a-f]{8}\.xlsx$') ($v.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+  Igual 'B: el original de ayer y el migrado de hoy dan el mismo nombre' $v['A'] $v['B']
+  Comprueba 'C: el mismo nombre de fichero en otra carpeta es otro fichero: otro hash' ($v['C'] -cmatch '^ficheros/informe-resumen-reci~[0-9a-f]{8}\.xlsx$' -and $v['C'] -cne $v['A']) ($v.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })
+}
+
+$Pruebas['m83 (b2) un fichero que no cabe ni aplanado (su primera carpeta ya mide demas) no se guarda, como antes: el caso sale distinto con el fichero y el motivo, la consola sugiere una carpeta mas corta y -Reparar no lo toca'] = {
+  $e = Escenario-M83 'm83-b2' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $rel = ('c' * 200) + '/a/informe-resumen-recibos-cobrados.xlsx'
+  $r = Prueba-M83 $e 'sin-sitio:/caso-01'
+  Igual 'sale con 2 (un caso distinto)' 2 $r.Codigo
+  Igual 'el caso con el fichero sale distinto y el otro, igual' 'distinto,igual' ((Resultados $e) -join ',')
+  $d = @((Caso $e 'cargaJob' 'caso-01').diferencias)
+  Igual 'una diferencia: el fichero' $rel ($d | ForEach-Object { $_.fichero })
+  Comprueba 'con el motivo: no se ha podido guardar y la ruta de mas de 259 letras (la del aplanado)' ("$($d[0].original)" -match '^no se ha podido guardar: ruta de (\d+) letras$' -and [int]$Matches[1] -gt 259 -and "$($d[0].migrado)" -match '^no se ha podido guardar: ruta de \d+ letras$') "$($d[0].original) | $($d[0].migrado)"
+  Comprueba 'la consola dice el fichero y el motivo y sugiere una carpeta mas corta' ($r.Salida.Contains($rel) -and $r.Salida -match 'no se ha podido guardar: ruta de \d+ letras' -and $r.Salida -match 'carpeta mas corta') (Cola $r.Salida)
+  foreach ($lado in @('original', 'original-2', 'migrado')) {
+    $xlsx = @(Get-ChildItem -LiteralPath (Get-Ruta $e.Local "salidas/$lado/cargaJob/caso-01") -Recurse -File -Filter '*.xlsx')
+    Igual "$lado no guarda el fichero, ni con nombre corto ni aplanado" 0 $xlsx.Count
+  }
+  Igual 'el caso con un fichero sin guardar no queda como original reutilizable (el otro, si)' 'cargaJob/caso-02' (@((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos | ForEach-Object { "$($_.job)/$($_.caso)" }) -join ',')
+}
+
+$Pruebas['m83 (b3) Test-NombreCorto (regresion.ps1) reconoce el nombre aplanado y sigue sin reconocer uno normal'] = {
+  $v = Salidas-M83
+  Igual 'F: el aplanado es un nombre corto' 'True' $v['F']
+  Igual 'E: uno normal, no' 'False' $v['E']
+  Igual 'D: lo que no cabe ni aplanado no se guarda' '(null)' $v['D']
 }
 
 # ================================ LANZADOR ================================
