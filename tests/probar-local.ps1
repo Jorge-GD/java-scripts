@@ -9245,5 +9245,136 @@ $Pruebas['m85 (e) con cinco tablas con otras columnas en dos jobs: cada tabla sa
   Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
 }
 
+# ===================== M89: los ficheros de entrada que el original quita (o el migrado) son una sola causa =====================
+# El caso trae de entrada ficheros/entrada/A.txt, B.txt y C.txt (casos\<job>\<caso>\ficheros\<carpeta>\<fichero>, como dice tareas/caso-local.md; el arnes los copia a su
+# carpeta de trabajo y los devuelve en la salida con la misma ruta). El original los quita al procesarlos y el migrado los deja: eran 'sobra A.txt', 'sobra B.txt'... un grupo
+# por nombre. Add-MarcaEntrada marca (entrada = $true) las faltas y las sobras que son de entrada y Get-Grupos las agrupa por esa causa, sin el nombre; Add-Hechos dice cuales son.
+
+# Un script con Get-Grupos y Add-Hechos sobre los casos que dice $Casos (Caso-M <caso> @(<Dif ...>)) y una linea 'G <numero> ## <firma> ## <casos> ## <descripcion> ## <hechos>' por grupo.
+function Grupos-M89([string]$Nombre, [string]$Casos) {
+  $f = Join-Path $Dir "$Nombre.ps1"
+  $cabeza = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @()
+$script:Anterior = $null
+# Dif <fichero> <original> <migrado> [entrada]: la diferencia de un fichero (clave = su ruta), de entrada si se dice
+function Dif([string]$Fichero, [string]$Original, [string]$Migrado, [string]$Entrada = '') {
+  $d = [ordered]@{ fichero = $Fichero; clave = $Fichero; lineas = 1; linea = 1; original = $Original; migrado = $Migrado; nota = '' }
+  if ($Entrada) { $d.entrada = $true }
+  return $d
+}
+function Caso-M([string]$Caso, $Dif) { [ordered]@{ job = 'cargaJob'; caso = $Caso; titulo = 't'; resultado = 'distinto'; motivo = ''; diferencias = @($Dif); fallos = @() } }
+'@
+  $pie = @'
+$res = @($resultados)
+$grupos = @(Get-Grupos $res)
+Add-Hechos $grupos $res 'codigo' 'hash'
+foreach ($g in $grupos) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion + ' ## ' + (@($g.hechos) -join ' | ') }
+'@
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Get-Grupos', 'Add-Hechos', 'Get-CasoDe', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + '$resultados = @(' + "`n" + $Casos + "`n" + ')' + "`n" + $pie))
+  $r = Lanzar $f @()
+  return @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+}
+
+$Pruebas['m89 (a) Get-Grupos: tres casos que dejan, cada uno, un fichero de entrada distinto que el original quita (y otro con dos de ellos) son un solo grupo, con la causa sin el nombre del fichero y los nombres en lo medido'] = {
+  $g = @(Grupos-M89 'm89-a' @'
+(Caso-M 'caso-01' @((Dif 'ficheros/entrada/A.txt' '(no esta)' 'x' 'e'))),
+(Caso-M 'caso-02' @((Dif 'ficheros/entrada/B.txt' '(no esta)' 'y' 'e'))),
+(Caso-M 'caso-03' @((Dif 'ficheros/entrada/C.txt' '(no esta)' 'z' 'e'))),
+(Caso-M 'caso-04' @((Dif 'ficheros/entrada/A.txt' '(no esta)' 'x' 'e'), (Dif 'ficheros/entrada/D.txt' '(no esta)' 'w' 'e')))
+'@)
+  Igual 'un solo grupo' 1 $g.Count
+  Igual 'con los cuatro casos, la causa comun en la firma y en la cabecera, y los ficheros en lo medido' '1 ## fichero|(ficheros de entrada):sobra ## cargaJob/caso-01,cargaJob/caso-02,cargaJob/caso-03,cargaJob/caso-04 ## 4 casos distintos, el migrado deja ficheros de entrada que el original quita ## ficheros de entrada afectados: ficheros/entrada/A.txt, ficheros/entrada/B.txt, ficheros/entrada/C.txt, ficheros/entrada/D.txt' $g[0]
+}
+
+$Pruebas['m89 (b) Get-Grupos: tres casos con un fichero de entrada que el migrado quita y el original deja son un solo grupo, con el otro texto'] = {
+  $g = @(Grupos-M89 'm89-b' @'
+(Caso-M 'caso-01' @((Dif 'ficheros/entrada/A.txt' 'x' '(no esta)' 'e'))),
+(Caso-M 'caso-02' @((Dif 'ficheros/entrada/B.txt' 'y' '(no esta)' 'e'))),
+(Caso-M 'caso-03' @((Dif 'ficheros/procesados/C.txt' 'z' '(no esta)' 'e')))
+'@)
+  Igual 'un solo grupo' 1 $g.Count
+  Igual 'con los tres casos y el otro texto' '1 ## fichero|(ficheros de entrada):falta ## cargaJob/caso-01,cargaJob/caso-02,cargaJob/caso-03 ## 3 casos distintos, el migrado quita ficheros de entrada que el original deja ## ficheros de entrada afectados: ficheros/entrada/A.txt, ficheros/entrada/B.txt, ficheros/procesados/C.txt' $g[0]
+}
+
+$Pruebas['m89 (c) Get-Grupos: un fichero que sobra y no es de entrada, y uno de tablas, se agrupan por su nombre como hoy; uno de entrada con otro que no lo es se agrupa con su primera causa (la de entrada) y la cabecera cuenta el otro'] = {
+  $g = @(Grupos-M89 'm89-c' @'
+(Caso-M 'caso-01' @((Dif 'ficheros/salida/extra.txt' '(no esta)' 'x'))),
+(Caso-M 'caso-02' @((Dif 'tablas/T_X.csv' '(no esta)' 'y'))),
+(Caso-M 'caso-03' @((Dif 'ficheros/entrada/A.txt' '(no esta)' 'x' 'e'), (Dif 'ficheros/salida/extra.txt' '(no esta)' 'x'))),
+(Caso-M 'caso-04' @((Dif 'ficheros/salida/extra.txt' '(no esta)' 'x'), (Dif 'ficheros/entrada/B.txt' '(no esta)' 'x' 'e')))
+'@)
+  Igual 'tres grupos' 3 $g.Count
+  Igual '1: los dos casos con una causa de entrada y la otra por nombre, juntos' '1 ## fichero|(ficheros de entrada):sobra|ficheros/salida/extra.txt:sobra ## cargaJob/caso-03,cargaJob/caso-04 ## 2 casos distintos, el migrado deja ficheros de entrada que el original quita y 1 fichero mas ## ficheros de entrada afectados: ficheros/entrada/A.txt, ficheros/entrada/B.txt' $g[0]
+  Igual '2: el que sobra y no es de entrada, por su nombre' '2 ## fichero|ficheros/salida/extra.txt:sobra ## cargaJob/caso-01 ## 1 caso distinto, en ficheros/salida/extra.txt: sobra ##' $g[1]
+  Igual '3: el de tablas, por su nombre' '3 ## fichero|tablas/T_X.csv:sobra ## cargaJob/caso-02 ## 1 caso distinto, en tablas/T_X.csv: sobra ##' $g[2]
+}
+
+$Pruebas['m89 (d) Add-MarcaEntrada con ficheros de verdad: marca las faltas y las sobras cuyo nombre esta en la carpeta de entradas del caso (bajo ficheros/); no las de tablas/, datos.sql, las que no estan, las de contenido, otraCarpeta ni noGuardado'] = {
+  $f = Join-Path $Dir 'm89-marca.ps1'
+  $cabeza = @'
+param([string]$Raiz)
+$SoWindows = $false
+$LimiteRuta = 259
+'@
+  $cuerpo = @'
+$Entradas = Join-Path $Raiz 'casos/cargaJob/caso-01'
+foreach ($rel in @('ficheros/entrada/A.txt', 'ficheros/procesados/B.txt', 'ficheros/entrada/C.txt', 'ficheros/entrada/E.txt', 'datos.sql', 'tablas/T_X.csv')) {
+  $p = Join-Ruta $Entradas $rel
+  [void](New-Item -ItemType Directory -Path (Split-Path $p -Parent) -Force)
+  [System.IO.File]::WriteAllText($p, "x`n")
+}
+function Dif([string]$Fichero, [string]$Original, [string]$Migrado) { [ordered]@{ fichero = $Fichero; clave = $Fichero; lineas = 1; linea = 1; original = $Original; migrado = $Migrado; nota = '' } }
+$dif = @(
+  (Dif 'ficheros/entrada/A.txt' '(no esta)' 'x'),
+  (Dif 'ficheros/procesados/B.txt' 'x' '(no esta)'),
+  (Dif 'ficheros/entrada/C.txt' 'x' 'y'),
+  (Dif 'ficheros/entrada/N.txt' '(no esta)' 'x'),
+  (Dif 'datos.sql' '(no esta)' 'x'),
+  (Dif 'tablas/T_X.csv' '(no esta)' 'x'),
+  ([ordered]@{ fichero = 'ficheros/entrada/E.txt'; clave = 'a -> b'; lineas = 1; linea = 1; original = 'en a'; migrado = 'en b'; nota = ''; otraCarpeta = $true }),
+  ([ordered]@{ fichero = 'ficheros/entrada/E.txt'; clave = 'ficheros/entrada/E.txt'; lineas = 1; linea = 1; original = 'no se ha podido guardar: ruta'; migrado = '(guardado)'; nota = ''; noGuardado = $true })
+)
+$vuelta = @(Add-MarcaEntrada $dif $Entradas)
+'N ' + $vuelta.Count
+foreach ($d in $vuelta) { 'R ' + $d.fichero + ' ' + (Get-TipoDif $d) + ' ' + [bool]$d.entrada }
+'@
+  $comun = Join-Path (Split-Path -Parent $Script) 'comun.ps1'
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Add-MarcaEntrada', 'Get-TipoDif', 'Get-RutaLarga')) + "`n" + (Texto-De-Funciones $comun @('Join-Ruta')) + "`n" + $cuerpo))
+  $r = Lanzar $f @((Join-Path $Dir 'm89-marca-dirs'))
+  $l = @($r.Salida -split "`n" | ForEach-Object { $_.TrimEnd() })
+  Comprueba 'devuelve las ocho diferencias' ($l -contains 'N 8') (Cola $r.Salida)
+  foreach ($x in @(
+      @('ficheros/entrada/A.txt sobra True', 'una sobra que es de entrada: marcada'),
+      @('ficheros/procesados/B.txt falta True', 'una falta que es de entrada (en otra carpeta de ficheros/): marcada'),
+      @('ficheros/entrada/C.txt contenido False', 'si el contenido es distinto no es de falta ni de sobra: sin marca'),
+      @('ficheros/entrada/N.txt sobra False', 'una sobra que no esta en las entradas del caso: sin marca'),
+      @('datos.sql sobra False', 'datos.sql, de la raiz del caso: sin marca (solo cuenta ficheros/)'),
+      @('tablas/T_X.csv sobra False', 'una tabla: sin marca'),
+      @('ficheros/entrada/E.txt otraCarpeta False', 'otraCarpeta: sin marca'),
+      @('ficheros/entrada/E.txt noGuardado False', 'noGuardado: sin marca'))) {
+    Comprueba $x[1] ($l -contains ('R ' + $x[0])) (Cola $r.Salida)
+  }
+}
+
+$Pruebas['m89 (e) un caso real: el migrado deja el fichero de entrada que el original quita en tres casos y, ademas, uno que no es de entrada: un solo grupo, con la causa, los ficheros y la marca en el json'] = {
+  $aj = @{ MvnExe = (Join-Path $falsos 'm89-mvn.ps1') }
+  $e = Escenario-M25 'm89-e' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) -Sano -Ajustes $aj
+  $r = Prueba $e
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'los tres casos salen distintos' 'distinto,distinto,distinto' ((Resultados $e) -join ',')
+  foreach ($n in 1..3) {
+    $d = @((Caso $e 'cargaJob' "caso-0$n").diferencias | Where-Object { $_ })
+    Igual "caso-0${n}: sus dos ficheros, el de entrada marcado y el otro no" 'ficheros/entrada/datos.txt:True,ficheros/entrada/extra.txt:False' ((@($d | ForEach-Object { "$($_.fichero):$([bool]$_.entrada)" } | Sort-Object)) -join ',')
+  }
+  $grupos = @((Lee-Json $e.Json).grupos | Where-Object { $_ })
+  Igual 'un solo grupo' 1 $grupos.Count
+  Igual 'con los tres casos' 'cargaJob/caso-01,cargaJob/caso-02,cargaJob/caso-03' (@($grupos[0].casos) -join ',')
+  Igual 'la firma lleva la causa de entrada y el fichero que no lo es' 'fichero|(ficheros de entrada):sobra|ficheros/entrada/extra.txt:sobra' $grupos[0].firma
+  Comprueba 'la consola dice la cabecera del grupo' ($r.Salida.Contains('Grupo 1: 3 casos distintos, el migrado deja ficheros de entrada que el original quita y 1 fichero mas')) (Cola $r.Salida)
+  Comprueba 'y lo medido: los ficheros de entrada' ($r.Salida.Contains('medido: ficheros de entrada afectados: ficheros/entrada/datos.txt')) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

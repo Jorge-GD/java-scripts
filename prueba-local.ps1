@@ -103,6 +103,8 @@ QUE HACE
      otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
      alguna copia del original o, si no, la primera linea distinta (Join-OtraCarpeta). Lo que solo esta en un lado y las tablas\ no se emparejan. Los casos
      con esa diferencia, aunque el nombre lleve otra fecha, son un solo grupo (la pareja de carpetas) y la consola dice que suele ser el test del migrado.
+     Un fichero de entrada del caso (el mismo nombre en casos\<job>\<caso>\ficheros\) que el original quita y el migrado deja, o al reves, es una sola causa en los
+     grupos y no un grupo por nombre: la cabecera la dice y 'medido' lista los ficheros (Add-MarcaEntrada).
   6. Solo con -Desde <commit> (un commit de la rama que se prueba): para cada caso distinto busca, por biseccion entre
      <commit> y el HEAD (git rev-list --first-parent), el primer commit que lo rompe. Ejecuta el caso en el migrado de
      cada commit que prueba (en una copia desechable, con el arnes ya guardado; el original no se vuelve a ejecutar) y
@@ -3160,6 +3162,18 @@ function New-DifOtraCarpeta($Faltas, $Sobras, [string]$A, [string]$B, $DiasA = $
   }
 }
 
+# Marca (entrada = $true) las diferencias $Dif de un caso que son un fichero de entrada: una falta o una sobra (Get-TipoDif) de un fichero de ficheros\ cuyo mismo nombre
+# esta en $Entradas, la carpeta de entradas del caso (casos\<job>\<caso>: sus ficheros\<carpeta>\<fichero>, que el arnes copia a su carpeta de trabajo y devuelve en la
+# salida con esa ruta). Si el original los quita al procesarlos y el migrado no, o al reves, es una causa y no un nombre por fichero (Get-Grupos). No cuentan datos.sql ni
+# parametros.properties (no son de ficheros\), tablas\, otraCarpeta, noGuardado ni un fichero de contenido distinto. Devuelve $Dif.
+function Add-MarcaEntrada($Dif, [string]$Entradas) {
+  foreach ($d in @($Dif)) {
+    if (@('falta', 'sobra') -cnotcontains (Get-TipoDif $d) -or $d.fichero -cnotmatch '^ficheros/') { continue }
+    if ([System.IO.File]::Exists((Get-RutaLarga (Join-Ruta $Entradas $d.fichero)))) { $d.entrada = $true }
+  }
+  return $Dif
+}
+
 # Lo que no se pudo guardar de un caso en sus lados (original, original-2 y $Nombre, el migrado; Copy-Salida): uno por fichero (por su ruta
 # normalizada, que es la misma en todos los lados), con fichero, clave, destino (la clave de donde habria ido, para quitar la diferencia que
 # Compare-Caso ve por faltar en un lado) y, en original y migrado, el motivo del lado que fallo o '(guardado)'.
@@ -3225,6 +3239,8 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
   }
   # Un fichero que el original deja en una carpeta y el migrado en otra es una sola diferencia (despues de lo que no se pudo guardar: esas faltas no son de verdad)
   $d = @(Join-OtraCarpeta $d $s1 (Join-Ruta $Local "salidas/$Nombre/$j/$c") $diasOrig)
+  # Un fichero de entrada del caso que un lado quita y el otro deja es una causa (despues de Join-OtraCarpeta: lo que ya se une no cuenta)
+  $d = @(Add-MarcaEntrada $d (Join-Ruta $Local "casos/$j/$c"))
   if ($d.Count -gt 0) {
     $o.resultado = 'distinto'; $o.diferencias = $d
     # Un migrado que no ha dejado ni estado.txt no ha corrido el caso: la consola lo dice antes de las diferencias, que son todas (no esta)
@@ -3262,7 +3278,8 @@ function Get-CausaNormal([string]$Causa, [string]$Caso) {
 # - De fallo: el migrado acaba FAILED, EXCEPCION o sin estado.txt y el original no. Firma 'fallo|<estado>|<causa normalizada>' (Get-CausaNormal).
 # - De fichero: los demas. Firma 'fichero|' y la lista ordenada de '<clave>:<tipo>' de sus diferencias; el tipo es falta (no esta en el migrado), sobra
 #   (solo esta en el migrado), noGuardado, otraCarpeta (un fichero que cada lado deja en otra carpeta, Join-OtraCarpeta: su clave es la pareja de carpetas
-#   y no el nombre, que lleva la fecha del caso, y su cabecera dice las carpetas de cada lado) o contenido.
+#   y no el nombre, que lleva la fecha del caso, y su cabecera dice las carpetas de cada lado) o contenido. Una falta o una sobra de un fichero de entrada del caso
+#   (entrada, Add-MarcaEntrada) lleva por clave '(ficheros de entrada)' y no su nombre: el original los quita y el migrado no (o al reves) es una causa, no una por fichero.
 function Get-Grupos($Res) {
   $por = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
   foreach ($r in @($Res | Where-Object { $_.resultado -eq 'distinto' })) {
@@ -3276,7 +3293,9 @@ function Get-Grupos($Res) {
     else {
       $tipo = 'fichero'
       foreach ($d in @($r.diferencias)) {
-        $ent[$d.clave + ':' + (Get-TipoDif $d)] = $d
+        $clave = $d.clave
+        if ($d.entrada) { $clave = '(ficheros de entrada)' }
+        $ent[$clave + ':' + (Get-TipoDif $d)] = $d
       }
       $firma = 'fichero|' + ((Sort-Ordinal @($ent.Keys)) -join '|')
     }
@@ -3295,6 +3314,8 @@ function Get-Grupos($Res) {
       $lista = @(Sort-Ordinal @($m[0].ent.Keys))
       $primera = $m[0].ent[$lista[0]]
       if ($primera.otraCarpeta) { $desc = "$cuantos, el migrado deja sus ficheros en $(Format-Carpetas $primera.carpetasMigrado) y el original en $(Format-Carpetas $primera.carpetasOriginal)" }
+      elseif ($primera.entrada -and (Get-TipoDif $primera) -ceq 'sobra') { $desc = "$cuantos, el migrado deja ficheros de entrada que el original quita" }
+      elseif ($primera.entrada) { $desc = "$cuantos, el migrado quita ficheros de entrada que el original deja" }
       else { $desc = "$cuantos, en $($primera.fichero): " + $lista[0].Substring($lista[0].LastIndexOf(':') + 1) }
       if ($lista.Count -eq 2) { $desc += ' y 1 fichero mas' }
       if ($lista.Count -gt 2) { $desc += " y $($lista.Count - 1) ficheros mas" }
@@ -3375,6 +3396,12 @@ function Add-Hechos($Grupos, $Res, [string]$Codigo, [string]$Hash) {
           $h += "de dependencias: falta una clase o un metodo de $prefijo. En el arbol del migrado: $texto. Arbol completo: $($arbol.Ruta)"
         }
       }
+    }
+    $entradas = @(Sort-Ordinal @($g.casos | ForEach-Object { (Get-CasoDe $Res $_).diferencias } | Where-Object { $_.entrada } | ForEach-Object { $_.fichero } | Select-Object -Unique))
+    if ($entradas.Count -gt 0) {
+      $texto = (@($entradas | Select-Object -First 10) -join ', ')
+      if ($entradas.Count -gt 10) { $texto += " y $($entradas.Count - 10) mas" }
+      $h += "ficheros de entrada afectados: $texto"
     }
     if ($antes -and $antes.PSObject.Properties['codigoMigrado'] -and $antes.PSObject.Properties['hashArnesMigrado'] -and $antes.codigoMigrado -ceq $Codigo -and $antes.hashArnesMigrado -cne $Hash) {
       $iguales = 0
