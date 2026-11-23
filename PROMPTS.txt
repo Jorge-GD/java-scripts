@@ -37,7 +37,7 @@ PROMPT 12 (comprobacion final: pegalo en cada ventana de los prompts 9, 10 y 11 
 
 Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en local:
 1. Copia cada test guardado a su copia: el del original a la carpeta del original terminada en -prueba-local y el del migrado a la del migrado. No los mezcles. Compilan los dos.
-2. Caso vacio de TODOS los jobs, en los dos lados: cada job deja estado.txt y ningun error.txt. Si uno falla, arreglalo antes de seguir: con un caso vacio que falla, la prueba en local descarta el test.
+2. Caso vacio de TODOS los jobs, en los dos lados: cada job deja estado.txt y ningun error.txt. Si falta estado.txt o hay error.txt, arreglalo antes de seguir: la prueba en local no acepta un test asi. Un job que acaba FAILED con estado.txt y sin error.txt vale si el original y el migrado acaban igual y es porque no tienen entradas: no cambies los tests para que salga COMPLETED. Dime por que acaba FAILED cada uno, con la linea del log.
 3. Si has cambiado el test del original, ejecuta un mismo caso con el test de antes (el de git o el de la ultima copia) y con el de ahora, y dime que cambia en su salida. Solo puede cambiar lo que querias arreglar.
 4. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
 5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
