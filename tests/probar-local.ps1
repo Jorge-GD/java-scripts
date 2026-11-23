@@ -9574,5 +9574,68 @@ $Pruebas['m89 (e) un caso real: el migrado deja el fichero de entrada que el ori
   Comprueba 'y lo medido: los ficheros de entrada' ($r.Salida.Contains('medido: ficheros de entrada afectados: ficheros/entrada/datos.txt')) (Cola $r.Salida)
 }
 
+# ===================== M87: el caso vacio dice todos los jobs que fallan, no solo el primero =====================
+# m87-mvn.ps1 (sobre m48-mvn.ps1) deja, en el caso vacio del arnes del original, los jobs de la regex de RESCATE_M87 sin estado.txt y con su error.txt, las primeras
+# M87_VECES veces. Para el migrado, los guiones de m48-mvn.ps1 (vacio-excepcion-mig y excepcion-mig).
+
+function Escenario-M87([string]$Nombre, $Casos) { return (Escenario-M48 $Nombre $Casos @{ MvnExe = (Join-Path $falsos 'm87-mvn.ps1') }) }
+
+# Lanza con los jobs $Jobs (regex) sin estado.txt en el vacio del original las primeras $Veces veces, el guion $GuionM48 de m48-mvn.ps1 y las variables de entorno $Env.
+function Prueba-M87($E, [string]$Jobs = '', [int]$Veces = 0, [string]$GuionM48 = '', [hashtable]$Env = @{}) {
+  $env:RESCATE_M87 = $Jobs
+  $Env['M87_VECES'] = $Veces
+  try { return (Prueba-M48 $E $GuionM48 @() '' $Env) }
+  finally { $env:RESCATE_M87 = '' }
+}
+
+# El motivo de un job sin estado.txt en el caso vacio del original (el error.txt de m87-mvn.ps1) y el del migrado que no arranca donde el original si (con la causa de
+# vacio-excepcion-mig, o la que se de: la de excepcion-mig es IllegalStateException).
+function Sin-Estado87([string]$Job) { return "Con un caso vacio (src/test/resources/prueba-local/$Job/vacio, una carpeta sin nada), el job $Job error.txt: no se puede abrir el recurso de $Job" }
+function No-Arranca87([string]$Job, [string]$Causa = 'org.springframework.beans.factory.BeanCreationException: sin correo') { return $MotivoVacio48.Replace('cargaJob', $Job).Replace('org.springframework.beans.factory.BeanCreationException: sin correo', $Causa) }
+
+$Pruebas['m87 (a) dos jobs sin estado.txt en el caso vacio del original: el rechazo nombra los dos, un parrafo por job y en el orden de los jobs, y el reintento lo recibe entero'] = {
+  $e = Escenario-M87 'm87-a' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
+  $r = Prueba-M87 $e '^(cargaJob|remesaJob)$' 1
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del original con una linea que nombra los dos jobs' ($r.Salida.Contains('Arnes del original rechazado: Con un caso vacio fallan 2 jobs: cargaJob, remesaJob.')) (Cola $r.Salida)
+  $p = Registro-Arnes $e 'original' 2
+  Comprueba 'el reintento recibe esa linea y los dos motivos, uno por parrafo' ($p.Contains('Con un caso vacio fallan 2 jobs: cargaJob, remesaJob.' + "`n`n" + (Sin-Estado87 'cargaJob') + "`n`n" + (Sin-Estado87 'remesaJob'))) (Cola $p)
+  Igual 'la tarea del original queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'original').estado):$((Tarea-Arnes $e 'original').intentos)"
+}
+
+$Pruebas['m87 (b) un solo job sin estado.txt en el caso vacio del original: el motivo es el de siempre, sin el otro job ni parrafos de mas'] = {
+  $e = Escenario-M87 'm87-b' ([ordered]@{ cargaJob = @('importe=10.00'); remesaJob = @('importe=10.00') })
+  $r = Prueba-M87 $e '^remesaJob$' 99
+  Igual 'sale con 1 (el arnes queda atascado)' 1 $r.Codigo
+  $t = Tarea-Arnes $e 'original'
+  Igual 'la tarea queda atascada' 'atascada' $t.estado
+  Igual 'el motivo es solo el de remesaJob' (Sin-Estado87 'remesaJob') ([string]$t.motivo)
+}
+
+$Pruebas['m87 (c) dos jobs donde el original arranca y el migrado no: el rechazo nombra los dos, un parrafo por job, y el reintento lo recibe entero'] = {
+  $e = Escenario-M87 'm87-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M87 $e '' 0 'vacio-excepcion-mig:/vacio' @{ M48_VACIOS = 2 }
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del migrado con una linea que nombra los dos jobs' ($r.Salida.Contains('Arnes del migrado rechazado: Con un caso vacio, el original arranca 2 jobs que con tu test el migrado no: cargaJob, remesaJob.')) (Cola $r.Salida)
+  $p = Registro-Arnes $e 'migrado' 2
+  Comprueba 'el reintento recibe esa linea y los dos motivos, uno por parrafo' ($p.Contains('Con un caso vacio, el original arranca 2 jobs que con tu test el migrado no: cargaJob, remesaJob.' + "`n`n" + (No-Arranca87 'cargaJob') + "`n`n" + (No-Arranca87 'remesaJob'))) (Cola $p)
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Igual 'los casos salen iguales' 'igual,igual,igual,igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m87 (d) dos jobs rechazados por no arrancar y aceptados en el ultimo intento: los dos se apuntan en NoArranca (el aviso y el resumen dicen las veces de cada uno y solo se ejecuta su primer caso)'] = {
+  $e = Escenario-M87 'm87-d' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00'); remesaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M87 $e '' 0 'excepcion-mig'
+  Igual 'sale con 2' 2 $r.Codigo
+  Igual 'el primer intento del migrado se rechaza, una vez' 1 @([regex]::Matches($r.Salida, 'Arnes del migrado rechazado: Con un caso vacio')).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  foreach ($j in @('cargaJob', 'remesaJob')) {
+    Comprueba "$j : el ultimo intento lo avisa" ($r.Salida.Contains((No-Arranca87 $j 'java.lang.IllegalStateException: sin correo'))) (Cola $r.Salida)
+    Comprueba "$j : solo se ejecuta su primer caso" ($r.Salida.Contains("El migrado no arranca el job $j con este test (BeanCreationException): no ejecuto sus demas casos.")) (Cola $r.Salida)
+    Comprueba "$j : el resumen dice que el test se escribio 2 veces" ($r.Salida.Contains("El migrado no arranca el job $j (BeanCreationException: java.lang.IllegalStateException: sin correo). El test ya se escribio 2 veces con este error")) (Cola $r.Salida)
+  }
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
