@@ -97,7 +97,7 @@ QUE HACE
      pero si es asi con todos los casos de un job (y ninguno sale distinto), el test no le pasa las entradas al job: esos casos pasan a
      'no se pudo preparar' con ese motivo (no cuentan como iguales: el -Cierre no pasa), la prueba sigue con los demas jobs, guarda
      prueba-local.json como siempre y acaba con 2, como con casos distintos. Al final lo dice en rojo, una vez por job. Los tests guardados no se
-     tocan: el usuario los arregla en prueba-local\arnes\<lado> y relanza sin -Rehacer, o relanza con -RehacerArnes y la IA recibe ese motivo (Get-PrevioArnes).
+     tocan: el usuario los arregla en prueba-local\arnes\<lado> y relanza sin -Rehacer, o relanza con -RehacerOriginal (el test del original y, con el, el del migrado) y la IA recibe ese motivo (Get-PrevioArnes).
      Una tabla (tablas\X.csv) sin filas de datos, o con solo la cabecera, en
      un solo lado es lo mismo que una tabla que no esta. Un fichero que el original deja en una carpeta y el migrado, con el mismo nombre (normalizado), en
      otra es una sola diferencia, de tipo otraCarpeta, y no un '(no esta)' por cada copia: dice las carpetas de cada lado y si el contenido es igual al de
@@ -4348,7 +4348,7 @@ try {
   if ($Rapida) { Info "Prueba rapida: $($res.Count) casos de $casosEnTotal. No vale para -Cierre: cuando salga igual, lanza sin -Rapida." }
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig $NombreJson)"
   Info $NoPromete
-  foreach ($v in $vacios) { Fallo ((Get-FraseSinEntradas $v) + ' Arreglalo en tu test guardado (prueba-local\arnes\<lado>) y relanza sin -Rehacer, o relanza con -RehacerArnes para que la IA lo escriba otra vez.') }
+  foreach ($v in $vacios) { Fallo ((Get-FraseSinEntradas $v) + ' Arreglalo en tus tests guardados (prueba-local\arnes\original y arnes\migrado) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que la IA los escriba otra vez (el del original y, con el, el del migrado).') }
 
   # Lo que no se podia tocar sigue igual
   $H1 = @($intocables | ForEach-Object { Get-Huella $_ })

@@ -8982,7 +8982,7 @@ $Pruebas['m81 (a9) surefire:test que ejecuta el test (deja su informe) pero no d
 
 $MotivoM82 = 'El test no le pasa las entradas al job: ningun caso deja nada distinto del caso vacio.'
 $DetalleM82 = 'En remesaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job.'
-$LineaM82 = "$DetalleM82 Arreglalo en tu test guardado (prueba-local\arnes\<lado>) y relanza sin -Rehacer, o relanza con -RehacerArnes para que la IA lo escriba otra vez."
+$LineaM82 = "$DetalleM82 Arreglalo en tus tests guardados (prueba-local\arnes\original y arnes\migrado) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que la IA los escriba otra vez (el del original y, con el, el del migrado)."
 
 function Escenario-M82([string]$Nombre) {
   $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) 'minimo=5.00' 'minimo=5.01'
