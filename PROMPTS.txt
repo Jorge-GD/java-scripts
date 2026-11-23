@@ -9,37 +9,50 @@ Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en lo
 6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
 
 
-PROMPT 17 (misma carpeta de siempre, no la de rescate; en la ventana que acaba de buscar por que salen distintos 7 casos)
+PROMPT 19 (misma carpeta de siempre; en la ventana de Copilot de este batch)
 
-Has visto que las diferencias que quedan vienen del test guardado del migrado y no del codigo. Corrigelo solo en el test guardado del migrado y en su copia:
-1. La lista que el test fuerza a un solo valor de relleno (las dos propiedades) tiene que recibir exactamente la misma lista que usa el original en la prueba local, en el formato que lee el codigo del migrado. Saca los valores del test guardado del original o de su configuracion; no los inventes.
-2. Quita el asunto forzado sin tilde, para que el migrado use el valor de su configuracion. Si el test tiene que dar ese valor, que sea el mismo texto que usa el original, con la letra acentuada escrita como \u00e1 en el codigo Java.
-3. No toques src/main, ni el test del original, ni los casos.
-4. Dime el nombre de cada propiedad que el test rellena porque en local no existe: hay que comprobar que esta en el configmap con el mismo valor.
-
-Comprobacion final:
-a) Copia el test guardado del migrado a su copia y compila los dos lados.
-b) Caso vacio de TODOS los jobs, en los dos lados: estado.txt y ningun error.txt.
-c) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia.
-d) Lanza los 7 casos que salian distintos y 2 de los que salian iguales. Cada uno tiene que ser distinto del caso vacio en los dos lados. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
-e) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
-f) Get-FileHash del test guardado y de su copia: coinciden. git status de los dos repos: src/main sin tocar.
-Si algun caso sigue distinto, dime de que lado esta el fallo, con la linea del log o del fichero, y no lo arregles todavia.
-
-
-PROMPT 18 (misma carpeta de siempre; en la ventana que acaba de hacer la tabla de los 7 jobs)
-
-Quedan tres diferencias. Antes de tocar nada, confirma leyendo el codigo de que lado sale cada una.
-1. El fichero json del job tactico: el original escribe los nombres de los campos en snake_case y el migrado en camelCase. Busca de donde saca el original el snake_case (anotacion, configuracion del ObjectMapper o propiedad de Spring). Si el migrado lo ha perdido en su codigo o en su configuracion, arreglalo en la carpeta de rescate, con un test unitario que compruebe los nombres de un registro, y haz commit. Si la causa esta en un test, corrige el test.
-2. A quien va el correo: en un job el migrado deja vacio el para= y en otro el primer correo va a otra direccion. Mira de que propiedad lo lee cada lado. Si el migrado lo lee de una propiedad que en local no existe porque va en el configmap, dale en el test guardado del migrado el mismo valor que usa el original y dime el nombre de la propiedad. Si el migrado la lee con otro nombre, o no la lee, es un fallo del codigo: arreglalo en rescate, con su test unitario y commit.
-3. Captura de correos, en los dos tests guardados (original y migrado), con el mismo cambio en los dos: ninguna linea puede ser un objeto (paquete.Clase@hash). El cuerpo es el texto del mensaje tal como llega a la bandeja; en un multipart, el texto de su parte de texto. Cada adjunto va en la cabecera como adjunto=<nombre que ve quien lo recibe>, sin ruta temporal. Si el Excel no queda ya en ficheros\, guarda el contenido de cada adjunto Excel en envios\ con ese mismo nombre, para que se compare celda a celda.
-4. No toques los casos. En src/main, solo los commits de rescate de los puntos 1 y 2.
+En la prueba completa sale distinto un solo caso: el del primer job que lanza el tipo de ejecucion alternativo. El original escribe el fichero KO del proceso mensual (no existe el fichero mensual) y el migrado escribe el fichero KO del proceso diario (no existen los ficheros diarios). Parece que el migrado no hace caso del tipo de ejecucion que trae el caso.
+1. Antes de tocar nada, confirma leyendo el codigo como lee cada lado el tipo de ejecucion (parametro del job, propiedad o variable de entorno; nombre y formato) y como se lo pasa a cada lado el test guardado desde el caso.
+2. Si el migrado lo lee de otro sitio, con otro nombre o con otro formato, haz que lo lea igual que el original: arreglalo en la carpeta de rescate, con un test unitario que pruebe los dos tipos, y haz commit. Si eso choca con la configuracion del migrado (configmap), para y dimelo sin arreglarlo.
+3. Si el fallo esta en el test guardado (le pasa el tipo a un lado y no al otro), corrige el test y su copia, y no toques src/main.
 
 Comprobacion final:
-a) Copia cada test guardado a su copia (el del original a la carpeta del original terminada en -prueba-local, el del migrado a la del migrado) y compila los dos lados.
+a) Copia cada test guardado que hayas cambiado a su copia (el del original a la carpeta del original terminada en -prueba-local, el del migrado a la del migrado) y compila los dos lados.
 b) Caso vacio de TODOS los jobs, en los dos lados: estado.txt y ningun error.txt.
-c) El test del original cambia: lanza un mismo caso con el test de antes y con el de ahora. Solo puede cambiar la captura de correos.
-d) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza el mismo caso de cada job que en tu tabla anterior, con el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
+c) Si cambias el test del original, lanza un mismo caso con el test de antes y con el de ahora: solo puede cambiar lo que querias arreglar.
+d) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza el caso que salia distinto y otro caso de cada job que salia igual. Usa el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
 e) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 f) Get-FileHash de cada test guardado y de su copia: coinciden. git status de los repos y los commits nuevos de rescate.
-Si un caso no se distingue del vacio, dime que entrada le falta y si se puede preparar en local; no la fuerces.
+
+
+PROMPT 20 (misma carpeta de siempre; en la ventana de Copilot de este batch)
+
+En la prueba del primer job salen distintos 4 casos, todos por la misma tabla de salida: el migrado guarda los importes redondeados a entero (por ejemplo, 12.50 sale 13) y el original los guarda con sus decimales.
+1. Antes de tocar nada, mira de donde saca cada lado la definicion de esa tabla en la prueba (el SQL del original, el esquema del test guardado del migrado o Hibernate) y que tipo tienen esas columnas en cada lado. Mira tambien como escribe el valor el codigo de cada lado (tipo del campo, escala, redondeo, tipo en el insert).
+2. Si la diferencia esta en el esquema del test del migrado, dale a esas columnas los mismos tipos que tienen en el original, en el test guardado del migrado y en su copia. No toques src/main.
+3. Si esta en el codigo del migrado, arreglalo en la carpeta de rescate con un test unitario que compruebe que se guardan los decimales, y haz commit.
+4. Mira si otras tablas del esquema del test del migrado tienen el mismo problema en columnas con decimales, y corrigelo igual.
+
+Comprobacion final:
+a) Copia cada test guardado que hayas cambiado a su copia (el del original a la carpeta del original terminada en -prueba-local, el del migrado a la del migrado) y compila los dos lados.
+b) Caso vacio de TODOS los jobs, en los dos lados: estado.txt y ningun error.txt.
+c) Si cambias el test del original, lanza un mismo caso con el test de antes y con el de ahora: solo puede cambiar lo que querias arreglar.
+d) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza los 4 casos que salian distintos y un caso de cada uno de los otros jobs que tenga entradas. Usa el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
+e) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
+f) Get-FileHash de cada test guardado y de su copia: coinciden. git status de los repos y los commits nuevos de rescate.
+
+
+PROMPT 21 (misma carpeta de siempre; en la ventana que acaba de hacer la tabla de los 7 jobs)
+
+Quedan dos diferencias reales y cuatro jobs cuyo caso sale igual que el vacio.
+1. El Excel con la fila de sumas: compara la hoja entera celda a celda, no solo la primera diferencia, y dime si el original escribe esas sumas en otra fila o columna, o no los escribe. Lee el codigo de los dos lados y haz que el migrado escriba lo mismo que el original: arreglalo en la carpeta de rescate, con un test unitario, y haz commit.
+2. El correo resumen: el original lo manda y el migrado no, y su tasklet registra una RuntimeException. Dame la linea del log y la traza. Si la causa esta en el codigo del migrado, arreglalo en rescate con su test unitario y commit. Si es una propiedad que en local no existe porque va en el configmap, dale en el test guardado del migrado el mismo valor que usa el original y dime su nombre.
+3. Los cuatro jobs cuyo caso sale igual que el vacio: para cada uno, dime que entradas lee y de donde (tabla SQL, fichero, base no SQL o servicio HTTP), con fichero:linea. Si se pueden dar con datos.sql o con ficheros\, anade a un caso de ese job las entradas minimas, inventadas, para que haga algo, y comprueba que sale distinto del vacio en los dos lados. Si vienen de una base no SQL o de un servicio, no lo fuerces: dime la coleccion o la URL y los campos que lee.
+
+Comprobacion final:
+a) Copia cada test guardado que hayas cambiado a su copia (el del original a la carpeta del original terminada en -prueba-local, el del migrado a la del migrado) y compila los dos lados.
+b) Caso vacio de TODOS los jobs, en los dos lados: estado.txt y ningun error.txt.
+c) Si cambias el test del original, lanza un mismo caso con el test de antes y con el de ahora: solo puede cambiar lo que querias arreglar.
+d) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza el mismo caso de cada job que en tu tabla anterior, y los casos que hayas tocado. Usa el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
+e) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
+f) Get-FileHash de cada test guardado y de su copia: coinciden. git status de los repos y los commits nuevos de rescate.
