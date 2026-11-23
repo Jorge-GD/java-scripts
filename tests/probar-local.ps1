@@ -4316,23 +4316,24 @@ Caso 'la-misma-con-el-campo-escrito' "ID;CORREOS;NOMBRE`n1;a@x;b@x;ana`n2;c@x;ma
 }
 
 $Pruebas['m50 (b) 9 casos con la misma causa (cambia un numero y el nombre del caso): un grupo, una cabecera, el detalle de 2 casos, grupos en prueba-local.json y grupo en cada caso'] = {
-  $e = Escenario-M50 'm50-b' ([ordered]@{ cargaJob = @(1..9 | ForEach-Object { 'importe=10.00' }) })
-  $r = Prueba-M50 $e 'numero:/caso-'
+  # Fallan los casos 4 a 12: si fallaran los tres primeros igual, el migrado se pararia (M80) y los demas saldrian sin probar
+  $e = Escenario-M50 'm50-b' ([ordered]@{ cargaJob = @(1..12 | ForEach-Object { 'importe=10.00' }) })
+  $r = Prueba-M50 $e 'numero:/caso-(0[4-9]|1[0-2])$'
   Igual 'sale con 2' 2 $r.Codigo
-  Igual 'los 9 casos salen distintos' (@(1..9 | ForEach-Object { 'distinto' }) -join ',') ((Resultados $e) -join ',')
-  Comprueba 'la consola: una sola cabecera, con los 9 casos y la causa del primero sin normalizar' ($r.Salida.Contains('Grupo 1: 9 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-01 (id 101)')) (Cola $r.Salida)
+  Igual 'los 9 casos salen distintos' (@(1..3 | ForEach-Object { 'igual' }) + @(1..9 | ForEach-Object { 'distinto' }) -join ',') ((Resultados $e) -join ',')
+  Comprueba 'la consola: una sola cabecera, con los 9 casos y la causa del primero sin normalizar' ($r.Salida.Contains('Grupo 1: 9 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-04 (id 104)')) (Cola $r.Salida)
   Igual 'y ningun grupo 2' 0 (Veces-M50 $r.Salida 'Grupo 2')
-  Comprueba 'la lista de casos, sin el y N mas (son menos de 10)' ($r.Salida.Contains('casos: cargaJob/caso-01, cargaJob/caso-02, cargaJob/caso-03, cargaJob/caso-04, cargaJob/caso-05, cargaJob/caso-06, cargaJob/caso-07, cargaJob/caso-08, cargaJob/caso-09') -and $r.Salida -match 'caso-09\r?\n') (Cola $r.Salida)
+  Comprueba 'la lista de casos, sin el y N mas (son menos de 10)' ($r.Salida.Contains('casos: cargaJob/caso-04, cargaJob/caso-05, cargaJob/caso-06, cargaJob/caso-07, cargaJob/caso-08, cargaJob/caso-09, cargaJob/caso-10, cargaJob/caso-11, cargaJob/caso-12') -and $r.Salida -match 'caso-12\r?\n') (Cola $r.Salida)
   Igual 'el detalle de 2 casos, no de los 9' 2 @([regex]::Matches($r.Salida, 'distinto: cargaJob/caso-\d\d \(')).Count
-  Comprueba 'que son los dos primeros' ($r.Salida.Contains('distinto: cargaJob/caso-01 (') -and $r.Salida.Contains('distinto: cargaJob/caso-02 (') -and -not $r.Salida.Contains('distinto: cargaJob/caso-03 (')) (Cola $r.Salida)
-  Comprueba 'cada uno con su fallo, en su linea (la cabecera no cuenta)' (@([regex]::Matches($r.Salida, '(?m)^\s+el migrado acaba FAILED: java\.lang\.IllegalStateException: no hay datos para caso-0[12] ')).Count -eq 2) (Cola $r.Salida)
+  Comprueba 'que son los dos primeros' ($r.Salida.Contains('distinto: cargaJob/caso-04 (') -and $r.Salida.Contains('distinto: cargaJob/caso-05 (') -and -not $r.Salida.Contains('distinto: cargaJob/caso-06 (')) (Cola $r.Salida)
+  Comprueba 'cada uno con su fallo, en su linea (la cabecera no cuenta)' (@([regex]::Matches($r.Salida, '(?m)^\s+el migrado acaba FAILED: java\.lang\.IllegalStateException: no hay datos para caso-0[45] ')).Count -eq 2) (Cola $r.Salida)
   $g = @(Grupos-M50 $e)
   Igual 'prueba-local.json lleva un grupo' 1 $g.Count
   Igual 'con numero, tipo y firma (la causa normalizada)' '1|fallo|fallo|FAILED|java.lang.IllegalStateException: no hay datos para <caso> (id <n>)' "$($g[0].numero)|$($g[0].tipo)|$($g[0].firma)"
-  Igual 'los 9 casos, job/caso' (@(1..9 | ForEach-Object { 'cargaJob/caso-0' + $_ }) -join ',') (@($g[0].casos) -join ',')
-  Igual 'la descripcion es la cabecera sin Grupo n' '9 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-01 (id 101)' "$($g[0].descripcion)"
+  Igual 'los 9 casos, job/caso' (@(4..12 | ForEach-Object { 'cargaJob/caso-{0:00}' -f $_ }) -join ',') (@($g[0].casos) -join ',')
+  Igual 'la descripcion es la cabecera sin Grupo n' '9 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-04 (id 104)' "$($g[0].descripcion)"
   Igual 'sin hechos (ni de dependencias ni de cambio con el test)' 0 @($g[0].hechos).Count
-  Igual 'cada caso lleva su grupo, el 1' '1,1,1,1,1,1,1,1,1' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
+  Igual 'cada caso lleva su grupo, el 1' ',,,1,1,1,1,1,1,1,1,1' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
 }
 
 $Pruebas['m50 (b2) un caso con un fallo y con diferencias de fichero va solo a su grupo de fallo'] = {
@@ -4353,7 +4354,7 @@ $Pruebas['m50 (b2) un caso con un fallo y con diferencias de fichero va solo a s
 
 $Pruebas['m50 (b3) dos causas de fallo y una de fichero: los grupos van primero los de fallo, y los de mas casos antes'] = {
   $e = Escenario-M50 'm50-b3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=10.00', 'importe=5.00', 'importe=5.00', 'importe=5.00', 'importe=5.00') })
-  $r = Prueba-M50 $e 'otra:/caso-0[123]$;numero:/caso-0[45]$'
+  $r = Prueba-M50 $e 'otra:/caso-0[135]$;numero:/caso-0[24]$'
   Igual 'sale con 2' 2 $r.Codigo
   $g = @(Grupos-M50 $e)
   Igual 'tres grupos' 3 $g.Count
@@ -4362,11 +4363,11 @@ $Pruebas['m50 (b3) dos causas de fallo y una de fichero: los grupos van primero 
   Igual 'el 3: fichero, 4 casos, aunque tiene mas casos que los de fallo' '3|fichero|4' "$($g[2].numero)|$($g[2].tipo)|$(@($g[2].casos).Count)"
   $s = $r.Salida
   $i1 = [regex]::Match($s, [regex]::Escape('Grupo 1: 3 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: sin correo')).Index
-  $i2 = [regex]::Match($s, [regex]::Escape('Grupo 2: 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-04 (id 104)')).Index
+  $i2 = [regex]::Match($s, [regex]::Escape('Grupo 2: 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalStateException: no hay datos para caso-02 (id 102)')).Index
   $i3 = [regex]::Match($s, [regex]::Escape('Grupo 3: 4 casos distintos, en ficheros/salida/resultado_')).Index
   Comprueba 'la consola los saca en ese orden, con la cabecera de cada uno' ($i1 -gt 0 -and $i2 -gt $i1 -and $i3 -gt $i2) "$i1 $i2 $i3 | $(Cola $s)"
   Comprueba 'el de fichero dice el fichero y el tipo' ($s -match 'Grupo 3: 4 casos distintos, en ficheros/salida/resultado_\d{8}\.txt: contenido\r?\n') (Cola $s)
-  Igual 'cada caso con su grupo' '1,1,1,2,2,3,3,3,3' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
+  Igual 'cada caso con su grupo' '1,2,1,2,1,3,3,3,3' ((@((Lee-Json $e.Json).casos | ForEach-Object { $_.grupo })) -join ',')
 }
 
 $Pruebas['m50 (b4) casos de fichero con las mismas diferencias: un grupo de fichero (con y N mas); un fichero que sobra y uno que falta, cada uno el suyo'] = {
@@ -6459,7 +6460,7 @@ $Pruebas['m68 (d1) el test del migrado se acepta en el ultimo intento con el avi
   Comprueba 'sin el consejo de -RehacerArnes' ($r.Salida -notmatch 'relanza con -RehacerArnes') (Cola $r.Salida)
 }
 
-$Pruebas['m68 (d2) sin ese rechazo (un test guardado de otro lanzamiento, que se usa con el aviso) se ejecutan los 5 casos y sale la linea de siempre, con -RehacerArnes'] = {
+$Pruebas['m68 (d2) sin ese rechazo (un test guardado de otro lanzamiento, que se usa con el aviso) se ejecutan 3 casos (los tres iguales paran el job, M80 b), no uno y sale la linea de siempre, con -RehacerArnes'] = {
   $e = Escenario-M68d 'm68-d2'
   $r = Prueba-M48 $e ''
   Igual 'la primera vez sale con 0' 0 $r.Codigo
@@ -6468,30 +6469,33 @@ $Pruebas['m68 (d2) sin ese rechazo (un test guardado de otro lanzamiento, que se
   $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'el test guardado se usa, con el aviso del caso vacio' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob \(estado=COMPLETED\) y con tu test el migrado no: BeanCreationException \(java\.lang\.IllegalStateException: sin correo\)\.') (Cola $r.Salida)
-  Igual 'el migrado ejecuta los 5 casos' 5 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
-  Igual 'los cinco salen distintos' 'distinto,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Igual 'el migrado ejecuta 3 casos: los tres primeros iguales lo paran (M80 b), no se queda en uno' 3 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Igual 'tres distintos y dos sin probar en local' 'distinto,distinto,distinto,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  Igual 'los otros dos, con el motivo de la parada de M80 (no el de M68)' $M80Motivo "$((Caso $e 'cargaJob' 'caso-05').motivo)"
   Comprueba 'la linea de siempre' ($r.Salida.Contains('El migrado no arranca el job cargaJob en ningun caso (BeanCreationException: java.lang.IllegalStateException: sin correo). Casi siempre es el test del migrado, no el codigo: relanza con -RehacerArnes.')) (Cola $r.Salida)
   Comprueba 'y ni rastro de la nueva' ($r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
 }
 
-$Pruebas['m68 (d3) si el primer caso acaba EXCEPCION con otra clase que la del caso vacio, no se salta ninguno: se ejecutan los 5 casos'] = {
+$Pruebas['m68 (d3) si el primer caso acaba EXCEPCION con otra clase que la del caso vacio, no se salta ninguno: se ejecutan 3 casos (los tres iguales paran el job, M80 b), no uno'] = {
   $e = Escenario-M68d 'm68-d3' -OtraClase
   $env:RESCATE_M68 = 'otra-clase'
   try { $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/' }
   finally { $env:RESCATE_M68 = '' }
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'el test se acepta con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
-  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
-  Igual 'ninguno sin probar' 0 @(Resultados $e | Where-Object { $_ -eq 'sin probar en local' }).Count
+  Igual 'el migrado ejecuta 3 casos: los tres primeros iguales lo paran (M80 b), no se queda en uno' 3 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'los otros dos, sin probar en local' 2 @(Resultados $e | Where-Object { $_ -eq 'sin probar en local' }).Count
+  Igual 'los otros dos, con el motivo de la parada de M80 (no el de M68)' $M80Motivo "$((Caso $e 'cargaJob' 'caso-05').motivo)"
 }
 
-$Pruebas['m68 (d4) un test que se acepta sin haberse rechazado por eso (con Intentos = 1 el primer intento es el ultimo) no recorta nada: se ejecutan los 5 casos y sale la linea de siempre'] = {
+$Pruebas['m68 (d4) un test que se acepta sin haberse rechazado por eso (con Intentos = 1 el primer intento es el ultimo) no se recorta a un caso: se ejecutan 3 (los tres iguales paran el job, M80 b) y sale la linea de siempre'] = {
   $e = Escenario-M48 'm68-d4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00', 'importe=50.00') }) @{ Intentos = 1 }
   $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'el test se acepta a la primera, con el aviso' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
-  Igual 'el migrado ejecuta los 5 casos' 5 (Casos-Mvn $e $e.CopiaMig).Count
-  Igual 'los cinco salen distintos' 'distinto,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
+  Igual 'el migrado ejecuta 3 casos: los tres primeros iguales lo paran (M80 b), no se queda en uno' 3 (Casos-Mvn $e $e.CopiaMig).Count
+  Igual 'tres distintos y dos sin probar en local' 'distinto,distinto,distinto,sin probar en local,sin probar en local' ((Resultados $e) -join ',')
+  Igual 'los otros dos, con el motivo de la parada de M80 (no el de M68)' $M80Motivo "$((Caso $e 'cargaJob' 'caso-05').motivo)"
   Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
 }
 
@@ -6504,7 +6508,7 @@ $Pruebas['m68 (d5) si el primer caso arranca, los demas se ejecutan aunque algun
   Igual 'el primero sale igual y los otros cuatro, distintos: ninguno sin probar' 'igual,distinto,distinto,distinto,distinto' ((Resultados $e) -join ',')
 }
 
-$Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo cortada tras un intento rechazado por eso (el motivo lo dice), se usa con el aviso y no recorta nada: se ejecutan los 5 casos y sale la linea de siempre'] = {
+$Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo cortada tras un intento rechazado por eso (el motivo lo dice), se usa con el aviso y no se recorta a un caso: se ejecutan 3 (los tres iguales paran el job, M80 b) y sale la linea de siempre'] = {
   $e = Escenario-M68d 'm68-d6'
   $r = Prueba-M48 $e ''
   Igual 'la primera vez sale con 0' 0 $r.Codigo
@@ -6517,7 +6521,8 @@ $Pruebas['m68 (d6) un test guardado de otro lanzamiento, cuya tarea quedo cortad
   $r = Prueba-M48 $e 'excepcion-mig:^cargaJob/'
   Igual 'sale con 2' 2 $r.Codigo
   Comprueba 'el test guardado se usa, con el aviso' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)' -and $r.Salida -match 'Con un caso vacio, el original arranca el job cargaJob') (Cola $r.Salida)
-  Igual 'el migrado ejecuta los 5 casos' 5 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Igual 'el migrado ejecuta 3 casos: los tres primeros iguales lo paran (M80 b), no se queda en uno' 3 ((Casos-Mvn $e $e.CopiaMig).Count - $antes)
+  Igual 'los otros dos, con el motivo de la parada de M80 (no el de M68)' $M80Motivo "$((Caso $e 'cargaJob' 'caso-05').motivo)"
   Comprueba 'la linea de siempre, sin la nueva' ($r.Salida -match 'en ningun caso \(BeanCreationException' -and $r.Salida -notmatch 'puede ser el codigo del migrado') (Cola $r.Salida)
 }
 
