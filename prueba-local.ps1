@@ -31,7 +31,10 @@ QUE HACE
      de prueba no crea las tablas del codigo) y, con el, el del migrado. Lo mismo, sin pedirlo, si el guardado se escribio con otra
      plantilla (tareas\arnes-local.md) que la de ahora, o con una de antes de que la tarea la apuntara. Si el del original se
      escribe otra vez (por eso, o porque ya no vale en este commit), tambien el del migrado, que traduce el nuevo; esto vale
-     tambien con -RehacerArnes. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
+     tambien con -RehacerArnes. Un test guardado que ya no vale en este commit y que ha cambiado el usuario (su hash no es el que la tarea apunto
+     al guardarlo, entradas.hashEscrito, o la tarea no apunta ninguno) no se escribe otra vez con la IA: el arranque para con 1, antes de llamar a
+     Copilot, con el motivo y como seguir (arreglarlo en prueba-local\arnes\<lado> y relanzar, o relanzar con -RehacerOriginal o -RehacerArnes, que
+     lo escriben otra vez aunque sea del usuario). Uno tal cual lo escribio la IA que ya no vale se escribe otra vez, como siempre. El primer intento de un test que se escribe otra vez lleva lo que fallo la otra vez: el ultimo
      motivo de su tarea de antes y, en el del original, las pistas de los casos que no se pudieron preparar y una linea por cada job (3 como
      mucho) cuyo caso vacio guardado no acabo COMPLETED, con su causa (Get-PrevioArnes): la de salidas\vacio\causas.json o, en uno guardado antes de M69, la del
      registro de Maven mas reciente del caso vacio del original (registros\mvn-<n>-arnes-original--caso-vacio.log), que se apunta al empezar (Save-Anterior); en el
