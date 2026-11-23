@@ -9102,5 +9102,74 @@ $Pruebas['m82 (a5) -Rapida: lo mismo en prueba-local-rapida.json, y prueba-local
   Comprueba 'no hay arnes-invalidado\' (-not (Test-Path -LiteralPath (Get-Ruta $e.Local 'arnes-invalidado')))
 }
 
+# ===================== M84: cambios sin commit en src o pom.xml =====================
+# La prueba copia el ultimo commit del original y de la rama que se prueba: lo que haya sin commit en su src\ o su pom.xml no llega
+# a la copia. Una corrida normal lo avisa (Aviso, sin parar), una vez por carpeta; lo de fuera de src\ y pom.xml no avisa.
+
+function Aviso-M84([string]$Dir, [string]$Head) { return "$Dir tiene cambios sin commit en src o pom.xml: la prueba usa su ultimo commit ($(Corto $Head)) y no los ve. Si son parte del arreglo, haz commit y vuelve a lanzar." }
+
+function Avisos-M84([string]$Salida) { return @([regex]::Matches($Salida, ' tiene cambios sin commit en src o pom\.xml')).Count }
+
+$Pruebas['m84 (a) un cambio sin commit en src\ del worktree de rescate: avisa con su carpeta y el sha de su HEAD, y la prueba sigue con el mismo codigo'] = {
+  $e = Nuevo-Escenario 'm84-a' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  $r = Prueba $e
+  Igual 'sin cambios sale con 0' 0 $r.Codigo
+  Igual 'y no avisa de nada' 0 (Avisos-M84 $r.Salida)
+  Escribe $e.Wt 'src/main/java/com/acme/nuevo/App.java' ((App 'com.acme.nuevo') + "// a medias`n")
+  $head = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e
+  Igual 'con el cambio sale con el mismo codigo (0)' 0 $r.Codigo
+  Comprueba 'avisa de la carpeta de rescate con el sha corto de su HEAD' ($r.Salida.Contains((Aviso-M84 $e.Wt $head))) (Cola $r.Salida)
+  Igual 'y solo avisa una vez' 1 (Avisos-M84 $r.Salida)
+  Comprueba 'no toca el cambio ni el HEAD' ((GitEn $e.Wt @('rev-parse', 'HEAD')) -eq $head -and (GitEn $e.Wt @('status', '--porcelain')) -match 'App\.java') (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m84 (b) cambios sin commit solo fuera de src\ y pom.xml (ficheros sueltos, un fichero ya en git cambiado): no avisa'] = {
+  $e = Nuevo-Escenario 'm84-b' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  Escribe $e.Wt 'apuntes.txt' "nota suelta`n"
+  Escribe $e.Wt 'regla.txt' "minimo=5.00`n# tocada`n"
+  Escribe $e.Legacy 'apuntes.txt' "nota suelta`n"
+  Escribe $e.Migrado 'migracion-batch-nuevo/nota.txt' "dentro de migracion-*`n"
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'no avisa de nada' 0 (Avisos-M84 $r.Salida)
+  Comprueba 'los cambios siguen sin commit' ((GitEn $e.Wt @('status', '--porcelain')) -match 'apuntes\.txt' -and (GitEn $e.Wt @('status', '--porcelain')) -match 'regla\.txt') (GitEn $e.Wt @('status', '--porcelain'))
+}
+
+$Pruebas['m84 (c) un cambio sin commit en el pom.xml del original: avisa con la carpeta del original y su sha, y no con la del migrado'] = {
+  $e = Nuevo-Escenario 'm84-c' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  Escribe $e.Legacy 'pom.xml' ((Pom 'batch-viejo') + "<!-- a medias -->`n")
+  $head = GitEn $e.Legacy @('rev-parse', 'HEAD')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'avisa de la carpeta del original con el sha corto de su HEAD' ($r.Salida.Contains((Aviso-M84 $e.Legacy $head))) (Cola $r.Salida)
+  Igual 'y solo avisa una vez' 1 (Avisos-M84 $r.Salida)
+  Comprueba 'no avisa del migrado' (-not $r.Salida.Contains("$($e.Wt) tiene cambios sin commit")) (Cola $r.Salida)
+}
+
+$Pruebas['m84 (d) cambios sin commit en el original (un fichero nuevo en src\) y en la rama de rescate (pom.xml): un aviso por carpeta, cada uno con su sha'] = {
+  $e = Nuevo-Escenario 'm84-d' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  Escribe $e.Legacy 'src/main/java/com/acme/viejo/Nuevo.java' "package com.acme.viejo;`n`npublic class Nuevo {`n}`n"
+  Escribe $e.Wt 'pom.xml' ((Pom 'batch-nuevo') + "<!-- a medias -->`n")
+  $headO = GitEn $e.Legacy @('rev-parse', 'HEAD')
+  $headM = GitEn $e.Wt @('rev-parse', 'HEAD')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'avisa del original' ($r.Salida.Contains((Aviso-M84 $e.Legacy $headO))) (Cola $r.Salida)
+  Comprueba 'avisa de la rama de rescate' ($r.Salida.Contains((Aviso-M84 $e.Wt $headM))) (Cola $r.Salida)
+  Igual 'dos avisos en total' 2 (Avisos-M84 $r.Salida)
+}
+
+$Pruebas['m84 (e) sin worktree de rescate: el aviso es de la carpeta del migrado'] = {
+  $e = Nuevo-Escenario 'm84-e' ([ordered]@{ cargaJob = @('importe=5.00', 'importe=10.00') })
+  [void](GitEn $e.Migrado @('worktree', 'remove', '--force', $e.Wt))
+  Escribe $e.Migrado 'src/main/java/com/acme/nuevo/App.java' ((App 'com.acme.nuevo') + "// a medias`n")
+  $head = GitEn $e.Migrado @('rev-parse', 'HEAD')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'avisa de la carpeta del migrado con el sha corto de su HEAD' ($r.Salida.Contains((Aviso-M84 $e.Migrado $head))) (Cola $r.Salida)
+  Igual 'y solo avisa una vez' 1 (Avisos-M84 $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
