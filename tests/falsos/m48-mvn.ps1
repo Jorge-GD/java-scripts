@@ -5,7 +5,7 @@
 #                       mismo contenido
 #   largo-fijo          como largo, sin la fecha en el nombre (de M48_LARGO letras en total, acaba en .log)
 #   largo-distinto      como largo, pero el migrado lo escribe con otro contenido
-#   sin-sitio           los dos lados: ficheros/<100 letras>/<100 letras>/dato.txt (la carpeta ya es tan larga que ni un nombre corto cabe)
+#   sin-sitio           los dos lados: <200 letras>/<100 letras>/dato.txt (la primera carpeta ya es tan larga que ni un nombre corto aplanado cabe)
 #   failed-mig          el migrado acaba estado=FAILED (el job corre y falla); Maven sale con 0 y escribe 'Caused by: java.lang.IllegalStateException: sin correo'
 #   excepcion-orig      el original no arranca: estado=EXCEPCION, salida=BadSqlGrammarException, sin error.txt; Maven sale con 0 y escribe
 #                       'Caused by: org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "T_X" not found'
@@ -53,7 +53,7 @@ if ($env:RESCATE_M48 -and $codigo -eq 0 -and $caso -and $caso -ne 'otro' -and (T
       [void](New-Item -ItemType Directory -Path (Split-Path $env:M48_OBSTACULO -Parent) -Force)
       [System.IO.File]::WriteAllText($env:M48_OBSTACULO, "no soy una carpeta`n")
     }
-    if ($guion -eq 'sin-sitio') { Escribe-Salida ('ficheros/' + ('a' * 100) + '/' + ('b' * 100) + '/dato.txt') "ok`n" }
+    if ($guion -eq 'sin-sitio') { Escribe-Salida (('a' * 200) + '/' + ('b' * 100) + '/dato.txt') "ok`n" }
     if ($guion -eq 'failed-mig' -and -not $original) {
       Escribe-Salida 'estado.txt' "estado=FAILED`nsalida=FAILED`n"
       'Caused by: java.lang.IllegalStateException: sin correo'
