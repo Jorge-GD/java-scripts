@@ -61,7 +61,8 @@ QUE HACE
      corrija las entradas) y despues lo acepta; igual con un caso hecho de antes cuya salida guardada del original dice eso.
      Si el caso no corre en el original porque su base no tiene una tabla o una columna (H2: Tabla "X" no encontrada), una tabla del codigo
      queda sin preparar y sin mas intentos (la IA no ve la base del test); una inventada o una columna se le dicen en el reintento.
-  4. Ejecuta, sin IA: el original dos veces y el migrado una (mvn test -Dtest=PruebaLocalTest, un job por llamada). El migrado se ejecuta
+  4. Ejecuta, sin IA: el original dos veces y el migrado una (un job y un caso por llamada de Maven: mvn surefire:test -Dtest=PruebaLocalTest, o
+     mvn test con MavenCasoDirecto en false). El migrado se ejecuta
      siempre; el original (y el original-2) de un caso, solo si ha cambiado algo de lo que entra en su ejecucion (la lista, en el comentario
      de 'EL ORIGINAL NO SE REPITE'): si no, se reutilizan sus salidas de otro lanzamiento y la consola dice cuantos casos son. El original se
      ejecuta con UTF-8, como en el servidor (sus Maven llevan JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8 y, con el, lo que ya hubiera). Para obligar a
@@ -70,9 +71,15 @@ QUE HACE
      que se ejecuta (el test y Spring Batch ya crean cosas en su base y H2 dice 'ya existe'; lo guardado en casos\ no cambia), y el original de un caso
      hecho de antes cuyo error.txt guardado dice que algo ya existe se ejecuta otra vez. Cada caso, en su Maven
      (una JVM nueva, como en produccion), va sin red (-o) y sin los plugins de MavenCasoRapido (checkstyle, enforcer...); si sin red Maven
-     no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red. De cada Maven
-     de un caso apunta los segundos del Maven y los del test en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade) y, al
-     acabar, dice cuanto es test y cuanto Maven.
+     no llega a ejecutar el test y su salida dice que es por la red (offline), se repite con red y esa copia sigue con red.
+     Con MavenCasoDirecto (por defecto) cada copia se compila una vez (mvn test-compile) y cada caso va con mvn surefire:test, sin el ciclo
+     de Maven (que repetia en cada caso validate, resources, compile y test-compile: mas de la mitad del tiempo de un caso): si cambia algo en
+     el src\ de la copia (fuera de la carpeta de los casos) o en su pom.xml, se compila otra vez antes del siguiente caso. Si un caso no llega
+     a ejecutarse asi (la salida de Maven con @{argLine}: se repite con -DargLine=), ese caso y los demas de esa copia van con mvn test, y la
+     consola lo dice una vez. No promete: un plugin del pom ligado a la fase test que no sea surefire no se ejecuta en el modo directo
+     (MavenCasoDirecto en false de ajustes.json lo deja todo con mvn test). De cada Maven de un caso apunta los segundos del Maven y los del
+     test, y su modo (directo o ciclo), en datos\prueba-local-tiempos.json (una fila por ejecucion, se anade; la compilacion de una copia es
+     otra fila, (compilar), y no entra en la media por caso) y, al acabar, dice cuanto es test y cuanto Maven, y cuantas veces y cuanto se compilo.
      En cuanto acaba el migrado de un caso, la consola dice una linea (Format-VeredictoCaso): 'caso-07: el migrado acaba EXCEPCION (<clase>: <causa>); el original, COMPLETED' o
      'caso-07: los dos acaban COMPLETED (la comparacion de ficheros, al final)' (sale de los estado.txt y de la causa de Maven; no adelanta la comparacion de ficheros). Si los
      3 primeros casos de un job ($CasosParaParar) acaban en el migrado FAILED o EXCEPCION con la misma causa (Get-FirmaFallo, como el original) y el original de ninguno falla con ella,
@@ -198,7 +205,12 @@ $Cfg += @{
   EsfuerzoReparar = 'high'
   SegundosReparar = 1800  # tope de una llamada que repara (-Reparar; las demas usan SegundosPorLlamada)
   MaxReparaciones = 8     # claves de diferencia que -Reparar prueba como mucho en un lanzamiento
-  # Propiedades que saltan plugins que no influyen en el test: Invoke-Job las pasa en cada caso (no en el test-compile, ni en el arnes ni en los
+  # Cada caso con 'mvn surefire:test' (solo el test, sobre lo que 'mvn test-compile' dejo compilado en la copia: Invoke-Compilar compila una vez por copia y por estado de su
+  # src\ y su pom.xml) en lugar de 'mvn test' (el ciclo entero: validate, generacion de codigo, resources, compile y test-compile en cada caso, mas de la mitad del tiempo).
+  # En false (en ajustes.json: "MavenCasoDirecto": false), cada caso con mvn test como antes. Lo que no promete: un plugin del pom ligado a la fase test que no sea surefire
+  # no se ejecuta en el modo directo.
+  MavenCasoDirecto = $true
+  # Propiedades que saltan plugins que no influyen en el test: Invoke-Job las pasa en cada caso y en el test-compile de la copia (no en el arnes ni en los
   # tests unitarios). Sin JaCoCo: su argLine lo usa surefire. Vacia la lista (en ajustes.json: "MavenCasoRapido": []) para no saltar ninguno.
   MavenCasoRapido = @('-Dcheckstyle.skip', '-Denforcer.skip', '-Dspotbugs.skip', '-Dpmd.skip', '-Dmaven.javadoc.skip', '-Dmaven.source.skip', '-Dmaven.gitcommitid.skip', '-Dlicense.skip')
   # Ficheros de la salida de un caso que no se comparan, en ninguno de los dos lados (Test-Ignorado): patrones como -like sobre el nombre del fichero. El framework nuevo
@@ -620,48 +632,153 @@ function Get-SegundosTest([string]$Dir, [DateTime]$Desde) {
 }
 
 # Un Maven de un caso de un job (con -o si $SinRed), cronometrado: apunta en $script:Tiempos una fila con los segundos de Maven y los de su test.
-function Invoke-MavenCaso([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [bool]$SinRed, [string]$Que) {
-  $a = @('test', '-Dtest=PruebaLocalTest', "-Dprueba.local.job=$Job", "-Dprueba.local.caso=$Caso") + @($Cfg.MavenCasoRapido | Where-Object { $_ })
+# $Modo: 'ciclo' (mvn test: el ciclo entero hasta el test), 'directo' (mvn surefire:test: solo el test, sobre lo compilado por Invoke-Compilar; con -DargLine= si la copia lo
+# necesita, ver Invoke-Job) o 'compilar' (el mvn test-compile de la copia que necesita el modo directo: su fila lleva caso '(compilar)', sin job ni segundosTest, y no entra en
+# la media por caso, Show-Tiempos). Cada fila lleva su modo: directo (tambien la de compilar) o ciclo.
+function Invoke-MavenCaso([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [bool]$SinRed, [string]$Que, [string]$Modo = 'ciclo') {
+  $rapido = @($Cfg.MavenCasoRapido | Where-Object { $_ })
+  if ($Modo -eq 'compilar') { $Job = ''; $Caso = '(compilar)'; $a = @('test-compile') + $rapido }
+  else {
+    $a = @('test', '-Dtest=PruebaLocalTest', "-Dprueba.local.job=$Job", "-Dprueba.local.caso=$Caso") + $rapido
+    if ($Modo -eq 'directo') {
+      $a[0] = 'surefire:test'
+      if ($script:ArgLineVacio.ContainsKey($Dir)) { $a += '-DargLine=' }
+    }
+  }
   if ($SinRed) { $a += '-o' }
   $lado = 'migrado'
   if ($EsOriginal) { $lado = 'original' }
+  $modoFila = 'directo'
+  if ($Modo -eq 'ciclo') { $modoFila = 'ciclo' }
   $desde = [DateTime]::UtcNow
   $cron = [System.Diagnostics.Stopwatch]::StartNew()
   $r = Invoke-Maven $Dir $EsOriginal $a $Que
   $segundos = [Math]::Round($cron.Elapsed.TotalSeconds, 1)
-  $script:Tiempos += [pscustomobject][ordered]@{ lado = $lado; job = $Job; caso = $Caso; segundosMaven = $segundos; segundosTest = (Get-SegundosTest $Dir $desde); offline = $SinRed; cuando = (Get-Date).ToString('s') }
+  $segundosTest = $null
+  if ($Modo -ne 'compilar') {
+    $segundosTest = Get-SegundosTest $Dir $desde
+    # Informe: surefire escribio el informe de PruebaLocalTest desde que empezo este Maven, es decir, el test llego a ejecutarse (Invoke-Job lo usa en el modo directo).
+    Add-Member -InputObject $r -NotePropertyName Informe -NotePropertyValue ($null -ne $segundosTest) -Force
+  }
+  $script:Tiempos += [pscustomobject][ordered]@{ lado = $lado; job = $Job; caso = $Caso; modo = $modoFila; segundosMaven = $segundos; segundosTest = $segundosTest; offline = $SinRed; cuando = (Get-Date).ToString('s') }
   return $r
+}
+
+# La huella del estado de $Dir que decide si lo compilado vale (Invoke-Compilar): la ruta, el tamano y la fecha de modificacion (LastWriteTimeUtc) de todo lo que hay en src\ salvo la
+# carpeta de los casos ($Casos: el caso lee sus entradas por el sistema de ficheros, no del classpath, y Edit-DatosSql o un caso nuevo no cambian lo compilado) y del pom.xml, en un
+# hash. Un test que se instala otra vez cambia la huella aunque su fecha sea mas vieja (otro fichero con la misma ruta y otra fecha o tamano).
+function Get-HuellaCopia([string]$Dir) {
+  $ficheros = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+  $pom = Join-Path $Dir 'pom.xml'
+  if (Test-Path -LiteralPath $pom -PathType Leaf) { $ficheros.Add((New-Object System.IO.FileInfo $pom)) }
+  $pila = New-Object System.Collections.Generic.Stack[System.IO.DirectoryInfo]
+  $src = Join-Path $Dir 'src'
+  if (Test-Path -LiteralPath $src) { $pila.Push((New-Object System.IO.DirectoryInfo $src)) }
+  while ($pila.Count -gt 0) {
+    $d = $pila.Pop()
+    foreach ($sub in $d.GetDirectories()) { if ((Get-Rel $Dir $sub.FullName) -cne $Casos) { $pila.Push($sub) } }
+    $ficheros.AddRange($d.GetFiles())
+  }
+  $l = @($ficheros | ForEach-Object { (Get-Rel $Dir $_.FullName) + '|' + $_.Length + '|' + $_.LastWriteTimeUtc.Ticks })
+  return (Get-Hash256 ($Utf8.GetBytes((Sort-Ordinal $l) -join "`n")))
+}
+
+# Compila la copia $Dir (mvn test-compile, con las propiedades de MavenCasoRapido y -o como los casos) si lo compilado no es su estado de ahora: $script:Compilada guarda, por copia,
+# la huella (Get-HuellaCopia) con la que se compilo por ultima vez, y no depende del orden del flujo (un test que el arnes o -Reparar escriben, -Desde en otro commit...): lo que
+# cambie en src\ o en el pom.xml se compila otra vez antes del siguiente caso. Si sin red Maven no compila y su salida dice que es por la red (Test-FalloSinRed), otra vez con red y
+# esa copia sigue con red (como en Invoke-Job). Devuelve $null si la copia queda compilada, o el Maven que ha fallado (un error de compilacion, el tope): el caso sale como saldria con
+# mvn test, y la copia no queda como compilada.
+# Solo cuando compila de verdad, y justo antes del test-compile, borra target\classes, target\test-classes y target\maven-status de la copia (nada mas de target: ni
+# target\prueba-local ni los informes de surefire): Copy-Fichero conserva la fecha de un fichero (Copy-Item en Windows), asi que un test guardado con fecha vieja que se copia
+# encima de otro ya compilado cambia la huella, pero el maven-compiler-plugin solo recompila una fuente mas nueva que su .class y dejaria la clase de antes: se ejecutaria un
+# test que no es el que hay en src\ sin que nadie lo viera. Sin las clases ni el estado del compilador, Maven lo compila todo.
+function Invoke-Compilar([string]$Dir, [bool]$EsOriginal, [string]$Que) {
+  $huella = Get-HuellaCopia $Dir
+  if ($script:Compilada[$Dir] -ceq $huella) { return $null }
+  foreach ($c in @('target/classes', 'target/test-classes', 'target/maven-status')) { Remove-Carpeta (Join-Ruta $Dir $c) }
+  $sinRed = -not $script:ConRed.ContainsKey($Dir)
+  $r = Invoke-MavenCaso $Dir $EsOriginal '' '' $sinRed $Que 'compilar'
+  if ($sinRed -and $r.Codigo -ne 0 -and -not $r.Tope -and (Test-FalloSinRed $r)) {
+    Info 'Sin red Maven no ha podido compilar: repito con red y sigo con red en esta copia.'
+    $r = Invoke-MavenCaso $Dir $EsOriginal '' '' $false $Que 'compilar'
+    if ($r.Codigo -eq 0) { $script:ConRed[$Dir] = $true }
+  }
+  if ($r.Codigo -ne 0 -or $r.Tope) {
+    $script:Compilada.Remove($Dir)
+    return $r
+  }
+  $script:Compilada[$Dir] = $huella
+  return $null
 }
 
 # Ha llegado Maven a ejecutar el test del caso? Si, si ha dejado su estado.txt (aunque el job acabe FAILED) o su error.txt.
 function Test-CasoEjecutado([string]$Sal) { return ((Test-Path -LiteralPath (Join-Path $Sal 'estado.txt')) -or (Test-Path -LiteralPath (Join-Path $Sal 'error.txt'))) }
+
+# Ha llegado el surefire:test del caso a ejecutar el test? Si Maven se paro por el tope (colgado: no se repite), si surefire escribio el informe de PruebaLocalTest desde que empezo
+# ese Maven ($R.Informe, Invoke-MavenCaso) o si el caso dejo su estado.txt o su error.txt. Sin ninguna de las tres cosas el test no corrio (la JVM no arranco, no hay nada que ejecutar).
+function Test-DirectoEjecutado($R, [string]$Sal) { return [bool]($R.Tope -or $R.Informe -or (Test-CasoEjecutado $Sal)) }
 
 # Dice la salida de Maven que ha fallado por estar sin red (-o)? Lo dice con 'Cannot access <repo> in offline mode and the artifact ... has not
 # been downloaded from it before' o con 'The repository system is offline but the artifact ... is not available'. Sin esa palabra el fallo es
 # otro (por ejemplo, el contexto de Spring no arranca: el arnes solo deja error.txt si el caso no se puede preparar) y repetir con red no lo arregla.
 function Test-FalloSinRed($Maven) { return (@($Maven.Salida | Where-Object { $_ -match '(?i)\boffline\b' }).Count -gt 0) }
 
+# Un caso en $Modo (Invoke-MavenCaso) con -o si la copia sigue sin red. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
+# una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se repite; tampoco uno parado por el tope de
+# Maven (colgado, no por la red).
+function Invoke-CasoConRed([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que, [string]$Modo) {
+  $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
+  $sinRed = -not $script:ConRed.ContainsKey($Dir)
+  $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que $Modo
+  if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
+    Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
+    Remove-Carpeta $sal
+    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que $Modo
+    if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+  }
+  return $r
+}
+
 # Ejecuta en una copia un caso de un job (con su salida anterior borrada), en su propio Maven: cada caso en una JVM
 # nueva, como cada ejecucion en produccion. En la misma JVM, lo que el batch deja en campos static (un fichero abierto,
 # un contador) pasaria de un caso al siguiente. Va sin red (-o: no mira los repositorios remotos) y sin los plugins de
-# $Cfg.MavenCasoRapido. Si sin red Maven no llega a ejecutar el test y su salida dice que es por la red (Test-FalloSinRed), se repite
-# una vez con red y, si asi si llega, esa copia sigue con red el resto del lanzamiento. Un caso que ya dejo estado.txt o error.txt no se
-# repite; tampoco uno parado por el tope de Maven (colgado, no por la red).
+# $Cfg.MavenCasoRapido (Invoke-CasoConRed).
+# Con $Cfg.MavenCasoDirecto (por defecto), el caso va con mvn surefire:test, sin el ciclo de Maven, sobre lo que Invoke-Compilar ha dejado compilado en la copia. Si el caso no
+# llega a ejecutarse (Test-DirectoEjecutado: ni informe de surefire de PruebaLocalTest, ni estado.txt, ni error.txt, ni tope de Maven, ni fallo por la red): si la salida de Maven
+# lleva @{argLine} (surefire lo deja sin sustituir cuando la propiedad argLine no existe, como con JaCoCo sin prepare-agent, y la JVM no arranca: no hay informe), una vez mas con
+# -DargLine= (la propiedad no existia: no se pierde nada) y la copia sigue con -DargLine= ($script:ArgLineVacio); si sigue sin ejecutarse, ese caso va con mvn test como siempre y
+# esa copia sigue con mvn test el resto del lanzamiento ($script:ConCiclo), con una Info una sola vez. Si hay informe, el test se ejecuto (un contexto de Spring del migrado que no
+# arranca deja el informe y ni estado.txt ni error.txt): el resultado vale tal cual, con mvn test saldria lo mismo, y la copia sigue en directo. Un test-compile que falla
+# (Invoke-Compilar) es el resultado del caso: mvn test fallaria igual.
 # Mientras Maven ejecuta el caso, su datos.sql lleva IF NOT EXISTS en cada CREATE y ADD que lo acepta (Edit-DatosSql); al acabar queda como estaba.
 function Invoke-Job([string]$Dir, [bool]$EsOriginal, [string]$Job, [string]$Caso, [string]$Que) {
   $sal = Join-Ruta $Dir "target/prueba-local/$Job/$Caso"
   Remove-Carpeta $sal
-  $sinRed = -not $script:ConRed.ContainsKey($Dir)
   $sql = Join-Ruta $Dir "$Casos/$Job/$Caso/datos.sql"
   $bytes = Edit-DatosSql $sql
   try {
-    $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $sinRed $Que
-    if ($sinRed -and -not $r.Tope -and -not (Test-CasoEjecutado $sal) -and (Test-FalloSinRed $r)) {
-      Info 'Sin red Maven no ha podido: repito el caso con red y sigo con red en esta copia.'
-      Remove-Carpeta $sal
-      $r = Invoke-MavenCaso $Dir $EsOriginal $Job $Caso $false $Que
-      if (Test-CasoEjecutado $sal) { $script:ConRed[$Dir] = $true }
+    $r = $null
+    if ([bool]$Cfg.MavenCasoDirecto -and -not $script:ConCiclo.ContainsKey($Dir)) {
+      $r = Invoke-Compilar $Dir $EsOriginal 'compilar para los casos'
+      if ($null -eq $r) {
+        $r = Invoke-CasoConRed $Dir $EsOriginal $Job $Caso $Que 'directo'
+        if (-not (Test-DirectoEjecutado $r $sal) -and -not $script:ArgLineVacio.ContainsKey($Dir) -and @($r.Salida | Where-Object { ([string]$_).Contains('@{argLine}') }).Count -gt 0) {
+          $script:ArgLineVacio[$Dir] = $true
+          Remove-Carpeta $sal
+          $r = Invoke-CasoConRed $Dir $EsOriginal $Job $Caso $Que 'directo'
+        }
+        if (-not (Test-DirectoEjecutado $r $sal)) {
+          $script:ConCiclo[$Dir] = $true
+          $linea = [string](@((Get-FalloMaven $r) -split "`n") | Where-Object { $_.Trim() } | Select-Object -First 1)
+          if (-not $linea) { $linea = 'sin mensaje de Maven' }
+          if ($linea.Length -gt 200) { $linea = $linea.Substring(0, 200) }
+          Info "En $(Split-Path $Dir -Leaf) no puedo ejecutar los casos sin el ciclo de Maven ($linea): sigo con mvn test, mas lento."
+          Remove-Carpeta $sal
+          $r = $null
+        }
+      }
     }
+    if ($null -eq $r) { $r = Invoke-CasoConRed $Dir $EsOriginal $Job $Caso $Que 'ciclo' }
   }
   finally { if ($null -ne $bytes) { [System.IO.File]::WriteAllBytes($sql, $bytes) } }
   return $r
@@ -729,12 +846,20 @@ function Save-Tiempos {
 }
 
 # De las ejecuciones de este lanzamiento que tienen segundosTest: lo que tarda Maven por caso y cuanto de eso es el test.
+# La compilacion de las copias (modo directo, caso '(compilar)') no entra en la media por caso: va aparte, 'Compilar: <veces>, <segundos>'.
 function Show-Tiempos {
-  $f = @($script:Tiempos | Where-Object { $null -ne $_.segundosTest })
+  $f = @($script:Tiempos | Where-Object { $_.caso -ne '(compilar)' -and $null -ne $_.segundosTest })
   if ($f.Count -eq 0) { return }
   $maven = ($f | Measure-Object -Property segundosMaven -Average).Average
   $test = ($f | Measure-Object -Property segundosTest -Average).Average
-  Info ("Maven por caso: $([Math]::Round($maven, 1)) s de media; el test $([Math]::Round($test, 1)) s y Maven $([Math]::Round($maven - $test, 1)) s (arranque, plugins y red). Detalle: " + (Join-Path $DatosMig 'prueba-local-tiempos.json'))
+  $compilar = ''
+  $c = @($script:Tiempos | Where-Object { $_.caso -eq '(compilar)' })
+  if ($c.Count -gt 0) {
+    $veces = 'veces'
+    if ($c.Count -eq 1) { $veces = 'vez' }
+    $compilar = " Compilar: $($c.Count) $veces, $([Math]::Round(($c | Measure-Object -Property segundosMaven -Sum).Sum, 1)) s."
+  }
+  Info ("Maven por caso: $([Math]::Round($maven, 1)) s de media; el test $([Math]::Round($test, 1)) s y Maven $([Math]::Round($maven - $test, 1)) s (arranque, plugins y red).$compilar Detalle: " + (Join-Path $DatosMig 'prueba-local-tiempos.json'))
 }
 
 # Por que un caso no ha dejado estado.txt en $Sal: su error.txt o, si no hay, el error de Maven.
@@ -2333,6 +2458,8 @@ function Invoke-Migrado([string]$Nombre, $Listas) {
 #  - que falte lo guardado: la carpeta del caso en salidas\original o en salidas\original-2, o su estado.txt (borrar prueba-local\salidas lo repite
 #    todo), o que el original dejara estado=EXCEPCION y el caso vuelva a pendiente (Reset-CasosExcepcion).
 # NO lleva, y no se ve: ~/.m2/settings.xml, los jar de ~/.m2 (un SNAPSHOT que cambia) ni lo que hay fuera (base de datos, SFTP, correo: simulado).
+# NO lleva $Cfg.MavenCasoDirecto: con mvn surefire:test (sobre lo que Invoke-Compilar compilo con el mismo codigo, pom.xml y propiedades de MavenCasoRapido) corre la
+# misma clase PruebaLocalTest, con las mismas entradas y en una JVM nueva por caso, que con mvn test; las salidas guardadas con el ciclo entero siguen valiendo.
 # Un original que no llega a dejar estado.txt, o que se pasa del tope de Maven, o con un fichero que no se pudo guardar en salidas (Copy-Salida), no
 # se guarda: se ejecuta en el siguiente lanzamiento. Con cada original se guarda la causa de su Maven (la de un job que no arranca o que falla: Get-CausaLado).
 # $VersionSalidas (la version del formato de lo que se guarda en salidas) y la longitud de la ruta de prueba-local (cambia los nombres de Get-RelSalida)
@@ -4074,7 +4201,10 @@ $script:ParadaMigrado = @{}   # por job: el fallo del primero de los casos (Get-
 $script:SinProbar = @{}   # por (lado|job|caso): el motivo de un caso que no se ha ejecutado porque su job no arranca con ese test (Invoke-Salidas)
 $script:AvisoCarpetaCorta = $false   # la sugerencia de una carpeta mas corta sale una sola vez
 $script:ConRed = @{}    # las copias que ya han hecho un caso con red porque sin ella Maven no llegaba al test: siguen con red (Invoke-Job)
-$script:Tiempos = @()   # una fila por Maven de un caso en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
+$script:Tiempos = @()   # una fila por Maven de un caso (y por test-compile de una copia) en este lanzamiento (Invoke-MavenCaso); Save-Tiempos las guarda
+$script:Compilada = @{}   # por copia: la huella de su src\ y su pom.xml con la que se compilo por ultima vez para los casos en modo directo (Invoke-Compilar)
+$script:ConCiclo = @{}   # las copias donde un caso no se pudo ejecutar con surefire:test: siguen con mvn test el resto del lanzamiento (Invoke-Job)
+$script:ArgLineVacio = @{}   # las copias donde surefire:test dejo @{argLine} sin sustituir: sus casos van con -DargLine= (Invoke-Job)
 $script:InventarioOrig = $null   # las tablas que usa el codigo del original (Get-TablasBatch), la primera vez que hacen falta (Get-MotivoBase)
 $script:SitiosColumna = @{}   # por (copia|COLUMNA): el sitio donde el codigo la nombra o '' (Get-SitioColumna)
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
