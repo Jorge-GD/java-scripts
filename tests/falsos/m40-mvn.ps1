@@ -1,6 +1,7 @@
 # m40-mvn.ps1 - Maven de mentira para los tests m40 de tests/probar-local.ps1. Hace lo de mvn-local.ps1 y, ademas:
 #  - Base de prueba: si el PruebaLocalTest.java de la copia lleva la linea '// BASE_TABLAS=T_A,T_B', cada salida de un caso (tambien la del
-#    caso vacio) lleva tablas/T_A.csv y tablas/T_B.csv con la cabecera 'ID;NOMBRE' (lo que dejaria el arnes de verdad con esa base).
+#    caso vacio) lleva tablas/T_A.csv y tablas/T_B.csv con la cabecera 'ID;NOMBRE' (lo que dejaria el arnes de verdad con esa base). Una tabla puede traer sus
+#    columnas: 'T_A~ID~CORREO' deja la cabecera 'ID;CORREO' y 'T_A~' un .csv sin cabecera.
 #  - RESCATE_M40 trae guiones ('guion=valor:regex' o 'guion:regex', separados por ';'; la regex, sobre 'job/caso'; gana el primero). Cada caso
 #    que ejecuta (-Dprueba.local.job y -Dprueba.local.caso, menos vacio y otro) hace, segun el guion y el lado (batch-viejo = original):
 #   falta-tabla=T_A      original, solo la primera vez que se ejecuta el caso: el test no llega a preparar el caso (sin estado.txt) y su
@@ -31,10 +32,13 @@ if ($test.Count -gt 0 -and (Test-Path -LiteralPath $base)) {
   if ($m.Success) {
     foreach ($d in @(Get-ChildItem -LiteralPath $base -Directory | ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Directory })) {
       foreach ($t in ($m.Groups[1].Value -split ',')) {
-        $f = Join-Path (Join-Path $d.FullName 'tablas') ($t + '.csv')
+        $nombre, $columnas = ($t -split '~', 2)
+        $cabecera = 'ID;NOMBRE'
+        if ($null -ne $columnas) { $cabecera = $columnas.Replace('~', ';') }
+        $f = Join-Path (Join-Path $d.FullName 'tablas') ($nombre + '.csv')
         if (-not (Test-Path -LiteralPath $f)) {
           [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force)
-          [System.IO.File]::WriteAllText($f, "ID;NOMBRE`n")
+          [System.IO.File]::WriteAllText($f, "$cabecera`n")
         }
       }
     }

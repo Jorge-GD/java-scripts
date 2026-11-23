@@ -9171,5 +9171,79 @@ $Pruebas['m84 (e) sin worktree de rescate: el aviso es de la carpeta del migrado
   Igual 'y solo avisa una vez' 1 (Avisos-M84 $r.Salida)
 }
 
+# ===================== M85: las tablas que tienen los dos tests tienen las mismas columnas =====================
+# Estos escenarios usan los de m68 (el Copilot de m40 y el Maven de m68). 'tablas=<n>/<T_A~ID~CORREO,T_B>:<id>' de m40-copilot.ps1 deja las columnas de cada tabla tras un '~'
+# (m40-mvn.ps1: la cabecera de su .csv en el caso vacio de ese lado; sin '~', 'ID;NOMBRE'; 'T_A~' sin cabecera). Se compara el conjunto de columnas, sin mayusculas ni orden.
+
+$MotivoColumnas85 = 'En tu test estas tablas tienen otras columnas que en el test del original: CLIENTES (original: ID, NOMBRE; tu test: ID, CORREO). Usa las mismas columnas que en el test del original.'
+
+$Pruebas['m85 (a) el migrado deja CLIENTES con otras columnas que el original: el primer intento se rechaza con el motivo y las dos listas, y el segundo, que las iguala, se acepta'] = {
+  $e = Escenario-M68 'm85-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CLIENTES~ID~NOMBRE:arnes-original;tablas=2/CLIENTES~ID~NOMBRE:arnes-migrado;tablas=1/CLIENTES~ID~CORREO:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'la consola rechaza el primer intento del migrado con el motivo' ($r.Salida.Contains("Arnes del migrado rechazado: $MotivoColumnas85")) (Cola $r.Salida)
+  Igual 'hay dos llamadas del migrado' 2 (Llamadas-Arnes $e 'migrado').Count
+  Comprueba 'el reintento recibe el motivo entero' ((Registro-Arnes $e 'migrado' 2).Contains($MotivoColumnas85)) (Cola (Registro-Arnes $e 'migrado' 2))
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'el segundo se acepta sin aviso de columnas' ($r.Salida -match 'Arnes del migrado: bien\.' -and $r.Salida -notmatch 'tiene otras columnas que la del test del original') (Cola $r.Salida)
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m85 (b) en el ultimo intento, y con un test guardado, el migrado con otras columnas se acepta con un aviso (una vez) y los casos se ejecutan, distintos'] = {
+  $e = Escenario-M68 'm85-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CLIENTES~ID~NOMBRE:arnes-original;tablas=1/CLIENTES~ID~CORREO:arnes-migrado'
+  $aviso = 'La base de tu test tiene otras columnas que la del test del original en estas tablas: CLIENTES (original: ID, NOMBRE; tu test: ID, CORREO). Los casos que las usen saldran distintos. Igualalas en tu test guardado'
+  Igual 'sale con 2: el caso es distinto' 2 $r.Codigo
+  Igual 'el primer intento se rechaza' 1 @([regex]::Matches($r.Salida, [regex]::Escape("Arnes del migrado rechazado: $MotivoColumnas85"))).Count
+  Comprueba 'el ultimo se acepta' ($r.Salida -match 'Arnes del migrado: bien\.') (Cola $r.Salida)
+  Igual 'con el aviso, una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Igual 'la tarea queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Igual 'el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+  $n = @(Llamadas $e).Count
+  Cambia-Huella $e 'migrado'
+  $r = Prueba-M68 $e '' 'tablas=1/CLIENTES~ID~NOMBRE:arnes-original;tablas=1/CLIENTES~ID~CORREO:arnes-migrado'
+  Igual 'con el test guardado sale con 2' 2 $r.Codigo
+  Igual 'sin llamadas a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'dice que el test de otro lanzamiento sigue valiendo' ($r.Salida -match 'Arnes del migrado: bien \(el test de otro lanzamiento sigue valiendo\)') (Cola $r.Salida)
+  Igual 'y avisa de las columnas, una vez' 1 @([regex]::Matches($r.Salida, [regex]::Escape($aviso))).Count
+  Igual 'los casos se ejecutan: el caso sale distinto' 'distinto' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m85 (c) las mismas columnas en otro orden y en minusculas no cuentan: el migrado se acepta a la primera, sin rechazo ni aviso'] = {
+  $e = Escenario-M68 'm85-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CLIENTES~ID~Nombre~CORREO:arnes-original;tablas=1/clientes~correo~nombre~id:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de columnas' ($r.Salida -notmatch 'otras columnas') (Cola $r.Salida)
+}
+
+$Pruebas['m85 (d1) no cuentan una tabla solo del migrado, una sin cabecera en un lado ni las de Spring Batch y Spring Cloud Task con otras columnas: el migrado se acepta a la primera'] = {
+  $e = Escenario-M68 'm85-d1' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CLIENTES~ID~NOMBRE,PEDIDOS~ID~TOTAL,BATCH_JOB_INSTANCE~JOB_ID~X,task_execution~ID~Y:arnes-original;tablas=1/CLIENTES~ID~NOMBRE,PEDIDOS~,BATCH_JOB_INSTANCE~ID~Z,task_execution~ID~W,EXTRA~ID~Q:arnes-migrado'
+  Comprueba 'el original deja PEDIDOS con su cabecera (el migrado, sin ella: no hay con que comparar)' ((Lee $e.Local 'salidas/vacio/cargaJob/tablas/PEDIDOS.csv') -match 'ID;TOTAL') ''
+  Igual 'la tarea del migrado queda hecha a la primera' 'hecha:1' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+  Comprueba 'sin rechazo ni aviso de columnas' ($r.Salida -notmatch 'otras columnas') (Cola $r.Salida)
+}
+
+$Pruebas['m85 (d2) una tabla del original que el migrado no tiene se rechaza por la puerta de las tablas y no por la de las columnas'] = {
+  $e = Escenario-M68 'm85-d2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M68 $e '' 'tablas=1/CLIENTES~ID~NOMBRE,PEDIDOS~ID~TOTAL:arnes-original;tablas=2/CLIENTES~ID~NOMBRE,PEDIDOS~ID~TOTAL:arnes-migrado;tablas=1/CLIENTES~ID~NOMBRE:arnes-migrado'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'rechaza el primer intento por las tablas' ($r.Salida.Contains('Arnes del migrado rechazado: La base de tu test no tiene estas tablas que si tiene la del test del original: PEDIDOS.')) (Cola $r.Salida)
+  Comprueba 'sin rechazo ni aviso de columnas' ($r.Salida -notmatch 'otras columnas') (Cola $r.Salida)
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+}
+
+$Pruebas['m85 (e) con cinco tablas con otras columnas en dos jobs: cada tabla sale una vez, por orden de nombre, con detalle las tres primeras y las demas con y N mas'] = {
+  $e = Escenario-M68 'm85-e' ([ordered]@{ cargaJob = @('importe=10.00'); otroJob = @('importe=20.00') })
+  $orig = 'T_1~ID~A,T_2~ID~A,T_3~ID~A,T_4~ID~A,T_5~ID~A'
+  $r = Prueba-M68 $e '' "tablas=1/${orig}:arnes-original;tablas=2/${orig}:arnes-migrado;tablas=1/T_5~ID~B,T_4~ID~B,T_3~ID~B,T_2~ID~B,T_1~ID~A~B:arnes-migrado"
+  Igual 'sale con 0' 0 $r.Codigo
+  $motivo = 'En tu test estas tablas tienen otras columnas que en el test del original: T_1 (original: ID, A; tu test: ID, A, B), T_2 (original: ID, A; tu test: ID, B), T_3 (original: ID, A; tu test: ID, B) y 2 mas. Usa las mismas columnas que en el test del original.'
+  Comprueba 'la consola rechaza el primer intento con las tres primeras y y 2 mas' ($r.Salida.Contains("Arnes del migrado rechazado: $motivo")) (Cola $r.Salida)
+  Igual 'cada tabla una vez en el motivo' 1 @([regex]::Matches((Registro-Arnes $e 'migrado' 2), 'T_1 \(original')).Count
+  Igual 'la tarea del migrado queda hecha, con dos intentos' 'hecha:2' "$((Tarea-Arnes $e 'migrado').estado):$((Tarea-Arnes $e 'migrado').intentos)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
