@@ -8301,7 +8301,7 @@ function Hashes-Carpeta-M78($E, [string]$Rel) {
 
 # El job sale bien una vez (los dos arneses quedan guardados), el usuario retoca los dos tests a mano para que ya no pasen las entradas (la marca de m20b-mvn.ps1) y se
 # relanza: ningun caso deja nada distinto del caso vacio y Stop-Vacios invalida los dos. $Antes es lo que habia en arnes\<lado> (hash de cada fichero) justo antes del relanzamiento.
-function Invalida-M78([string]$Nombre, [scriptblock]$Entre = {}) {
+function Invalida-M78([string]$Nombre, [scriptblock]$Entre = {}, [string[]]$A = @()) {
   $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') })
   Ajustes-M20b $e
   $r = Prueba $e
@@ -8310,7 +8310,7 @@ function Invalida-M78([string]$Nombre, [scriptblock]$Entre = {}) {
   $antes = @{}
   foreach ($lado in @('original', 'migrado')) { $antes[$lado] = Hashes-Carpeta-M78 $e "arnes/$lado" }
   & $Entre $e
-  $r = Prueba $e
+  $r = Prueba $e $A
   return [pscustomobject]@{ e = $e; antes = $antes; r = $r }
 }
 
@@ -8518,6 +8518,74 @@ $Pruebas['m80 (b3) fallos distintos en los casos 1-3, solo 2 iguales y el tercer
   Comprueba 'ningun caso sale sin probar' (@(Resultados $e | Where-Object { $_ -ceq 'sin probar en local' }).Count -eq 0) ((Resultados $e) -join ',')
   Comprueba 'la consola no dice que el migrado falla igual ni que deja de ejecutar casos' ($r.Salida -notmatch 'El migrado falla igual en los|no ejecuto sus demas casos') (Cola $r.Salida)
   Comprueba 'y el json no lleva falloIgual del migrado en cargaJob ni en remesaJob' (@((Lee-Json $e.Json).jobs | Where-Object { $_.job -ne 'tarifaJob' -and $_.falloIgual.lado -eq 'migrado' }).Count -eq 0) ''
+}
+
+$Pruebas['m80 (c1) -Rapida: de 2 jobs con 4 casos, solo el primer caso de cada uno en el migrado; no escribe prueba-local.json (hash igual) y deja prueba-local-rapida.json; la linea final; el original que guarda se reutiliza despues'] = {
+  $e = Nuevo-Escenario 'm80-c1' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00'); remesaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00') })
+  $rapida = Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'
+  $r = Prueba $e @('-Rapida')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'cargaJob: el migrado ejecuta solo caso-01' 'caso-01' (Casos-M77 $e 'migrado' 'cargaJob')
+  Igual 'remesaJob: igual' 'caso-01' (Casos-M77 $e 'migrado' 'remesaJob')
+  Comprueba 'la linea de la prueba rapida, con los casos y el aviso de -Cierre' ($r.Salida.Contains('Prueba rapida: 2 casos de 8. No vale para -Cierre: cuando salga igual, lanza sin -Rapida.')) (Cola $r.Salida)
+  Comprueba 'la tabla: 1 caso por job' ($r.Salida -match 'cargaJob\s+1\s+1\s+0\s+0' -and $r.Salida -match 'remesaJob\s+1\s+1\s+0\s+0') (Cola $r.Salida)
+  Comprueba 'sin prueba-local.json (nunca habia uno)' (-not (Test-Path -LiteralPath $e.Json)) ''
+  Comprueba 'prueba-local-rapida.json con los 2 casos' (Test-Path -LiteralPath $rapida) ''
+  Igual 'sus 2 casos, los primeros' 'cargaJob/caso-01,remesaJob/caso-01' ((@((Lee-Json $rapida).casos | ForEach-Object { "$($_.job)/$($_.caso)" })) -join ',')
+  Comprueba 'la consola dice donde queda el resultado' ($r.Salida.Contains('prueba-local-rapida.json')) (Cola $r.Salida)
+  $r = Prueba $e
+  Igual 'sin -Rapida: sale con 0' 0 $r.Codigo
+  Comprueba 'reutiliza el original de los 2 casos de la rapida y ejecuta los otros 6' ($r.Salida.Contains('Original: se reutilizan las salidas de 2 caso(s) y se ejecutan 6.')) (Cola $r.Salida)
+  Igual 'prueba-local.json con los 8 casos' 8 @((Lee-Json $e.Json).casos).Count
+  Comprueba 'sin la linea de la prueba rapida' ($r.Salida -notmatch 'Prueba rapida:') (Cola $r.Salida)
+  $antes = (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'registros') -Recurse -Force
+  $r = Prueba $e @('-Rapida')
+  Igual 'otra -Rapida: sale con 0' 0 $r.Codigo
+  Igual 'prueba-local.json igual que antes (hash)' $antes (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Igual 'el migrado ejecuta 2 casos' 'caso-01' (Casos-M77 $e 'migrado' 'cargaJob')
+}
+
+$Pruebas['m80 (c2) -Rapida con un caso que deja lo mismo que el caso vacio: avisa, no corre Stop-Vacios (los arneses guardados siguen en arnes\, nada en arnes-invalidado\) y no borra prueba-local.json'] = {
+  $v = Invalida-M78 'm80-c2' {} @('-Rapida')
+  $e = $v.e; $r = $v.r
+  Igual 'sale con 0 (el caso sale igual)' 0 $r.Codigo
+  Comprueba 'avisa de que no le pasa las entradas al job' ($r.Salida.Contains('En cargaJob, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job.')) (Cola $r.Salida)
+  Comprueba 'y de que con -Rapida no invalida los tests' ($r.Salida -match 'Con -Rapida no invalido los tests guardados') (Cola $r.Salida)
+  foreach ($lado in @('original', 'migrado')) {
+    Igual "arnes\$lado sigue igual" $v.antes[$lado] (Hashes-Carpeta-M78 $e "arnes/$lado")
+    Comprueba "y no hay arnes-invalidado\$lado" (-not (Test-Path -LiteralPath (Get-Ruta $e.Local "arnes-invalidado/$lado")))
+  }
+  Comprueba 'prueba-local.json de antes sigue ahi' (Test-Path -LiteralPath $e.Json) ''
+  Comprueba 'y deja prueba-local-rapida.json' (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json')) ''
+}
+
+$Pruebas['m80 (c3) -Rapida con -Reparar, -Regresion o -Desde: para con un mensaje claro, sin ejecutar nada'] = {
+  $e = Nuevo-Escenario 'm80-c3' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  foreach ($otra in @(@('-Reparar'), @('-Regresion'), @('-Desde', 'HEAD'))) {
+    $r = Prueba $e (@('-Rapida') + $otra)
+    Igual "-Rapida $($otra -join ' '): sale con 1" 1 $r.Codigo
+    Comprueba "-Rapida $($otra -join ' '): dice que no se combina" ($r.Salida.Contains('-Rapida no se combina con -Reparar, -Regresion ni -Desde')) (Cola $r.Salida)
+    Comprueba "-Rapida $($otra -join ' '): no ejecuta nada" ($r.Salida -notmatch 'Ejecutando los casos') (Cola $r.Salida)
+  }
+  Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
+}
+
+$Pruebas['m80 (c4) la funcion de informe.ps1 que da por buena la prueba en local (la del -Cierre) lee prueba-local.json, y una -Rapida con un caso distinto no le cambia el resultado'] = {
+  $e = Escenario-M77 'm80-c4' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00', 'importe=30.00') }) @{ Intentos = 1 }
+  $r = Prueba-M77 $e '' @()
+  Igual 'la prueba entera sale con 0' 0 $r.Codigo
+  . ([scriptblock]::Create((Texto-De-Funciones (Join-Path (Split-Path -Parent $Script) 'informe.ps1') @('Get-FallosPruebaLocal'))))
+  $mapa = Lee-Json (Get-Ruta $e.Migrado 'migracion-batch-nuevo/datos/mapa.json')
+  $antes = (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Igual 'sin fallos para el cierre' 0 @(Get-FallosPruebaLocal (Lee-Json $e.Json) $mapa).Count
+  $r = Prueba-M77 $e '' @('-Rapida') 'excepcion-mig:^cargaJob/caso-01$'
+  Igual 'la -Rapida con el migrado EXCEPCION sale con 2' 2 $r.Codigo
+  $rapida = Lee-Json (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json')
+  Igual 'su resultado dice que el caso es distinto' 'distinto' (@($rapida.casos)[0]).resultado
+  Igual 'prueba-local.json no ha cambiado (hash)' $antes (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Igual 'y el cierre sigue sin ver fallos' 0 @(Get-FallosPruebaLocal (Lee-Json $e.Json) $mapa).Count
+  Comprueba 'con lo de la rapida si los veria (la prueba es sensible)' (@(Get-FallosPruebaLocal $rapida $mapa).Count -gt 0) ''
 }
 
 # ================================ LANZADOR ================================

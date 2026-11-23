@@ -126,6 +126,11 @@ QUE HACE
      (sin las tablas BATCH_ ni TASK_), el arnes del migrado y RegresionLocalTest, que corre despues y falla si lo que sale
      cambia. Antes del commit se prueba en una copia desechable (<Migrado>-regresion): pasa, y con un byte cambiado falla; un caso
      que no pasa o que lleva la fecha, la hora o la ruta de hoy se quita (datos\regresion.json lo cuenta). No cambia la salida.
+  9. Solo con -Rapida (no se combina con -Reparar, -Regresion ni -Desde): para saber en minutos si un arreglo vale, sin esperar a todos los casos. Mismo arranque (las copias, los
+     arneses, las comprobaciones y el caso vacio) y, de cada job, solo el primer caso (en el orden de siempre). Al acabar, la tabla y los grupos de esos casos y una linea: 'Prueba
+     rapida: N casos de M. No vale para -Cierre'. No escribe ni borra datos\prueba-local.json (lo que lee -Cierre; ni prueba-local-grupos.jsonl): deja su resultado en
+     datos\prueba-local-rapida.json. No corre Stop-Vacios: si el caso deja lo mismo que el caso vacio, lo avisa y deja los tests guardados donde estan. Las salidas del original que
+     guarda se reutilizan en la prueba entera (la clave de cada original ya cuenta lo que entra en su ejecucion).
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
@@ -144,6 +149,7 @@ USO
   .\prueba-local.ps1 ... -Modelo <id>          # sin esto, el que uso migracion.ps1
   .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven
   .\prueba-local.ps1 ... -Job cargaRecibosJob  # solo los casos de ese job
+  .\prueba-local.ps1 ... -Rapida              # solo el primer caso de cada job, en minutos: para comprobar un arreglo (no vale para -Cierre ni deja prueba-local.json)
   .\prueba-local.ps1 ... -Si                   # no pregunta antes de llamar a Copilot
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
@@ -164,6 +170,7 @@ param(
   [string]$Modelo = '',       # id del modelo de Copilot; sin esto, el de migracion.ps1 ('' = el que tenga Copilot)
   [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original
   [string]$Job = '',          # solo los casos de este job
+  [switch]$Rapida,            # solo el primer caso de cada job; su resultado va a prueba-local-rapida.json y no toca prueba-local.json (no con -Reparar, -Regresion ni -Desde)
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
   [switch]$Reparar,           # arregla el migrado, en la rama de rescate, hasta que los casos distintos salgan iguales (no con -Desde)
@@ -3948,7 +3955,8 @@ function Merge-OtrosJobs($O) {
   return $f
 }
 
-# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo de este lanzamiento.
+# Escribe datos\prueba-local.json con $Res (y, con -Desde, los culpables; con -Reparar, las reparaciones) y devuelve lo de este lanzamiento. Con -Rapida lo escribe en
+# datos\prueba-local-rapida.json ($NombreJson) y deja prueba-local.json como esta.
 # Con -Job, el fichero lleva ademas lo de los otros jobs (Merge-OtrosJobs); lo devuelto, solo lo de ahora: es lo que ensena la consola.
 function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   $grupos = @(Get-Grupos $Res)
@@ -3969,8 +3977,8 @@ function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   if ($Desde) { $o.culpables = @($Culpables | ForEach-Object { [ordered]@{ job = $_.job; caso = $_.caso; commit = $_.commit; asunto = $_.asunto; deshecho = $_.deshecho } }) }
   if ($Reparar) { $o.reparaciones = @($Reparaciones) }
   $f = $o
-  if ($Job) { $f = Merge-OtrosJobs $o }
-  Write-Json (Join-Path $DatosMig 'prueba-local.json') $f
+  if ($Job -and -not $Rapida) { $f = Merge-OtrosJobs $o }
+  Write-Json (Join-Path $DatosMig $NombreJson) $f
   return $o
 }
 
@@ -3979,6 +3987,9 @@ $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original.' }
 if ($Reparar -and ($Desde -or $Deshacer)) { Stop-Arranque '-Reparar no se combina con -Desde ni con -Deshacer: o buscas el commit que rompe un caso, o arreglas lo que venia mal de la migracion.' }
+if ($Rapida -and ($Reparar -or $Regresion -or $Desde)) { Stop-Arranque '-Rapida no se combina con -Reparar, -Regresion ni -Desde: la prueba rapida solo ejecuta el primer caso de cada job y no deja resultado para -Cierre, y esas opciones necesitan todos los casos.' }
+$NombreJson = 'prueba-local.json'   # donde deja su resultado: con -Rapida otro, para no pisar el que lee -Cierre
+if ($Rapida) { $NombreJson = 'prueba-local-rapida.json' }
 if ($Deshacer -and -not $Desde) { Stop-Arranque '-Deshacer solo vale con -Desde <commit>: dime desde que commit tengo que buscar lo que rompe.' }
 $ajustes = Read-CfgFile (Get-RutaAjustes) @('Plantilla') $false
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro git en el PATH." }
@@ -4012,7 +4023,9 @@ if ($Job) {
   $pruebas = @($pruebas | Where-Object { $_.job -ceq $Job })
   if ($pruebas.Count -eq 0) { Stop-Arranque ("-Job ${Job}: no hay casos de ese job. Hay de: " + ($todosJobs -join ', ')) }
 }
-if (@($pruebas | ForEach-Object { @($_.casos) } | Where-Object { $_ }).Count -eq 0) { Stop-Arranque 'Los guiones de migracion.ps1 no traen ningun caso que probar.' }
+$casosEnTotal = @($pruebas | ForEach-Object { @($_.casos) } | Where-Object { $_ }).Count
+if ($casosEnTotal -eq 0) { Stop-Arranque 'Los guiones de migracion.ps1 no traen ningun caso que probar.' }
+if ($Rapida) { foreach ($unJob in $pruebas) { $unJob.casos = @(@($unJob.casos) | Select-Object -First 1) } }
 $mapa = $null
 if (Test-Path -LiteralPath (Join-Path $DatosMig 'mapa.json')) { $mapa = Read-Json (Join-Path $DatosMig 'mapa.json') }
 
@@ -4163,9 +4176,10 @@ try {
   $res = @($tareasCasos | ForEach-Object { Get-Resultado $_ })
   $res = @(Confirm-OriginalesDeOtroDia $tareasCasos $res)
   $vacios = @(Get-JobsVacios $res)
-  if ($vacios.Count -gt 0) { Stop-Vacios $vacios }
+  if ($vacios.Count -gt 0 -and $Rapida) { foreach ($v in $vacios) { Aviso "En $v, ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job. Con -Rapida no invalido los tests guardados: lanza sin -Rapida para decidirlo." } }
+  elseif ($vacios.Count -gt 0) { Stop-Vacios $vacios }
   $o = Save-Resultado $res @()
-  foreach ($g in @($o.grupos)) {   # una linea por grupo y lanzamiento: cuantas causas hay y de que clase
+  foreach ($g in @($o.grupos | Where-Object { -not $Rapida })) {   # una linea por grupo y lanzamiento (no de una -Rapida: son pocos casos): cuantas causas hay y de que clase
     $linea = [ordered]@{ fecha = (Get-Date).ToString('s'); numero = $g.numero; tipo = $g.tipo; firma = $g.firma; casos = @($g.casos).Count; hechos = @($g.hechos) }
     [System.IO.File]::AppendAllText((Join-Path $DatosMig 'prueba-local-grupos.jsonl'), ((ConvertTo-Json -InputObject $linea -Compress) + "`n"), $Utf8)
   }
@@ -4200,7 +4214,8 @@ try {
   }
   foreach ($f in @(Get-JobsFalloOriginal $res)) { Aviso (Format-LineaOriginal $f.job $f.fallo) }   # una linea por job donde el original falla igual en todos los casos
   Show-Tiempos
-  Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig 'prueba-local.json')"
+  if ($Rapida) { Info "Prueba rapida: $($res.Count) casos de $casosEnTotal. No vale para -Cierre: cuando salga igual, lanza sin -Rapida." }
+  Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig $NombreJson)"
   Info $NoPromete
 
   # Lo que no se podia tocar sigue igual
