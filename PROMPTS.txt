@@ -6,28 +6,20 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
   .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
 - Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
 - No la lances mientras corre la prueba completa de este batch.
+- No hagas commits ni cambios en el repo del original, tampoco en src/test: con un commit nuevo en el original la prueba rehace todos los casos con la IA y pisa los arreglos de las entradas.
 - Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 29 (carpeta del migrado; en la ventana de Copilot de este batch)
+PROMPT 31 (carpeta del migrado; en la ventana de Copilot de este batch)
 
-Quedan cuatro cosas, y cada una impide cerrar su job.
+En la ultima prueba completa la herramienta rehizo con la IA las entradas de los 25 casos, porque el repo del original tenia un commit nuevo (los dos tests de contrato que anadiste, fc8d558). Eso piso tu arreglo de las entradas con una sola fila candidata, y vuelven a salir distintos los casos 03 y 15: el original y el migrado eligen una fecha distinta.
 
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el repo del original: ni src/main, ni src/test, ni commits (con un commit nuevo en el original la prueba rehace todos los casos con la IA y pisa los arreglos). No uses no-aplica.txt para tapar una diferencia.
 
-1. El job que no manda correos (16 casos, mas el caso 20). El original manda dos correos y pone la fecha de hoy en una columna; el migrado no hace ninguna de las dos cosas. Se salta toda la rama que trata cada registro. Antes de cambiar nada, averigua donde se separa, en este orden:
-   a) La consulta que elige los registros a procesar: en el migrado, devuelve filas? Compara el esquema y las filas de esas tablas en los dos tests guardados.
-   b) Las propiedades que lee esa rama (destinatarios, plantillas, interruptores): en el test del migrado, tienen valor? Lo que el original saca de su properties y el migrado espera del configmap llega vacio en el test.
-   c) El cliente con que el migrado envia (correo o HTTP): es uno que el test guardado sustituye y guarda en envios?
-   Subir el nivel de log en el test guardado para verlo no cambia lo que se compara. Lo que sea del test, arreglalo en el test guardado. Si es el codigo del migrado, en rescate con un test unitario.
-2. El asunto con la tilde rota en el original. El valor que pusiste no cambio nada porque las propiedades por defecto (setDefaultProperties o parecido) tienen la prioridad mas baja: las pisa el properties del jar.
-   a) Dime de donde sale el asunto en el original (clave y fichero) y en que codificacion esta escrito ese fichero.
-   b) Si esa clave esta en el configmap de pre de este batch (preguntame donde esta el repo si no lo sabes): pon ese valor en los dos tests guardados con algo que gane al properties del jar (las properties de la anotacion del test, o una propiedad de sistema antes de arrancar), con la tilde escrita como \u00ed. Dime el nombre de la clave.
-   c) Si no esta en el configmap: no lo toques. El original lo manda roto tambien en produccion. Dimelo y sigue con lo demas.
-3. El caso de la tabla con todas las filas distintas. Dices que la causa es el SQL del test (el original no tiene las filas que busca) y no el codigo. Arreglalo en el test guardado del original o en las entradas del caso, hasta que los dos lados lean las mismas filas. Si con las mismas filas el original sigue sin encontrarlo, es una diferencia del codigo: dime cual de los dos hace lo que pasaria en produccion.
-4. El job que lee de la base no SQL sigue sin registros pendientes, y por eso ningun caso sale distinto del vacio. Sin esto no se puede cerrar. Haz que los dos tests guardados carguen esos registros desde un JSON de la carpeta del caso (prueba-local\casos\<job>\<caso>) y prepara al menos un caso con registros pendientes que los dos lados procesen.
+0. Primero, en el repo del original: comprueba que git status esta limpio (si no lo esta, para y dimelo). Guarda tu commit en una rama (git branch tests-copilot fc8d558) y deja la rama actual en el commit con que se hicieron los casos (git reset --hard 4aab0f2). Dame git log --oneline -2 al terminar.
+1. En los casos 03 y 15 (y mira el 05), haz otra vez lo de antes en las entradas del caso (prueba-local\casos\<job>\<caso>): una sola fila candidata, para que los dos lados elijan la misma. No toques el codigo.
 
 Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
   .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
@@ -36,21 +28,28 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 - Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
-Lanza dos casos de cada punto (uno si solo hay uno) y, del punto 4, el caso que prepares.
+Lanza el job con los casos 03, 05 y 15.
 
 
-PROMPT 30 (carpeta del migrado; en la ventana de Copilot de este batch)
+PROMPT 32 (carpeta del migrado; en la ventana de Copilot de este batch)
 
-La ultima prueba completa (migracion-<batch>\datos\prueba-local.json) deja cinco jobs sin cerrar. Para cerrar, cada job necesita al menos un caso igual y ninguno distinto. Dos cosas que me dijiste no se cumplen en la prueba completa: que un caso de uno de los jobs del punto 1 salia distinto del vacio e igual, y que los JSON del punto 4 eran identicos. La prueba compara el texto byte a byte: compruebalo todo con la herramienta, como se dice al final.
+Antes de la prueba completa, contesta sin cambiar nada, tres lineas por punto como mucho:
+1. El Excel con los totales: en la prueba completa salia distinto y el commit que dices que lo arregla ya estaba en rescate. Que cambiaste ahora para que salga igual (fichero y cambio)? Faltaba una fila de datos en el migrado o era una fila en blanco?
+2. El job de la cache: que cambiaste para que el original no acabe FAILED? En datos reales ese valor puede ser nulo?
+3. El JSON de la base no SQL: que cambiaste? Solo el orden de los campos, y en los dos tests guardados?
+4. git log --oneline -3 y git status del repo del original: hay algun commit o cambio tuyo de hoy? Si lo hay, no lo deshagas: dimelo.
 
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
 
-1. Dos jobs en los que ningun caso deja nada distinto del caso vacio (las dos lineas rojas del final de la prueba): el test guardado no le pasa las entradas al job. Mira con el log del test que lee el job al arrancar (tablas, ficheros, parametros, perfil, base no SQL) y por que no le llega lo del caso. Arreglalo en los dos tests guardados o en las entradas de los casos. Si el job lee de la base no SQL, que los dos tests carguen esos registros desde un JSON de la carpeta del caso. Prepara al menos un caso por job que salga distinto del vacio. Los casos marcados "sin probar en local" se quedan asi.
-2. El job del Excel en el que la fila de totales sale una fila mas arriba en el migrado (4 casos; el primer cambio es la celda de totales). Antes de tocar nada, mira las filas de ese Excel en los dos lados: falta una fila de datos en el migrado, o el original deja una fila en blanco antes de los totales? Si falta un dato, es un fallo del migrado. Si es la fila en blanco, el migrado tiene que escribir la misma disposicion que el original. En los dos casos se arregla en rescate, con un test unitario, y los totales tienen que salir con el mismo valor.
-3. El job en el que el original acaba FAILED con "Null key returned for cache operation" y el migrado COMPLETED (3 casos). Averigua por que la clave de la cache sale nula en el original:
-   a) Si el argumento llega nulo por los datos del caso: mira si en datos reales ese valor puede ser nulo (la restriccion de la tabla, la consulta que lo trae). Si no puede, corrige las entradas del caso para que lo tengan. Si puede, no lo tapes: es una diferencia real (el original falla en produccion con esos datos). Dimelo y sigue con lo demas.
-   b) Si es por como se compila el original en la prueba (sin los nombres de los parametros): dime que cambiarias y donde, antes de hacerlo.
-4. El job en el que el JSON de lo que se guarda en la base no SQL sale distinto (2 casos, una sola linea con todo el JSON). Compara los dos lados campo a campo con un script, no a ojo. Si solo cambia el orden de los campos, haz que los dos tests guardados escriban ese JSON con las claves ordenadas: el mismo codigo en los dos lados, nunca en uno solo. Si cambia algun valor, dime el campo y el valor de cada lado; si es un fallo del migrado, arreglalo en rescate con un test unitario.
+PROMPT 33 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+Sigue con lo que queda. Cada punto impide cerrar su job.
+
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el repo del original: ni src/main, ni src/test, ni commits (con un commit nuevo en el original la prueba rehace todos los casos con la IA y pisa los arreglos). No uses no-aplica.txt para tapar una diferencia.
+
+1. El job de pagos: el migrado deja el CSV pero no manda el correo (el paso 4). Averigua por que no llega a enviarlo (la condicion que lo decide, las propiedades de destinatarios en el test del migrado, el cliente de correo o HTTP que el test captura) y arreglalo donde toque: en el test guardado si es del test; en rescate, con un test unitario, si es el codigo.
+2. El job de la base no SQL: ahora que el registro pendiente se carga, el original acaba FAILED y el migrado COMPLETED. Dime la excepcion del original y por que pasa. Si es por como lo prepara el test (un campo que falta en el JSON del caso, el contexto que monta el test), arreglalo en el test guardado o en el caso. Si el original fallaria igual en produccion con ese registro, para y dimelo.
+3. La consulta paginada del caso 6 que dejaste pendiente: terminala.
+4. El asunto con la tilde rota: dime en que quedo (la clave, si esta en el configmap de pre y que hiciste).
 
 Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
   .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
@@ -59,4 +58,4 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 - Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
-Lanza dos casos de cada punto (uno si solo hay uno) y, del punto 1, el caso que prepares en cada job.
+Lanza dos casos de cada punto (uno si solo hay uno).
