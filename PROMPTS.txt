@@ -7,17 +7,3 @@ Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en lo
 4. Antes de ejecutar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia: es lo que hace la prueba en local, y sin eso H2 dice que la tabla ya existe. El caso guardado no se toca. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
 5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
-
-
-PROMPT 23 (misma carpeta de siempre; en la ventana de Copilot de este batch)
-
-Despues del commit que reparte los jobs por tipo de ejecucion, el migrado deja en la carpeta de backup un fichero que el original no deja: el KO mensual con un sufijo de fecha y hora. Sale en el caso vacio de los dos jobs y en el caso 13, asi que en la prueba completa saldria distinto en casi todos los casos.
-1. Antes de tocar nada, mira en el codigo de los dos lados cuando se mueve un fichero a backup y por que el migrado lo hace y el original no. Por ejemplo: si ahora escribe el KO dos veces y la segunda mueve la primera a backup, o si el reparto por tipo lanza un paso de mas.
-2. Arreglalo en la carpeta de rescate para que haga lo mismo que el original, con un test unitario que lo compruebe, y haz commit. No toques los tests guardados ni los casos.
-
-Comprobacion final:
-a) Compila los dos lados.
-b) Caso vacio de los dos jobs, en los dos lados: estado.txt, ningun error.txt, y la carpeta de backup igual en los dos lados.
-c) Antes de lanzar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza el caso 13, el caso 01 de los dos jobs y un caso de cada job de los que mueven ficheros antiguos a backup, con el migrado en el ultimo commit de rescate. Compara original y migrado fichero a fichero (ficheros\, tablas\ y envios\) y dame la primera linea distinta de cada fichero.
-d) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual exacto entre los dos (si/no y por que).
-e) git status de los repos y los commits nuevos de rescate.
