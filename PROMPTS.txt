@@ -21,3 +21,24 @@ b) Caso vacio en los dos lados: estado.txt y ningun error.txt.
 c) Copia el caso 22 desde prueba-local\casos a las dos copias. Pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanzalo en los dos lados y compara fichero a fichero (ficheros\, tablas\ y envios\): dame la primera linea distinta de cada fichero.
 d) Tabla: caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado), igual exacto (si/no y por que). Di tambien como has dejado las filas de los ficheros de entrada para que el original no falle.
 e) git status de los repos.
+
+
+PROMPT 25 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+La prueba completa ha acabado y cinco jobs no pasan. Los grupos de casos distintos y los jobs sin ningun caso distinto del vacio estan en migracion-<batch>\datos\prueba-local.json. Las salidas de cada caso estan en migracion-<batch>\prueba-local\salidas\original\<job>\<caso> y en salidas\migrado\<job>\<caso>.
+
+Regla para todo lo que sigue: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. Ya ha pasado dos veces: tus cambios de entradas salian bien en tus pruebas a mano y la prueba completa no los vio. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+
+1. Fila de sumas de un Excel. En un job, el original escribe la fila de sumas una fila mas abajo que el migrado, en todos sus casos distintos. Compara las dos salidas guardadas. Hoy hiciste un commit en rescate que movio esa fila: mira si la movio en el sentido contrario. Arreglalo en rescate con un test unitario.
+2. El original acaba FAILED con "Null key returned for cache operation" en tres casos de un job, y el migrado acaba COMPLETED. Ese mensaje sale cuando la clave de una cache vale null, casi siempre porque un dato del caso viene vacio. Busca que dato es y rellenalo, con un valor como los de produccion, en las entradas de esos casos (prueba-local\casos). Dime tambien que hace el migrado cuando ese dato viene vacio: va en la PR.
+3. Un fichero JSON con lo que el job guarda en la base no SQL sale distinto en dos casos de un job. Compara las dos salidas guardadas con las claves ordenadas.
+   - Si solo cambia el orden de las claves, haz que los dos tests guardados escriban ese fichero con las claves en orden alfabetico.
+   - Si cambian valores (por ejemplo, el estado o la fecha de finalizacion), es un fallo del migrado: arreglalo en rescate con un test unitario.
+4. En dos jobs ningun caso deja nada distinto del caso vacio: el test no le pasa las entradas al job. Antes me dijiste que sus entradas de la base no SQL se podian preparar, pero la prueba no las ve. Ponlas donde mira la prueba: el codigo que las carga, en los dos tests guardados, y los datos de cada caso, en prueba-local\casos\<job>\<caso>. Al menos un caso de cada uno de esos jobs tiene que dejar algo distinto del vacio en los dos lados.
+
+Comprobacion final:
+a) Haz copias nuevas solo desde lo que usa la prueba: el ultimo commit de rescate y el original, con los tests guardados y los casos de prueba-local\casos. Compila los dos lados.
+b) Caso vacio de TODOS los jobs en los dos lados: estado.txt y ningun error.txt.
+c) Antes de lanzar un caso, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza en los dos lados dos casos de cada problema de arriba. Compara fichero a fichero (ficheros\, tablas\ y envios\, y el JSON del punto 3) como la prueba: el texto tal cual, quitando solo la fecha y la hora de hoy. Dame la primera linea distinta de cada fichero.
+d) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual exacto (si/no y por que).
+e) git status de los repos y los commits nuevos de rescate.
