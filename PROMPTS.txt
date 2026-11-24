@@ -7,3 +7,17 @@ Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en lo
 4. Antes de ejecutar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia: es lo que hace la prueba en local, y sin eso H2 dice que la tabla ya existe. El caso guardado no se toca. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
 5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
+
+
+PROMPT 24 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+La prueba completa sigue dando el caso 22 con el original FAILED (NullPointerException) y el migrado COMPLETED. Tu cambio de las entradas de ese caso no ha llegado a lo que usa la prueba: en cada ejecucion, la prueba copia las entradas de cada caso desde migracion-<batch>\prueba-local\casos\<job>\<caso> a las dos copias, y no mira lo que haya en las copias de antes.
+1. Dime en que carpeta cambiaste las entradas del caso 22 y compara esos ficheros con los de migracion-<batch>\prueba-local\casos\<job>\caso-22.
+2. Deja en migracion-<batch>\prueba-local\casos\<job>\caso-22 unas entradas con las que el original acabe COMPLETED. El caso tiene que seguir probando lo que dice su titulo. No toques src/main, los tests guardados ni los demas casos.
+
+Comprobacion final:
+a) Compila los dos lados.
+b) Caso vacio en los dos lados: estado.txt y ningun error.txt.
+c) Copia el caso 22 desde prueba-local\casos a las dos copias. Pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanzalo en los dos lados y compara fichero a fichero (ficheros\, tablas\ y envios\): dame la primera linea distinta de cada fichero.
+d) Tabla: caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado), igual exacto (si/no y por que). Di tambien como has dejado las filas de los ficheros de entrada para que el original no falle.
+e) git status de los repos.
