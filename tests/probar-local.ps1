@@ -9839,5 +9839,110 @@ $Pruebas['m91 (j) como (h), pero la tarea del original no estaba hecha (un lanza
   Igual 'arnes\migrado sigue igual' $v.migrado (Hashes-Carpeta-M78 $e 'arnes/migrado')
 }
 
+# ===================== M98: -Caso ejecuta los casos que se piden, desde lo guardado y sin IA (lo de -Rapida) =====================
+# Sin falsos nuevos: Nuevo-Escenario y el Maven de mentira de siempre. -Caso activa lo de -Rapida: su resultado va a prueba-local-rapida.json y prueba-local.json no se toca.
+
+$M98Importes = @('importe=10.00', 'importe=20.00', 'importe=30.00', 'importe=40.00')
+
+# Dos jobs de 4 casos probados una vez enteros: lo guardado (los tests y los casos) que -Caso necesita para no llamar a la IA.
+function Primera-M98([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = $M98Importes; remesaJob = $M98Importes })
+  $r = Prueba $e
+  Igual "${Nombre}: la prueba entera sale con 0" 0 $r.Codigo
+  return $e
+}
+
+# Lanza -Job cargaJob con -Caso como una lista de PowerShell (con -File llega siempre un texto): lo hace un script de la carpeta del escenario que llama a prueba-local.ps1.
+function Prueba-Lista-M98($E, [string[]]$Lista) {
+  $lista = "@('" + ($Lista -join "','") + "')"
+  Escribe $E.Raiz 'lista-caso.ps1' "param([string]`$Real, [string]`$Legacy, [string]`$Migrado, [string]`$Modelo, [switch]`$Si)`n& `$Real -Legacy `$Legacy -Migrado `$Migrado -Modelo `$Modelo -Si:`$Si -Job cargaJob -Caso $lista`nexit `$LASTEXITCODE`n"
+  Ajusta-Directo $E
+  $env:RESCATE_HOME = $E.Home
+  $env:RESCATE_LLAMADAS = $E.Llamadas
+  try { return (Lanzar (Get-Ruta $E.Raiz 'lista-caso.ps1') @('-Real', $Script, '-Legacy', $E.Legacy, '-Migrado', $E.Migrado, '-Modelo', 'modelo-x', '-Si')) }
+  finally { $env:RESCATE_HOME = ''; $env:RESCATE_LLAMADAS = '' }
+}
+
+$Pruebas['m98 (a) -Job cargaJob -Caso caso-03,caso-01 tras una prueba entera: el migrado ejecuta solo caso-01 y caso-03 de cargaJob y nada de remesaJob, deja prueba-local-rapida.json con esos 2 y prueba-local.json igual (hash), dice la linea de la prueba rapida y no llama a Copilot'] = {
+  $e = Primera-M98 'm98-a'
+  $hash = (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  $n = @(Llamadas $e).Count
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'registros') -Recurse -Force
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', 'caso-03,caso-01')
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'cargaJob: el migrado ejecuta solo caso-01 y caso-03' 'caso-01,caso-03' (Casos-M77 $e 'migrado' 'cargaJob')
+  Igual 'remesaJob: el migrado no ejecuta nada' '' (Casos-M77 $e 'migrado' 'remesaJob')
+  Igual 'prueba-local-rapida.json lleva esos 2 casos' 'cargaJob/caso-01,cargaJob/caso-03' (Casos-Rapida-M88 $e)
+  Igual 'prueba-local.json igual que antes (hash)' $hash (Get-FileHash -LiteralPath $e.Json -Algorithm SHA256).Hash
+  Comprueba 'la linea de la prueba rapida: 2 casos de 4' ($r.Salida.Contains('Prueba rapida: 2 casos de 4.')) (Cola $r.Salida)
+  Igual 'ninguna llamada nueva a Copilot' $n @(Llamadas $e).Count
+  Comprueba 'y la consola cuenta 0 llamadas' ($r.Salida.Contains('Llamadas a Copilot: 0. ')) (Cola $r.Salida)
+}
+
+$Pruebas['m98 (b) las formas de -Caso: un solo texto con comas (caso-03,caso-1), una lista de PowerShell (3 y 01), repetidos y mayusculas (3,CASO-03,03) y -Rapida junto a -Caso'] = {
+  $e = Primera-M98 'm98-b'
+  $rapida = Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', 'caso-03,caso-1')
+  Igual "un solo texto 'caso-03,caso-1': sale con 0" 0 $r.Codigo
+  Igual 'un solo texto: caso-01 y caso-03' 'cargaJob/caso-01,cargaJob/caso-03' (Casos-Rapida-M88 $e)
+  Remove-Item -LiteralPath $rapida -Force
+  $r = Prueba-Lista-M98 $e @('3', '01')
+  Igual 'la lista 3 y 01: sale con 0' 0 $r.Codigo
+  Igual 'la lista: caso-01 y caso-03' 'cargaJob/caso-01,cargaJob/caso-03' (Casos-Rapida-M88 $e)
+  Remove-Item -LiteralPath $rapida -Force
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', '3,CASO-03,03')
+  Igual 'repetidos y mayusculas: sale con 0' 0 $r.Codigo
+  Igual 'repetidos y mayusculas: solo caso-03' 'cargaJob/caso-03' (Casos-Rapida-M88 $e)
+  Comprueba 'la linea dice 1 caso de 4' ($r.Salida.Contains('Prueba rapida: 1 casos de 4.')) (Cola $r.Salida)
+  Remove-Item -LiteralPath $rapida -Force
+  $r = Prueba $e @('-Job', 'cargaJob', '-Rapida', '-Caso', '2')
+  Igual '-Rapida y -Caso juntos: sale con 0' 0 $r.Codigo
+  Igual '-Rapida y -Caso juntos: solo caso-02, no el primero que elige -Rapida' 'cargaJob/caso-02' (Casos-Rapida-M88 $e)
+}
+
+$Pruebas['m98 (c) -Caso sin -Job: para con el texto y los jobs que hay, sin ejecutar nada ni llamar a Copilot'] = {
+  $e = Nuevo-Escenario 'm98-c' ([ordered]@{ cargaJob = $M98Importes; remesaJob = $M98Importes })
+  $r = Prueba $e @('-Caso', 'caso-01')
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que -Caso necesita -Job y los jobs que hay' ($r.Salida.Contains('-Caso necesita -Job: los casos son de un job. Hay de: cargaJob, remesaJob')) (Cola $r.Salida)
+  Comprueba 'no ejecuta nada' ($r.Salida -notmatch 'Ejecutando los casos') (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' 0 @(Llamadas $e).Count
+  Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
+}
+
+$Pruebas['m98 (d) un caso que no existe (caso-09 con 4 casos, 5) o un texto que no es un caso (abc): para con su texto, sin ejecutar nada'] = {
+  $e = Nuevo-Escenario 'm98-d' ([ordered]@{ cargaJob = $M98Importes })
+  foreach ($x in @(@('caso-09', '-Caso caso-09: el job cargaJob tiene de caso-01 a caso-04'), @('caso-01,5', '-Caso caso-05: el job cargaJob tiene de caso-01 a caso-04'), @('abc', '-Caso abc: no es un caso (escribe caso-05 o 5)'))) {
+    $r = Prueba $e @('-Job', 'cargaJob', '-Caso', $x[0])
+    Igual "-Caso $($x[0]): sale con 1" 1 $r.Codigo
+    Comprueba "-Caso $($x[0]): dice '$($x[1])'" ($r.Salida.Contains($x[1])) (Cola $r.Salida)
+    Comprueba "-Caso $($x[0]): no ejecuta nada" ($r.Salida -notmatch 'Ejecutando los casos') (Cola $r.Salida)
+  }
+  Igual 'ninguna llamada a Copilot' 0 @(Llamadas $e).Count
+  Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
+}
+
+$Pruebas['m98 (e) sin tests guardados ni casos preparados, -Caso 1 con -Si: para sin llamar a Copilot, diciendo cuantas tareas faltan, y sin ejecutar nada'] = {
+  $e = Nuevo-Escenario 'm98-e' ([ordered]@{ cargaJob = $M98Importes; remesaJob = $M98Importes })
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', '1')
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que con -Caso no llama a la IA y que faltan 3 tareas (los 2 tests y el caso)' ($r.Salida.Contains('Con -Caso no llamo a la IA: faltan 3 tareas (un test guardado o las entradas de un caso). Lanza la prueba sin -Caso.')) (Cola $r.Salida)
+  Comprueba 'no pregunta ni ejecuta nada' ($r.Salida -notmatch 'Ejecutando los casos|Llamar a Copilot') (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' 0 @(Llamadas $e).Count
+  Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
+}
+
+$Pruebas['m98 (f) -Caso con -Reparar, -Regresion o -Desde: para con un mensaje claro, sin ejecutar nada'] = {
+  $e = Nuevo-Escenario 'm98-f' ([ordered]@{ cargaJob = $M98Importes })
+  foreach ($otra in @(@('-Reparar'), @('-Regresion'), @('-Desde', 'HEAD'))) {
+    $r = Prueba $e (@('-Job', 'cargaJob', '-Caso', '1') + $otra)
+    Igual "-Caso $($otra -join ' '): sale con 1" 1 $r.Codigo
+    Comprueba "-Caso $($otra -join ' '): dice que no se combina" ($r.Salida.Contains('-Caso no se combina con -Reparar, -Regresion ni -Desde')) (Cola $r.Salida)
+    Comprueba "-Caso $($otra -join ' '): no ejecuta nada" ($r.Salida -notmatch 'Ejecutando los casos') (Cola $r.Salida)
+  }
+  Igual 'ninguna llamada a Copilot' 0 @(Llamadas $e).Count
+  Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

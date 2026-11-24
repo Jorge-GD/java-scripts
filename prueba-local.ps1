@@ -147,6 +147,10 @@ QUE HACE
      datos\prueba-local-rapida.json. Un job cuyo caso deja lo mismo que el caso vacio se trata como en el paso 5, en ese json, y el aviso en rojo dice que con -Rapida solo se ha
      ejecutado un caso de ese job y que lo confirmes sin -Rapida. Las salidas del original que guarda se reutilizan en la prueba entera (la clave de cada original ya cuenta lo
      que entra en su ejecucion).
+     Con -Caso caso-05,caso-03 (hace falta -Job: los casos son de un job; vale 5 o caso-05, una lista o un texto con comas) es una -Rapida con los casos que dices en vez del primero
+     de cada job: para comprobar un arreglo como lo ve la prueba, desde el ultimo commit de rescate, los tests guardados (arnes\) y las entradas ya preparadas (casos\). Nunca llama a
+     la IA: si falta un test guardado o las entradas de un caso (tarea pendiente), para y dice que lances la prueba sin -Caso, tambien con -Si. Mismo json y mismas combinaciones
+     que -Rapida (y -Caso con -Rapida es lo mismo); los casos conservan su numero.
   Lo de la IA queda en <Migrado>\migracion-<batch>\prueba-local\ (arnes\, casos\ y tareas\), con las salidas
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
@@ -167,6 +171,7 @@ USO
   .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven
   .\prueba-local.ps1 ... -Job cargaRecibosJob  # solo los casos de ese job
   .\prueba-local.ps1 ... -Rapida              # un caso por job (el primero con entradas), en minutos: para comprobar un arreglo (no vale para -Cierre ni deja prueba-local.json)
+  .\prueba-local.ps1 ... -Job cargaRecibosJob -Caso caso-05,caso-03   # solo esos casos, sin IA y desde lo guardado: para comprobar un arreglo (no vale para -Cierre)
   .\prueba-local.ps1 ... -Si                   # no pregunta antes de llamar a Copilot
   .\prueba-local.ps1 ... -Desde <commit>       # y, de cada caso distinto, el commit de la rama que lo rompe
   .\prueba-local.ps1 ... -Desde <commit> -Deshacer   # y deshace esos commits con git revert (solo commits nuevos encima)
@@ -187,6 +192,7 @@ param(
   [string]$Modelo = '',       # id del modelo de Copilot; sin esto, el de migracion.ps1 ('' = el que tenga Copilot)
   [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original
   [string]$Job = '',          # solo los casos de este job
+  [string[]]$Caso = @(),      # solo estos casos del job de -Job (caso-05 o 5): como -Rapida, sin IA
   [switch]$Rapida,            # un caso por job (el primero con entradas); su resultado va a prueba-local-rapida.json y no toca prueba-local.json (no con -Reparar, -Regresion ni -Desde)
   [string]$Desde = '',        # un commit de la rama que se prueba: busca el commit que rompe cada caso distinto
   [switch]$Deshacer,          # con -Desde: deshace con git revert los commits que rompen (la unica vez que se toca tu rama)
@@ -2302,18 +2308,35 @@ function Get-NumeroCasoRapido($Prueba) {
   return 1
 }
 
+# Los numeros de los casos que pide -Caso (caso-05 o 5, en una lista o en un texto con comas; con pwsh -File llega un solo texto), sin repetidos y de menor a mayor.
+# Un trozo que no es un caso para el arranque.
+function Get-NumerosCaso([string[]]$Pedidos) {
+  $numeros = @()
+  foreach ($trozo in @($Pedidos | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() })) {
+    $m = [regex]::Match($trozo, '^(caso-)?0*(\d+)$', 'IgnoreCase')
+    if (-not $m.Success) { Stop-Arranque "-Caso ${trozo}: no es un caso (escribe caso-05 o 5)." }
+    $num = 0
+    if (-not [int]::TryParse($m.Groups[2].Value, [ref]$num)) { $num = [int]::MaxValue }
+    $numeros += $num
+  }
+  return @($numeros | Sort-Object -Unique)
+}
+
 # Las tareas de los casos de un job (caso-01, caso-02... en el orden del guion), o las hechas de antes si sus entradas
-# no han cambiado. Con -Rapida, el job lleva un solo caso y su numero (numeroCaso, Get-NumeroCasoRapido): sigue siendo el suyo.
+# no han cambiado. Con -Rapida o -Caso, el job lleva solo sus casos y sus numeros (numerosCaso, en el orden de los casos; Get-NumeroCasoRapido o -Caso): cada uno sigue siendo el suyo.
 function Get-TareasCasos($Prueba, $JobMapa) {
   $ctx = Get-ContextoCaso $JobMapa
   $leer = '(No se sabe que clases leen la entrada de este job: buscalas tu en src/main.)'
   if ($ctx.Leer.Count -gt 0) { $leer = (@($ctx.Leer | ForEach-Object { '- ' + $_ }) -join "`n") }
   if (-not $ctx.Datos) { $ctx.Datos = '(No hay hechos de este job.)' }
   $tareas = @()
+  $numeros = @()
+  if ($Prueba.PSObject.Properties['numerosCaso']) { $numeros = @($Prueba.numerosCaso) }
   $n = 0
-  if ($Prueba.PSObject.Properties['numeroCaso']) { $n = [int]$Prueba.numeroCaso - 1 }
+  $i = 0
   foreach ($c in @($Prueba.casos)) {
-    $n++
+    if ($numeros.Count -gt 0) { $n = [int]$numeros[$i] } else { $n++ }
+    $i++
     $caso = Get-NombreCaso $n
     $carpeta = "$Casos/$($Prueba.job)/$caso"
     $prompt = [pscustomobject]@{ JOB = $Prueba.job; CASO = $caso; CARPETA = $carpeta; TITULO = [string]$c.titulo; ENTRADA = [string]$c.entrada; ESPERADO = [string]$c.esperado; PASOS = $ctx.Pasos; HECHOS = $ctx.Datos; LEER = $leer }
@@ -4295,7 +4318,13 @@ $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
 if (-not $Legacy) { Stop-Arranque 'Falta -Legacy: la carpeta del batch original.' }
 if ($Reparar -and ($Desde -or $Deshacer)) { Stop-Arranque '-Reparar no se combina con -Desde ni con -Deshacer: o buscas el commit que rompe un caso, o arreglas lo que venia mal de la migracion.' }
-if ($Rapida -and ($Reparar -or $Regresion -or $Desde)) { Stop-Arranque '-Rapida no se combina con -Reparar, -Regresion ni -Desde: la prueba rapida solo ejecuta un caso de cada job y no deja resultado para -Cierre, y esas opciones necesitan todos los casos.' }
+if ($Caso.Count -gt 0) { $Rapida = $true }   # -Caso es una -Rapida con los casos que se piden
+if ($Rapida -and ($Reparar -or $Regresion -or $Desde)) {
+  $quien = '-Rapida'
+  $cuales = 'un caso de cada job'
+  if ($Caso.Count -gt 0) { $quien = '-Caso'; $cuales = 'los casos que pides' }
+  Stop-Arranque "$quien no se combina con -Reparar, -Regresion ni -Desde: la prueba rapida solo ejecuta $cuales y no deja resultado para -Cierre, y esas opciones necesitan todos los casos."
+}
 $NombreJson = 'prueba-local.json'   # donde deja su resultado: con -Rapida otro, para no pisar el que lee -Cierre
 if ($Rapida) { $NombreJson = 'prueba-local-rapida.json' }
 if ($Deshacer -and -not $Desde) { Stop-Arranque '-Deshacer solo vale con -Desde <commit>: dime desde que commit tengo que buscar lo que rompe.' }
@@ -4333,12 +4362,22 @@ if ($Job) {
 }
 $casosEnTotal = @($pruebas | ForEach-Object { @($_.casos) } | Where-Object { $_ }).Count
 if ($casosEnTotal -eq 0) { Stop-Arranque 'Los guiones de migracion.ps1 no traen ningun caso que probar.' }
-if ($Rapida) {   # un caso por job (Get-NumeroCasoRapido), con su numero para que siga siendo caso-NN
+$NumerosCaso = @()   # -Caso: los numeros pedidos (Get-NumerosCaso), de un job
+if ($Caso.Count -gt 0) {
+  if (-not $Job) { Stop-Arranque ('-Caso necesita -Job: los casos son de un job. Hay de: ' + ($todosJobs -join ', ') + '.') }
+  $NumerosCaso = @(Get-NumerosCaso $Caso)
+}
+if ($Rapida) {   # un caso por job (Get-NumeroCasoRapido) o los de -Caso, con sus numeros para que sigan siendo caso-NN
   foreach ($unJob in $pruebas) {
-    if (@($unJob.casos).Count -eq 0) { continue }
-    $numero = Get-NumeroCasoRapido $unJob
-    $unJob.casos = @(@($unJob.casos)[$numero - 1])
-    Add-Member -InputObject $unJob -NotePropertyName numeroCaso -NotePropertyValue $numero -Force
+    $totalJob = @($unJob.casos).Count
+    if ($totalJob -eq 0) { continue }
+    $numerosJob = $NumerosCaso
+    if ($numerosJob.Count -eq 0) { $numerosJob = @(Get-NumeroCasoRapido $unJob) }
+    foreach ($num in $numerosJob) {
+      if ($num -lt 1 -or $num -gt $totalJob) { Stop-Arranque "-Caso $(Get-NombreCaso $num): el job $($unJob.job) tiene de $(Get-NombreCaso 1) a $(Get-NombreCaso $totalJob)." }
+    }
+    $unJob.casos = @($numerosJob | ForEach-Object { @($unJob.casos)[$_ - 1] })
+    Add-Member -InputObject $unJob -NotePropertyName numerosCaso -NotePropertyValue $numerosJob -Force
   }
 }
 $mapa = $null
@@ -4475,6 +4514,7 @@ try {
   Reset-OriginalesYaExiste $tareasCasos
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
+  if ($Caso.Count -gt 0 -and $pendientes -gt 0) { Stop-Arranque "Con -Caso no llamo a la IA: faltan $pendientes tareas (un test guardado o las entradas de un caso). Lanza la prueba sin -Caso." }   # tambien con -Si
   if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
   foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Save-Anterior $repo } }
 
@@ -4541,8 +4581,12 @@ try {
   Info "Llamadas a Copilot: $($script:Llamadas). Tiempo: $($o.minutos) min. Resultado en $(Join-Path $DatosMig $NombreJson)"
   Info $NoPromete
   foreach ($v in $vacios) {
-    $soloUno = ''   # con -Rapida el job se ha juzgado con un solo caso: puede que otro si deje algo
-    if ($Rapida) { $soloUno = " Con -Rapida solo se ha ejecutado un caso de este job ($(@($res | Where-Object { $_.job -ceq $v })[0].caso)): confirmalo lanzando sin -Rapida." }
+    $soloUno = ''   # con -Rapida o -Caso el job se ha juzgado con pocos casos: puede que otro si deje algo
+    if ($Rapida) {
+      $ejecutados = @($res | Where-Object { $_.job -ceq $v } | ForEach-Object { $_.caso }) -join ', '
+      if ($Caso.Count -gt 0) { $soloUno = " Con -Caso solo se han ejecutado los casos elegidos de este job ($ejecutados): confirmalo lanzando sin -Caso." }
+      else { $soloUno = " Con -Rapida solo se ha ejecutado un caso de este job ($ejecutados): confirmalo lanzando sin -Rapida." }
+    }
     Fallo ((Get-FraseSinEntradas $v) + ' Arreglalo en tus tests guardados (prueba-local\arnes\original y arnes\migrado) y relanza sin -Rehacer, o relanza con -RehacerOriginal para que la IA los escriba otra vez (el del original y, con el, el del migrado).' + $soloUno)
   }
 
