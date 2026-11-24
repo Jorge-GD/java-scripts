@@ -30,3 +30,48 @@ b) Caso vacio de TODOS los jobs en los dos lados: estado.txt y ningun error.txt.
 c) Antes de lanzar un caso, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza en los dos lados dos casos de cada punto de arriba (uno si el grupo solo tiene uno). Compara fichero a fichero (ficheros\, tablas\ y envios\) como la prueba: el texto tal cual, quitando solo la fecha y la hora de hoy. Dame la primera linea distinta de cada fichero.
 d) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual exacto (si/no y por que).
 e) git status de los repos y los commits nuevos de rescate.
+
+
+PROMPT 27 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+La prueba completa deja un caso distinto y otro no determinista. Los dos prueban el mismo paso del job: rellena unos campos copiandolos de una fila elegida entre varias candidatas. Estan en migracion-<batch>\datos\prueba-local.json (grupos) y sus salidas en prueba-local\salidas\original, original-2 y migrado\<job>\<caso>.
+- En el no determinista, el original da dos salidas distintas entre dos ejecuciones.
+- En el distinto, la prueba completa anterior salio igual y esta no: el original copia los campos de una fila y el migrado los de otra.
+
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+
+1. Mira en los datos.sql de esos dos casos cuantas filas candidatas hay. Busca en el codigo de los dos lados como se elige una: una consulta sin ORDER BY, un Set o un Map sin orden, el primero de una lista...
+2. Lanza el caso distinto tres veces en cada lado, desde copias nuevas como en la comprobacion final. Dime que fila sale cada vez.
+3. Si los dos lados eligen sin un orden definido: deja una sola fila candidata en las entradas de esos dos casos, en prueba-local\casos\<job>\<caso>, sin cambiar lo que prueba el caso. Dime en una frase como elige el original: va como nota en la PR.
+4. Si el migrado elige con otra regla que el original (otro orden, otra condicion), es un fallo del migrado: arreglalo en rescate con un test unitario.
+
+Comprobacion final:
+a) Haz copias nuevas solo desde lo que usa la prueba: el ultimo commit de rescate y el original, con los tests guardados y los casos de prueba-local\casos. Compila los dos lados.
+b) Caso vacio de TODOS los jobs en los dos lados: estado.txt y ningun error.txt.
+c) Antes de lanzar un caso, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza en los dos lados los casos de arriba. Compara fichero a fichero (ficheros\, tablas\ y envios\) como la prueba: el texto tal cual, linea a linea, quitando solo la fecha y la hora de hoy. Dame la primera linea distinta de cada fichero.
+d) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual exacto (si/no y por que).
+e) git status de los repos y los commits nuevos de rescate.
+f) Lanza tambien el caso distinto dos veces en cada lado y di si sale siempre lo mismo.
+
+
+PROMPT 28 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+Tu ultima tabla deja dos cosas que haran fallar la prueba completa.
+
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+
+1. Un job sigue sin ningun caso distinto del vacio: en tu tabla sale No/No y los dos lados dan total 0. Si ningun caso de un job deja algo distinto del caso vacio, la prueba marca sus casos como no se pudo preparar y el cierre no pasa.
+   - Mira como elige el job el periodo (fechas relativas a hoy, a la fecha fija del test o a un parametro) y de donde lee (tablas o base no SQL).
+   - Pon en al menos un caso entradas que caigan en ese periodo, en prueba-local\casos\<job>\<caso>. Si lee de la base no SQL, que los dos tests guardados carguen esos registros desde la carpeta del caso.
+   - Tiene que dar un total distinto de 0, y el mismo en los dos lados.
+2. En otro job dices JSON semanticamente igual. La prueba no compara por significado: compara el texto linea a linea, byte a byte, quitando solo la fecha y la hora de hoy. Otro orden de claves u otros espacios salen distintos.
+   - Comparalo como la prueba.
+   - Si solo cambia el orden de las claves y ese JSON lo escribe el test (el volcado de la base no SQL), haz que los dos tests guardados lo escriban con las claves ordenadas.
+   - Si lo escribe el job, no lo tapes: dime que cambia y en que fichero.
+
+Comprobacion final:
+a) Haz copias nuevas solo desde lo que usa la prueba: el ultimo commit de rescate y el original, con los tests guardados y los casos de prueba-local\casos. Compila los dos lados.
+b) Caso vacio de TODOS los jobs en los dos lados: estado.txt y ningun error.txt.
+c) Antes de lanzar un caso, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza en los dos lados los casos de arriba. Compara fichero a fichero (ficheros\, tablas\ y envios\) como la prueba: el texto tal cual, linea a linea, quitando solo la fecha y la hora de hoy. Dame la primera linea distinta de cada fichero.
+d) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual exacto (si/no y por que).
+e) git status de los repos y los commits nuevos de rescate.
