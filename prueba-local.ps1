@@ -2322,6 +2322,34 @@ function Get-NumerosCaso([string[]]$Pedidos) {
   return @($numeros | Sort-Object -Unique)
 }
 
+# La huella de un caso: sus entradas y el commit del original con que se preparan. Es la unica formula; Test-HuellaOtroCommit la repite con otro commit.
+function Get-HuellaCaso($Caso, $Ctx, [string]$Leer, [string]$Commit) {
+  return (Get-Hash8 ((@([string]$Caso.titulo, [string]$Caso.entrada, [string]$Caso.esperado, $Ctx.Pasos, $Ctx.Datos, $Leer, $Commit)) -join "`n"))
+}
+
+# Los commits del original que valen como el de ahora para sus casos (HEAD el primero): desde HEAD hacia atras, por el primer padre y hasta 100,
+# los que tienen el mismo codigo (src/main de cualquier modulo) y pom.xml que HEAD; para en el primero que difiere. Se calcula la primera vez que
+# hace falta, una vez por lanzamiento ($script:CommitsEquivalentes).
+function Get-CommitsEquivalentes {
+  if ($null -ne $script:CommitsEquivalentes) { return $script:CommitsEquivalentes }
+  $lista = @($HeadOrig)
+  foreach ($c in @((Invoke-Git $LegacyRoot @('rev-list', '--first-parent', '-n', '100', $HeadOrig)).Salida | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ -and $_ -ne $HeadOrig })) {
+    if ((Invoke-Git $LegacyRoot @('diff', '--quiet', $c, $HeadOrig, '--', ':(glob)**/src/main/**', ':(glob)**/pom.xml')).Codigo -ne 0) { break }
+    $lista += $c
+  }
+  $script:CommitsEquivalentes = $lista
+  return $lista
+}
+
+# Si la tarea hecha de antes (con la huella $Guardada) se preparo con un commit del original que vale como el de ahora (Get-CommitsEquivalentes):
+# un commit de tests o de notas en el original no cambia lo que la IA leyo.
+function Test-HuellaOtroCommit([string]$Guardada, $Caso, $Ctx, [string]$Leer) {
+  foreach ($c in @(Get-CommitsEquivalentes | Where-Object { $_ -ne $HeadOrig })) {
+    if ((Get-HuellaCaso $Caso $Ctx $Leer $c) -eq $Guardada) { return $true }
+  }
+  return $false
+}
+
 # Las tareas de los casos de un job (caso-01, caso-02... en el orden del guion), o las hechas de antes si sus entradas
 # no han cambiado. Con -Rapida o -Caso, el job lleva solo sus casos y sus numeros (numerosCaso, en el orden de los casos; Get-NumeroCasoRapido o -Caso): cada uno sigue siendo el suyo.
 function Get-TareasCasos($Prueba, $JobMapa) {
@@ -2340,9 +2368,16 @@ function Get-TareasCasos($Prueba, $JobMapa) {
     $caso = Get-NombreCaso $n
     $carpeta = "$Casos/$($Prueba.job)/$caso"
     $prompt = [pscustomobject]@{ JOB = $Prueba.job; CASO = $caso; CARPETA = $carpeta; TITULO = [string]$c.titulo; ENTRADA = [string]$c.entrada; ESPERADO = [string]$c.esperado; PASOS = $ctx.Pasos; HECHOS = $ctx.Datos; LEER = $leer }
-    $huella = Get-Hash8 ((@([string]$c.titulo, [string]$c.entrada, [string]$c.esperado, $ctx.Pasos, $ctx.Datos, $leer, $HeadOrig)) -join "`n")
+    $huella = Get-HuellaCaso $c $ctx $leer $HeadOrig
+    $id = 'caso-' + (Get-NombreJob $Prueba.job) + '-' + $n.ToString('00')
+    # hecha con otro commit del original que tiene el mismo src/main y pom.xml: se queda como estaba (su huella), no se rehace con la IA
+    $antes = Get-TareaGuardada $id
+    if ($antes -and $antes.estado -eq 'hecha' -and $antes.entradas.huella -ne $huella -and (Test-HuellaOtroCommit ([string]$antes.entradas.huella) $c $ctx $leer)) {
+      $huella = [string]$antes.entradas.huella
+      $script:CasosOtroCommit++
+    }
     $e = [pscustomobject]@{ job = $Prueba.job; caso = $caso; titulo = [string]$c.titulo; carpeta = $carpeta; copia = $CopiaOrig; dirs = @(); huella = $huella; prompt = $prompt }
-    $t = Restore-Tarea (New-TareaTipo 'caso-local' ('caso-' + (Get-NombreJob $Prueba.job) + '-' + $n.ToString('00')) '' "prueba-local/casos/$($Prueba.job)/$caso" $e) $false
+    $t = Restore-Tarea (New-TareaTipo 'caso-local' $id '' "prueba-local/casos/$($Prueba.job)/$caso" $e) $false
     $t.entradas.copia = $CopiaOrig   # la de ahora, aunque la tarea venga de otro lanzamiento
     # excepcionPedida: ya se le ha dicho a la IA que el job no arrancaba en el original (Invoke-Casos); las tareas de antes no la llevan
     if ($null -eq $t.entradas.PSObject.Properties['excepcionPedida']) { Add-Member -InputObject $t.entradas -NotePropertyName excepcionPedida -NotePropertyValue $false }
@@ -4425,6 +4460,8 @@ $script:SitiosColumna = @{}   # por (copia|COLUMNA): el sitio donde el codigo la
 $script:Estados = @{}   # -Desde: lo visto por (commit|job|caso), para no repetir ejecuciones
 $script:Propios = @()   # los commits que ha hecho en $DirRama: los reverts de -Deshacer y los arreglos de -Reparar
 $script:Arbol = $null   # el arbol de dependencias del migrado (Get-ArbolDependencias), la primera vez que un grupo lo pide
+$script:CommitsEquivalentes = $null   # los commits del original con el mismo src/main y pom.xml que HEAD (Get-CommitsEquivalentes): se calculan la primera vez que hacen falta
+$script:CasosOtroCommit = 0   # los casos hechos con otro de esos commits que se quedan como estaban (Get-TareasCasos)
 $script:Anterior = Get-JsonPrueba   # el prueba-local.json de antes de este lanzamiento: Save-Resultado lo pisa y Add-Hechos lo compara
 $script:VueltaAlDeAntes = ''   # el aviso de que el test nuevo del original quedaba peor y se vuelve al de antes (Test-ArnesEscrito); '' si no
 $script:MigradoPorOriginal = $false   # el test del migrado se escribe otra vez solo porque cambia el del original, no porque se pida (-RehacerArnes): si el del original vuelve al de antes, vuelve tambien el suyo
@@ -4510,6 +4547,7 @@ try {
     if (-not $jm) { $jm = [pscustomobject]@{ job = $p.job; clases = @() } }
     $tareasCasos += @(Get-TareasCasos $p $jm)
   }
+  if ($script:CasosOtroCommit -gt 0) { Info "$($script:CasosOtroCommit) casos hechos con otro commit del original se quedan como estaban: los commits nuevos no cambian src/main ni pom.xml." }
   Reset-CasosExcepcion $tareasCasos
   Reset-OriginalesYaExiste $tareasCasos
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count

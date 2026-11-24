@@ -9944,5 +9944,96 @@ $Pruebas['m98 (f) -Caso con -Reparar, -Regresion o -Desde: para con un mensaje c
   Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
 }
 
+# ===================== M100: un commit del original que no toca su codigo no rehace los casos =====================
+# La huella de cada caso lleva el commit del original. Una tarea hecha con otro commit vale si ese commit tiene el mismo src/main y pom.xml que el de ahora
+# (git diff --quiet): los commits nuevos de tests o de notas no gastan IA. Uno que cambia src/main o pom.xml los rehace, como siempre.
+
+$M100Importes = @('importe=10.00', 'importe=20.00', 'importe=30.00')
+
+# Un job de 3 casos probado una vez entero (los casos quedan hechos con el commit de entonces) y las llamadas de casos que costo.
+function Primera-M100([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = $M100Importes })
+  $r = Prueba $e
+  Igual "${Nombre}: la prueba entera sale con 0" 0 $r.Codigo
+  Igual "${Nombre}: prepara los 3 casos con la IA" 3 @(Llamadas-Casos $e).Count
+  return $e
+}
+
+function Linea-M100([int]$N) { return "$N casos hechos con otro commit del original se quedan como estaban: los commits nuevos no cambian src/main ni pom.xml." }
+
+# La huella de las tareas de los casos de cargaJob, por orden: 'huella-01,huella-02,...'.
+function Huellas-M100($E) { return ((@(1..3 | ForEach-Object { (Tarea-Caso-M36 $E 'cargaJob' $_.ToString('00')).entradas.huella })) -join ',') }
+
+$Pruebas['m100 (a) un commit del original que solo anade un fichero bajo src/test: el relanzamiento no llama a la IA para los casos, dice la linea con 3 casos, las tareas siguen hechas con su huella y las carpetas de casos no cambian (hash)'] = {
+  $e = Primera-M100 'm100-a'
+  $n = @(Llamadas-Casos $e).Count
+  $huellas = Huellas-M100 $e
+  $hash = Hashes-Carpeta-M78 $e 'casos'
+  [void](Commit-En $e.Legacy 'src/test/java/com/acme/viejo/LectorTest.java' "package com.acme.viejo;`n`npublic class LectorTest {`n}`n" 'tests nuevos')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'ninguna llamada nueva a la IA para los casos' $n @(Llamadas-Casos $e).Count
+  Comprueba 'dice la linea con los 3 casos' ($r.Salida.Contains((Linea-M100 3))) (Cola $r.Salida)
+  Comprueba 'la consola cuenta 0 tareas de IA por hacer' ($r.Salida.Contains('tareas de IA por hacer: 0 ')) (Cola $r.Salida)
+  Igual 'las tareas siguen hechas con la huella de antes' $huellas (Huellas-M100 $e)
+  Igual 'las carpetas de casos no cambian (hash)' $hash (Hashes-Carpeta-M78 $e 'casos')
+  $r = Prueba $e
+  Igual 'y otro lanzamiento mas con el mismo commit: sale con 0' 0 $r.Codigo
+  Igual 'sigue sin llamar a la IA para los casos' $n @(Llamadas-Casos $e).Count
+  Comprueba 'y repite la linea' ($r.Salida.Contains((Linea-M100 3))) (Cola $r.Salida)
+}
+
+$Pruebas['m100 (b) con el commit de tests ya hecho en el original, -Job cargaJob -Caso 1 no para con "Con -Caso no llamo a la IA": ejecuta el caso-01 sin llamar a la IA'] = {
+  $e = Primera-M100 'm100-b'
+  $n = @(Llamadas $e).Count
+  [void](Commit-En $e.Legacy 'src/test/java/com/acme/viejo/LectorTest.java' "package com.acme.viejo;`n`npublic class LectorTest {`n}`n" 'tests nuevos')
+  [void](Commit-En $e.Legacy 'notas/paso-1.txt' "nota`n" 'una nota')
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', '1')
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no dice que con -Caso no llama a la IA' (-not $r.Salida.Contains('Con -Caso no llamo a la IA')) (Cola $r.Salida)
+  Igual 'prueba-local-rapida.json lleva el caso-01' 'cargaJob/caso-01' (Casos-Rapida-M88 $e)
+  Igual 'ninguna llamada nueva a Copilot' $n @(Llamadas $e).Count
+}
+
+$Pruebas['m100 (c) un commit del original que cambia un fichero de src/main (y otro en un modulo): el relanzamiento rehace los casos con la IA y no dice la linea'] = {
+  foreach ($x in @(@('m100-c1', 'src/main/java/com/acme/viejo/Lector.java'), @('m100-c2', 'modulo-a/src/main/java/com/acme/viejo/Otro.java'))) {
+    $e = Primera-M100 $x[0]
+    $n = @(Llamadas-Casos $e).Count
+    $huellas = Huellas-M100 $e
+    [void](Commit-En $e.Legacy $x[1] "package com.acme.viejo;`n`npublic class Cambia {`n}`n" 'cambia el codigo')
+    $r = Prueba $e
+    Igual "$($x[1]): sale con 0" 0 $r.Codigo
+    Igual "$($x[1]): vuelve a preparar los 3 casos con la IA" ($n + 3) @(Llamadas-Casos $e).Count
+    Comprueba "$($x[1]): no dice la linea de los casos que se quedan" ($r.Salida -notmatch 'hechos con otro commit del original') (Cola $r.Salida)
+    Comprueba "$($x[1]): las tareas tienen otra huella" ($huellas -ne (Huellas-M100 $e)) (Huellas-M100 $e)
+  }
+}
+
+$Pruebas['m100 (d) un commit del original que cambia solo pom.xml: el relanzamiento rehace los casos con la IA y no dice la linea'] = {
+  $e = Primera-M100 'm100-d'
+  $n = @(Llamadas-Casos $e).Count
+  [void](Commit-En $e.Legacy 'pom.xml' ((Pom 'batch-viejo').Replace('1.0.0', '1.0.1')) 'sube la version')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'vuelve a preparar los 3 casos con la IA' ($n + 3) @(Llamadas-Casos $e).Count
+  Comprueba 'no dice la linea de los casos que se quedan' ($r.Salida -notmatch 'hechos con otro commit del original') (Cola $r.Salida)
+}
+
+$Pruebas['m100 (e) un commit de src/main y despues otro de src/test, sin relanzar entre los dos: los casos de antes del de src/main se rehacen; con uno de tests mas despues, ya se quedan'] = {
+  $e = Primera-M100 'm100-e'
+  $n = @(Llamadas-Casos $e).Count
+  [void](Commit-En $e.Legacy 'src/main/java/com/acme/viejo/Lector.java' "package com.acme.viejo;`n`npublic class Lector {`n  int a;`n}`n" 'cambia el codigo')
+  [void](Commit-En $e.Legacy 'src/test/java/com/acme/viejo/LectorTest.java' "package com.acme.viejo;`n`npublic class LectorTest {`n}`n" 'tests nuevos')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los casos de antes del commit de src/main se rehacen' ($n + 3) @(Llamadas-Casos $e).Count
+  Comprueba 'sin la linea' ($r.Salida -notmatch 'hechos con otro commit del original') (Cola $r.Salida)
+  [void](Commit-En $e.Legacy 'notas/paso-1.txt' "nota`n" 'una nota')
+  $r = Prueba $e
+  Igual 'con un commit de notas mas: sale con 0' 0 $r.Codigo
+  Igual 'esta vez no llama a la IA' ($n + 3) @(Llamadas-Casos $e).Count
+  Comprueba 'y dice la linea con los 3 casos' ($r.Salida.Contains((Linea-M100 3))) (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
