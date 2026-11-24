@@ -6,6 +6,8 @@
 #  - una llamada con -Dtest=<clases> deja una linea en .rescate/cobertura-rep.log. Con el guion cob-inestable en RESCATE_FALSO, la
 #    segunda de cada tres sale con 1 ('[ERROR] Tests run: 1, Failures: 1'): un test que a veces pasa y a veces no.
 #  - con el guion cob-mvn-error:<texto>, el paso de JaCoCo sale con 1 y '[ERROR] <texto>' (la cobertura no se puede medir).
+#  - con el guion cob-mvn-doble, el paso de JaCoCo con una version fija (jacoco-maven-plugin:<n>) sale con 1 como cuando la JVM de los tests
+#    arranca con dos agentes de JaCoCo (LinkageError); sin version funciona normal. Con cob-mvn-doble-siempre falla tambien sin version.
 if ($args -contains '--version') { & (Join-Path $PSScriptRoot 'mvn.ps1') @args; exit $LASTEXITCODE }
 $raiz = (Get-Location).Path
 $resc = Join-Path $raiz '.rescate'
@@ -25,6 +27,12 @@ if ($prueba.Count -gt 0 -and (Test-Path -LiteralPath $resc)) {
   }
 }
 if ($conJacoco -and $guion -match 'cob-mvn-error:(.*)$') { '[ERROR] ' + $Matches[1]; exit 1 }
+$fija = (@($args | Where-Object { "$_" -match 'jacoco-maven-plugin:\d' }).Count -gt 0)
+if ($conJacoco -and $guion -match 'cob-mvn-doble' -and ($fija -or $guion -match 'cob-mvn-doble-siempre')) {
+  '[ERROR] Failed to execute goal org.apache.maven.plugins:maven-surefire-plugin:3.5.5:test (default-test)'
+  'Caused by: java.lang.LinkageError: loader ''bootstrap'' attempted duplicate class definition for java.lang.$JaCoCo.'
+  exit 1
+}
 if ($conJacoco -and $env:RESCATE_JACOCO_CSV) { & (Join-Path $PSScriptRoot 'mvn.ps1') @args; exit $LASTEXITCODE }
 $resto = @($args | Where-Object { "$_" -notmatch 'jacoco-maven-plugin' })
 & (Join-Path $PSScriptRoot 'mvn.ps1') @resto

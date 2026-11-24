@@ -7313,5 +7313,65 @@ $Pruebas['m76 (j13) referencia-circular: un ciclo a traves de una interfaz que e
   Igual 'salen los dos ciclos' 'Adap AdapG Consumidor ConsumidorG' (Ficheros-M70 (Cal-M76 $e 'referencia-circular'))
 }
 
+# ================================ M99: COBERTURA CUANDO EL POM YA TRAE JACOCO ================================
+# Si el pom (o su padre) ya ata prepare-agent de JaCoCo con otra version, la JVM de los tests arranca con dos agentes y muere (LinkageError):
+# Get-Cobertura usa entonces las coordenadas sin version (la que declara el pom). Si el pom no lo trae pero el padre si, repite una vez sin version.
+$PomJacoco = $Pom.Replace('</project>', "  <build><plugins><plugin><groupId>org.jacoco</groupId><artifactId>jacoco-maven-plugin</artifactId><version>0.8.14</version></plugin></plugins></build>`n</project>")
+
+# Get-Cobertura sobre un repo de una clase (4 lineas, 2 cubiertas) con el Maven de mentira de cobertura-mvn.ps1 y el guion $Guion.
+# Devuelve la medida, las lineas de JaCoCo que dejo Maven en .rescate/cobertura-mvn.log (una por llamada) y lo que escribio el proceso.
+function Cobertura-M99([string]$Nombre, [string]$PomTexto, [string]$Guion = '') {
+  $raiz = Join-Path $Dir $Nombre
+  if (Test-Path -LiteralPath $raiz) { Remove-Item -LiteralPath $raiz -Recurse -Force }
+  Escribe $raiz 'pom.xml' $PomTexto
+  Escribe $raiz 'src/main/java/com/acme/batch/Alta.java' "package com.acme.batch;`npublic class Alta {`n    // LINEAS: 4`n}`n"
+  Escribe $raiz 'src/test/java/com/acme/batch/AltaTest.java' "package com.acme.batch;`npublic class AltaTest {`n    // CUBRE: 2`n}`n"
+  [void](New-Item -ItemType Directory -Path (Join-Path $raiz '.rescate') -Force)
+  $f = Join-Path $Dir ($Nombre + '.ps1')
+  [System.IO.File]::WriteAllText($f, @'
+param([string]$Sis, [string]$Mvn, [string]$Carpeta, [string]$Registro)
+. (Join-Path $Sis 'comun.ps1')
+$Cfg.MvnExe = $Mvn
+$Cfg.SegundosLatido = 0
+ConvertTo-Json -InputObject (Get-Cobertura $Carpeta $Registro $true) -Depth 4 -Compress
+'@)
+  $r = Lanzar $f @((Split-Path -Parent $Script), (Join-Path $falsos 'cobertura-mvn.ps1'), $raiz, (Join-Path $Dir ($Nombre + '.log'))) $Guion
+  $o = $null
+  try { $o = @($r.Salida -split "`r?`n")[-1] | ConvertFrom-Json } catch { }
+  $ll = @([System.IO.File]::ReadAllLines((Join-Path (Join-Path $raiz '.rescate') 'cobertura-mvn.log')) | Where-Object { $_ -match 'jacoco' })
+  return [pscustomobject]@{ Medida = $o; Jacoco = $ll; Salida = $r.Salida }
+}
+
+$Pruebas['m99 cobertura: con jacoco-maven-plugin en el pom Maven lleva las coordenadas sin version; sin el, la version fija'] = {
+  $con = Cobertura-M99 'm99-con' $PomJacoco
+  Comprueba 'mide' ($con.Medida.medida -eq $true) (Cola $con.Salida)
+  Igual 'un solo Maven de JaCoCo' 1 $con.Jacoco.Count
+  Comprueba 'lleva org.jacoco:jacoco-maven-plugin:prepare-agent' ("$($con.Jacoco[0])" -match 'org\.jacoco:jacoco-maven-plugin:prepare-agent') "$($con.Jacoco -join ' / ')"
+  Comprueba 'y no lleva 0.8.16' ("$($con.Jacoco[0])" -notmatch '0\.8\.16') "$($con.Jacoco -join ' / ')"
+  $sin = Cobertura-M99 'm99-sin' $Pom
+  Comprueba 'sin jacoco en el pom mide' ($sin.Medida.medida -eq $true) (Cola $sin.Salida)
+  Igual 'un solo Maven de JaCoCo' 1 $sin.Jacoco.Count
+  Comprueba 'lleva org.jacoco:jacoco-maven-plugin:0.8.16:prepare-agent' ("$($sin.Jacoco[0])" -match 'org\.jacoco:jacoco-maven-plugin:0\.8\.16:prepare-agent') "$($sin.Jacoco -join ' / ')"
+}
+
+$Pruebas['m99 cobertura: dos agentes por el pom padre - falla con la version fija, repite una vez sin version y mide'] = {
+  $r = Cobertura-M99 'm99-padre' $Pom 'cob-mvn-doble'
+  Comprueba 'mide' ($r.Medida.medida -eq $true) (Cola $r.Salida)
+  Igual 'el 50 % de las 4 lineas' 50 $r.Medida.porcentaje
+  Igual 'dos Maven de JaCoCo' 2 $r.Jacoco.Count
+  Comprueba 'el primero con la version fija' ("$($r.Jacoco[0])" -match 'jacoco-maven-plugin:0\.8\.16:prepare-agent') "$($r.Jacoco -join ' / ')"
+  Comprueba 'el segundo sin version' ("$($r.Jacoco[-1])" -match 'org\.jacoco:jacoco-maven-plugin:prepare-agent' -and "$($r.Jacoco[-1])" -notmatch '0\.8\.16') "$($r.Jacoco -join ' / ')"
+}
+
+$Pruebas['m99 cobertura: dos agentes aun sin version - no mide, el motivo lo dice y no hay un tercer intento; con el plugin en el pom, un solo intento'] = {
+  $r = Cobertura-M99 'm99-siempre' $Pom 'cob-mvn-doble-siempre'
+  Igual 'no hay medida' $false $r.Medida.medida
+  Comprueba 'el motivo habla de dos agentes de JaCoCo' ("$($r.Medida.motivo)" -match 'dos agentes de JaCoCo' -and "$($r.Medida.motivo)" -notmatch 'surefire') "$($r.Medida.motivo)"
+  Igual 'dos Maven de JaCoCo, no tres' 2 $r.Jacoco.Count
+  $c = Cobertura-M99 'm99-siempre-pom' $PomJacoco 'cob-mvn-doble-siempre'
+  Comprueba 'con el plugin en el pom el motivo es el mismo' ("$($c.Medida.motivo)" -match 'dos agentes de JaCoCo') "$($c.Medida.motivo)"
+  Igual 'y Maven se lanza una sola vez' 1 $c.Jacoco.Count
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

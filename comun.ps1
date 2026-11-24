@@ -473,6 +473,8 @@ function Get-Head([string]$Dir) { return ((Invoke-Git $Dir @('rev-parse', 'HEAD'
 # Con $ConClases en $true devuelve ademas clases (por defecto no: migracion.ps1 guarda el objeto tal cual en sus datos): una fila por fila del CSV,
 # con Clase (paquete.clase), Fichero (la ruta relativa src/main/java/... del .java, o '' si no esta), Faltan y Cubiertas (lineas); vacia si no se
 # ha medido. Una clase interna (Externa$Interna) lleva el fichero de la externa.
+# Si el pom ya trae jacoco-maven-plugin usa sus coordenadas sin version (la que declara el pom): dos agentes de JaCoCo de versiones distintas
+# hacen que la JVM de los tests no arranque. Si el que lo trae es el pom padre y falla por eso, repite una vez sin version.
 function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila, [bool]$ConClases = $false) {
   $o = [ordered]@{ medida = $false; porcentaje = $null; cubiertas = $null; total = $null; minima = $Cfg.CoberturaMinima; motivo = '' }
   if ($ConClases) { $o.clases = @() }
@@ -480,9 +482,18 @@ function Get-Cobertura([string]$Dir, [string]$Registro, [bool]$Compila, [bool]$C
   $csv = Join-Ruta $Dir 'target/site/jacoco/jacoco.csv'
   if (Test-Path -LiteralPath $csv) { Remove-Item -LiteralPath $csv -Force }
   $j = $Cfg.JacocoPlugin
-  $r = Invoke-MavenTope $Dir @('-B', "${j}:prepare-agent", 'test', "${j}:report") 'Maven (cobertura)' $Registro
+  $sinVersion = $j -replace ':\d[^:]*$', ''
+  $pom = Join-Ruta $Dir 'pom.xml'
+  if ((Test-Path -LiteralPath $pom -PathType Leaf) -and ([System.IO.File]::ReadAllText($pom) -match 'jacoco-maven-plugin')) { $j = $sinVersion }
+  for ($intento = 1; $intento -le 2; $intento++) {
+    $r = Invoke-MavenTope $Dir @('-B', "${j}:prepare-agent", 'test', "${j}:report") 'Maven (cobertura)' $Registro
+    $dos = ($r.Codigo -ne 0) -and (@($r.Salida | Where-Object { "$_" -match 'duplicate class definition for java\.lang\.\$JaCoCo' }).Count -gt 0)
+    if ($r.Tope -or -not $dos -or $j -eq $sinVersion) { break }
+    $j = $sinVersion
+  }
   if ($r.Tope) { $o.motivo = $r.Tope; return $o }
   if ($r.Codigo -ne 0) {
+    if ($dos) { $o.motivo = 'dos agentes de JaCoCo de versiones distintas (el pom ya trae el suyo): los tests no han llegado a correr'; return $o }
     $e = @($r.Salida | Where-Object { "$_" -match '^\[ERROR\]\s*\S' } | Select-Object -First 1)
     $o.motivo = "Maven ha salido con error (codigo $($r.Codigo))"
     if ($e.Count -gt 0) { $o.motivo = 'Maven ha salido con error: ' + ("$($e[0])" -replace '^\[ERROR\]\s*', '').Trim() }
