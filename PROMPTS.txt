@@ -14,11 +14,11 @@ Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) 
 
 PROMPT 31 (carpeta del migrado; en la ventana de Copilot de este batch)
 
-En la ultima prueba completa la herramienta rehizo con la IA las entradas de los 25 casos, porque el repo del original tenia un commit nuevo (los dos tests de contrato que anadiste, fc8d558). Eso piso tu arreglo de las entradas con una sola fila candidata, y vuelven a salir distintos los casos 03 y 15: el original y el migrado eligen una fecha distinta.
+En la ultima prueba completa la herramienta rehizo con la IA las entradas de los 25 casos, porque el repo del original tenia un commit nuevo (los dos tests de contrato que anadiste). Eso piso tu arreglo de las entradas con una sola fila candidata, y vuelven a salir distintos los casos 03 y 15: el original y el migrado eligen una fecha distinta.
 
 Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el repo del original: ni src/main, ni src/test, ni commits (con un commit nuevo en el original la prueba rehace todos los casos con la IA y pisa los arreglos). No uses no-aplica.txt para tapar una diferencia.
 
-0. Primero, en el repo del original: comprueba que git status esta limpio (si no lo esta, para y dimelo). Guarda tu commit en una rama (git branch tests-copilot fc8d558) y deja la rama actual en el commit con que se hicieron los casos (git reset --hard 4aab0f2). Dame git log --oneline -2 al terminar.
+0. No hagas commits en el repo del original y no deshagas el que hay: si cambia el commit del original, la prueba vuelve a rehacer todos los casos con la IA. Dame git log --oneline -2 y git status del original.
 1. En los casos 03 y 15 (y mira el 05), haz otra vez lo de antes en las entradas del caso (prueba-local\casos\<job>\<caso>): una sola fila candidata, para que los dos lados elijan la misma. No toques el codigo.
 
 Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
@@ -59,3 +59,11 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 Lanza dos casos de cada punto (uno si solo hay uno).
+
+
+PROMPT 34 (carpeta del migrado del batch ya cerrado; en su ventana de Copilot)
+
+No cambies nada: solo contesta. En el repo de configmap nuevo (al lado del migrado) esta PENDIENTE.md.
+1. Para cada variable pendiente que no sea de SFTP, ni de las rutas de ficheros que se anadieron en la migracion, ni un secreto, una fila: variable | donde la pide el migrado (fichero:linea) | quien la lee en el codigo del migrado (clase:linea, o "nadie") | si el batch original tenia algo equivalente (fichero:linea, o "no") | si tiene valor por defecto.
+2. El repo de configmap que este batch ya tenia antes de migrarlo (preguntame donde esta si no lo sabes): tiene el identificador de la aplicacion de cada entorno (el que falta en los ficheros de despliegue) y los nombres de los Secret de la base de datos? Dime fichero:linea de cada uno.
+3. El inventario: de que entornos tiene carpeta? Que carpeta de config del repo nuevo no tiene la suya?
