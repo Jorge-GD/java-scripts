@@ -7,3 +7,26 @@ Antes de dar esto por acabado, comprueba lo mismo que comprobara la prueba en lo
 4. Antes de ejecutar un caso a mano, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia: es lo que hace la prueba en local, y sin eso H2 dice que la tabla ya existe. El caso guardado no se toca. Cada caso que has tocado o que sale en tu tabla, en los dos lados: su salida tiene que ser distinta de la del caso vacio de ese lado. Despues compara la salida del original con la del migrado (ficheros\, tablas\ y envios\, fichero a fichero) y dime que ficheros difieren y la primera linea distinta de cada uno.
 5. Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual entre los dos (si/no y por que).
 6. Get-FileHash de cada test guardado y de su copia: tienen que coincidir. git status de los dos repos: src/main sin tocar.
+
+
+PROMPT 26 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+La prueba completa ha acabado y cinco de los seis jobs no pasan. Los grupos de casos distintos (del 1 al 7) y el job sin ningun caso distinto del vacio estan en migracion-<batch>\datos\prueba-local.json. Las salidas de cada caso estan en migracion-<batch>\prueba-local\salidas\original\<job>\<caso> y en salidas\migrado\<job>\<caso>. Los registros de Maven, en prueba-local\registros.
+
+Regla para todo lo que sigue: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+
+1. Grupo 1 (2 casos): el migrado acaba con java.net.BindException: Address already in use. El test abre un puerto fijo (un servidor web, una base de datos embebida u otra cosa) y choca con otra prueba que corria a la vez en el equipo. Busca en los dos tests guardados que abre un puerto y haz que use uno libre (puerto 0 o aleatorio) o que no lo abra si el job no lo necesita (por ejemplo, spring.main.web-application-type=none).
+2. Grupos 2, 3 y 5 (16 casos del mismo job): el original manda dos correos y pone la fecha de hoy en una columna de una tabla; el migrado no manda ningun correo y deja la fecha que habia. Mira en las salidas guardadas y en los registros que camino toma cada lado. Si es el test (por ejemplo, el simulado de HTTP o de correo no cubre el cliente que usa el migrado, o una propiedad que en el migrado llega vacia), arreglalo en el test guardado. Si es el codigo del migrado, arreglalo en rescate con un test unitario.
+3. Grupo 4 (1 caso): el asunto del correo. El original lo manda con la tilde rota y el migrado bien. Mira de donde sale ese asunto en pre.
+   - Si lo pone el configmap: pon ese valor en las propiedades de la prueba de los dos lados, con la tilde escrita como \u00ed, para que los dos lean lo mismo. Dime el nombre de la propiedad: va al configmap.
+   - Si sale de un fichero de dentro del jar: no lo toques y dimelo. El original lo manda roto tambien en produccion y va en la PR.
+4. Grupo 6 (1 caso): el datos.sql del caso falla en el migrado al insertar una fila con dos columnas vacias, y el original acaba con EXCEPCION sin causa (mira su registro de Maven). Arregla las entradas del caso, o el esquema del test guardado si el fallo es del esquema, sin cambiar lo que prueba el caso.
+5. Grupo 7 (1 caso): una tabla de salida sale distinta en todas sus filas. El original no encuentra el registro que busca (importe 0 y un texto de que no existe) y el migrado si lo encuentra. Mira la consulta paginada de cada lado contra los datos del caso. Si el original no lo encuentra por algo del test (el dialecto de H2, el orden o la pagina), arreglalo en el test guardado o en el caso. Si es el codigo del migrado, arreglalo en rescate con un test unitario. Dime cual de los dos hace lo que pasaria en produccion.
+6. Un job no tiene ningun caso distinto del vacio: sus casos necesitan registros pendientes en la base no SQL y el test la deja vacia. Haz que los dos tests guardados carguen esos registros desde la carpeta del caso (por ejemplo, un JSON por coleccion en prueba-local\casos\<job>\<caso>) y prepara al menos un caso de ese job con registros pendientes.
+
+Comprobacion final:
+a) Haz copias nuevas solo desde lo que usa la prueba: el ultimo commit de rescate y el original, con los tests guardados y los casos de prueba-local\casos. Compila los dos lados.
+b) Caso vacio de TODOS los jobs en los dos lados: estado.txt y ningun error.txt.
+c) Antes de lanzar un caso, pon IF NOT EXISTS en cada CREATE y en cada ALTER TABLE ... ADD de su datos.sql, solo en la copia. Lanza en los dos lados dos casos de cada punto de arriba (uno si el grupo solo tiene uno). Compara fichero a fichero (ficheros\, tablas\ y envios\) como la prueba: el texto tal cual, quitando solo la fecha y la hora de hoy. Dame la primera linea distinta de cada fichero.
+d) Tabla: job, caso, estado del original, estado del migrado, distinto del vacio (si/no en cada lado) e igual exacto (si/no y por que).
+e) git status de los repos y los commits nuevos de rescate.
