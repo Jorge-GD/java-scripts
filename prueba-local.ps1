@@ -155,6 +155,8 @@ QUE HACE
   (salidas\original, original-2 y migrado, y originales.json con la clave y los dias de cada original) y los registros; el
   resultado, en datos\prueba-local.json. Al relanzar no se repite lo hecho (si no han cambiado sus entradas): se vuelve a ejecutar
   el migrado y a comparar, y el original solo si ha cambiado algo de lo que entra en su ejecucion.
+  Al acabar una prueba entera (ni -Rapida ni -Caso), si migracion.ps1 ya monto las paginas HTML (hay index.html en la carpeta migracion-<batch>), las rehace con el resultado nuevo
+  (informe.ps1) y lo dice ('HTML al dia'); si no las monto, no las crea, y si falla avisa y la salida es la de siempre.
   Rutas largas: un fichero cuya ruta en salidas pasa de 259 letras se guarda con un nombre corto (20 letras, ~ y un hash), el mismo en todos los
   lados, y si ni asi cabe, sin las carpetas de en medio (<primera carpeta>/<nombre corto>); uno que ni asi cabe no se guarda y su caso sale distinto,
   con ese fichero. Cuando un lado de un caso acaba FAILED, EXCEPCION o sin
@@ -206,6 +208,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
 . (Join-Path $PSScriptRoot 'tareas.ps1')
 . (Join-Path $PSScriptRoot 'regresion.ps1')
+. (Join-Path $PSScriptRoot 'informe.ps1')   # solo Write-Informes: al acabar una prueba entera rehace las paginas de migracion.ps1 (Update-Informes)
 
 # ============================ CONFIGURACION ============================
 $Cfg += @{
@@ -4372,6 +4375,15 @@ function Save-Resultado($Res, $Culpables, $Reparaciones = @()) {
   return $o
 }
 
+# Rehace las paginas HTML de migracion-<batch> (informe.ps1) con el resultado de ahora, solo si migracion.ps1 ya las monto (hay index.html): un lanzamiento solo de
+# esta prueba no las crea. Son una vista de los datos: si falla se avisa y el codigo de salida no cambia.
+function Update-Informes {
+  $indice = Join-Path $Salida 'index.html'
+  if (-not (Test-Path -LiteralPath $indice -PathType Leaf)) { return }
+  try { Write-Informes -Salida $Salida; Info "HTML al dia: $indice" }
+  catch { Aviso ('No he podido rehacer las paginas del informe: ' + $_.Exception.Message) }
+}
+
 # ================================= MAIN =================================
 $reloj = [System.Diagnostics.Stopwatch]::StartNew()
 $Inicio = Get-Date
@@ -4640,6 +4652,8 @@ try {
   }
   # 8. Con -Regresion: los casos que salen iguales se quedan como tests en la rama de rescate (un commit); no cambia la salida
   if ($Regresion) { Invoke-Regresion $res }
+  # 9. Con la prueba entera (ni -Rapida ni -Caso), las paginas del informe con el prueba-local.json de ahora
+  if (-not $Rapida) { Update-Informes }
   Info ''
   foreach ($c in @(@($PrefijoSinTabla, 'no crea sus tablas'), @($PrefijoTablaMal, 'crea mal sus tablas'), @($PrefijoSinColumna, 'no crea una columna que usa el codigo'))) {   # una linea por causa
     $n = @($res | Where-Object { $_.resultado -eq 'no se pudo preparar' -and $_.motivo.Contains($c[0]) }).Count

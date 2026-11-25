@@ -10150,5 +10150,71 @@ $Pruebas['m102 (b) con mas de 10 tareas por hacer nombra 10 y dice cuantas mas; 
   Comprueba 'con 2 tests y 8 casos (10 tareas) las nombra todas y no dice mas' ($r.Salida -match 'faltan 10 tareas \(un test guardado o las entradas de un caso\): arnes-original \(pendiente\), arnes-migrado \(pendiente\)(, caso-cargaJob-\d\d \(pendiente\)){8}\. Lanza la prueba sin -Caso\.' -and -not $r.Salida.Contains(' mas.')) (Cola $r.Salida)
 }
 
+# ===================== M105: la prueba entera rehace el HTML al acabar =====================
+# migracion.ps1 monta las paginas (index.html...) en migracion-<batch>; si ya estan, una prueba entera las rehace con lo que acaba de guardar (informe.ps1). -Rapida y -Caso no.
+
+function Salida-M105($E) { return (Split-Path -Parent (Split-Path -Parent $E.Json)) }
+function Pagina-M105($E, [string]$Nombre) {
+  $f = Join-Path (Salida-M105 $E) $Nombre
+  if (-not (Test-Path -LiteralPath $f)) { return $null }
+  return [System.IO.File]::ReadAllText($f)
+}
+# index.html y la pagina 3 de un montaje de antes (con un texto que no es de ningun informe de verdad)
+function Pon-Viejas-M105($E) {
+  foreach ($n in @('index.html', '3-original-vs-migrado.html')) { [System.IO.File]::WriteAllText((Join-Path (Salida-M105 $E) $n), 'viejo') }
+}
+function Nuevo-M105([string]$Nombre) { return (Nuevo-Escenario $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })) }
+
+$Pruebas['m105 (a) con las paginas ya montadas, una prueba entera rehace index.html y 3-original-vs-migrado.html con el resultado nuevo (2 casos iguales) y dice HTML al dia con la ruta de index.html'] = {
+  $e = Nuevo-M105 'm105-a'
+  Pon-Viejas-M105 $e
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  $t = Pagina-M105 $e '3-original-vs-migrado.html'
+  Comprueba 'la pagina 3 ya no es la de antes' ($t -ne 'viejo') ''
+  Comprueba 'y lleva el resultado nuevo: 2 casos de 1 jobs: 2 iguales' ($t -and $t.Contains('2 casos de 1 jobs: 2 iguales')) "$t"
+  Comprueba 'index.html tambien se ha rehecho' ((Pagina-M105 $e 'index.html') -ne 'viejo') ''
+  Comprueba 'y salen las otras cuatro paginas' (@('1-batch-original.html', '2-problemas.html', '4-correcciones.html', '5-buenas-practicas.html' | Where-Object { Pagina-M105 $e $_ }).Count -eq 4) ''
+  Comprueba 'sale la linea HTML al dia con la ruta de index.html' ($r.Salida.Contains('HTML al dia: ' + (Join-Path (Salida-M105 $e) 'index.html'))) (Cola $r.Salida)
+}
+
+$Pruebas['m105 (b) con -Rapida y con -Job cargaJob -Caso 1 las paginas no se tocan ni sale la linea HTML al dia'] = {
+  $e = Nuevo-M105 'm105-b'
+  $r = Prueba $e
+  Igual 'la prueba entera sale con 0' 0 $r.Codigo
+  Pon-Viejas-M105 $e
+  $r = Prueba $e @('-Rapida')
+  Igual 'con -Rapida sale con 0' 0 $r.Codigo
+  Comprueba 'con -Rapida index.html y la pagina 3 siguen como estaban' ((Pagina-M105 $e 'index.html') -ceq 'viejo' -and (Pagina-M105 $e '3-original-vs-migrado.html') -ceq 'viejo') ''
+  Comprueba 'y no dice HTML al dia' (-not $r.Salida.Contains('HTML al dia')) (Cola $r.Salida)
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', '1')
+  Igual 'con -Caso sale con 0' 0 $r.Codigo
+  Comprueba 'con -Caso index.html y la pagina 3 siguen como estaban' ((Pagina-M105 $e 'index.html') -ceq 'viejo' -and (Pagina-M105 $e '3-original-vs-migrado.html') -ceq 'viejo') ''
+  Comprueba 'y no dice HTML al dia' (-not $r.Salida.Contains('HTML al dia')) (Cola $r.Salida)
+}
+
+$Pruebas['m105 (c) sin index.html previo (migracion.ps1 no ha montado las paginas) no se crea ninguna pagina, ni se toca una suelta, y no sale la linea'] = {
+  $e = Nuevo-M105 'm105-c'
+  [System.IO.File]::WriteAllText((Join-Path (Salida-M105 $e) '3-original-vs-migrado.html'), 'viejo')
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no hay index.html' ($null -eq (Pagina-M105 $e 'index.html')) ''
+  Comprueba 'la pagina suelta sigue como estaba' ((Pagina-M105 $e '3-original-vs-migrado.html') -ceq 'viejo') ''
+  Comprueba 'no hay ninguna pagina mas' (@(Get-ChildItem -LiteralPath (Salida-M105 $e) -File -Filter '*.html').Count -eq 1) ''
+  Comprueba 'y no dice HTML al dia' (-not $r.Salida.Contains('HTML al dia')) (Cola $r.Salida)
+}
+
+$Pruebas['m105 (d) si Write-Informes falla (una carpeta donde va el fichero temporal de la pagina 3), sale un Aviso con el mensaje, el codigo de salida es el de siempre y no sale HTML al dia'] = {
+  $e = Nuevo-M105 'm105-d'
+  Pon-Viejas-M105 $e
+  $r = Prueba $e
+  Igual 'sin el fallo sale con 0 y dice HTML al dia' '0,True' "$($r.Codigo),$($r.Salida.Contains('HTML al dia'))"
+  [void](New-Item -ItemType Directory -Path (Join-Path (Salida-M105 $e) '3-original-vs-migrado.html.tmp') -Force)
+  $r2 = Prueba $e
+  Igual 'con el fallo sale con el mismo codigo' $r.Codigo $r2.Codigo
+  Comprueba 'avisa de que no ha podido rehacer las paginas, con el mensaje' ($r2.Salida -match 'No he podido rehacer las paginas del informe: \S') (Cola $r2.Salida)
+  Comprueba 'y no dice HTML al dia' (-not $r2.Salida.Contains('HTML al dia')) (Cola $r2.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
