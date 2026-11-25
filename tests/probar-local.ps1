@@ -10355,7 +10355,7 @@ Prueba-D 'excepcion-clases' @((Fallo-M 'original' 'EXCEPCION' '' 'BeanCreationEx
 Prueba-D 'excepcion-igual' @((Fallo-M 'original' 'EXCEPCION' '' 'BeanCreationException'), (Fallo-M 'migrado' 'EXCEPCION' 'otro' 'org.x.BeanCreationException'))
 Prueba-D 'excepcion-sin-clase' @((Fallo-M 'original' 'EXCEPCION' '' 'una excepcion'), $monitor)
 Prueba-D 'failed-y-excepcion' @($nulo, (Fallo-M 'migrado' 'EXCEPCION' '' 'BeanCreationException'))
-Prueba-D 'sin-estado' @((Fallo-M 'original' 'sin estado.txt' ''), $monitor)
+Prueba-D 'sin-estado' @((Fallo-M 'original' 'sin estado.txt' 'java.lang.OutOfMemoryError: sin memoria'), $monitor)
 $res = @(
   (Caso-M 'caso-01' @($nulo, $monitor)),
   (Caso-M 'caso-02' @((Fallo-M 'original' 'FAILED' 'java.lang.IllegalStateException: tres'), $monitor) @((Dif 'e.txt'))),
@@ -10380,7 +10380,7 @@ foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## 
   Igual 'dos EXCEPCION de la misma clase (una con paquete): no' 'False' $d['excepcion-igual']
   Igual 'una EXCEPCION sin clase (una excepcion): no' 'False' $d['excepcion-sin-clase']
   Igual 'FAILED en el original y EXCEPCION en el migrado, de clases distintas: si' 'True' $d['failed-y-excepcion']
-  Igual 'un lado sin estado.txt: no' 'False' $d['sin-estado']
+  Igual 'un lado sin estado.txt (aunque su causa tenga clase): no' 'False' $d['sin-estado']
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'cuatro grupos' 4 $g.Count
   Igual '1: los casos 01 y 02 (el migrado con la misma causa; el original falla en los dos): la cabecera dice el estado y la clase del original del primero' '1 ## fallo ## fallo|FAILED|java.lang.IllegalMonitorStateException: dos ## cargaJob/caso-01,cargaJob/caso-02 ## 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalMonitorStateException: dos; el original acaba FAILED por otra causa: NullPointerException' $g[0]
@@ -10408,6 +10408,19 @@ $Pruebas['m108 (a) con prueba-local.lock abierto en exclusiva por otra prueba: l
   Igual 'el migrado queda como estaba' $antes (Foto $e.Migrado)
   $r3 = Prueba $e
   Igual 'con el cerrojo ya suelto, la prueba sale con 0 otra vez' 0 $r3.Codigo
+}
+
+$Pruebas['m108 (c) con prueba-local.lock abierto por otro sin exclusiva: la prueba pide exclusiva, asi que tambien para con el mensaje nuevo y no toca la copia'] = {
+  $e = Escenario-M107 'm108-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera prueba sale con 0' 0 $r.Codigo
+  Escribe $e.CopiaMig 'marca-m108.txt' "de antes`n"
+  $cerrojo = [System.IO.File]::Open((Cerrojo-M108 $e), 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+  try { $r2 = Prueba $e }
+  finally { $cerrojo.Dispose() }
+  Comprueba 'sale con un codigo distinto de 0' ($r2.Codigo -ne 0) "rc=$($r2.Codigo)"
+  Comprueba 'dice que hay otra prueba local de este batch en marcha' ($r2.Salida.Contains('Otra prueba local de este batch esta en marcha')) (Cola $r2.Salida)
+  Comprueba 'la copia del migrado de antes sigue ahi' (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'marca-m108.txt')) ''
 }
 
 $Pruebas['m108 (b) dos lanzamientos seguidos del mismo batch: el segundo no choca con el cerrojo del primero (el sistema lo suelta al acabar) y el fichero se queda'] = {
