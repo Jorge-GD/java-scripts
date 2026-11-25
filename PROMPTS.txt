@@ -10,3 +10,32 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 - Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
+
+
+PROMPT 36 (carpeta del migrado; en la ventana de Copilot del batch que ya esta cerrado)
+
+No cambies nada: solo contesta. Compara el configmap nuevo de este batch (al lado del migrado, con su PENDIENTE.md) con los configmaps de los otros dos batch que miraste (preguntamelos si no los sabes). Nunca escribas el valor de una contrasena.
+1. Una fila por cada <PENDIENTE> que quede en los ficheros (junta las que se repiten igual en varios entornos):
+variable o campo | entorno | valor en el primero | valor en el segundo | misma linea salvo el valor (si/no) | propuesta
+La propuesta es una de estas tres:
+- copiar: los dos tienen el mismo valor y no lleva el nombre de su batch (es de la plataforma). Lo de SFTP nunca va aqui.
+- adaptar: los dos siguen el mismo patron con el nombre de su batch. Escribe el valor que tocaria a este batch.
+- pedir: es propio de cada batch (rutas, Secret de SFTP) o no esta en ninguno de los dos.
+Y cuantas filas hay de cada propuesta.
+2. Para cada fichero con <PENDIENTE>: una linea del repo nuevo y la misma linea en el primero de los otros dos, con los valores cambiados por otros inventados (quiero ver la forma, no los datos). Si en algun fichero una entrada ocupa varias lineas, dilo.
+3. Las carpetas de entornos: se llaman igual en los tres repos? Cual tiene CERT y cual no?
+Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
+
+
+PROMPT 37 (misma ventana, despues de la tabla)
+
+Pon en el configmap nuevo solo las filas "copiar" de tu tabla: cambia su <PENDIENTE> por ese valor. No toques nada mas y no escribas ninguna contrasena. Dame la lista fichero:linea de lo que has cambiado y cuantos <PENDIENTE> quedan.
+
+
+PROMPT 38 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+No cambies nada y no lances nada: solo contesta, tres lineas por punto como mucho.
+1. El job de pagos: la comprobacion con -Caso paro porque falta una tarea. Dime cual: en prueba-local\tareas, la que no esta en estado hecha (id, estado y motivo). Y si borraste, moviste o creaste alguna carpeta en prueba-local\casos o prueba-local\arnes.
+2. El caso 6 de la consulta paginada: por que el original no encuentra el ajuste y el migrado si (fichero:linea del lector o de la consulta en cada lado). Es la paginacion del original (por ejemplo, salta filas al pasar de pagina porque el propio job cambia las filas que lee)? Pasaria igual en produccion con mas filas que el tamano de pagina?
+3. El job de la base no SQL, caso 5: la excepcion del original (clase, mensaje y fichero:linea donde salta) y por que. Es por el test (un campo que falta en el JSON del caso, algo que el test no monta) o fallaria igual en produccion con ese registro?
+Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
