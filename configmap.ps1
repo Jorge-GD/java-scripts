@@ -1080,7 +1080,16 @@ function Get-TextoPendienteConfigMap($D) {
     $l.Add('')
     $l.Add('## Entorno ' + $e.nombre.ToUpperInvariant())
     $l.Add('')
-    if (-not $e.inventario) { $l.Add('No hay carpeta de este entorno en el inventario: todos los valores quedan pendientes.'); $l.Add('') }
+    if (-not $e.inventario) {
+      $frase = 'No hay carpeta de este entorno en el inventario: todos los valores quedan pendientes.'
+      $suyos = @($D.sinInventario | Where-Object { $_ -and $_.entorno -ceq $e.nombre })
+      if ($suyos.Count -gt 0) {
+        $fu = $suyos[0].fuente.ToUpperInvariant()
+        $frase = "No hay carpeta de este entorno en el inventario: toma los valores de $fu donde su l${CmI}nea casa (mira " + [char]0xAB + "Puesto de $fu porque $($e.nombre.ToUpperInvariant()) no tiene inventario" + [char]0xBB + '). La tabla dice lo que sali' + $CmO + ' del inventario.'
+      }
+      $l.Add($frase)
+      $l.Add('')
+    }
     $l.Add('| Variable | De donde sale | Estado |')
     $l.Add('|---|---|---|')
     foreach ($f in $e.tabla) {

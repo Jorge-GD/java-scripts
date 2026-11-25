@@ -1466,6 +1466,9 @@ $Pruebas['m101 (o) Set-ComunesConfigMap: un valor vacio, solo de blancos o con o
 # En el escenario de siempre DES no tiene carpeta en el inventario (PRE y PRO si): todas sus lineas salen <PENDIENTE>. Base-M101 con $Pre pone en PRE una linea mas ($Dato) con valor.
 $TituloSinInv = 'Puesto de PRE porque DES no tiene inventario'
 $AvisoDes = 'DES no tiene inventario: si usa los valores de otro entorno, relanza con -ConfigMapSinInventario <ese entorno>.'
+# La frase de PENDIENTE.md bajo Entorno DES: la de siempre, o la que dice que toma los valores de PRE.
+$FraseDesVieja = 'No hay carpeta de este entorno en el inventario: todos los valores quedan pendientes.'
+$FraseDesFuente = 'No hay carpeta de este entorno en el inventario: toma los valores de PRE donde su l' + [char]0xED + 'nea casa (mira ' + [char]0xAB + 'Puesto de PRE porque DES no tiene inventario' + [char]0xBB + '). La tabla dice lo que sali' + [char]0xF3 + ' del inventario.'
 # Anade lineas al fichero variables de cada entorno de $PorEntorno (entorno -> texto) en el plan de la IA.
 function Plan-Lineas($E, [hashtable]$PorEntorno) {
   $ref = Ficheros-Referencia
@@ -1514,6 +1517,10 @@ $Pruebas['m111 (a) sin inventario: con -ConfigMapSinInventario pre, cada <PENDIE
   Igual 'Copilot recibe las mismas llamadas que sin el parametro' (Ids-Nuevos $b 0) (Ids-Nuevos $e 0)
   Comprueba 'la consola lo cuenta' ($x.Consola.Contains(', 5 puestos de pre')) $x.Consola
   Comprueba 'y no pide el parametro' (-not $x.Consola.Contains('relanza con -ConfigMapSinInventario'))
+  $d = Seccion $p 'Entorno DES'
+  Comprueba 'Entorno DES: la frase dice que toma los valores de PRE y donde mirar' ($d.Contains($FraseDesFuente)) $d
+  Comprueba 'y ya no dice que todos quedan pendientes' (-not $d.Contains('todos los valores quedan pendientes'))
+  Comprueba 'PRE y PRO (con inventario) no llevan ninguna de las dos' (-not (Seccion $p 'Entorno PRE').Contains('No hay carpeta') -and -not (Seccion $p 'Entorno PRO').Contains('No hay carpeta'))
   Comprueba 'sin el parametro no dice nada de eso' (-not $xb.Consola.Contains('puestos de pre'))
 }
 
@@ -1558,6 +1565,7 @@ $Pruebas['m111 (d) sin inventario: una fuente que no existe, o que tampoco tiene
   Comprueba 'avisa de que no es un entorno de la referencia' ($x.Consola.Contains('-ConfigMapSinInventario nada: no es un entorno de la referencia (des, pre, pro). No pongo nada.')) $x.Consola
   Igual 'nada cambia: mismos ficheros que sin el parametro' (Hashes-Destino $b) (Hashes-Destino $e)
   Igual 'configmap.json: sin puestos' 0 @((Json-Datos $e).sinInventario.lista).Count
+  Comprueba 'Entorno DES sigue con la frase de siempre' ((Seccion (Pendiente $e) 'Entorno DES').Contains($FraseDesVieja)) (Seccion (Pendiente $e) 'Entorno DES')
   $e2 = Base-M101 'm111-d2' 'acme-plat'
   $x2 = Corre $e2 @() 'des'
   Comprueba 'una fuente sin inventario: avisa del motivo' ($x2.Consola.Contains('-ConfigMapSinInventario des: no tiene inventario. No pongo nada.')) $x2.Consola
@@ -1574,6 +1582,7 @@ $Pruebas['m111 (e) sin inventario: sin el parametro, la ultima linea dice como p
   Comprueba 'va al final, despues del resumen' ($x.Consola.IndexOf($AvisoDes) -gt $x.Consola.IndexOf('Repo de configmap hecho')) $x.Consola
   Comprueba 'des sigue entero' ((Lineas-Destino $e 'config/des/variables') -ccontains 'pfx.variables.env.ruta-entrada=<PENDIENTE>')
   Comprueba 'PENDIENTE.md no tiene la seccion' ((Pendiente $e) -notmatch '(?m)^## Puesto de') (Pendiente $e)
+  Comprueba 'Entorno DES sigue con la frase de siempre' ((Seccion (Pendiente $e) 'Entorno DES').Contains($FraseDesVieja)) (Seccion (Pendiente $e) 'Entorno DES')
   $j = Json-Datos $e
   Comprueba 'configmap.json lleva sinInventario, vacio' (($j.PSObject.Properties.Name -contains 'sinInventario') -and @($j.sinInventario.lista).Count -eq 0)
 }
