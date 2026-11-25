@@ -1036,6 +1036,9 @@ function Texto-De-Funciones([string]$Ruta, [string[]]$Nombres) {
 # Las funciones del script que leen un fichero para compararlo (Get-LineasNormales y lo que decide por su tipo, M73 (c)): las que necesita cualquier prueba que extraiga Compare-Fichero.
 $FnLeer = @('Get-LineasNormales', 'Get-LineasContenido', 'Get-TipoContenido', 'Get-LineasExcel', 'Get-LineasZip', 'Get-LineaBinaria', 'Get-Hash256')
 
+# Las funciones del script que necesita cualquier prueba que extraiga Get-Grupos (los grupos de casos distintos por causa) con resultados inventados.
+$FnGrupos = @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal', 'Get-FalloDe', 'Get-FallosDistintos', 'Get-ClaseFallo')
+
 $Pruebas['55 m20b (a, b): una fecha de negocio que no es de hoy y cambia entre el original y el migrado sale distinta; la fecha y hora de hoy con otra hora sale igual'] = {
   $hoy = (Get-Date).ToString('yyyy-MM-dd')
   $e = Nuevo-Escenario 'm20b-fechas' ([ordered]@{ cargaJob = @('importe=10.00 vence=1980-05-12 00:00:00', "importe=10.00 hecho=$hoy 10:00:00") }) 'minimo=5.00' "minimo=5.00`nreescribe=1980-05-12 00:00:00=>1980-05-11 23:00:00`nreescribe=$hoy 10:00:00=>$hoy 11:30:00"
@@ -4467,7 +4470,7 @@ $res = @(
 )
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script $FnGrupos) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'cinco grupos' 5 $g.Count
@@ -4490,7 +4493,7 @@ function Caso-M([string]$Caso, [string]$Causa) {
 $res = @((Caso-M 'caso-01' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'), (Caso-M 'caso-02' 'java.lang.NoClassDefFoundError: org/x/a/ClaseB'), (Caso-M 'caso-03' 'java.lang.NoClassDefFoundError: org/x/a/ClaseA'))
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script $FnGrupos) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'dos grupos' 2 $g.Count
@@ -7152,7 +7155,7 @@ $res = @(
 )
 foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
 '@
-  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script @('Get-Grupos', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + $cuerpo))
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script $FnGrupos) + "`n" + $cuerpo))
   $r = Lanzar $f @()
   $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
   Igual 'cuatro grupos' 4 $g.Count
@@ -9471,7 +9474,7 @@ $grupos = @(Get-Grupos $res)
 Add-Hechos $grupos $res 'codigo' 'hash'
 foreach ($g in $grupos) { 'G ' + $g.numero + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion + ' ## ' + (@($g.hechos) -join ' | ') }
 '@
-  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script @('Get-Grupos', 'Add-Hechos', 'Get-CasoDe', 'Get-TipoDif', 'Format-Carpetas', 'Get-CausaNormal', 'Get-Normal', 'Format-Fallo', 'Sort-Ordinal')) + "`n" + '$resultados = @(' + "`n" + $Casos + "`n" + ')' + "`n" + $pie))
+  [System.IO.File]::WriteAllText($f, ($cabeza + "`n" + (Texto-De-Funciones $Script ($FnGrupos + @('Add-Hechos', 'Get-CasoDe'))) + "`n" + '$resultados = @(' + "`n" + $Casos + "`n" + ')' + "`n" + $pie))
   $r = Lanzar $f @()
   return @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
 }
@@ -10224,6 +10227,211 @@ $Pruebas['m105 (d) si Write-Informes falla (una carpeta donde va el fichero temp
   Igual 'con el fallo sale con el mismo codigo' $r.Codigo $r2.Codigo
   Comprueba 'avisa de que no ha podido rehacer las paginas, con el mensaje' ($r2.Salida -match 'No he podido rehacer las paginas del informe: \S') (Cola $r2.Salida)
   Comprueba 'y no dice HTML al dia' (-not $r2.Salida.Contains('HTML al dia')) (Cola $r2.Salida)
+}
+
+# ===================== M107 y M108: causas distintas y una sola prueba por batch =====================
+# M107: un caso cuyos dos lados acaban FAILED o EXCEPCION con la misma salida de ficheros, pero con una clase de excepcion distinta en cada lado, sale distinto (sin
+# diferencias de ficheros) y va a un grupo de fallo; con la misma clase (aunque cambie el mensaje o el paquete) o con un lado sin causa, sale igual como siempre.
+# El Maven de mentira que lo hace lo escribe la propia prueba (no hay falso en tests/falsos que deje FAILED en los dos lados sin tocar sus ficheros): encima de m25-mvn.ps1,
+# si RESCATE_M107 trae 'lado[:regex sobre job/caso]=causa' separados por ';' (lado: original o migrado; gana el primero que casa; sin causa, solo estado=FAILED), cada
+# caso que ejecuta (menos vacio y otro) deja estado=FAILED en ese lado, con 'Caused by: <causa>' en la salida de Maven, y conserva el resto de lo que deja.
+$M107Falso = @'
+$raiz = (Get-Location).Path
+& '@FALSO@' @args
+$codigo = $LASTEXITCODE
+$job = ''; $caso = ''
+foreach ($a in $args) {
+  if ("$a" -match '^-Dprueba\.local\.job=(.+)$') { $job = $Matches[1] }
+  if ("$a" -match '^-Dprueba\.local\.caso=(.+)$') { $caso = $Matches[1] }
+}
+if ($env:RESCATE_M107 -and $codigo -eq 0 -and $job -and $caso -and $caso -ne 'vacio' -and $caso -ne 'otro') {
+  $lado = 'migrado'
+  if ($raiz -like '*batch-viejo*') { $lado = 'original' }
+  $hecho = $false
+  foreach ($g in ($env:RESCATE_M107 -split ';')) {
+    $izq, $causa = $g -split '=', 2
+    $quien, $solo = $izq -split ':', 2
+    if (-not $solo) { $solo = '.' }
+    if ($hecho -or $quien -ne $lado -or "$job/$caso" -notmatch $solo) { continue }
+    $hecho = $true
+    [System.IO.File]::WriteAllText([System.IO.Path]::Combine($raiz, 'target', 'prueba-local', $job, $caso, 'estado.txt'), "estado=FAILED`nsalida=FAILED`n")
+    if ($causa) { 'Caused by: ' + $causa }
+  }
+}
+exit $codigo
+'@
+
+function Escenario-M107([string]$Nombre, $Casos) {
+  $mvn = Join-Path $Dir 'm107-mvn.ps1'
+  if (-not (Test-Path -LiteralPath $mvn)) { [System.IO.File]::WriteAllText($mvn, $M107Falso.Replace('@FALSO@', (Join-Path $falsos 'm25-mvn.ps1'))) }
+  return (Escenario-M25 $Nombre $Casos -Sano -Ajustes @{ MvnExe = $mvn })
+}
+
+# Lanza con las causas $Causas de ese Maven de mentira (ver arriba).
+function Prueba-M107($E, [string]$Causas, [string[]]$A = @()) {
+  $env:RESCATE_M107 = $Causas
+  try { return (Prueba $E $A) }
+  finally { $env:RESCATE_M107 = '' }
+}
+
+$M107Nulo = 'java.lang.NullPointerException: no hay contexto'
+$M107Monitor = 'java.lang.IllegalMonitorStateException: tapa otro fallo'
+
+$Pruebas['m107 (a) los dos acaban FAILED con los mismos ficheros pero con clases distintas (NullPointerException frente a IllegalMonitorStateException): el caso sale distinto, sin diferencias, con su motivo, en un grupo de fallo, y sale con 2'] = {
+  $e = Escenario-M107 'm107-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M107 $e "original=$M107Nulo;migrado=$M107Monitor"
+  Igual 'sale con 2 (hay distintos)' 2 $r.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sale distinto' 'distinto' $c.resultado
+  Igual 'sin diferencias de ficheros' 0 @($c.diferencias | Where-Object { $_ }).Count
+  Igual 'con el motivo que nombra las dos clases' "Los dos acaban FAILED, pero por causas distintas: el original, $M107Nulo; el migrado, $M107Monitor. No es el mismo fallo." $c.motivo
+  Igual 'los dos lados siguen en fallos' 'original,migrado' ((@($c.fallos | ForEach-Object { $_.lado })) -join ',')
+  $g = @((Lee-Json $e.Json).grupos | Where-Object { $_ })
+  Igual 'hay un solo grupo' 1 $g.Count
+  Igual 'de tipo fallo' 'fallo' $g[0].tipo
+  Igual 'con la firma de siempre: estado y causa del migrado' "fallo|FAILED|$M107Monitor" $g[0].firma
+  Igual 'y el caso lleva su grupo' 1 $c.grupo
+  Comprueba 'la cabecera del grupo dice la causa del migrado y la clase del original' ($r.Salida.Contains("Grupo 1: 1 caso distinto, el migrado acaba FAILED: ${M107Monitor}; el original acaba FAILED por otra causa: NullPointerException")) (Cola $r.Salida)
+  Comprueba 'la consola ensena el motivo del caso' ($r.Salida.Contains('Los dos acaban FAILED, pero por causas distintas')) (Cola $r.Salida)
+}
+
+$Pruebas['m107 (b) los dos acaban FAILED con la misma clase y otro mensaje (o con otro paquete): igual, como hoy, y sale con 0'] = {
+  $e = Escenario-M107 'm107-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M107 $e 'original:caso-01=java.lang.IllegalStateException: sin correo;migrado:caso-01=java.lang.IllegalStateException: sin datos;original:caso-02=java.lang.IllegalStateException: sin correo;migrado:caso-02=org.acme.IllegalStateException: otro mensaje'
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Comprueba 'no dice que sean causas distintas' ($r.Salida -notmatch 'causas distintas') (Cola $r.Salida)
+  Comprueba 'y no hay grupos' (@((Lee-Json $e.Json).grupos | Where-Object { $_ }).Count -eq 0) ''
+}
+
+$Pruebas['m107 (c) los dos acaban FAILED y un lado no dice su causa (el original en un caso, el migrado en otro): igual, como hoy'] = {
+  $e = Escenario-M107 'm107-c' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba-M107 $e "original:caso-01=$M107Nulo;migrado:caso-01=;original:caso-02=;migrado:caso-02=$M107Monitor"
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'los dos casos salen iguales' 'igual,igual' ((Resultados $e) -join ',')
+  Igual 'el lado sin causa sigue sin ella' '' (@((Caso $e 'cargaJob' 'caso-01').fallos | Where-Object { $_.lado -eq 'migrado' })[0].causa)
+  Comprueba 'no dice que sean causas distintas' ($r.Salida -notmatch 'causas distintas') (Cola $r.Salida)
+}
+
+$Pruebas['m107 (d) un segundo lanzamiento con el original reutilizado (no se ejecuta otra vez): la causa del original sale de originales.json y el caso sigue distinto'] = {
+  $e = Escenario-M107 'm107-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba-M107 $e "original=$M107Nulo;migrado=$M107Monitor"
+  Igual 'el primero sale con 2' 2 $r.Codigo
+  # el original, si se ejecutara otra vez, acabaria bien: solo se ve su fallo si se reutiliza lo guardado
+  $r2 = Prueba-M107 $e "migrado=$M107Monitor"
+  Comprueba 'la consola dice que reutiliza el original' ($r2.Salida -match 'Original: se reutilizan las salidas de 1 caso\(s\) y se ejecutan 0\.') (Cola $r2.Salida)
+  Igual 'sale con 2' 2 $r2.Codigo
+  $c = Caso $e 'cargaJob' 'caso-01'
+  Igual 'el caso sigue distinto' 'distinto' $c.resultado
+  Igual 'con el mismo motivo' "Los dos acaban FAILED, pero por causas distintas: el original, $M107Nulo; el migrado, $M107Monitor. No es el mismo fallo." $c.motivo
+  Igual 'la causa del original sale de originales.json' $M107Nulo (@((Lee-Json (Get-Ruta $e.Local 'salidas/originales.json')).casos)[0].causa)
+}
+
+$Pruebas['m107 (e) Get-FallosDistintos y Get-Grupos con resultados inventados: solo clases distintas en los dos lados cuentan; la cabecera del grupo dice lo del original solo si es verdad en todos sus casos'] = {
+  $f = Join-Path $Dir 'm107-grupos.ps1'
+  $cuerpo = @'
+$Inv = [System.Globalization.CultureInfo]::InvariantCulture
+$RutasCopia = @()
+$Hoy = @([datetime]'2026-11-20')
+function Fallo-M([string]$Lado, [string]$Estado, [string]$Causa, [string]$Clase = '') {
+  $x = [ordered]@{ lado = $Lado; estado = $Estado; causa = $Causa }
+  if ($Clase) { $x.clase = $Clase }
+  return $x
+}
+function Dif([string]$Clave) { [ordered]@{ fichero = $Clave; clave = $Clave; lineas = 1; linea = 1; original = 'x'; migrado = 'y'; nota = '' } }
+function Caso-M([string]$Caso, $Fallos, $Dif = @()) {
+  [ordered]@{ job = 'cargaJob'; caso = $Caso; titulo = 't'; resultado = 'distinto'; motivo = ''; diferencias = @($Dif); fallos = @($Fallos) }
+}
+$nulo = Fallo-M 'original' 'FAILED' 'java.lang.NullPointerException: uno'
+$monitor = Fallo-M 'migrado' 'FAILED' 'java.lang.IllegalMonitorStateException: dos'
+function Prueba-D([string]$Que, $Fallos) { 'D ' + $Que + ' ' + (Get-FallosDistintos $Fallos) }
+Prueba-D 'clases' @($nulo, $monitor)
+Prueba-D 'solo-uno' @($monitor)
+Prueba-D 'misma-clase' @($nulo, (Fallo-M 'migrado' 'FAILED' 'java.lang.NullPointerException: otro mensaje'))
+Prueba-D 'otro-paquete' @($nulo, (Fallo-M 'migrado' 'FAILED' 'org.acme.NullPointerException: dos'))
+Prueba-D 'sin-causa' @($nulo, (Fallo-M 'migrado' 'FAILED' ''))
+Prueba-D 'sin-clase' @($nulo, (Fallo-M 'migrado' 'FAILED' 'no hay datos'))
+Prueba-D 'excepcion-clases' @((Fallo-M 'original' 'EXCEPCION' '' 'BeanCreationException'), (Fallo-M 'migrado' 'EXCEPCION' '' 'org.x.NoSuchBeanDefinitionException'))
+Prueba-D 'excepcion-igual' @((Fallo-M 'original' 'EXCEPCION' '' 'BeanCreationException'), (Fallo-M 'migrado' 'EXCEPCION' 'otro' 'org.x.BeanCreationException'))
+Prueba-D 'excepcion-sin-clase' @((Fallo-M 'original' 'EXCEPCION' '' 'una excepcion'), $monitor)
+Prueba-D 'failed-y-excepcion' @($nulo, (Fallo-M 'migrado' 'EXCEPCION' '' 'BeanCreationException'))
+Prueba-D 'sin-estado' @((Fallo-M 'original' 'sin estado.txt' 'java.lang.OutOfMemoryError: sin memoria'), $monitor)
+$res = @(
+  (Caso-M 'caso-01' @($nulo, $monitor)),
+  (Caso-M 'caso-02' @((Fallo-M 'original' 'FAILED' 'java.lang.IllegalStateException: tres'), $monitor) @((Dif 'e.txt'))),
+  (Caso-M 'caso-03' @((Fallo-M 'migrado' 'FAILED' 'java.lang.QException: cuatro'))),
+  (Caso-M 'caso-04' @($nulo, (Fallo-M 'migrado' 'FAILED' 'java.lang.RException: cinco'))),
+  (Caso-M 'caso-05' @((Fallo-M 'migrado' 'FAILED' 'java.lang.RException: cinco')) @((Dif 'f.txt'))),
+  (Caso-M 'caso-06' @((Fallo-M 'original' 'FAILED' 'java.lang.AException: seis'), (Fallo-M 'migrado' 'FAILED' 'java.lang.AException: siete')) @((Dif 'g.txt')))
+)
+foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## ' + $g.firma + ' ## ' + (@($g.casos) -join ',') + ' ## ' + $g.descripcion }
+'@
+  [System.IO.File]::WriteAllText($f, ((Texto-De-Funciones $Script $FnGrupos) + "`n" + $cuerpo))
+  $r = Lanzar $f @()
+  $d = @{}
+  foreach ($l in @($r.Salida -split "`n")) { if ($l -cmatch '^D (\S+) (\S+)$') { $d[$Matches[1]] = $Matches[2] } }
+  Igual 'dos clases distintas: si' 'True' $d['clases']
+  Igual 'solo falla un lado: no' 'False' $d['solo-uno']
+  Igual 'la misma clase con otro mensaje: no' 'False' $d['misma-clase']
+  Igual 'la misma clase de otro paquete: no' 'False' $d['otro-paquete']
+  Igual 'un lado sin causa: no' 'False' $d['sin-causa']
+  Igual 'un lado con una causa sin clase: no' 'False' $d['sin-clase']
+  Igual 'dos EXCEPCION de clases distintas (una con paquete): si' 'True' $d['excepcion-clases']
+  Igual 'dos EXCEPCION de la misma clase (una con paquete): no' 'False' $d['excepcion-igual']
+  Igual 'una EXCEPCION sin clase (una excepcion): no' 'False' $d['excepcion-sin-clase']
+  Igual 'FAILED en el original y EXCEPCION en el migrado, de clases distintas: si' 'True' $d['failed-y-excepcion']
+  Igual 'un lado sin estado.txt (aunque su causa tenga clase): no' 'False' $d['sin-estado']
+  $g = @($r.Salida -split "`n" | Where-Object { $_ -cmatch '^G ' } | ForEach-Object { $_.TrimEnd().Substring(2) })
+  Igual 'cuatro grupos' 4 $g.Count
+  Igual '1: los casos 01 y 02 (el migrado con la misma causa; el original falla en los dos): la cabecera dice el estado y la clase del original del primero' '1 ## fallo ## fallo|FAILED|java.lang.IllegalMonitorStateException: dos ## cargaJob/caso-01,cargaJob/caso-02 ## 2 casos distintos, el migrado acaba FAILED: java.lang.IllegalMonitorStateException: dos; el original acaba FAILED por otra causa: NullPointerException' $g[0]
+  Igual '2: el caso 04 y el 05 comparten causa del migrado y el original solo falla en uno: la cabecera no dice nada del original' '2 ## fallo ## fallo|FAILED|java.lang.RException: cinco ## cargaJob/caso-04,cargaJob/caso-05 ## 2 casos distintos, el migrado acaba FAILED: java.lang.RException: cinco' $g[1]
+  Igual '3: el migrado falla y el original no, como siempre' '3 ## fallo ## fallo|FAILED|java.lang.QException: cuatro ## cargaJob/caso-03 ## 1 caso distinto, el migrado acaba FAILED: java.lang.QException: cuatro' $g[2]
+  Igual '4: los dos fallan con la misma clase y distintos ficheros: de fichero, como siempre' '4 ## fichero ## fichero|g.txt:contenido ## cargaJob/caso-06 ## 1 caso distinto, en g.txt: contenido' $g[3]
+}
+
+# M108: el cerrojo prueba-local.lock en prueba-local del batch.
+function Cerrojo-M108($E) { return (Get-Ruta $E.Local 'prueba-local.lock') }
+
+$Pruebas['m108 (a) con prueba-local.lock abierto en exclusiva por otra prueba: la segunda para con el mensaje nuevo (codigo distinto de 0) y no toca la copia del migrado de antes'] = {
+  $e = Escenario-M107 'm108-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera prueba sale con 0' 0 $r.Codigo
+  Escribe $e.CopiaMig 'marca-m108.txt' "de antes`n"
+  $antes = Foto $e.Migrado
+  $cerrojo = [System.IO.File]::Open((Cerrojo-M108 $e), 'OpenOrCreate', 'ReadWrite', 'None')
+  try { $r2 = Prueba $e }
+  finally { $cerrojo.Dispose() }
+  Comprueba 'sale con un codigo distinto de 0' ($r2.Codigo -ne 0) "rc=$($r2.Codigo)"
+  Comprueba 'dice que hay otra prueba local de este batch en marcha y que espere' ($r2.Salida.Contains('Otra prueba local de este batch esta en marcha (en otra ventana, o la lanzo Copilot con -Caso). Espera a que acabe y vuelve a lanzar.')) (Cola $r2.Salida)
+  Comprueba 'la copia del migrado de antes sigue ahi, con lo que tenia' ((Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'marca-m108.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'pom.xml'))) ''
+  Comprueba 'no ha llegado a hacer copias ni a ejecutar nada' ($r2.Salida -notmatch 'Copias:') (Cola $r2.Salida)
+  Igual 'el migrado queda como estaba' $antes (Foto $e.Migrado)
+  $r3 = Prueba $e
+  Igual 'con el cerrojo ya suelto, la prueba sale con 0 otra vez' 0 $r3.Codigo
+}
+
+$Pruebas['m108 (c) con prueba-local.lock abierto por otro sin exclusiva: la prueba pide exclusiva, asi que tambien para con el mensaje nuevo y no toca la copia'] = {
+  $e = Escenario-M107 'm108-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera prueba sale con 0' 0 $r.Codigo
+  Escribe $e.CopiaMig 'marca-m108.txt' "de antes`n"
+  $cerrojo = [System.IO.File]::Open((Cerrojo-M108 $e), 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+  try { $r2 = Prueba $e }
+  finally { $cerrojo.Dispose() }
+  Comprueba 'sale con un codigo distinto de 0' ($r2.Codigo -ne 0) "rc=$($r2.Codigo)"
+  Comprueba 'dice que hay otra prueba local de este batch en marcha' ($r2.Salida.Contains('Otra prueba local de este batch esta en marcha')) (Cola $r2.Salida)
+  Comprueba 'la copia del migrado de antes sigue ahi' (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'marca-m108.txt')) ''
+}
+
+$Pruebas['m108 (b) dos lanzamientos seguidos del mismo batch: el segundo no choca con el cerrojo del primero (el sistema lo suelta al acabar) y el fichero se queda'] = {
+  $e = Escenario-M107 'm108-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primero sale con 0' 0 $r.Codigo
+  Comprueba 'deja prueba-local.lock en prueba-local' (Test-Path -LiteralPath (Cerrojo-M108 $e)) ''
+  $r2 = Prueba $e
+  Igual 'el segundo sale con 0' 0 $r2.Codigo
+  Comprueba 'y no habla de otra prueba en marcha' ($r2.Salida -notmatch 'Otra prueba local') (Cola $r2.Salida)
+  Igual 'el fichero sigue siendo uno solo y sin contenido (ni PID ni nada)' '0' "$((Get-Item -LiteralPath (Cerrojo-M108 $e)).Length)"
 }
 
 # ================================ LANZADOR ================================

@@ -370,7 +370,7 @@ function New-Copia([string]$Repo, [string]$Commit, [string]$Dir) {
   if (Test-Path -LiteralPath $Dir) {
     if (-not (Test-CopiaDe $Repo $Dir)) { return "La carpeta $Dir ya existe y no es una copia de la prueba local de $Repo. Muevela o borrala y vuelve a lanzar." }
     $r = Invoke-Git $Repo @('worktree', 'remove', '--force', $Dir)
-    if ($r.Codigo -ne 0) { return ("No he podido borrar la copia anterior ($Dir): " + ($r.Salida -join ' ')) }
+    if ($r.Codigo -ne 0) { return ("No he podido borrar la copia anterior ($Dir): " + ($r.Salida -join ' ') + ' Algo tiene abierta esa carpeta: cierra los java.exe de una prueba anterior y el explorador, VS Code o las terminales abiertas dentro de ella, y vuelve a lanzar.') }
   }
   # -f: vale aunque git aun tenga apuntada una copia anterior que alguien borro a mano
   $r = Invoke-Git $Repo @('worktree', 'add', '-q', '-f', '--detach', $Dir, $Commit)
@@ -1018,6 +1018,24 @@ function Format-DetalleFallo($F) {
   if ($F.clase -and $F.causa) { return "$($F.clase): $($F.causa)" }
   if ($F.clase) { return [string]$F.clase }
   return [string]$F.causa
+}
+
+# El fallo del lado $Lado ('original' o 'migrado') de los $Fallos de un caso (Get-Fallos), o $null si ese lado no falla.
+function Get-FalloDe($Fallos, [string]$Lado) { return @(@($Fallos) | Where-Object { $_.lado -ceq $Lado })[0] }
+
+# $true si los $Fallos de un caso (Get-Fallos) dicen que el original y el migrado acaban FAILED o EXCEPCION, los dos con su clase de excepcion (Get-ClaseFallo, sin paquete)
+# y las clases son distintas (ordinal): los dos fallan, pero por causas distintas, y que acaben con los mismos ficheros no lo hace el mismo fallo. Con la misma clase (aunque cambie
+# el mensaje) es el mismo fallo dicho de otra forma, y con un lado sin clase no se sabe: $false, como antes de decidirlo por la causa.
+function Get-FallosDistintos($Fallos) {
+  $clases = @()
+  foreach ($lado in @('original', 'migrado')) {
+    $f = Get-FalloDe $Fallos $lado
+    if (-not $f -or ($f.estado -cne 'FAILED' -and $f.estado -cne 'EXCEPCION')) { return $false }
+    $clase = (Get-ClaseFallo $f).Split('.')[-1]
+    if ($clase -cnotmatch '^[\w$]+$') { return $false }   # (sin clase, o 'una excepcion': Get-Excepcion no la sabe)
+    $clases += $clase
+  }
+  return ($clases[0] -cne $clases[1])
 }
 
 # La linea de un caso del migrado en cuanto acaba su Maven (Invoke-Salidas), sin esperar a la comparacion de ficheros: como acaba el migrado (con el detalle de su fallo $Fallo,
@@ -3394,7 +3412,8 @@ function Get-SinGuardar([string]$Nombre, [string]$Job, [string]$Caso) {
 # Si Maven se ha pasado del tope en una de sus tres ejecuciones, no se pudo preparar y el motivo es el mensaje del tope.
 # 'fallos' dice, de original y migrado, cual acaba FAILED, EXCEPCION o sin estado.txt y por que (Get-Fallos). Un caso con un fichero que no se
 # pudo guardar sale distinto, con ese fichero entre las diferencias (noGuardado). Un caso que no se ejecuto en el migrado porque su job no arranca con
-# su test (Invoke-Salidas) sale sin probar en local.
+# su test (Invoke-Salidas) sale sin probar en local. Un caso cuyos dos lados acaban FAILED o EXCEPCION con los mismos ficheros pero con clases de excepcion distintas sale
+# distinto, sin diferencias y con el motivo de las dos causas (Get-FallosDistintos).
 # $Nombre es donde esta lo del migrado: salidas\<Nombre> (el migrado de siempre, o el de un commit de la busqueda de -Desde). Lo del original
 # se normaliza con los dias de su ejecucion (Get-DiasOriginal: puede ser de otro dia) y lo del migrado, con los de hoy.
 function Get-Resultado($T, [string]$Nombre = 'migrado') {
@@ -3443,6 +3462,16 @@ function Get-Resultado($T, [string]$Nombre = 'migrado') {
     return $o
   }
   if ($azar.Count -gt 0) { $o.resultado = 'no determinista'; return $o }
+  # Los dos acaban mal con los mismos ficheros, pero cada uno por su causa: no es el mismo fallo (el que ve la consola sin esto es el que tapa al otro)
+  if (Get-FallosDistintos $o.fallos) {
+    $fo = Get-FalloDe $o.fallos 'original'
+    $fm = Get-FalloDe $o.fallos 'migrado'
+    $quien = "Los dos acaban $($fm.estado)"
+    if ($fo.estado -cne $fm.estado) { $quien = "Los dos fallan (el original acaba $($fo.estado) y el migrado, $($fm.estado))" }
+    $o.resultado = 'distinto'
+    $o.motivo = "$quien, pero por causas distintas: el original, $(Format-DetalleFallo $fo); el migrado, $(Format-DetalleFallo $fm). No es el mismo fallo."
+    return $o
+  }
   $o.resultado = 'igual'
   $vacio = Join-Ruta $Local "salidas/vacio/$j"
   if ((Test-Path -LiteralPath $vacio) -and @(Compare-Caso $s1 $vacio $diasOrig $diasOrig).Count -eq 0) { $o.motivo = $MotivoVacio }
@@ -3469,7 +3498,8 @@ function Get-CausaNormal([string]$Causa, [string]$Caso) {
 
 # Los grupos de los casos distintos de $Res, numerados desde 1: primero los de fallo, despues los de mas casos y, a igualdad, por la firma (en orden
 # ordinal). Cada uno: numero, tipo, firma, casos ('job/caso', por job y caso), descripcion (la cabecera de la consola, sin 'Grupo <n>: ') y hechos (vacio).
-# - De fallo: el migrado acaba FAILED, EXCEPCION o sin estado.txt y el original no. Firma 'fallo|<estado>|<causa normalizada>' (Get-CausaNormal).
+# - De fallo: el migrado acaba FAILED, EXCEPCION o sin estado.txt y el original no, o tambien falla pero por otra causa (Get-FallosDistintos). Firma 'fallo|<estado>|<causa normalizada
+#   del migrado>' (Get-CausaNormal). Si el original falla en todos los casos del grupo, la cabecera anade 'el original acaba <estado> por otra causa: <clase>'.
 # - De fichero: los demas. Firma 'fichero|' y la lista ordenada de '<clave>:<tipo>' de sus diferencias; el tipo es falta (no esta en el migrado), sobra
 #   (solo esta en el migrado), noGuardado, otraCarpeta (un fichero que cada lado deja en otra carpeta, Join-OtraCarpeta: su clave es la pareja de carpetas
 #   y no el nombre, que lleva la fecha del caso, y su cabecera dice las carpetas de cada lado) o contenido. Una falta o una sobra de un fichero de entrada del caso
@@ -3480,7 +3510,7 @@ function Get-Grupos($Res) {
     $mig = @($r.fallos | Where-Object { $_.lado -ceq 'migrado' })
     $orig = @($r.fallos | Where-Object { $_.lado -ceq 'original' })
     $ent = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
-    if ($mig.Count -gt 0 -and $orig.Count -eq 0) {
+    if ($mig.Count -gt 0 -and ($orig.Count -eq 0 -or (Get-FallosDistintos $r.fallos))) {
       $tipo = 'fallo'
       $firma = 'fallo|' + $mig[0].estado + '|' + (Get-CausaNormal ([string]$mig[0].causa) $r.caso)
     }
@@ -3503,7 +3533,12 @@ function Get-Grupos($Res) {
     [System.Array]::Sort($k, [object[]]$m, [System.StringComparer]::Ordinal)
     $cuantos = "$($m.Count) casos distintos"
     if ($m.Count -eq 1) { $cuantos = '1 caso distinto' }
-    if ($g.tipo -ceq 'fallo') { $desc = "$cuantos, " + (Format-Fallo @($m[0].caso.fallos | Where-Object { $_.lado -ceq 'migrado' })[0] -ConRegistro) }
+    if ($g.tipo -ceq 'fallo') {
+      $desc = "$cuantos, " + (Format-Fallo (Get-FalloDe $m[0].caso.fallos 'migrado') -ConRegistro)
+      # Si en todos los casos del grupo el original tambien falla (con otra causa: Get-FallosDistintos), la cabecera lo dice
+      $deOriginal = @($m | ForEach-Object { Get-FalloDe $_.caso.fallos 'original' } | Where-Object { $_ })
+      if ($deOriginal.Count -eq $m.Count) { $desc += "; el original acaba $($deOriginal[0].estado) por otra causa: $(Get-ClaseFallo $deOriginal[0])" }
+    }
     else {
       $lista = @(Sort-Ordinal @($m[0].ent.Keys))
       $primera = $m[0].ent[$lista[0]]
@@ -4426,6 +4461,12 @@ $Local = Join-Path $Salida 'prueba-local'
 $Datos = $Local   # Save-Tarea y Restore-Tarea (tareas.ps1) guardan las tareas en $Datos\tareas
 $Registros = Join-Path $Local 'registros'
 [void](New-Item -ItemType Directory -Path $Registros -Force)
+# Una sola prueba local por batch: prueba-local.lock se abre en exclusiva (FileShare.None: en Windows lo impone el sistema y en Unix, .NET lo hace con flock) y se queda abierto mientras dura
+# el proceso. Si este muere, el sistema lo suelta: no lleva PID ni se borra a mano, y el fichero se queda, vacio. Esta en la raiz de prueba-local\, fuera de casos\, arnes\, salidas\ y de
+# las copias: no entra en ninguna huella ni lo borran -Rehacer* ni la limpieza de salidas\. Una segunda prueba del mismo batch (otra ventana, o Copilot con -Caso) rehaceria las copias
+# que la primera esta usando: aqui se para antes de tocar nada.
+try { $script:Cerrojo = [System.IO.File]::Open((Join-Path $Local 'prueba-local.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+catch [System.IO.IOException] { Stop-Arranque 'Otra prueba local de este batch esta en marcha (en otra ventana, o la lanzo Copilot con -Caso). Espera a que acabe y vuelve a lanzar.' }
 $todosJobs = @($pruebas | ForEach-Object { [string]$_.job })
 if ($Job) {
   $pruebas = @($pruebas | Where-Object { $_.job -ceq $Job })
@@ -4684,4 +4725,5 @@ try {
 finally {
   Save-Tiempos
   [void](Set-Despierto $false)
+  if ($script:Cerrojo) { $script:Cerrojo.Dispose() }
 }
