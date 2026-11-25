@@ -12,43 +12,23 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 44 (carpeta del migrado; en la ventana de Copilot del configmap de este batch)
+COMANDOS (en PowerShell, desde la carpeta java-scripts; cambia lo que va entre < > por las rutas de cada batch)
 
-Quedan tres valores del configmap y una comprobacion que hace fallar el arranque. No escribas contrasenas. No hagas commits en el repo del original y no deshagas el que hay.
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+0. Antes de nada, sin ninguna prueba corriendo:
+git pull
 
-1. Los tres valores que quedan (servidor de logs, seguridad activada y aceptar claves de host desconocidas): pon el valor que tiene esa linea en el configmap de referencia, el que se uso para crear este (su ruta esta en migracion-<batch>\datos\configmap.json, campo referencia), en el mismo entorno; en CERT, el de PRE. El de aceptar claves desconocidas va a true, como en los otros dos batch. Si la referencia no tiene alguna de esas lineas, dejala pendiente y dime que valor tiene en cada uno de los otros dos.
-2. Las rutas de archivo y de cuarentena del SFTP. Con SFTP activado y sin ruta de archivo, el migrado no arranca. Antes de cambiar nada, dame fichero:linea de cada llamada (no la definicion) al metodo que archiva y a la ruta de cuarentena, en src/main del migrado.
-   a) Si no hay ninguna llamada, es codigo que no se usa. En rescate, quita el metodo que archiva, la comprobacion que exige la ruta de archivo al arrancar, el calculo de la ruta de cuarentena y esas dos propiedades. Ajusta los tests unitarios que los prueban y anade uno que compruebe que arranca con SFTP activado y sin ruta de archivo. mvn test en verde.
-   b) Si alguna se usa, no toques nada y dime que hace.
-3. Comprobacion final, solo si has cambiado rescate, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes):
-  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Rapida
-- Ejecuta un caso de cada job desde el ultimo commit de rescate, los tests guardados y las entradas de los casos. No llama a la IA.
-- No la lances mientras corre otra prueba de este batch.
-Dame la tabla (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y el commit nuevo de rescate.
-4. Dame fichero:linea de cada cambio del configmap, cuantos <PENDIENTE> quedan por entorno y el mensaje final para el equipo de plataforma.
-Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
+1. BATCH 1. La prueba completa. A la pregunta "El test del original ha cambiado: N casos sin probar ... Llamar a Copilot para ellos?" contesta n. Si pregunta por otras tareas de IA, contesta n y dime cuantas.
+.\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
+Cuando acabe sin distintos, el cierre:
+.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
 
+2. BATCH 2. El repo de configmap (los dos de -ConfigMapComparar son los configmaps de otros dos batch que ya funcionan):
+.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -ConfigMap -Inventario "<inventario del original>" -ConfigMapComparar "<configmap de otro batch>,<configmap de otro batch>"
 
-PROMPT 45 (carpeta del migrado; en la ventana de Copilot de este batch)
+3. BATCH 3. Cuando Copilot acabe el configmap: si ha hecho un commit nuevo en rescate, la prueba completa y despues el cierre. Si no, nada mas.
+.\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
+.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
 
-El caso 6 esta bien. Queda el caso 5: los dos lados acaban FAILED, pero por causas distintas, y eso no es igual. El original falla con una NullPointerException y el migrado con una IllegalMonitorStateException.
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
-No hagas commits en el repo del original y no deshagas el que hay.
-
-Antes de cambiar nada, por este orden:
-1. El migrado: dame la traza entera de su IllegalMonitorStateException en el registro del caso 5 (prueba-local\registros) y su fichero:linea en src/main. Suele salir al soltar un cerrojo que no se ha cogido (un unlock en un finally), y entonces tapa la excepcion de verdad: busca la primera excepcion de esa ejecucion.
-   a) Si el migrado suelta un cerrojo que no tiene, arreglalo en rescate con un test unitario (que lo suelte solo si lo tiene), para que salga la causa de verdad.
-   b) Si es otra cosa, dime cual antes de tocar nada.
-2. El original: dime que es null en su NullPointerException y de que entrada del caso viene. Si en las entradas del caso falta una fila SQL para los registros del JSON, anadela, para que los dos lados procesen esos registros. Si con esas entradas el original falla tambien en produccion, no lo tapes: dimelo en dos lineas para el PR.
-3. Dime que test unitario cubre en rescate el arreglo del caso 6. Si no hay ninguno, anadelo.
-
-Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
-  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
-- Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
-- No la lances mientras corre la prueba completa de este batch.
-- Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
-- Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
-Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
-Lanza el caso 5 y el caso 6. Si has cambiado rescate, lanza ademas el comando con -Rapida.
-Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
+4. BATCH 4. Cuando el caso 5 este bien, la prueba completa. A la pregunta nueva, n. A "Llamar a Copilot para esas N tareas?", s si N es 1; si no, n y dime N. Despues, el cierre (antes, mira que el migrado esta en su rama buena):
+.\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
+.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
