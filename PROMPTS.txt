@@ -12,24 +12,22 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 48 (carpeta del migrado; en una ventana de Copilot nueva para el configmap de este batch)
+PROMPT 49 (carpeta del migrado; en la misma ventana de Copilot del repo de configmap nuevo de este batch)
 
-La herramienta ha escrito el repo de configmap nuevo de este batch (su ruta sale al final de la consola, con su PENDIENTE.md). Quedan <PENDIENTE> en los ficheros, secretos por pedir y hallazgos de la revision. Resuelve todo lo que se pueda con estas decisiones, que ya se tomaron con otro batch.
-No escribas contrasenas. No toques el codigo del migrado: si hiciera falta, dimelo. No borres nada fuera del repo nuevo.
+Estas son mis decisiones para lo que queda. No escribas contrasenas. No hagas commits en el repo del original y no deshagas el que hay. Los cambios de codigo van en la carpeta de rescate (al lado del migrado, acabada en -rescate), con commit; nunca en la carpeta del migrado.
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
 
-0. Si junto al repo nuevo hay una carpeta con su mismo nombre acabado en -antes, es la que habia antes. No la borres. Dime de donde viene (git remote -v y git log -3 si tiene .git) y si tiene valores que sirvan para los pendientes.
-1. Los hallazgos de la revision (PENDIENTE.md): arregla los que sean de verdad y dime en una linea por que no lo son los demas.
-2. CERT usa los mismos valores que PRE: no hay inventario de CERT. En todos los ficheros de CERT, pon en cada linea el valor que tiene esa misma linea en PRE. No pidas el inventario de CERT.
-3. Si el batch usa SFTP:
-   a) El original leia y escribia en carpetas de su maquina (las rutas de su inventario). El migrado llega a esas mismas carpetas por SFTP. Una fila por cada ruta del original: clave del inventario | fichero:linea del original que la usa | para que (leer la entrada, dejar la salida, mover tras procesar, copia de seguridad) | variable SFTP del migrado que hace lo mismo (fichero:linea donde la usa). Pon en cada variable SFTP la ruta del original para lo mismo, de su entorno.
-   b) Las variables de carpetas locales del migrado son carpetas de trabajo dentro del contenedor: si el migrado les da valor por defecto y los configmaps de los otros dos batch no las ponen, quita sus lineas.
-   c) La variable que activa SFTP, a true en todos los entornos.
-   d) Las rutas de archivo y de cuarentena del SFTP: si el original movia el fichero a una carpeta de su inventario al acabar, pon esa carpeta. Si no, dame fichero:linea de cada uso en el migrado (no la definicion) y dime si el migrado la exige al arrancar. No la quites sin decirmelo.
-4. Los valores de la plataforma (servidor de logs, seguridad activada, aceptar claves de host desconocidas y cualquier otro que no sea del batch): pon el valor que tiene esa linea en el configmap de referencia (su ruta esta en migracion-<batch>\datos\configmap.json, campo referencia), en el mismo entorno. El de aceptar claves desconocidas va a true, como en los otros dos batch. Si la referencia no tiene la linea, dejala pendiente y dime que valor tiene en cada uno de los otros dos.
-5. Quita las lineas cuyo valor por defecto en el migrado ya vale en produccion (una carpeta local, un puerto estandar, vacio para no hacer algo) y que no pone ninguno de los configmaps de los otros dos batch. Si el valor por defecto es de desarrollo (localhost, una URL de pruebas, un usuario de prueba), dejala pendiente y dimelo.
-6. Los nombres de los Secret, con el mismo patron que usan los configmaps de los otros dos batch. Dime cuales son y que claves lleva cada uno.
-7. Una fila por cada <PENDIENTE> que quede: fichero:linea | variable | donde la usa el migrado (fichero:linea) | por que no hay valor | quien lo da.
-8. Dame fichero:linea de cada cambio, cuantos <PENDIENTE> quedan por entorno y el mensaje para el equipo de plataforma con solo lo que quede de verdad, agrupado y sin contrasenas.
+1. La carpeta -antes es el repo de configmap que ya existe en el remoto. Mueve su carpeta .git al repo nuevo; la carpeta -antes se queda como copia, sin .git. No hagas commit. Dame git status y git diff --stat del repo nuevo.
+   a) Para cada linea que en el repo de antes tenia un valor y en el nuevo tiene <PENDIENTE> u otro valor, una fila: fichero:linea | antes | ahora. Si ahora es <PENDIENTE> y el valor de antes es del batch y no es secreto, pon el de antes.
+   b) Para cada fichero que git status da como borrado: que era y si hace falta. Si es configuracion de este batch que el nuevo no tiene, recuperalo con git checkout -- <fichero> y dimelo.
+2. Claves de host desconocidas: aceptarlas, como el batch de referencia. En rescate, que el adaptador SFTP lea ese valor de una propiedad (false si no llega) en vez de fijarlo en el codigo. Usa el mismo nombre de propiedad y de variable que el batch de referencia y su configmap (el campo referencia de datos\configmap.json), si lo tienen. Con un test unitario que compruebe que el valor llega al adaptador. En el configmap, esa variable a true en todos los entornos. Si con true el fichero de hosts conocidos ya no se usa (dame fichero:linea), quita su linea pendiente; si se usa igual, dejala y dimelo.
+3. La copia de seguridad: el original copiaba cada fichero a su carpeta de copia de seguridad. Dime que hace el servicio del migrado que la hace (fichero:linea): a que ruta escribe, de donde sale esa ruta y si escribe en el servidor SFTP o en el contenedor.
+   a) Si escribe en otra ruta que el original, o en el contenedor: arreglalo en rescate. La ruta, de una variable; en el configmap, la del original en cada entorno. Con su test unitario.
+   b) Si ya escribe en la misma carpeta del servidor SFTP, no toques nada y dimelo.
+4. Si has cambiado rescate: mvn test en verde en la carpeta de rescate, y despues la comprobacion de la herramienta, no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes):
+  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Rapida
+   No la lances mientras corre la prueba completa de este batch. Dame su tabla (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos y, para cada caso que no salga igual, por que.
+5. Dame fichero:linea de cada cambio (rescate y configmap), los commits nuevos de rescate, git status de los tres repos (el src/main del original sin tocar), cuantos <PENDIENTE> quedan por entorno y el mensaje final para plataforma: los Secret con sus claves, sin valores, y lo que siga faltando.
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
 
 
