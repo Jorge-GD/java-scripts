@@ -10035,5 +10035,94 @@ $Pruebas['m100 (e) un commit de src/main y despues otro de src/test, sin relanza
   Comprueba 'y dice la linea con los 3 casos' ($r.Salida.Contains((Linea-M100 3))) (Cola $r.Salida)
 }
 
+# ===================== M103: los casos sin probar no se preparan otra vez con la IA sin preguntar =====================
+# Un job de 2 casos probado una vez entero, el primero no-aplica (sin probar en local, con el hash del test del original de entonces). Un cambio a mano en
+# prueba-local\arnes\original (su test sigue valiendo) deja ese hash distinto: el caso se podria preparar otra vez, y eso gasta IA.
+
+function Primera-M103([string]$Nombre) {
+  $e = Escenario-M59 $Nombre ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $r = Prueba $e @() 'caso-no-aplica:caso-cargaJob-01'
+  Igual "${Nombre}: la prueba entera sale con 0" 0 $r.Codigo
+  Igual "${Nombre}: el caso 1 queda sin probar en local" 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  return $e
+}
+
+function Cambia-Test-Original-M103($E) {
+  [System.IO.File]::AppendAllText((Get-Ruta $E.Local 'arnes/original/src/test/java/com/acme/viejo/PruebaLocalTest.java'), "// otro test`n")
+}
+
+$PreguntaM103 = 'El test del original ha cambiado: 1 casos sin probar se pueden preparar otra vez con la IA. Llamar a Copilot para ellos? (si dices que no, se quedan sin probar como estaban)'
+
+$Pruebas['m103 (a) cambio a mano en arnes\original y relanzar contestando n a la pregunta nueva: Copilot no se llama para el caso sin probar, sigue sin probar en local, la prueba acaba y la tarea sigue hecha; el siguiente lanzamiento vuelve a preguntar'] = {
+  $e = Primera-M103 'm103-a'
+  $n = @(Llamadas $e).Count
+  Cambia-Test-Original-M103 $e
+  $r = Prueba $e @() '' 'n'
+  Igual 'contestando n sale con 0' 0 $r.Codigo
+  Comprueba 'hace la pregunta nueva (1 caso)' ($r.Salida.Contains($PreguntaM103)) (Cola $r.Salida)
+  Igual 'ninguna llamada nueva a Copilot' $n @(Llamadas $e).Count
+  Igual 'el caso sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  Igual 'su tarea sigue hecha' 'hecha' (Tarea-Caso-M36 $e 'cargaJob' '01').estado
+  Comprueba 'no dice que se vuelve a preparar' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+  Comprueba 'la consola cuenta 0 tareas de IA por hacer' ($r.Salida.Contains('tareas de IA por hacer: 0 ')) (Cola $r.Salida)
+  $r = Prueba $e @() '' 'n'
+  Igual 'el siguiente lanzamiento tambien sale con 0' 0 $r.Codigo
+  Comprueba 'y vuelve a preguntar' ($r.Salida.Contains($PreguntaM103)) (Cola $r.Salida)
+  Igual 'sin llamadas nuevas' $n @(Llamadas $e).Count
+}
+
+$Pruebas['m103 (b) lo mismo con -Si: Copilot se llama para el caso sin probar y la linea de tareas de IA por hacer lo cuenta'] = {
+  $e = Primera-M103 'm103-b'
+  Igual 'una llamada del caso de antes' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Cambia-Test-Original-M103 $e
+  $r = Prueba $e
+  Igual 'con -Si sale con 0' 0 $r.Codigo
+  Igual 'el caso no-aplica se prepara otra vez (una llamada nueva)' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Comprueba 'la linea de tareas de IA por hacer cuenta 1' ($r.Salida.Contains('tareas de IA por hacer: 1 ')) (Cola $r.Salida)
+  Comprueba 'dice que se vuelve a preparar 1 caso' ($r.Salida.Contains('1 caso(s) sin probar se vuelven a preparar: el test del original ha cambiado.')) (Cola $r.Salida)
+  Comprueba 'con -Si no hace la pregunta' (-not $r.Salida.Contains('Llamar a Copilot para ellos')) (Cola $r.Salida)
+}
+
+$Pruebas['m103 (c) lo mismo con -Job cargaJob -Caso caso-01: sale como siempre, sin parar, sin llamar a Copilot; sale la linea de Info y el caso sigue sin probar'] = {
+  $e = Primera-M103 'm103-c'
+  $n = @(Llamadas $e).Count
+  $antes = Prueba $e @('-Job', 'cargaJob', '-Caso', 'caso-01')
+  Comprueba 'sin cambiar el test: -Caso sobre el caso sin probar acaba la prueba (con 1, porque queda sin probar) y no dice nada del test' ($antes.Codigo -eq 1 -and -not $antes.Salida.Contains('el test del original ha cambiado')) "$($antes.Codigo): $(Cola $antes.Salida)"
+  Cambia-Test-Original-M103 $e
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', 'caso-01')
+  Igual 'cambiado el test: sale igual que antes (con 1: el caso queda sin probar), sin parar antes' $antes.Codigo $r.Codigo
+  Comprueba 'no para con "Con -Caso no llamo a la IA: faltan"' (-not $r.Salida.Contains('Con -Caso no llamo a la IA: faltan')) (Cola $r.Salida)
+  Comprueba 'sale la linea de Info' ($r.Salida.Contains('1 caso(s) sin probar se quedan como estaban: el test del original ha cambiado, pero con -Caso no llamo a la IA.')) (Cola $r.Salida)
+  Comprueba 'no pregunta ni dice que se vuelve a preparar' ($r.Salida -notmatch 'Llamar a Copilot|se vuelven a preparar') (Cola $r.Salida)
+  Igual 'ninguna llamada nueva a Copilot' $n @(Llamadas $e).Count
+  Igual 'su tarea sigue hecha' 'hecha' (Tarea-Caso-M36 $e 'cargaJob' '01').estado
+  $f = Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'
+  $c = @((Lee-Json $f).casos | Where-Object { $_.caso -eq 'caso-01' })[0]
+  Igual 'el caso sigue sin probar en local' 'sin probar en local' "$($c.resultado)"
+}
+
+$Pruebas['m103 (d) sin cambiar el test del original no hay pregunta, como hoy (ni con 0 tareas ni con un caso sin probar)'] = {
+  $e = Primera-M103 'm103-d'
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e @() '' 'n'
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no hace la pregunta' ($r.Salida -notmatch 'El test del original ha cambiado|Llamar a Copilot') (Cola $r.Salida)
+  Igual 'ninguna llamada nueva' $n @(Llamadas $e).Count
+  Igual 'el caso sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+}
+
+$Pruebas['m103 (e) si el test del original se escribe en este lanzamiento (-RehacerOriginal), la pregunta sale despues de escribirlo: con n, el caso sigue sin probar y sin llamar a la IA'] = {
+  $e = Primera-M103 'm103-e'
+  $n = @(Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Pon-Hash-M59 $e 'caso-cargaJob-01' 'arnes-de-antes'
+  $r = Prueba $e @('-RehacerOriginal') '' "s`nn"
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'hace la pregunta nueva' ($r.Salida.Contains($PreguntaM103)) (Cola $r.Salida)
+  Igual 'el caso no se prepara otra vez (una sola llamada, la de antes)' 1 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Igual 'sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
+  Comprueba 'no dice que se vuelve a preparar' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
+  Igual 'su tarea sigue hecha, con el hash de antes' 'hecha,arnes-de-antes' ((Tarea-Caso-M36 $e 'cargaJob' '01').estado + ',' + (Hash-M59 $e 'caso-cargaJob-01'))
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

@@ -2427,21 +2427,45 @@ function Reset-OriginalesYaExiste($Tareas) {
 }
 
 # Un caso hecho como no-aplica (sin probar en local: la IA no lo vio correr en el original, por ejemplo por unas tablas que el test no creaba) se decidio con el test
-# del original de entonces. Si el que hay ahora es otro (su hash ya no es el que guardo la tarea), vuelve a pendiente con 0 intentos y se prepara otra vez. Uno de antes
-# de M59, que no guardo hash, cuenta como de otro test solo si el del original se escribe otra vez en este lanzamiento ($EscribeOriginal). Los casos con entradas no se
-# tocan: su original se ejecuta otra vez por la clave de las salidas. Dice cuantos son.
-function Reset-CasosSinProbar($Tareas, [bool]$EscribeOriginal) {
+# del original de entonces. Get-CasosSinProbarOtroTest da los que, con el test que hay ahora, se prepararian otra vez: los que su hash ya no es el del test guardado
+# (Get-HashArnesOriginal). Uno de antes de M59, que no guardo hash, cuenta como de otro test solo si el del original se escribe otra vez en este lanzamiento
+# ($EscribeOriginal). Los casos con entradas no se tocan: su original se ejecuta otra vez por la clave de las salidas. No cambia nada: Invoke-CasosSinProbarOtroTest
+# decide si se preparan.
+function Get-CasosSinProbarOtroTest($Tareas, [bool]$EscribeOriginal) {
   $actual = Get-HashArnesOriginal
-  $n = 0
+  $res = @()
   foreach ($t in @($Tareas | Where-Object { $_.estado -eq 'hecha' -and (Test-Path -LiteralPath (Join-Ruta $Local "casos/$($_.entradas.job)/$($_.entradas.caso)/no-aplica.txt")) })) {
     $antes = [string]$t.entradas.hashArnesOriginal
     if ($antes -ceq $actual -or (-not $antes -and -not $EscribeOriginal)) { continue }
+    $res += $t
+  }
+  return $res
+}
+
+# Vuelve a pendiente, con 0 intentos, cada caso de $Lista (Get-CasosSinProbarOtroTest) y dice cuantos. Devuelve cuantos.
+function Reset-CasosSinProbar($Lista) {
+  $n = 0
+  foreach ($t in @($Lista)) {
     $t.estado = 'pendiente'; $t.intentos = 0; $t.motivo = ''; $t.ultimoEstado = ''
     $t.entradas.hashArnesOriginal = ''
     Save-Tarea $t
     $n++
   }
   if ($n -gt 0) { Info "$n caso(s) sin probar se vuelven a preparar: el test del original ha cambiado." }
+  return $n
+}
+
+# Los casos sin probar que el test del original de ahora deja de otro test: con -Caso se quedan como estaban (no llamo a la IA); sin -Caso, la IA los prepara otra vez
+# solo si se dice que si (-Si es que si). Si se dice que no, no se guarda nada y el siguiente lanzamiento vuelve a preguntar. Devuelve cuantos se han puesto en pendiente.
+function Invoke-CasosSinProbarOtroTest($Tareas, [bool]$EscribeOriginal) {
+  $lista = @(Get-CasosSinProbarOtroTest $Tareas $EscribeOriginal)
+  if ($lista.Count -eq 0) { return 0 }
+  if ($Caso.Count -gt 0) {
+    Info "$($lista.Count) caso(s) sin probar se quedan como estaban: el test del original ha cambiado, pero con -Caso no llamo a la IA."
+    return 0
+  }
+  if (-not (Confirmar "El test del original ha cambiado: $($lista.Count) casos sin probar se pueden preparar otra vez con la IA. Llamar a Copilot para ellos? (si dices que no, se quedan sin probar como estaban)")) { return 0 }
+  return (Reset-CasosSinProbar $lista)
 }
 
 # Guarda un caso que ha pasado la comprobacion (en prueba-local\casos\<job>\<caso>); si es no-aplica, lo quita de la
@@ -4550,17 +4574,20 @@ try {
   if ($script:CasosOtroCommit -gt 0) { Info "$($script:CasosOtroCommit) casos hechos con otro commit del original se quedan como estaban: los commits nuevos no cambian src/main ni pom.xml." }
   Reset-CasosExcepcion $tareasCasos
   Reset-OriginalesYaExiste $tareasCasos
+  # con el test del original ya hecho (no se escribe en este lanzamiento) se sabe ya cuales de los casos sin probar se decidieron con otro: se pregunta antes de contar lo que se va a pedir a la IA
+  $yaAceptadas = 0
+  if ($ArnesOrig.estado -eq 'hecha') { $yaAceptadas = Invoke-CasosSinProbarOtroTest $tareasCasos $false }
   $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
   if ($Caso.Count -gt 0 -and $pendientes -gt 0) { Stop-Arranque "Con -Caso no llamo a la IA: faltan $pendientes tareas (un test guardado o las entradas de un caso). Lanza la prueba sin -Caso." }   # tambien con -Si
-  if ($pendientes -gt 0 -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
+  if ($pendientes -gt $yaAceptadas -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
   foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Save-Anterior $repo } }
 
   # 3. Arneses (sin el del original no se sigue) y entradas de los casos (las hechas de antes, a la copia del original)
   $escribeOriginal = ($ArnesOrig.estado -ne 'hecha')
   Invoke-Arneses @($arneses | Where-Object { $_.estado -ne 'hecha' }) $todosJobs
   if ($ArnesOrig.estado -ne 'hecha') { Show-Atascado $ArnesOrig; exit 1 }
-  Reset-CasosSinProbar $tareasCasos ($escribeOriginal -and -not $script:VueltaAlDeAntes)
+  if ($escribeOriginal) { [void](Invoke-CasosSinProbarOtroTest $tareasCasos (-not $script:VueltaAlDeAntes)) }   # el del original se ha escrito ahora: antes no se sabia su hash
   if ($ArnesMig.estado -ne 'hecha') { Show-Atascado $ArnesMig; Aviso 'Sigo con el original: los casos quedan hechos para el proximo lanzamiento.' }
   foreach ($t in @($tareasCasos | Where-Object { $_.estado -eq 'hecha' })) {
     $guardado = Join-Ruta $Local "casos/$($t.entradas.job)/$($t.entradas.caso)"
