@@ -12,6 +12,27 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
+PROMPT 48 (carpeta del migrado; en una ventana de Copilot nueva para el configmap de este batch)
+
+La herramienta ha escrito el repo de configmap nuevo de este batch (su ruta sale al final de la consola, con su PENDIENTE.md). Quedan <PENDIENTE> en los ficheros, secretos por pedir y hallazgos de la revision. Resuelve todo lo que se pueda con estas decisiones, que ya se tomaron con otro batch.
+No escribas contrasenas. No toques el codigo del migrado: si hiciera falta, dimelo. No borres nada fuera del repo nuevo.
+
+0. Si junto al repo nuevo hay una carpeta con su mismo nombre acabado en -antes, es la que habia antes. No la borres. Dime de donde viene (git remote -v y git log -3 si tiene .git) y si tiene valores que sirvan para los pendientes.
+1. Los hallazgos de la revision (PENDIENTE.md): arregla los que sean de verdad y dime en una linea por que no lo son los demas.
+2. CERT usa los mismos valores que PRE: no hay inventario de CERT. En todos los ficheros de CERT, pon en cada linea el valor que tiene esa misma linea en PRE. No pidas el inventario de CERT.
+3. Si el batch usa SFTP:
+   a) El original leia y escribia en carpetas de su maquina (las rutas de su inventario). El migrado llega a esas mismas carpetas por SFTP. Una fila por cada ruta del original: clave del inventario | fichero:linea del original que la usa | para que (leer la entrada, dejar la salida, mover tras procesar, copia de seguridad) | variable SFTP del migrado que hace lo mismo (fichero:linea donde la usa). Pon en cada variable SFTP la ruta del original para lo mismo, de su entorno.
+   b) Las variables de carpetas locales del migrado son carpetas de trabajo dentro del contenedor: si el migrado les da valor por defecto y los configmaps de los otros dos batch no las ponen, quita sus lineas.
+   c) La variable que activa SFTP, a true en todos los entornos.
+   d) Las rutas de archivo y de cuarentena del SFTP: si el original movia el fichero a una carpeta de su inventario al acabar, pon esa carpeta. Si no, dame fichero:linea de cada uso en el migrado (no la definicion) y dime si el migrado la exige al arrancar. No la quites sin decirmelo.
+4. Los valores de la plataforma (servidor de logs, seguridad activada, aceptar claves de host desconocidas y cualquier otro que no sea del batch): pon el valor que tiene esa linea en el configmap de referencia (su ruta esta en migracion-<batch>\datos\configmap.json, campo referencia), en el mismo entorno. El de aceptar claves desconocidas va a true, como en los otros dos batch. Si la referencia no tiene la linea, dejala pendiente y dime que valor tiene en cada uno de los otros dos.
+5. Quita las lineas cuyo valor por defecto en el migrado ya vale en produccion (una carpeta local, un puerto estandar, vacio para no hacer algo) y que no pone ninguno de los configmaps de los otros dos batch. Si el valor por defecto es de desarrollo (localhost, una URL de pruebas, un usuario de prueba), dejala pendiente y dimelo.
+6. Los nombres de los Secret, con el mismo patron que usan los configmaps de los otros dos batch. Dime cuales son y que claves lleva cada uno.
+7. Una fila por cada <PENDIENTE> que quede: fichero:linea | variable | donde la usa el migrado (fichero:linea) | por que no hay valor | quien lo da.
+8. Dame fichero:linea de cada cambio, cuantos <PENDIENTE> quedan por entorno y el mensaje para el equipo de plataforma con solo lo que quede de verdad, agrupado y sin contrasenas.
+Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
+
+
 COMANDOS (en PowerShell, desde la carpeta java-scripts; cambia lo que va entre < > por las rutas de cada batch)
 
 0. Antes de nada, sin ninguna prueba corriendo:
