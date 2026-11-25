@@ -12,30 +12,40 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 36 (carpeta del migrado; en la ventana de Copilot del batch que ya esta cerrado)
+PROMPT 37 (carpeta del migrado; en la ventana de Copilot del batch que ya esta cerrado, despues de la tabla de los configmaps)
 
-No cambies nada: solo contesta. Compara el configmap nuevo de este batch (al lado del migrado, con su PENDIENTE.md) con los configmaps de los otros dos batch que miraste (preguntamelos si no los sabes). Nunca escribas el valor de una contrasena.
-1. Una fila por cada <PENDIENTE> que quede en los ficheros (junta las que se repiten igual en varios entornos):
-variable o campo | entorno | valor en el primero | valor en el segundo | misma linea salvo el valor (si/no) | propuesta
-La propuesta es una de estas tres:
-- copiar: los dos tienen el mismo valor y no lleva el nombre de su batch (es de la plataforma). Lo de SFTP nunca va aqui.
-- adaptar: los dos siguen el mismo patron con el nombre de su batch. Escribe el valor que tocaria a este batch.
-- pedir: es propio de cada batch (rutas, Secret de SFTP) o no esta en ninguno de los dos.
-Y cuantas filas hay de cada propuesta.
-2. Para cada fichero con <PENDIENTE>: una linea del repo nuevo y la misma linea en el primero de los otros dos, con los valores cambiados por otros inventados (quiero ver la forma, no los datos). Si en algun fichero una entrada ocupa varias lineas, dilo.
-3. Las carpetas de entornos: se llaman igual en los tres repos? Cual tiene CERT y cual no?
+Pon en el configmap nuevo solo las filas "copiar" de tu tabla: cambia su <PENDIENTE> por ese valor. No toques nada mas y no escribas ninguna contrasena. Dame la lista fichero:linea de lo que has cambiado y cuantos <PENDIENTE> quedan.
+Despues, sin cambiar nada:
+1. Para cada variable de tu tabla que esta "Ausente" en los dos configmaps: la linea del migrado que la pide (fichero:linea, con el valor cambiado por uno inventado) y si lleva valor por defecto, del tipo ${variable:valor}.
+2. Escribeme un mensaje corto para el equipo de plataforma que pida lo que queda en "pedir", agrupado: SFTP (usuario y contrasena como Secret, rutas), rutas de ficheros, lo de CERT, y el resto. Sin contrasenas ni valores de secretos. Solo el texto: no lo mandes.
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
 
 
-PROMPT 37 (misma ventana, despues de la tabla)
+PROMPT 39 (carpeta del migrado; en la ventana de Copilot de este batch)
 
-Pon en el configmap nuevo solo las filas "copiar" de tu tabla: cambia su <PENDIENTE> por ese valor. No toques nada mas y no escribas ninguna contrasena. Dame la lista fichero:linea de lo que has cambiado y cuantos <PENDIENTE> quedan.
+Quedan dos casos para cerrar este batch.
 
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia. No hagas commits en el repo del original y no deshagas el que hay.
 
-PROMPT 38 (carpeta del migrado; en la ventana de Copilot de este batch)
+1. El caso 6 del job de la consulta paginada: el original no encuentra el ajuste (0.00) y el migrado si (30.00). Las dos consultas son distintas. Antes de cambiar nada:
+   a) Pon las dos consultas una al lado de la otra, condicion por condicion (tablas, cruces, filtros y parametros). Dime que condicion deja fuera la fila del caso 6 en el original, con el valor de esa fila en las entradas del caso.
+   b) Con eso, en este orden:
+      - Si el migrado ha perdido o cambiado una condicion del original, es un fallo de la migracion: arreglalo en rescate con un test unitario, para que haga lo mismo que el original.
+      - Si la condicion da otro resultado en la base del test que en la de produccion (una funcion, fechas, texto con espacios, mayusculas), arreglalo en el test guardado o en las entradas del caso, sin tapar la diferencia. Dime que has cambiado y por que.
+      - Si al caso le falta una fila en una tabla que solo cruza el original, anadela a las entradas del caso.
+   No me digas cual de los dos esta bien sin la condicion y el dato que lo prueban.
+2. El caso 5 del job de la base no SQL: el original falla (NullPointerException) porque el caso no tiene ninguna fila en la consulta SQL que el job lee antes; el migrado acaba bien. El caso se preparo para que los dos lados procesen registros pendientes.
+   - Anade a las entradas del caso 5 las filas en SQL que casan con los registros de su JSON, para que los dos lleguen a procesarlos.
+   - No cambies por esto el codigo del original ni el del migrado.
+   - Si el titulo del caso 5 dice que no hay filas en SQL, no lo cambies: dimelo.
+   - Para el PR, dos lineas: que hace el original sin esas filas y que hace el migrado.
 
-No cambies nada y no lances nada: solo contesta, tres lineas por punto como mucho.
-1. El job de pagos: la comprobacion con -Caso paro porque falta una tarea. Dime cual: en prueba-local\tareas, la que no esta en estado hecha (id, estado y motivo). Y si borraste, moviste o creaste alguna carpeta en prueba-local\casos o prueba-local\arnes.
-2. El caso 6 de la consulta paginada: por que el original no encuentra el ajuste y el migrado si (fichero:linea del lector o de la consulta en cada lado). Es la paginacion del original (por ejemplo, salta filas al pasar de pagina porque el propio job cambia las filas que lee)? Pasaria igual en produccion con mas filas que el tamano de pagina?
-3. El job de la base no SQL, caso 5: la excepcion del original (clase, mensaje y fichero:linea donde salta) y por que. Es por el test (un campo que falta en el JSON del caso, algo que el test no monta) o fallaria igual en produccion con ese registro?
+Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
+  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
+- Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
+- No la lances mientras corre la prueba completa de este batch.
+- Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
+- Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
+Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
+Lanza el caso 6 del punto 1 y el caso 5 del punto 2.
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
