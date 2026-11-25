@@ -12,6 +12,27 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
+PROMPT 46 (carpeta del migrado; en la ventana de Copilot de este batch)
+
+El test guardado del original no compila con el JDK del original. La prueba completa para con: PruebaLocalTest.java:[525,21] cannot find symbol: method toList(), location: interface java.util.stream.Stream. Stream.toList() es de Java 16, y la prueba compila el test del original con el JDK del original (-JavaLegacy), no con el de Maven.
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+No hagas commits en el repo del original y no deshagas el que hay.
+
+1. Arregla el test guardado del original, en prueba-local\arnes\original (no en la copia): cambia ese .toList() por .collect(Collectors.toList()), con su import. Busca en el mismo fichero todo lo que no exista en la version de Java del original (Stream.toList, records, bloques de texto con tres comillas, switch con flechas, instanceof con variable, y List.of o Map.of si el original es Java 8) y cambialo por lo equivalente.
+2. No cambies nada mas: los mismos casos y las mismas comprobaciones.
+3. Dime con que comando comprobaste este test la ultima vez y si llevaba -JavaLegacy.
+
+Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
+  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
+- Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
+- No la lances mientras corre la prueba completa de este batch.
+- Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
+- Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
+Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
+Lanza el comando con -Rapida y -JavaLegacy (sin -JavaLegacy no vale: compilaria con otro JDK).
+Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
+
+
 COMANDOS (en PowerShell, desde la carpeta java-scripts; cambia lo que va entre < > por las rutas de cada batch)
 
 0. Antes de nada, sin ninguna prueba corriendo:
