@@ -187,10 +187,12 @@ function Planes-Buenos($E, [string[]]$Pendientes = @()) {
 }
 
 # Una pasada de configmap.ps1 en este proceso. Devuelve el resultado de la fase (Codigo, Ruta...) y lo que sale por la consola.
-function Corre($E, [string[]]$Comparar = @()) {
+function Corre($E, [string[]]$Comparar = @(), [string]$SinInventario = '') {
   $script:Datos = $E.Datos
   $script:Registros = $E.Registros
-  $todo = @(Invoke-FaseConfigMap $E.Plantilla $E.Migrado $E.Ref $E.Inv $false $Comparar *>&1)
+  $extra = @{}
+  if ($SinInventario) { $extra['SinInventario'] = $SinInventario }
+  $todo = @(Invoke-FaseConfigMap $E.Plantilla $E.Migrado $E.Ref $E.Inv $false $Comparar @extra *>&1)
   $res = @($todo | Where-Object { $_ -is [System.Management.Automation.PSCustomObject] })
   $txt = ((@($todo | Where-Object { $_ -isnot [System.Management.Automation.PSCustomObject] }) | ForEach-Object { "$_" }) -join "`n")
   return [pscustomobject]@{ R = $res[0]; Consola = $txt }
@@ -1141,18 +1143,21 @@ function Anade-En-Todas($E, [string]$Rel, [string]$Linea) {
 $Dato = 'pfx.variables.env.dato-a='
 # El escenario de siempre y, en el fichero variables de cada entorno, una linea mas con <PENDIENTE> ($Dato): la IA la deja asi y ninguna tarea falla (una variable de la
 # tabla con valor en el inventario no puede quedar pendiente; esta no es de la tabla). Con ella, los tres entornos tienen una marca de un solo valor.
-function Pon-Dato-M101($E) {
+# $Pre: lo que lleva esa linea en PRE (lo que la IA dejaria si PRE lo tuviera); en DES y PRO, <PENDIENTE>.
+function Pon-Dato-M101($E, [string]$Pre = '<PENDIENTE>') {
   $ref = Ficheros-Referencia
   foreach ($env in @('des', 'pre', 'pro')) {
     $f = Ficheros-Entorno $env $ref
-    $f["config/$env/variables"] += $Dato + "<PENDIENTE>`n"
+    $v = '<PENDIENTE>'
+    if ($env -eq 'pre') { $v = $Pre }
+    $f["config/$env/variables"] += $Dato + $v + "`n"
     Plan $E "configmap-entorno-$env" $f
   }
 }
-function Base-M101([string]$Nombre) {
+function Base-M101([string]$Nombre, [string]$Pre = '<PENDIENTE>') {
   $e = Nuevo-Escenario $Nombre
   Planes-Buenos $e
-  Pon-Dato-M101 $e
+  Pon-Dato-M101 $e $Pre
   return $e
 }
 # Lo mismo con un repo de comparar (E.Cmp).
@@ -1455,6 +1460,207 @@ $Pruebas['m101 (o) Set-ComunesConfigMap: un valor vacio, solo de blancos o con o
   $res = @(Set-ComunesConfigMap $nuevo 'acme-cm-lote-pedidos' $ref $parte @($cmp) @())
   Igual 'no se pone ninguna' 0 $res.Count
   foreach ($k in $nuevos.Keys) { Igual "$k sigue con su <PENDIENTE>" $nuevos[$k] ([System.IO.File]::ReadAllText((Join-Path $nuevo "$k.properties"))) }
+}
+
+# ---- m111: -ConfigMapSinInventario (un entorno sin carpeta en el inventario toma los valores de otro) ----
+# En el escenario de siempre DES no tiene carpeta en el inventario (PRE y PRO si): todas sus lineas salen <PENDIENTE>. Base-M101 con $Pre pone en PRE una linea mas ($Dato) con valor.
+$TituloSinInv = 'Puesto de PRE porque DES no tiene inventario'
+$AvisoDes = 'DES no tiene inventario: si usa los valores de otro entorno, relanza con -ConfigMapSinInventario <ese entorno>.'
+# Anade lineas al fichero variables de cada entorno de $PorEntorno (entorno -> texto) en el plan de la IA.
+function Plan-Lineas($E, [hashtable]$PorEntorno) {
+  $ref = Ficheros-Referencia
+  foreach ($env in $PorEntorno.Keys) {
+    $f = Ficheros-Entorno $env $ref
+    $f["config/$env/variables"] += $PorEntorno[$env]
+    Plan $E "configmap-entorno-$env" $f
+  }
+}
+function Json-Datos($E) { return (Lee-Json (Join-Path $E.Datos 'configmap.json')) }
+# El inventario que lee Set-SinInventarioConfigMap: los entornos con carpeta y los que no.
+function Inv-Falso([string[]]$Con, [string[]]$Sin) {
+  $i = [ordered]@{}
+  foreach ($x in $Con) { $i[$x] = [pscustomobject]@{ Entorno = $x; Tiene = $true } }
+  foreach ($x in $Sin) { $i[$x] = [pscustomobject]@{ Entorno = $x; Tiene = $false } }
+  return $i
+}
+
+$Pruebas['m111 (a) sin inventario: con -ConfigMapSinInventario pre, cada <PENDIENTE> de DES con pareja en PRE se pone; PENDIENTE.md y configmap.json lo apuntan; Copilot recibe las mismas llamadas'] = {
+  $b = Base-M101 'm111-a0' 'acme-plat'
+  $xb = Corre $b
+  $e = Base-M101 'm111-a' 'acme-plat'
+  $x = Corre $e @() 'pre'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $l = Lineas-Destino $e 'config/des/variables'
+  foreach ($k in @('ruta-entrada=/data/pre/entrada', 'lote-pedidos-endpoint=https://pedidos.pre.acme.test/api', 'reintentos=5', 'url-auth=https://auth.pre.acme.test/token', 'dato-a=acme-plat')) {
+    Comprueba "des: la linea de $k se pone" ($l -ccontains ('pfx.variables.env.' + $k)) (Lee-Destino $e 'config/des/variables')
+  }
+  Comprueba 'des: cliente (pendiente tambien en PRE) sigue <PENDIENTE>' ($l -ccontains 'pfx.variables.env.cliente=<PENDIENTE>')
+  Comprueba 'pro (tiene inventario) no cambia: su dato sigue <PENDIENTE>' ((Lineas-Destino $e 'config/pro/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  Comprueba 'des/secretos: sus dos marcas siguen (en PRE tambien estan pendientes)' ((Lee-Destino $e 'config/des/secretos').Contains('<PENDIENTE: nombre del Secret>'))
+  Igual 'cinco pendientes menos que sin el parametro' ($xb.R.Pendientes - 5) $x.R.Pendientes
+  $p = Pendiente $e
+  $s = Seccion $p $TituloSinInv
+  $n = Numero-Linea $e 'config/des/variables' 'pfx.variables.env.ruta-entrada='
+  Comprueba 'PENDIENTE.md lista la linea en la seccion nueva' ($s.Contains('`config/des/variables:' + $n + '`')) $p
+  Igual 'y lista las cinco' 5 ([regex]::Matches($s, '(?m)^- `config/des/variables:\d+`\s*$')).Count
+  Comprueba 'la seccion va despues de la de pendientes en los ficheros' ((Titulos $p).Contains('Pendientes en los ficheros | ' + $TituloSinInv + ' | Hallazgos de la revisi' + [char]0xF3 + 'n')) (Titulos $p)
+  Comprueba 'la linea ya no sale entre los pendientes de los ficheros' (-not (Seccion $p 'Pendientes en los ficheros').Contains('config/des/variables:' + $n))
+  $j = Json-Datos $e
+  Igual 'configmap.json: la fuente' 'pre' "$($j.sinInventario.fuente)"
+  $c = @($j.sinInventario.lista)
+  Igual 'cinco entradas' 5 $c.Count
+  Igual 'la primera: fichero, linea, entorno y fuente' ('config/des/variables|' + $n + '|des|pre') "$($c[0].fichero)|$($c[0].linea)|$($c[0].entorno)|$($c[0].fuente)"
+  Igual 'comunes no se mezcla: vacio' 0 @($j.comunes).Count
+  Igual 'Copilot recibe las mismas llamadas que sin el parametro' (Ids-Nuevos $b 0) (Ids-Nuevos $e 0)
+  Comprueba 'la consola lo cuenta' ($x.Consola.Contains(', 5 puestos de pre')) $x.Consola
+  Comprueba 'y no pide el parametro' (-not $x.Consola.Contains('relanza con -ConfigMapSinInventario'))
+  Comprueba 'sin el parametro no dice nada de eso' (-not $xb.Consola.Contains('puestos de pre'))
+}
+
+$Pruebas['m111 (b) sin inventario: si la linea de PRE es un secreto, esta vacia, sigue <PENDIENTE> o lleva el nombre de una referencia, la de DES se queda <PENDIENTE>; la corriente de al lado se pone'] = {
+  $e = Nuevo-Escenario 'm111-b'
+  Planes-Buenos $e
+  $pre = "pfx.variables.env.dato-s=https://svc:Pa55@pedidos.pre.acme.test/api`npfx.variables.env.dato-e=`npfx.variables.env.dato-p=<PENDIENTE>`npfx.variables.env.dato-r=https://envios.pre.acme.test/api`npfx.variables.env.dato-ok=valor-pre`n"
+  $des = (@('dato-s', 'dato-e', 'dato-p', 'dato-r', 'dato-ok') | ForEach-Object { "pfx.variables.env.$_=<PENDIENTE>`n" }) -join ''
+  Plan-Lineas $e @{ pre = $pre; des = $des }
+  Add-Member -InputObject $e -NotePropertyName Cmp -NotePropertyValue (Nuevo-Comparar $e)
+  $x = Corre $e @($e.Cmp) 'pre'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $l = Lineas-Destino $e 'config/des/variables'
+  Comprueba 'un secreto en PRE (credenciales dentro): DES se queda' ($l -ccontains 'pfx.variables.env.dato-s=<PENDIENTE>') (Lee-Destino $e 'config/des/variables')
+  Comprueba 'un valor vacio en PRE: DES se queda' ($l -ccontains 'pfx.variables.env.dato-e=<PENDIENTE>')
+  Comprueba 'un <PENDIENTE> en PRE: DES se queda' ($l -ccontains 'pfx.variables.env.dato-p=<PENDIENTE>')
+  Comprueba 'el nombre de una referencia (envios) en PRE: DES se queda' ($l -ccontains 'pfx.variables.env.dato-r=<PENDIENTE>')
+  Comprueba 'el valor corriente se pone' ($l -ccontains 'pfx.variables.env.dato-ok=valor-pre')
+  Igual 'el valor con credenciales no sale en DES' 0 @($l | Where-Object { $_.Contains('Pa55') }).Count
+  Igual 'configmap.json: 5 puestos (los 4 de siempre y el corriente)' 5 @((Json-Datos $e).sinInventario.lista).Count
+}
+
+$Pruebas['m111 (c) sin inventario: un fichero de DES que el usuario ha cambiado no se toca'] = {
+  $e = Base-M101 'm111-c' 'acme-plat'
+  [void](Corre $e)
+  $mio = (Lee-Destino $e 'config/des/variables') + "# mio`n"
+  [System.IO.File]::WriteAllText((Get-Ruta $e.Destino 'config/des/variables'), $mio)
+  $x = Corre $e @() 'pre'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Igual 'el fichero cambiado queda como lo dejo el usuario' $mio (Lee-Destino $e 'config/des/variables')
+  Igual 'no hay puestos' 0 @((Json-Datos $e).sinInventario.lista).Count
+  Comprueba 'PENDIENTE.md no tiene la seccion' ((Pendiente $e) -notmatch '(?m)^## Puesto de') (Pendiente $e)
+  Comprueba 'avisa del cambiado' ($x.Consola.Contains('config/des/variables')) $x.Consola
+}
+
+$Pruebas['m111 (d) sin inventario: una fuente que no existe, o que tampoco tiene inventario, avisa con el motivo y no cambia nada'] = {
+  $b = Base-M101 'm111-d0' 'acme-plat'
+  [void](Corre $b)
+  $e = Base-M101 'm111-d' 'acme-plat'
+  $x = Corre $e @() 'nada'
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'avisa de que no es un entorno de la referencia' ($x.Consola.Contains('-ConfigMapSinInventario nada: no es un entorno de la referencia (des, pre, pro). No pongo nada.')) $x.Consola
+  Igual 'nada cambia: mismos ficheros que sin el parametro' (Hashes-Destino $b) (Hashes-Destino $e)
+  Igual 'configmap.json: sin puestos' 0 @((Json-Datos $e).sinInventario.lista).Count
+  $e2 = Base-M101 'm111-d2' 'acme-plat'
+  $x2 = Corre $e2 @() 'des'
+  Comprueba 'una fuente sin inventario: avisa del motivo' ($x2.Consola.Contains('-ConfigMapSinInventario des: no tiene inventario. No pongo nada.')) $x2.Consola
+  Igual 'y nada cambia' (Hashes-Destino $b) (Hashes-Destino $e2)
+  Comprueba 'una fuente con otras mayusculas (PRE) vale' ((Corre (Base-M101 'm111-d3' 'acme-plat') @() 'PRE').Consola.Contains(', 5 puestos de pre'))
+}
+
+$Pruebas['m111 (e) sin inventario: sin el parametro, la ultima linea dice como pedirlo; nada cambia ni se toca PENDIENTE.md'] = {
+  $e = Base-M101 'm111-e' 'acme-plat'
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'la linea Info sugiere el parametro' ($x.Consola.Contains($AvisoDes)) $x.Consola
+  Igual 'una sola vez (solo DES esta sin inventario)' 1 ([regex]::Matches($x.Consola, 'no tiene inventario')).Count
+  Comprueba 'va al final, despues del resumen' ($x.Consola.IndexOf($AvisoDes) -gt $x.Consola.IndexOf('Repo de configmap hecho')) $x.Consola
+  Comprueba 'des sigue entero' ((Lineas-Destino $e 'config/des/variables') -ccontains 'pfx.variables.env.ruta-entrada=<PENDIENTE>')
+  Comprueba 'PENDIENTE.md no tiene la seccion' ((Pendiente $e) -notmatch '(?m)^## Puesto de') (Pendiente $e)
+  $j = Json-Datos $e
+  Comprueba 'configmap.json lleva sinInventario, vacio' (($j.PSObject.Properties.Name -contains 'sinInventario') -and @($j.sinInventario.lista).Count -eq 0)
+}
+
+$Pruebas['m111 (f) migracion.ps1 -ConfigMapSinInventario: queda en ajustes.json y vale al relanzar sin darlo; lo puesto se conserva (configmap.json y PENDIENTE.md) aunque ya no haya parametro'] = {
+  $e = Migra-Escenario 'm111-f'
+  Pon-Dato-M101 $e 'acme-plat'
+  $json = Join-Path (Datos-Migra $e) 'configmap.json'
+  $r1 = Migra-C9 $e @('-ConfigMap', '-Inventario', $e.Inv, '-ConfigMapReferencia', $e.Ref, '-ConfigMapSinInventario', 'pre')
+  Igual 'sale con 0' 0 $r1.Codigo
+  Igual 'ajustes.json guarda la fuente' 'pre' "$((Lee-Json (Join-Path $e.Home 'ajustes.json')).ConfigMapSinInventario)"
+  Comprueba 'des: ruta-entrada se ha puesto' ((Lineas-Destino $e 'config/des/variables') -ccontains 'pfx.variables.env.ruta-entrada=/data/pre/entrada') $r1.Salida
+  Comprueba 'la consola lo cuenta' ($r1.Salida.Contains(', 5 puestos de pre')) $r1.Salida
+  $h1 = Hashes-Destino $e
+  $n = @(Llamadas-De $e).Count
+  $p1 = Pendiente $e
+  $r2 = Migra-C9 $e @('-ConfigMap')
+  Igual 'sin el parametro: sale con 0' 0 $r2.Codigo
+  Comprueba 'usa lo guardado: sigue contando 5 puestos de pre' ($r2.Salida.Contains(', 5 puestos de pre')) $r2.Salida
+  Comprueba 'y no pide el parametro' (-not $r2.Salida.Contains('relanza con -ConfigMapSinInventario'))
+  Igual 'relanzar: mismos ficheros' $h1 (Hashes-Destino $e)
+  Igual 'sin llamadas nuevas a Copilot' $n @(Llamadas-De $e).Count
+  Igual 'y el mismo PENDIENTE.md' $p1 (Pendiente $e)
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'c9-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); JavaExe = (Join-Path $falsos 'java.ps1'); SegundosPorLlamada = 60; ConfigMapReferencia = $e.Ref }))
+  $r3 = Migra-C9 $e @('-ConfigMap')
+  Igual 'sin parametro ni lo guardado: sale con 0' 0 $r3.Codigo
+  Igual 'lo puesto sigue en configmap.json' 5 @((Lee-Json $json).sinInventario.lista).Count
+  Comprueba 'y en PENDIENTE.md' ((Seccion (Pendiente $e) $TituloSinInv).Contains('`config/des/variables:')) (Pendiente $e)
+  Igual 'los ficheros no cambian' $h1 (Hashes-Destino $e)
+  Comprueba 'y dice como pedirlo' ($r3.Salida.Contains($AvisoDes)) $r3.Salida
+}
+
+$Pruebas['m111 (g) Set-SinInventarioConfigMap: conserva los saltos de linea (CRLF), la sangria y la codificacion del fichero (Latin-1, UTF-8 con BOM y UTF-8 sin BOM) y no toca un binario'] = {
+  $r = Join-Path $Dir 'm111-g'
+  if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
+  $l1 = [System.Text.Encoding]::GetEncoding(28591)
+  $u8 = New-Object System.Text.UTF8Encoding($false)
+  $bom = [byte[]](0xEF, 0xBB, 0xBF)
+  $o = [string][char]0xF3
+  $bin = [byte[]](1, 0) + $u8.GetBytes('<PENDIENTE>')
+  $w = { param($rel, [byte[]]$b) $f = Join-Path $r $rel; [void](New-Item -ItemType Directory -Path (Split-Path $f -Parent) -Force); [System.IO.File]::WriteAllBytes($f, $b) }
+  & $w 'config/pre/a.properties' $l1.GetBytes("texto=Gesti${o}n comun`n")
+  & $w 'config/cert/a.properties' $l1.GetBytes("texto=Gesti${o}n <PENDIENTE>`n")
+  & $w 'config/pre/b.properties' ($bom + $u8.GetBytes("dato=valor-bom`n"))
+  & $w 'config/cert/b.properties' ($bom + $u8.GetBytes("dato=<PENDIENTE>`n"))
+  & $w 'config/pre/c.properties' $u8.GetBytes("dato=Gesti${o}n utf8`n")
+  & $w 'config/cert/c.properties' $u8.GetBytes("dato=<PENDIENTE>`n")
+  & $w 'config/pre/d.bin' $bin
+  & $w 'config/cert/d.bin' $bin
+  & $w 'config/pre/e.yml' $u8.GetBytes("a:`r`n  b: valor`r`n  c: otro`r`n")
+  & $w 'config/cert/e.yml' $u8.GetBytes("a:`r`n  b: <PENDIENTE>`r`n  c: <PENDIENTE>`r`n")
+  $script:CmSecretos.Clear()
+  $res = @(Set-SinInventarioConfigMap $r 'pre' (Inv-Falso @('pre') @('cert')) @() @())
+  Igual 'se ponen 5 lineas (a, b, c y dos de e; el binario no cuenta)' 5 $res.Count
+  $hex = { param($bytes) return ((@($bytes) | ForEach-Object { $_.ToString('x2') }) -join '') }
+  Igual 'Latin-1 sigue en Latin-1' (& $hex $l1.GetBytes("texto=Gesti${o}n comun`n")) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $r 'config/cert/a.properties'))))
+  Igual 'UTF-8 con BOM sigue con BOM' (& $hex ($bom + $u8.GetBytes("dato=valor-bom`n"))) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $r 'config/cert/b.properties'))))
+  Igual 'UTF-8 sin BOM sigue sin BOM' (& $hex $u8.GetBytes("dato=Gesti${o}n utf8`n")) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $r 'config/cert/c.properties'))))
+  Igual 'el binario queda igual' (& $hex $bin) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $r 'config/cert/d.bin'))))
+  Igual 'el yml con CRLF y sangria queda con CRLF, su sangria y los valores' (& $hex $u8.GetBytes("a:`r`n  b: valor`r`n  c: otro`r`n")) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $r 'config/cert/e.yml'))))
+  Igual 'la fuente no cambia' (& $hex $u8.GetBytes("a:`r`n  b: valor`r`n  c: otro`r`n")) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $r 'config/pre/e.yml'))))
+}
+
+$Pruebas['m111 (h) Set-SinInventarioConfigMap: cada entorno sin inventario toma los de su pareja en la fuente; sin pareja, un cambiado por el usuario o fuera de config/<entorno>/ no se toca'] = {
+  $r = Join-Path $Dir 'm111-h'
+  if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
+  Escribe $r 'config/pre/variables' "uno=a`ndos=b`ntres=<PENDIENTE>`n"
+  Escribe $r 'config/cert/variables' "uno=<PENDIENTE>`ndos=<PENDIENTE>`ntres=<PENDIENTE>`n"
+  Escribe $r 'config/qa/variables' "uno=<PENDIENTE>`n"
+  Escribe $r 'config/qa/solo-qa' "x=<PENDIENTE>`n"
+  Escribe $r 'config/pro/variables' "uno=<PENDIENTE>`n"
+  Escribe $r '.plataforma/cd/x.yml' "x: <PENDIENTE>`n"
+  Escribe $r 'PENDIENTE.md' "uno=<PENDIENTE>`n"
+  $script:CmSecretos.Clear()
+  $inv = Inv-Falso @('pre', 'pro') @('cert', 'qa')
+  $res = @(Set-SinInventarioConfigMap $r 'PRE' $inv @() @('config/cert/variables'))
+  Igual 'cert (cambiado por el usuario) no se toca' "uno=<PENDIENTE>`ndos=<PENDIENTE>`ntres=<PENDIENTE>`n" (Lee $r 'config/cert/variables')
+  Igual 'qa toma uno de pre' "uno=a`n" (Lee $r 'config/qa/variables')
+  Igual 'sin pareja en pre: queda' "x=<PENDIENTE>`n" (Lee $r 'config/qa/solo-qa')
+  Igual 'pro (con inventario) no se toca' "uno=<PENDIENTE>`n" (Lee $r 'config/pro/variables')
+  Igual 'lo de fuera de config/<entorno>/ no se toca' "x: <PENDIENTE>`n" (Lee $r '.plataforma/cd/x.yml')
+  Igual 'PENDIENTE.md no se toca' "uno=<PENDIENTE>`n" (Lee $r 'PENDIENTE.md')
+  Igual 'una entrada: fichero, linea, entorno y fuente (con el nombre de la referencia)' 'config/qa/variables|1|qa|pre' (($res | ForEach-Object { "$($_.fichero)|$($_.linea)|$($_.entorno)|$($_.fuente)" }) -join ',')
+  $res2 = @(Set-SinInventarioConfigMap $r 'pre' $inv @() @())
+  Igual 'sin cambiados, cert toma los suyos (uno y dos; tres sigue pendiente en PRE)' "uno=a`ndos=b`ntres=<PENDIENTE>`n" (Lee $r 'config/cert/variables')
+  Igual 'y devuelve dos entradas de cert, en orden' 'cert:1,cert:2' (($res2 | ForEach-Object { "$($_.entorno):$($_.linea)" }) -join ',')
+  Igual 'sin fuente no hace nada' 0 @(Set-SinInventarioConfigMap $r '' $inv @() @()).Count
 }
 
 Invoke-Banco $Pruebas 'tests/probar-configmap.ps1'

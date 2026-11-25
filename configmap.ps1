@@ -3,7 +3,7 @@ configmap.ps1 - El repo de configmap del batch migrado (pieza C9). No se ejecuta
 '. (Join-Path $PSScriptRoot 'configmap.ps1')' despues de comun.ps1, tareas.ps1 y propiedades.ps1. Solo ASCII. Vale para Windows PowerShell 5.1
 y para PowerShell 7.
 
-  Invoke-FaseConfigMap <batch de referencia> <migrado> <repo de configmap de referencia> <inventario del original> [ConservarAtascadas] [Comparar]
+  Invoke-FaseConfigMap <batch de referencia> <migrado> <repo de configmap de referencia> <inventario del original> [ConservarAtascadas] [Comparar] [SinInventario]
       Escribe junto al migrado el repo de configmap nuevo (sin git init ni commit), adaptado del de referencia, y devuelve Codigo (0 bien,
       1 no pudo arrancar), Ruta, Pendientes y Atascadas. Deja datos\configmap.json (lo que ha hecho y el hash de cada fichero escrito) y
       <repo nuevo>\PENDIENTE.md (lo que queda por poner). Sin cambios en las entradas, un relanzamiento no llama a Copilot (huella de cada
@@ -22,6 +22,8 @@ y para PowerShell 7.
       Con Comparar (repos de configmap de otros batch que ya funcionan, -ConfigMapComparar de migracion.ps1), tras copiar y antes de revisar, un <PENDIENTE> se cambia por su valor,
       sin IA, si su linea vale lo mismo en la referencia y en todos ellos (Set-ComunesConfigMap): es de la plataforma, no del batch. PENDIENTE.md y datos\configmap.json (comunes)
       lo apuntan.
+      Con SinInventario (-ConfigMapSinInventario de migracion.ps1: un entorno de la referencia que tiene inventario), cada entorno que no tiene carpeta en el inventario toma, sin IA, los
+      valores de ese (Set-SinInventarioConfigMap, con las mismas guardas); PENDIENTE.md y datos\configmap.json (sinInventario) lo apuntan.
 
   Guardas (las comprueba el script, siempre)
       (a) cada variable no secreta sale en algun fichero del entorno, con su valor en su linea (o con <PENDIENTE> si no se sabe);
@@ -43,6 +45,7 @@ $Cfg += @{
   ConfigMapCarpeta           = 'config'   # la carpeta del repo de configmap con una subcarpeta por entorno
   ConfigMapReferencia        = ''     # el repo de configmap de referencia; migracion.ps1 lo pregunta la primera vez y lo guarda en ajustes.json
   ConfigMapComparar          = @()    # otros repos de configmap de batch que ya funcionan (-ConfigMapComparar de migracion.ps1, guardados en ajustes.json): lo que vale igual en todos y en la referencia se pone solo
+  ConfigMapSinInventario     = ''     # el entorno de la referencia (con inventario) cuyos valores toman los entornos sin inventario (-ConfigMapSinInventario de migracion.ps1, guardado en ajustes.json)
   ConfigMapVariablesPorTarea = 10     # variables como mucho en cada tarea configmap-variables
   ConfigMapHallazgosMax      = 5      # hallazgos como mucho en cada revision
 }
@@ -858,6 +861,53 @@ function Get-LineaComunConfigMap([string]$Linea, $LineasRef, $PatronesParte) {
   return $nueva
 }
 
+# Los repos con que se compara una pasada: la referencia (con su $Parte) y cada uno de $Comparar, con la parte del nombre que cambia entre el suyo y $Nombre (el del repo nuevo).
+function Get-ReferenciasConfigMap([string]$Nombre, [string]$Referencia, $Parte, [string[]]$Comparar) {
+  $refs = @([pscustomobject]@{ Ruta = $Referencia; Parte = $Parte })
+  foreach ($c in @($Comparar | Where-Object { $_ })) { $refs += [pscustomobject]@{ Ruta = $c; Parte = (Get-ParteDistintiva (Split-Path $c.TrimEnd('/', '\') -Leaf) $Nombre) } }
+  return $refs
+}
+
+# Lo que ningun valor puesto sin IA puede llevar: el nombre (la parte distintiva) de cada repo de $Refs.
+function Get-PatronesReferenciasConfigMap($Refs) {
+  return @($Refs | Where-Object { $_.Parte } | ForEach-Object { Get-PatronParte $_.Parte.R })
+}
+
+# El fichero $Ruta para cambiarle las marcas: Trozos (texto, salto, texto, salto...: el salto de cada linea se queda como esta), la codificacion (UTF-8 con o sin BOM o Latin-1) y el
+# BOM. $null si es binario o no lleva ninguna marca.
+function Read-FicheroMarcasConfigMap([string]$Ruta) {
+  $b = [System.IO.File]::ReadAllBytes($Ruta)
+  if ([array]::IndexOf($b, [byte]0) -ge 0) { return $null }
+  try { $t = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($b); $enc = New-Object System.Text.UTF8Encoding($false) }
+  catch { $enc = [System.Text.Encoding]::GetEncoding(28591); $t = $enc.GetString($b) }
+  $bom = ''
+  if ($t.Length -gt 0 -and $t[0] -eq [char]0xFEFF) { $bom = [string][char]0xFEFF; $t = $t.Substring(1) }
+  if (-not [regex]::IsMatch($t, $CmMarca)) { return $null }
+  return [pscustomobject]@{ Ruta = $Ruta; Enc = $enc; Bom = $bom; Trozos = @([regex]::Split($t, '(\r\n|\n)')) }
+}
+
+# Cambia cada linea con marca de $Doc (de Read-FicheroMarcasConfigMap) por lo que dice Get-LineaComunConfigMap con las lineas de ese fichero en cada referencia ($LineasRef) y, si
+# cambia alguna, escribe el fichero con los saltos de linea, la sangria y la codificacion que tenia. Devuelve el numero de cada linea puesta.
+function Set-MarcasFicheroConfigMap($Doc, $LineasRef, $PatronesParte) {
+  $puestas = @()
+  $trozos = $Doc.Trozos
+  for ($i = 0; $i -lt $trozos.Count; $i += 2) {
+    $sin = $trozos[$i].TrimEnd()
+    if (-not [regex]::IsMatch($sin, $CmMarca)) { continue }
+    $nueva = Get-LineaComunConfigMap $sin $LineasRef $PatronesParte
+    if ($null -eq $nueva) { continue }
+    $trozos[$i] = $nueva + $trozos[$i].Substring($sin.Length)
+    $puestas += ([int]($i / 2) + 1)
+  }
+  if ($puestas.Count -gt 0) { Write-BytesConfigMap $Doc.Ruta $Doc.Enc.GetBytes($Doc.Bom + ($trozos -join '')) }
+  return $puestas
+}
+
+# Las lineas de un fichero, sin los espacios del final de cada una (como las casa Get-LineaComunConfigMap).
+function Read-LineasRefConfigMap([string]$Ruta) {
+  return @(@((Read-TextoConfigMap $Ruta) -split '\r?\n') | ForEach-Object { $_.TrimEnd() })
+}
+
 # Paso sin IA: un <PENDIENTE> de un fichero del repo nuevo se cambia por su valor si la linea que lo lleva vale lo mismo en la referencia y en cada repo de $Comparar (lo
 # que es igual en todos es de la plataforma, no del batch: Get-LineaComunConfigMap dice cuando). El fichero de cada repo es el que, con la parte del nombre de ese repo
 # cambiada por la del nuevo ($Nombre), tiene la ruta del fichero del repo nuevo. No toca PENDIENTE.md ni los $Cambiados (los del usuario) y deja como estan los
@@ -867,47 +917,71 @@ function Set-ComunesConfigMap([string]$Destino, [string]$Nombre, [string]$Refere
   $puestos = @()
   $otros = @($Comparar | Where-Object { $_ })
   if ($otros.Count -eq 0) { return $puestos }
-  $refs = @([pscustomobject]@{ Ruta = $Referencia; Parte = $Parte; Ficheros = (Get-MapaFicherosConfigMap $Referencia $Parte) })
-  foreach ($c in $otros) {
-    $p = Get-ParteDistintiva (Split-Path $c.TrimEnd('/', '\') -Leaf) $Nombre
-    $refs += [pscustomobject]@{ Ruta = $c; Parte = $p; Ficheros = (Get-MapaFicherosConfigMap $c $p) }
-  }
-  $patrones = @($refs | Where-Object { $_.Parte } | ForEach-Object { Get-PatronParte $_.Parte.R })
+  $refs = @(Get-ReferenciasConfigMap $Nombre $Referencia $Parte $otros | ForEach-Object { Add-Member -InputObject $_ -NotePropertyName Ficheros -NotePropertyValue (Get-MapaFicherosConfigMap $_.Ruta $_.Parte) -PassThru })
+  $patrones = Get-PatronesReferenciasConfigMap $refs
   foreach ($rel in @(Get-FicherosSinGit $Destino @('.git', '.rescate'))) {
     if ($rel -ceq 'PENDIENTE.md' -or @($Cambiados) -ccontains $rel) { continue }
-    $ruta = Join-Ruta $Destino $rel
-    $b = [System.IO.File]::ReadAllBytes($ruta)
-    if ([array]::IndexOf($b, [byte]0) -ge 0) { continue }
-    try { $t = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($b); $enc = New-Object System.Text.UTF8Encoding($false) }
-    catch { $enc = [System.Text.Encoding]::GetEncoding(28591); $t = $enc.GetString($b) }
-    $bom = ''
-    if ($t.Length -gt 0 -and $t[0] -eq [char]0xFEFF) { $bom = [string][char]0xFEFF; $t = $t.Substring(1) }
-    if (-not [regex]::IsMatch($t, $CmMarca)) { continue }
+    $doc = Read-FicheroMarcasConfigMap (Join-Ruta $Destino $rel)
+    if (-not $doc) { continue }
     $lineasRef = @()
     foreach ($r in $refs) {
       if (-not $r.Ficheros.ContainsKey($rel)) { $lineasRef = $null; break }
-      $lineasRef += , @(@((Read-TextoConfigMap (Join-Ruta $r.Ruta $r.Ficheros[$rel])) -split '\r?\n') | ForEach-Object { $_.TrimEnd() })
+      $lineasRef += , @(Read-LineasRefConfigMap (Join-Ruta $r.Ruta $r.Ficheros[$rel]))
     }
     if ($null -eq $lineasRef) { continue }
-    $trozos = @([regex]::Split($t, '(\r\n|\n)'))   # texto, salto, texto, salto... (el salto de cada linea se queda como esta)
-    $hecho = $false
-    for ($i = 0; $i -lt $trozos.Count; $i += 2) {
-      $sin = $trozos[$i].TrimEnd()
-      if (-not [regex]::IsMatch($sin, $CmMarca)) { continue }
-      $nueva = Get-LineaComunConfigMap $sin $lineasRef $patrones
-      if ($null -eq $nueva) { continue }
-      $trozos[$i] = $nueva + $trozos[$i].Substring($sin.Length)
-      $puestos += [pscustomobject]@{ fichero = $rel; linea = ([int]($i / 2) + 1); referencias = $refs.Count }
-      $hecho = $true
-    }
-    if ($hecho) { Write-BytesConfigMap $ruta $enc.GetBytes($bom + ($trozos -join '')) }
+    foreach ($n in @(Set-MarcasFicheroConfigMap $doc $lineasRef $patrones)) { $puestos += [pscustomobject]@{ fichero = $rel; linea = $n; referencias = $refs.Count } }
   }
   return $puestos
 }
 
-# Lo que ya estaba puesto por ser comun ($Previas, de configmap.json) y sigue estando (el fichero existe, no es del usuario y su linea ya no lleva marca) mas lo de esta
-# pasada ($Nuevas), sin repetir fichero y linea y en orden.
-function Get-ComunesFinalesConfigMap($Previas, $Nuevas, [string]$Dir, $Cambiados) {
+# La fuente de -ConfigMapSinInventario: su nombre como sale en $Inv (los entornos de la referencia, de Read-InventarioConfigMap; sin distinguir mayusculas) y, si no vale (no es un
+# entorno de la referencia o no tiene inventario), Motivo. Sin $Fuente, todo vacio.
+function Get-FuenteSinInventarioConfigMap($Inv, [string]$Fuente) {
+  $r = [pscustomobject]@{ Nombre = ''; Motivo = '' }
+  if (-not $Fuente) { return $r }
+  $k = @($Inv.Keys | Where-Object { $_ -ieq $Fuente })
+  if ($k.Count -eq 0) { $r.Motivo = "-ConfigMapSinInventario ${Fuente}: no es un entorno de la referencia ($(@($Inv.Keys) -join ', ')). No pongo nada." }
+  elseif (-not $Inv[$k[0]].Tiene) { $r.Motivo = "-ConfigMapSinInventario ${Fuente}: no tiene inventario. No pongo nada." }
+  else { $r.Nombre = [string]$k[0] }
+  return $r
+}
+
+# Paso sin IA: un entorno que no tiene carpeta en el inventario ($Inv, de Read-InventarioConfigMap) usa los valores de $Fuente (un entorno que si la tiene, de -ConfigMapSinInventario):
+# en cada fichero config/<entorno>/... del repo nuevo, un <PENDIENTE> se cambia por lo que vale esa linea en la pareja, el mismo fichero con <entorno> cambiado por la fuente
+# (Get-LineaComunConfigMap, con las mismas guardas que Set-ComunesConfigMap: la linea de la fuente no puede estar vacia, ni pendiente, ni ser un secreto, ni llevar el nombre de
+# una referencia, $PatronesParte; y solo una linea casa). Sin $Fuente no hace nada; si no es un entorno de la referencia o no tiene inventario, avisa y tampoco. No toca los $Cambiados
+# (los del usuario) y deja como estan los saltos de linea, la sangria y la codificacion de cada fichero.
+# Devuelve una entrada por linea puesta: fichero, linea, entorno y fuente.
+function Set-SinInventarioConfigMap([string]$Destino, [string]$Fuente, $Inv, $PatronesParte, $Cambiados) {
+  $puestos = @()
+  $f = Get-FuenteSinInventarioConfigMap $Inv $Fuente
+  if ($f.Motivo) { Aviso $f.Motivo; return $puestos }
+  if (-not $f.Nombre) { return $puestos }
+  $carp = [string]$Cfg.ConfigMapCarpeta
+  $rels = @(Get-FicherosSinGit $Destino @('.git', '.rescate'))
+  foreach ($e in @($Inv.Keys | Where-Object { -not $Inv[$_].Tiene })) {
+    $prefijo = $carp + '/' + $e + '/'
+    foreach ($rel in @($rels | Where-Object { $_.StartsWith($prefijo, [System.StringComparison]::Ordinal) -and @($Cambiados) -cnotcontains $_ })) {
+      $pareja = Join-Ruta $Destino ($carp + '/' + $f.Nombre + '/' + $rel.Substring($prefijo.Length))
+      if (-not (Test-Path -LiteralPath $pareja -PathType Leaf)) { continue }
+      $doc = Read-FicheroMarcasConfigMap (Join-Ruta $Destino $rel)
+      if (-not $doc) { continue }
+      foreach ($n in @(Set-MarcasFicheroConfigMap $doc @(, @(Read-LineasRefConfigMap $pareja)) $PatronesParte)) { $puestos += [pscustomobject]@{ fichero = $rel; linea = $n; entorno = $e; fuente = $f.Nombre } }
+    }
+  }
+  return $puestos
+}
+
+# Una entrada de lo puesto sin IA con su fichero y su linea (con su tipo) y los demas campos (referencias, entorno, fuente...) como estan.
+function Copy-PuestoConfigMap($X) {
+  $o = [ordered]@{ fichero = [string]$X.fichero; linea = [int]$X.linea }
+  foreach ($p in $X.PSObject.Properties) { if (-not $o.Contains($p.Name)) { $o[$p.Name] = $p.Value } }
+  return [pscustomobject]$o
+}
+
+# Lo que ya estaba puesto sin IA ($Previas, de configmap.json: comunes o sinInventario) y sigue estando (el fichero existe, no es del usuario y su linea ya no lleva marca) mas lo de
+# esta pasada ($Nuevas), sin repetir fichero y linea y en orden.
+function Get-PuestosFinalesConfigMap($Previas, $Nuevas, [string]$Dir, $Cambiados) {
   $res = New-Object 'System.Collections.Generic.List[object]'
   $vistas = New-Object 'System.Collections.Generic.HashSet[string]'
   foreach ($x in @($Previas | Where-Object { $_ })) {
@@ -917,10 +991,10 @@ function Get-ComunesFinalesConfigMap($Previas, $Nuevas, [string]$Dir, $Cambiados
     $ls = @((Read-TextoConfigMap $ruta) -split '\r?\n')
     $n = [int]$x.linea
     if ($n -lt 1 -or $n -gt $ls.Count -or [regex]::IsMatch($ls[$n - 1], $CmMarca)) { continue }
-    if ($vistas.Add("$rel|$n")) { $res.Add([pscustomobject]@{ fichero = $rel; linea = $n; referencias = [int]$x.referencias }) }
+    if ($vistas.Add("$rel|$n")) { $res.Add((Copy-PuestoConfigMap $x)) }
   }
   foreach ($x in @($Nuevas | Where-Object { $_ })) {
-    if ($vistas.Add("$($x.fichero)|$($x.linea)")) { $res.Add([pscustomobject]@{ fichero = [string]$x.fichero; linea = [int]$x.linea; referencias = [int]$x.referencias }) }
+    if ($vistas.Add("$($x.fichero)|$($x.linea)")) { $res.Add((Copy-PuestoConfigMap $x)) }
   }
   $res.Sort([System.Comparison[object]]{ param($a, $b) $c = [string]::CompareOrdinal($a.fichero, $b.fichero); if ($c -ne 0) { return $c }; return ($a.linea - $b.linea) })
   return $res.ToArray()
@@ -934,7 +1008,7 @@ function Get-PendientesFicherosConfigMap([string]$Dir) {
     if ($rel -ceq 'PENDIENTE.md') { continue }
     $ls = @((Read-TextoConfigMap (Join-Ruta $Dir $rel)) -split '\r?\n')
     for ($i = 0; $i -lt $ls.Count; $i++) {
-      foreach ($m in [regex]::Matches($ls[$i], $CmMarca)) { $res += [pscustomobject]@{ fichero = $rel; linea = $i + 1; marca = $m.Value } }
+      foreach ($m in [regex]::Matches($ls[$i], $CmMarca)) { $res += [pscustomobject]@{ fichero = $rel; linea = $i + 1; marca = $m.Value} }
     }
   }
   return $res
@@ -979,6 +1053,16 @@ function Get-TextoPendienteConfigMap($D) {
     $l.Add('')
     if ($puestos.Count -eq 0) { $l.Add('Ninguno.') }
     else { foreach ($x in $puestos) { $l.Add("- $tilde$($x.fichero):$($x.linea)$tilde") } }
+  }
+  $sinInv = @($D.sinInventario | Where-Object { $_ })
+  foreach ($g in @($sinInv | ForEach-Object { $_.entorno + '|' + $_.fuente } | Select-Object -Unique)) {
+    $k = $g.Split('|')
+    $l.Add('')
+    $l.Add("## Puesto de $($k[1].ToUpperInvariant()) porque $($k[0].ToUpperInvariant()) no tiene inventario")
+    $l.Add('')
+    $l.Add("Estos valores son los de $($k[1].ToUpperInvariant()) (-ConfigMapSinInventario): $($k[0].ToUpperInvariant()) no tiene carpeta en el inventario. Compru${CmE}balos.")
+    $l.Add('')
+    foreach ($x in @($sinInv | Where-Object { $_.entorno -ceq $k[0] -and $_.fuente -ceq $k[1] })) { $l.Add("- $tilde$($x.fichero):$($x.linea)$tilde") }
   }
   $l.Add('')
   $l.Add('## Hallazgos de la revisi' + $CmO + 'n')
@@ -1036,7 +1120,7 @@ function Get-IdPlataformaConfigMap([string]$Rel, $Usados) {
 }
 
 # La fase entera. Devuelve Codigo (0 bien, 1 no pudo arrancar), Ruta del repo nuevo, Pendientes y Atascadas.
-function Invoke-FaseConfigMap([string]$Plantilla, [string]$Migrado, [string]$Referencia, [string]$Inventario, [bool]$ConservarAtascadas = $false, [string[]]$Comparar = @()) {
+function Invoke-FaseConfigMap([string]$Plantilla, [string]$Migrado, [string]$Referencia, [string]$Inventario, [bool]$ConservarAtascadas = $false, [string[]]$Comparar = @(), [string]$SinInventario = '') {
   # 1. Lo que se puede comprobar sin crear nada
   if (-not $Inventario -or -not (Test-Path -LiteralPath $Inventario -PathType Container)) { Fallo "No encuentro la carpeta del inventario del original: $Inventario"; return (New-ResultadoFaseConfigMap 1 '') }
   if (-not $Referencia -or -not (Test-Path -LiteralPath $Referencia -PathType Container)) { Fallo "No encuentro el repo de configmap de referencia: $Referencia"; return (New-ResultadoFaseConfigMap 1 '') }
@@ -1085,7 +1169,8 @@ function Invoke-FaseConfigMap([string]$Plantilla, [string]$Migrado, [string]$Ref
     }
   }
   # que el repo nuevo quede apuntado como del script ya (si se corta, el relanzamiento sabe que es suyo)
-  Write-JsonConfigMap $rutaJson ([ordered]@{ version = 1; destino = $destino; referencia = $Referencia; inventario = $Inventario; migrado = $Migrado; modelo = "$ModeloElegido"; ficheros = @($previo.ficheros | Where-Object { $_ }); comunes = @($previo.comunes | Where-Object { $_ }) })
+  Write-JsonConfigMap $rutaJson ([ordered]@{ version = 1; destino = $destino; referencia = $Referencia; inventario = $Inventario; migrado = $Migrado; modelo = "$ModeloElegido"; ficheros = @($previo.ficheros | Where-Object { $_ }); comunes = @($previo.comunes | Where-Object { $_ })
+      sinInventario = [ordered]@{ fuente = "$($previo.sinInventario.fuente)"; lista = @($previo.sinInventario.lista | Where-Object { $_ }) } })
   foreach ($c in $cambiados) { Aviso "Has cambiado $c desde la ultima pasada: lo dejo como esta (si quieres que se escriba otra vez, borralo y relanza)." }
   $script:CmCambiados = @($cambiados)
   $CmFuera.Clear()
@@ -1094,7 +1179,7 @@ function Invoke-FaseConfigMap([string]$Plantilla, [string]$Migrado, [string]$Ref
   $Cfg.CopilotArgs = @($args0) + '--deny-tool=shell'
   $gitAntes = @(Get-GitMigradoConfigMap $Migrado)
   try {
-    $res = Invoke-PasosConfigMap $Plantilla $Migrado $Referencia $Inventario $ConservarAtascadas $ref $parte $nombre $destino $rutaJson $cambiados $hashes $repos $previo
+    $res = Invoke-PasosConfigMap $Plantilla $Migrado $Referencia $Inventario $ConservarAtascadas $ref $parte $nombre $destino $rutaJson $cambiados $hashes $repos $previo $SinInventario
     Test-MigradoSinCambiosConfigMap $Migrado $gitAntes
     return $res
   }
@@ -1126,7 +1211,7 @@ function Test-MigradoSinCambiosConfigMap([string]$Migrado, $Antes) {
   Aviso ('Ojo: ha cambiado el migrado durante esta fase (no lo he deshecho; mira git status): ' + (($f | Select-Object -First 8) -join ', ') + $mas + '.')
 }
 
-function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Referencia, [string]$Inventario, [bool]$ConservarAtascadas, $ref, $parte, [string]$nombre, [string]$destino, [string]$rutaJson, $cambiados, $hashes, [string[]]$comparar = @(), $previo = $null) {
+function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Referencia, [string]$Inventario, [bool]$ConservarAtascadas, $ref, $parte, [string]$nombre, [string]$destino, [string]$rutaJson, $cambiados, $hashes, [string[]]$comparar = @(), $previo = $null, [string]$sinInventario = '') {
   $entornos = @($ref.Entornos.Keys)
   $inv = Read-InventarioConfigMap $Inventario $entornos
   $vars = @(Get-VariablesConfigMap $Migrado)
@@ -1238,6 +1323,9 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
   Copy-SueltosConfigMap $Referencia $destino $ref.Sueltos $cambiados
   # sin IA: lo que vale igual en la referencia y en los repos de comparar se pone solo (antes de la revision: ya ve esos valores)
   $puestos = @(Set-ComunesConfigMap $destino $nombre $Referencia $parte $comparar $cambiados)
+  # sin IA: un entorno sin inventario toma los valores del que diga -ConfigMapSinInventario (tras lo comun: la fuente ya lo lleva puesto)
+  $patrones = Get-PatronesReferenciasConfigMap (Get-ReferenciasConfigMap $nombre $Referencia $parte $comparar)
+  $puestosSin = @(Set-SinInventarioConfigMap $destino $sinInventario $inv $patrones $cambiados)
 
   # 4. Paso 3: la revision de cada entorno y de la plataforma (si una tarea de la que depende se ha rehecho, se rehace)
   $tRev = @()
@@ -1291,10 +1379,13 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
   }
   $dif = @(Get-DiferenciasConfigMap $pares $inv)
   $nSecretas = @($vars | Where-Object { $secretas.ContainsKey($_.variable) }).Count
-  $comunesFinal = @(Get-ComunesFinalesConfigMap @($previo.comunes) $puestos $destino $cambiados)
+  $comunesFinal = @(Get-PuestosFinalesConfigMap @($previo.comunes) $puestos $destino $cambiados)
+  $sinInvFinal = @(Get-PuestosFinalesConfigMap @($previo.sinInventario.lista) $puestosSin $destino $cambiados)
+  $fuenteSin = (Get-FuenteSinInventarioConfigMap $inv $sinInventario).Nombre
+  if (-not $fuenteSin -and $sinInvFinal.Count -gt 0) { $fuenteSin = [string]$sinInvFinal[0].fuente }   # sin -ConfigMapSinInventario en esta pasada, la fuente con que se pusieron los de antes
   $nRefs = $comparar.Count + 1   # sin -ConfigMapComparar en esta pasada, los repos con que se pusieron los de antes
   if ($comparar.Count -eq 0 -and $comunesFinal.Count -gt 0) { $nRefs = [int](@($comunesFinal | ForEach-Object { $_.referencias }) | Measure-Object -Maximum).Maximum }
-  $D = [pscustomobject]@{ nombre = $nombre; entornos = $datosEntornos; diferencias = $dif; pendientes = $pendientes; hallazgos = $hallazgos; atascadas = $atascadas; cambiados = @($cambiados); borrados = $borrados; aMano = $aMano; comunes = $CmComunes.ToArray(); secretas = $nSecretas; comparar = $comparar.Count; referencias = $nRefs; puestos = $comunesFinal }
+  $D = [pscustomobject]@{ nombre = $nombre; entornos = $datosEntornos; diferencias = $dif; pendientes = $pendientes; hallazgos = $hallazgos; atascadas = $atascadas; cambiados = @($cambiados); borrados = $borrados; aMano = $aMano; comunes = $CmComunes.ToArray(); secretas = $nSecretas; comparar = $comparar.Count; referencias = $nRefs; puestos = $comunesFinal; sinInventario = $sinInvFinal }
   [System.IO.File]::WriteAllText((Join-Path $destino 'PENDIENTE.md'), (Get-TextoPendienteConfigMap $D), $Utf8)
   $ficheros = @()
   foreach ($rel in @(Get-FicherosSinGit $destino @('.git', '.rescate'))) {
@@ -1321,12 +1412,18 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
       fueraDeSitio = @($CmFuera)
       secretosComunes = @($CmComunes.ToArray() | ForEach-Object { [ordered]@{ entorno = $_.entorno; clave = $_.clave } })
       comunes = @($comunesFinal | ForEach-Object { [ordered]@{ fichero = $_.fichero; linea = $_.linea; referencias = $_.referencias } })
+      sinInventario = [ordered]@{ fuente = $fuenteSin; lista = @($sinInvFinal | ForEach-Object { [ordered]@{ fichero = $_.fichero; linea = $_.linea; entorno = $_.entorno; fuente = $_.fuente } }) }
       ficheros = $ficheros
     })
   foreach ($m in $borrados) { Aviso "Borrado: $m llevaba el valor de un secreto." }
   Bien "Repo de configmap hecho: $destino"
   $sumaComunes = ''
   if ($comparar.Count -gt 0) { $sumaComunes = ", $($comunesFinal.Count) puestos por ser iguales en las referencias" }
-  Info "  $($pendientes.Count) pendientes en los ficheros, $nSecretas secretos por pedir, $($hallazgos.Count) hallazgos de la revision, $($atascadas.Count) tareas atascadas$sumaComunes. Mira $(Join-Path $destino 'PENDIENTE.md')"
+  $sumaSin = ''
+  if ($fuenteSin) { $sumaSin = ", $($sinInvFinal.Count) puestos de $fuenteSin" }
+  Info "  $($pendientes.Count) pendientes en los ficheros, $nSecretas secretos por pedir, $($hallazgos.Count) hallazgos de la revision, $($atascadas.Count) tareas atascadas$sumaComunes$sumaSin. Mira $(Join-Path $destino 'PENDIENTE.md')"
+  if (-not $sinInventario) {
+    foreach ($e in @($inv.Keys | Where-Object { -not $inv[$_].Tiene })) { Info "$($e.ToUpperInvariant()) no tiene inventario: si usa los valores de otro entorno, relanza con -ConfigMapSinInventario <ese entorno>." }
+  }
   return (New-ResultadoFaseConfigMap 0 $destino $pendientes.Count $atascadas.Count)
 }
