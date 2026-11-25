@@ -42,42 +42,19 @@ Lanza el caso 6 del punto 1 y el caso 5 del punto 2.
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
 
 
-PROMPT 40 (carpeta del migrado; en la ventana de Copilot de este batch)
+PROMPT 44 (carpeta del migrado; en la ventana de Copilot del configmap de este batch)
 
-La prueba completa salio sin distintos, pero tres casos que importan no prueban nada. Buscalos en migracion-*\datos\prueba-local.json por su titulo y su motivo.
+Quedan tres valores del configmap y una comprobacion que hace fallar el arranque. No escribas contrasenas. No hagas commits en el repo del original y no deshagas el que hay.
+Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
 
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia. No hagas commits en el repo del original y no deshagas el que hay.
-
-1. La base no SQL.
-   - Un caso sale igual que el caso vacio y su titulo dice que guarda el resultado en esa base.
-   - Otro esta sin probar porque necesita datos en esa base (el informe que sale de ellos).
-   a) Dime como la tratan hoy los dos tests guardados (una base en memoria, un sustituto o nada) y si lo que el job escribe en ella llega a lo que la prueba compara.
-   b) Haz que los dos tests guardados carguen esa base desde un JSON de la carpeta del caso (prueba-local\casos\<job>\<caso>) y que, al acabar, dejen lo que hay en ella donde la prueba compara (como hacen con las tablas), ordenado por un campo fijo. Igual en los dos lados.
-   c) Prepara el caso del informe: borra su no-aplica.txt y pon sus entradas (las filas SQL y el JSON), para que los dos lados generen el informe.
-2. El caso sin probar de los grupos de cien registros. No hace falta lanzarlo dos veces: borra su no-aplica.txt y prepara un solo lanzamiento con 250 registros validos en sus entradas (mas de dos grupos).
-3. Los demas sin probar (paso sin lector, sin procesador, sin escritor o sin nombre, perfiles, numero de pasos, ejecucion no completada) se quedan como estan: dependen de como se monta el job, no de los datos. Dime en una linea si alguno es otra cosa.
-
-Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
-  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
-- Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
-- No la lances mientras corre la prueba completa de este batch.
-- Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
-- Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
-Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
-Lanza los tres casos: el del informe, el que guarda en la base no SQL y el de los grupos de cien.
-Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
-
-
-PROMPT 43 (carpeta del migrado; en la ventana de Copilot del configmap de este batch)
-
-Estas son mis decisiones para lo que queda. No escribas contrasenas. No toques el codigo del migrado.
-
-1. CERT usa los mismos valores que PRE: no hay inventario de CERT. En todos los ficheros de CERT, pon en cada linea el valor que tiene esa misma linea en PRE. Deja de pedir el inventario de CERT.
-2. SFTP activado: pon a true la variable que activa SFTP, en todos los entornos. El migrado corre en otra maquina y lee y escribe por SFTP.
-3. Los valores de la plataforma (el que acepta claves de host desconocidas, el del servidor de logs, el de la seguridad activada y cualquier otro pendiente que no sea del batch): mira esa misma linea en los configmaps de los otros dos batch, en el mismo entorno. Si los dos tienen el mismo valor, y no lleva el nombre de su batch ni es un secreto, ponlo. Si son distintos, dejala pendiente y dame los dos valores.
-4. La ruta de archivo del SFTP. Dime que hacia el original con el fichero de entrada al acabar de procesarlo (fichero:linea), y que hace el migrado con esa ruta (fichero:linea de cada uso, no solo la comprobacion al arrancar).
-   a) Si el original lo movia a una carpeta de su inventario, pon esa misma carpeta.
-   b) Si el original no lo movia, no la pongas y dime en una linea que cambia en el migrado, para el PR.
-5. El nombre del Secret de SFTP: ponlo con el mismo patron que usan los configmaps de los otros dos batch, y dime cual es.
-6. Dame fichero:linea de cada cambio, cuantos <PENDIENTE> quedan por entorno y el mensaje para el equipo de plataforma, solo con lo que quede de verdad y sin contrasenas.
+1. Los tres valores que quedan (servidor de logs, seguridad activada y aceptar claves de host desconocidas): pon el valor que tiene esa linea en el configmap de referencia, el que se uso para crear este (su ruta esta en migracion-<batch>\datos\configmap.json, campo referencia), en el mismo entorno; en CERT, el de PRE. El de aceptar claves desconocidas va a true, como en los otros dos batch. Si la referencia no tiene alguna de esas lineas, dejala pendiente y dime que valor tiene en cada uno de los otros dos.
+2. Las rutas de archivo y de cuarentena del SFTP. Con SFTP activado y sin ruta de archivo, el migrado no arranca. Antes de cambiar nada, dame fichero:linea de cada llamada (no la definicion) al metodo que archiva y a la ruta de cuarentena, en src/main del migrado.
+   a) Si no hay ninguna llamada, es codigo que no se usa. En rescate, quita el metodo que archiva, la comprobacion que exige la ruta de archivo al arrancar, el calculo de la ruta de cuarentena y esas dos propiedades. Ajusta los tests unitarios que los prueban y anade uno que compruebe que arranca con SFTP activado y sin ruta de archivo. mvn test en verde.
+   b) Si alguna se usa, no toques nada y dime que hace.
+3. Comprobacion final, solo si has cambiado rescate, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes):
+  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Rapida
+- Ejecuta un caso de cada job desde el ultimo commit de rescate, los tests guardados y las entradas de los casos. No llama a la IA.
+- No la lances mientras corre otra prueba de este batch.
+Dame la tabla (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y el commit nuevo de rescate.
+4. Dame fichero:linea de cada cambio del configmap, cuantos <PENDIENTE> quedan por entorno y el mensaje final para el equipo de plataforma.
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
