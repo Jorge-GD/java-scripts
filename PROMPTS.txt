@@ -12,53 +12,6 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 46 (carpeta del migrado; en la ventana de Copilot de este batch)
-
-El test guardado del original no compila con el JDK del original. La prueba completa para con: PruebaLocalTest.java:[525,21] cannot find symbol: method toList(), location: interface java.util.stream.Stream. Stream.toList() es de Java 16, y la prueba compila el test del original con el JDK del original (-JavaLegacy), no con el de Maven.
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
-No hagas commits en el repo del original y no deshagas el que hay.
-
-1. Arregla el test guardado del original, en prueba-local\arnes\original (no en la copia): cambia ese .toList() por .collect(Collectors.toList()), con su import. Busca en el mismo fichero todo lo que no exista en la version de Java del original (Stream.toList, records, bloques de texto con tres comillas, switch con flechas, instanceof con variable, y List.of o Map.of si el original es Java 8) y cambialo por lo equivalente.
-2. No cambies nada mas: los mismos casos y las mismas comprobaciones.
-3. Dime con que comando comprobaste este test la ultima vez y si llevaba -JavaLegacy.
-
-Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
-  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
-- Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
-- No la lances mientras corre la prueba completa de este batch.
-- Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
-- Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
-Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
-Lanza el comando con -Rapida y -JavaLegacy (sin -JavaLegacy no vale: compilaria con otro JDK).
-Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
-
-
-PROMPT 47 (carpeta del migrado; en la ventana de Copilot de este batch)
-
-Los casos 5 y 6 ya estan bien. En la prueba rapida queda un caso distinto: el caso 01 del job que manda correos, por el correo y por un fichero de mas. Hay que dejarlo igual antes de la prueba completa, que tarda unas 3 horas.
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
-No hagas commits en el repo del original y no deshagas el que hay.
-
-Antes de cambiar nada:
-1. Dame las diferencias de ese caso tal como las da la herramienta (migracion-<batch>\datos\prueba-local.json, ese caso): fichero, que tiene el original y que tiene el migrado. Compara tu tambien prueba-local\salidas\original\<job>\caso-01 con prueba-local\salidas\migrado\<job>\caso-01.
-   - El fichero de mas: en que lado esta, como se llama y quien lo escribe (fichero:linea en src/main de ese lado).
-   - El correo: que manda cada lado (cuantos, destinatarios, asunto y adjuntos) y fichero:linea del envio en cada lado.
-2. Dime cual de los dos lados esta mal y por que, con el dato delante. El original es el que funciona en produccion.
-   a) Si el migrado hace otra cosa que el original, arreglalo en rescate con un test unitario. mvn test en verde.
-   b) Si lo que cambia es lo que captura el test guardado de un lado (y el codigo hace lo mismo), arregla ese test guardado, sin tocar los casos.
-   c) Si es otra cosa, dimelo antes de tocar nada.
-
-Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes), un lanzamiento por job:
-  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Job <job> -Caso <casos separados por comas>
-- Usa lo mismo que la prueba completa: el ultimo commit de rescate, los tests guardados y las entradas de los casos. Compara igual que ella. No llama a la IA. Tarda unos minutos.
-- No la lances mientras corre la prueba completa de este batch.
-- Si para con "Con -Caso no llamo a la IA", dimelo: falta un test guardado o las entradas de un caso, y hay que lanzar la prueba sin -Caso.
-- Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
-Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
-Lanza el caso 01 y otros dos casos de ese job con -Job y -Caso. Si has cambiado rescate o un test guardado, lanza ademas el comando con -Rapida.
-Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
-
-
 COMANDOS (en PowerShell, desde la carpeta java-scripts; cambia lo que va entre < > por las rutas de cada batch)
 
 0. Antes de nada, sin ninguna prueba corriendo:
