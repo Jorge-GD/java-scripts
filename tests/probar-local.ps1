@@ -9926,7 +9926,7 @@ $Pruebas['m98 (e) sin tests guardados ni casos preparados, -Caso 1 con -Si: para
   $e = Nuevo-Escenario 'm98-e' ([ordered]@{ cargaJob = $M98Importes; remesaJob = $M98Importes })
   $r = Prueba $e @('-Job', 'cargaJob', '-Caso', '1')
   Igual 'sale con 1' 1 $r.Codigo
-  Comprueba 'dice que con -Caso no llama a la IA y que faltan 3 tareas (los 2 tests y el caso)' ($r.Salida.Contains('Con -Caso no llamo a la IA: faltan 3 tareas (un test guardado o las entradas de un caso). Lanza la prueba sin -Caso.')) (Cola $r.Salida)
+  Comprueba 'dice que con -Caso no llama a la IA y que faltan 3 tareas (los 2 tests y el caso), con su id y su estado' ($r.Salida.Contains('Con -Caso no llamo a la IA: faltan 3 tareas (un test guardado o las entradas de un caso): arnes-original (pendiente), arnes-migrado (pendiente), caso-cargaJob-01 (pendiente). Lanza la prueba sin -Caso.')) (Cola $r.Salida)
   Comprueba 'no pregunta ni ejecuta nada' ($r.Salida -notmatch 'Ejecutando los casos|Llamar a Copilot') (Cola $r.Salida)
   Igual 'ninguna llamada a Copilot' 0 @(Llamadas $e).Count
   Comprueba 'no deja ningun resultado' (-not (Test-Path -LiteralPath $e.Json) -and -not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $e.Json) 'prueba-local-rapida.json'))) ''
@@ -10122,6 +10122,32 @@ $Pruebas['m103 (e) si el test del original se escribe en este lanzamiento (-Reha
   Igual 'sigue sin probar en local' 'sin probar en local' (Caso $e 'cargaJob' 'caso-01').resultado
   Comprueba 'no dice que se vuelve a preparar' (-not $r.Salida.Contains('se vuelven a preparar')) (Cola $r.Salida)
   Igual 'su tarea sigue hecha, con el hash de antes' 'hecha,arnes-de-antes' ((Tarea-Caso-M36 $e 'cargaJob' '01').estado + ',' + (Hash-M59 $e 'caso-cargaJob-01'))
+}
+
+# ===================== M102: -Caso dice que tareas faltan =====================
+# Con -Caso no se llama a la IA: si falta algo (un test guardado o las entradas de un caso), para y dice cuales son (hasta 10, con su estado).
+
+$Pruebas['m102 (a) tras una prueba entera se borra la tarea de un caso: -Job cargaJob -Caso 1 sale con 1 y el texto nombra el id de esa tarea y su estado, sin llamar a Copilot'] = {
+  $e = Primera-M98 'm102-a'
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'tareas/caso-cargaJob-01.json') -Force
+  $n = @(Llamadas $e).Count
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', '1')
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que faltan 1 tareas y nombra el id con su estado' ($r.Salida.Contains('Con -Caso no llamo a la IA: faltan 1 tareas (un test guardado o las entradas de un caso): caso-cargaJob-01 (pendiente). Lanza la prueba sin -Caso.')) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' $n @(Llamadas $e).Count
+}
+
+$Pruebas['m102 (b) con mas de 10 tareas por hacer nombra 10 y dice cuantas mas; con exactamente 10 las nombra todas y no dice mas'] = {
+  $importes = @(1..12 | ForEach-Object { 'importe=' + $_ + '.00' })
+  $e = Nuevo-Escenario 'm102-b' ([ordered]@{ cargaJob = $importes })
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', ((1..12) -join ','))
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'faltan 14 tareas (2 tests y 12 casos)' ($r.Salida.Contains('faltan 14 tareas (un test guardado o las entradas de un caso): ')) (Cola $r.Salida)
+  Comprueba 'nombra 10 y dice y 4 mas' ($r.Salida -match 'arnes-original \(pendiente\), arnes-migrado \(pendiente\), caso-cargaJob-01 \(pendiente\)(, caso-cargaJob-\d\d \(pendiente\)){7} y 4 mas\. Lanza la prueba sin -Caso\.') (Cola $r.Salida)
+  Comprueba 'no nombra el caso 09' (-not $r.Salida.Contains('caso-cargaJob-09')) (Cola $r.Salida)
+  Igual 'ninguna llamada a Copilot' 0 @(Llamadas $e).Count
+  $r = Prueba $e @('-Job', 'cargaJob', '-Caso', ((1..8) -join ','))
+  Comprueba 'con 2 tests y 8 casos (10 tareas) las nombra todas y no dice mas' ($r.Salida -match 'faltan 10 tareas \(un test guardado o las entradas de un caso\): arnes-original \(pendiente\), arnes-migrado \(pendiente\)(, caso-cargaJob-\d\d \(pendiente\)){8}\. Lanza la prueba sin -Caso\.' -and -not $r.Salida.Contains(' mas.')) (Cola $r.Salida)
 }
 
 # ================================ LANZADOR ================================

@@ -4577,9 +4577,14 @@ try {
   # con el test del original ya hecho (no se escribe en este lanzamiento) se sabe ya cuales de los casos sin probar se decidieron con otro: se pregunta antes de contar lo que se va a pedir a la IA
   $yaAceptadas = 0
   if ($ArnesOrig.estado -eq 'hecha') { $yaAceptadas = Invoke-CasosSinProbarOtroTest $tareasCasos $false }
-  $pendientes = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' }).Count
+  $faltan = @(@($arneses) + @($tareasCasos) | Where-Object { $_.estado -ne 'hecha' })
+  $pendientes = $faltan.Count
   Info "Casos: $($tareasCasos.Count) de $($pruebas.Count) jobs; tareas de IA por hacer: $pendientes (las hechas en otro lanzamiento no se repiten)."
-  if ($Caso.Count -gt 0 -and $pendientes -gt 0) { Stop-Arranque "Con -Caso no llamo a la IA: faltan $pendientes tareas (un test guardado o las entradas de un caso). Lanza la prueba sin -Caso." }   # tambien con -Si
+  if ($Caso.Count -gt 0 -and $pendientes -gt 0) {   # tambien con -Si: dice cuales faltan (10 como mucho)
+    $cuales = (@($faltan | Select-Object -First 10 | ForEach-Object { "$($_.id) ($($_.estado))" }) -join ', ')
+    if ($pendientes -gt 10) { $cuales += " y $($pendientes - 10) mas" }
+    Stop-Arranque "Con -Caso no llamo a la IA: faltan $pendientes tareas (un test guardado o las entradas de un caso): $cuales. Lanza la prueba sin -Caso."
+  }
   if ($pendientes -gt $yaAceptadas -and -not (Confirmar "Llamar a Copilot para esas $pendientes tareas?")) { Stop-Arranque 'No se ha hecho nada.' }
   foreach ($repo in @('original', 'migrado')) { if ($rehacer[$repo]) { Save-Anterior $repo } }
 
