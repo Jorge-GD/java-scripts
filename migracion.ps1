@@ -115,6 +115,7 @@ USO
   .\migracion.ps1 ... -Lanzadores C:\ruta\scripts   # los .sh que lanzan el batch estan fuera del repo del original; se guarda en estado.json
   .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -Cierre   # sin IA: junta la correccion con tu rama (fast-forward) si todo esta probado
   .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -ConfigMap -Inventario C:\ruta\inventario   # el repo de configmap del batch migrado (solo esta fase)
+  .\migracion.ps1 ... -ConfigMap -Inventario <inv> -ConfigMapComparar <repo1>,<repo2>   # lo que vale igual en la referencia y en estos se pone solo
 
   Cierre (-Cierre, solo, sin IA): lo unico que avanza tu rama. Comprueba que la pasada esta corregida y probada (todos los jobs con casos iguales y
   ninguno distinto, sobre el codigo de ahora) y que tu carpeta no tiene cambios sin commit; si tu rama avanzo, la junta con la de rescate en la
@@ -129,6 +130,8 @@ USO
   inventario con las variables del migrado lo hacen tareas de IA que el script comprueba; no hace git init ni commit. Deja PENDIENTE.md en el repo nuevo y
   datos\configmap.json. Un repo que ya existe y no es suyo para sin tocar nada; si es suyo, sus ficheros no cambiados se rehacen solo si cambian sus entradas y los que
   has cambiado a mano se respetan. Tambien se hace al final de -Cierre si se dan -Inventario y la referencia (o ya estan guardados); si no, -Cierre dice como pedirlo.
+  Con -ConfigMapComparar <repo1>,<repo2> (repos de configmap de otros batch que ya funcionan; se guardan en ajustes.json) un <PENDIENTE> se pone solo, sin IA, si la linea que lo lleva
+  vale lo mismo en la referencia y en todos ellos (y no lleva el nombre de ningun batch ni un secreto): es de la plataforma, no del batch. PENDIENTE.md lo lista aparte.
   No se mezcla con -Cierre, -SoloInforme, -Si, -Practicas, -Reglas ni -RevisarTodo; -Reintentar vale (repite las tareas atascadas).
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).
@@ -156,7 +159,8 @@ param(
   [switch]$Cierre,            # sin IA: juntar la correccion con tu rama, por fast-forward y despues de las puertas (Invoke-Cierre); va solo
   [switch]$ConfigMap,         # solo el repo de configmap del batch migrado (configmap.ps1); con -Cierre se hace al final si hay inventario y referencia
   [string]$Inventario = '',   # carpeta del inventario del original (un repo de ansible-like con una carpeta por entorno); se guarda en estado.json
-  [string]$ConfigMapReferencia = ''   # repo de configmap de referencia; si no se da, el guardado en ajustes.json o se pregunta (-ConfigMap)
+  [string]$ConfigMapReferencia = '',  # repo de configmap de referencia; si no se da, el guardado en ajustes.json o se pregunta (-ConfigMap)
+  [string[]]$ConfigMapComparar = @()  # otros repos de configmap de batch que ya funcionan: lo que vale igual en todos y en la referencia se pone solo
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
@@ -211,7 +215,7 @@ function Get-HoraTexto($V) {
 
 # ============================ AJUSTES Y ESTADO ============================
 # Guarda un ajuste (la referencia, la del configmap...) en ajustes.json sin tocar el resto de claves.
-function Save-Ajuste([string]$Clave, [string]$Valor) {
+function Save-Ajuste([string]$Clave, $Valor) {
   $f = Get-RutaAjustes
   $o = [ordered]@{}
   if (Test-Path -LiteralPath $f) { foreach ($pr in (Read-Json $f).PSObject.Properties) { $o[$pr.Name] = $pr.Value } }
@@ -917,9 +921,24 @@ function Invoke-ConfigMapMigracion([bool]$Preguntar) {
   }
   if (-not (Test-Path -LiteralPath $ref -PathType Container)) { Fallo "-ConfigMapReferencia no es una carpeta que exista: $ref"; return 1 }
   $ref = Resolve-Dir $ref
+  # los repos de comparar: los de -ConfigMapComparar (una lista o un texto con comas: con -File llega un solo texto) o, si no se da, los guardados (una que ya no existe se salta)
+  $dados = @($ConfigMapComparar | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  $comparar = @()
+  if ($dados.Count -gt 0) {
+    foreach ($c in $dados) {
+      if (-not (Test-Path -LiteralPath $c -PathType Container)) { Fallo "-ConfigMapComparar no es una carpeta que exista: $c"; return 1 }
+      $comparar += (Resolve-Dir $c)
+    }
+  }
+  else {
+    foreach ($c in @($Cfg.ConfigMapComparar | Where-Object { $_ })) {
+      if (Test-Path -LiteralPath $c -PathType Container) { $comparar += [string]$c } else { Aviso "ConfigMapComparar de ajustes.json: no es una carpeta que exista y la salto: $c" }
+    }
+  }
   if ($ref -ne $guardada) { Save-Ajuste 'ConfigMapReferencia' $ref; $Cfg.ConfigMapReferencia = $ref }
+  if ($dados.Count -gt 0 -and ($comparar -join '|') -cne (@($Cfg.ConfigMapComparar) -join '|')) { Save-Ajuste 'ConfigMapComparar' $comparar; $Cfg.ConfigMapComparar = $comparar }
   if ($previo -and [string]$previo.inventario -cne $InventarioRoot) { Save-Estado }   # el inventario queda guardado aunque la fase se corte
-  $r = Invoke-FaseConfigMap $PlantillaRoot $MigradoRoot $ref $InventarioRoot $conservar
+  $r = Invoke-FaseConfigMap $PlantillaRoot $MigradoRoot $ref $InventarioRoot $conservar $comparar
   return [int]$r.Codigo
 }
 

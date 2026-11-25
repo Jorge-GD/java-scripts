@@ -187,10 +187,10 @@ function Planes-Buenos($E, [string[]]$Pendientes = @()) {
 }
 
 # Una pasada de configmap.ps1 en este proceso. Devuelve el resultado de la fase (Codigo, Ruta...) y lo que sale por la consola.
-function Corre($E) {
+function Corre($E, [string[]]$Comparar = @()) {
   $script:Datos = $E.Datos
   $script:Registros = $E.Registros
-  $todo = @(Invoke-FaseConfigMap $E.Plantilla $E.Migrado $E.Ref $E.Inv *>&1)
+  $todo = @(Invoke-FaseConfigMap $E.Plantilla $E.Migrado $E.Ref $E.Inv $false $Comparar *>&1)
   $res = @($todo | Where-Object { $_ -is [System.Management.Automation.PSCustomObject] })
   $txt = ((@($todo | Where-Object { $_ -isnot [System.Management.Automation.PSCustomObject] }) | ForEach-Object { "$_" }) -join "`n")
   return [pscustomobject]@{ R = $res[0]; Consola = $txt }
@@ -1119,6 +1119,323 @@ $Pruebas['m79 (a2) referencia sin git: lista lo mismo que el disco, con su .giti
   Igual 'tantos como el disco' $disco.Count $todos.Count
   Comprueba 'y todos los del disco' (@($disco | Where-Object { $todos -cnotcontains $_ }).Count -eq 0) ($todos -join ',')
   Comprueba 'lo de __pycache__ sigue siendo de la plataforma (no hay git que lo ignore)' ($l.Punto -ccontains '.tools/__pycache__/z.txt') ($l.Punto -join ',')
+}
+
+# ---- m101: -ConfigMapComparar (lo que vale igual en varias referencias se pone solo) ----
+# Un repo de configmap de comparar, junto a la referencia: sus ficheros con $Nombre (su ultimo trozo) en vez de precios y otro id_ci (cada proyecto tiene el suyo).
+function Nuevo-Comparar($E, [string]$Nombre = 'acme-cm-lote-envios') {
+  $parte = ($Nombre -split '-')[-1]
+  $capital = $parte.Substring(0, 1).ToUpperInvariant() + $parte.Substring(1)
+  $c = Join-Path $E.Raiz $Nombre
+  foreach ($rel in @(Get-FicherosSinGit $E.Ref @('.git'))) {
+    $t = (Lee $E.Ref $rel).Replace('precios', $parte).Replace('PRECIOS', $parte.ToUpperInvariant()).Replace('Precios', $capital)
+    Escribe $c $rel ([regex]::Replace($t, 'id_ci: (\d+)', 'id_ci: ${1}0'))
+  }
+  return $c
+}
+function Anade-Linea([string]$Repo, [string]$Rel, [string]$Linea) { Escribe $Repo $Rel ((Lee $Repo $Rel) + $Linea + "`n") }
+function Anade-En-Todas($E, [string]$Rel, [string]$Linea) {
+  Anade-Linea $E.Ref $Rel $Linea
+  Anade-Linea $E.Cmp $Rel $Linea
+}
+$Dato = 'pfx.variables.env.dato-a='
+# El escenario de siempre y, en el fichero variables de cada entorno, una linea mas con <PENDIENTE> ($Dato): la IA la deja asi y ninguna tarea falla (una variable de la
+# tabla con valor en el inventario no puede quedar pendiente; esta no es de la tabla). Con ella, los tres entornos tienen una marca de un solo valor.
+function Pon-Dato-M101($E) {
+  $ref = Ficheros-Referencia
+  foreach ($env in @('des', 'pre', 'pro')) {
+    $f = Ficheros-Entorno $env $ref
+    $f["config/$env/variables"] += $Dato + "<PENDIENTE>`n"
+    Plan $E "configmap-entorno-$env" $f
+  }
+}
+function Base-M101([string]$Nombre) {
+  $e = Nuevo-Escenario $Nombre
+  Planes-Buenos $e
+  Pon-Dato-M101 $e
+  return $e
+}
+# Lo mismo con un repo de comparar (E.Cmp).
+function Escenario-M101([string]$Nombre) {
+  $e = Base-M101 $Nombre
+  Add-Member -InputObject $e -NotePropertyName Cmp -NotePropertyValue (Nuevo-Comparar $e)
+  return $e
+}
+# Las lineas de un fichero del repo nuevo, y el numero de la primera que empieza por $Prefijo (0 si ninguna).
+function Lineas-Destino($E, [string]$Rel) { return @((Lee-Destino $E $Rel) -split '\r?\n') }
+function Numero-Linea($E, [string]$Rel, [string]$Prefijo) {
+  $ls = @(Lineas-Destino $E $Rel)
+  for ($i = 0; $i -lt $ls.Count; $i++) { if ($ls[$i].StartsWith($Prefijo)) { return ($i + 1) } }
+  return 0
+}
+function Titulos([string]$Texto) { return ((@([regex]::Matches($Texto, '(?m)^## (.*)$') | ForEach-Object { $_.Groups[1].Value }) -join ' | ')) }
+function Hashes-Destino($E) {
+  $h = @()
+  foreach ($rel in @(Get-FicherosSinGit $E.Destino @('.git', '.rescate'))) { $h += ($rel + '=' + (Get-HashFicheroConfigMap (Join-Ruta $E.Destino $rel))) }
+  return ($h -join ';')
+}
+$TituloComunes = 'Puesto porque es igual en las referencias'
+
+$Pruebas['m101 (a) comparar: un valor igual en la referencia y en el de comparar sustituye al <PENDIENTE>; PENDIENTE.md y configmap.json lo apuntan; Copilot recibe las mismas llamadas'] = {
+  $b = Base-M101 'm101-a0'
+  $xb = Corre $b
+  $e = Escenario-M101 'm101-a'
+  Anade-En-Todas $e 'config/pre/variables' ($Dato + 'acme-plat')
+  $x = Corre $e @($e.Cmp)
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $n = Numero-Linea $e 'config/pre/variables' $Dato
+  Comprueba 'pre: la linea lleva el valor de la plataforma' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + 'acme-plat')) (Lee-Destino $e 'config/pre/variables')
+  Comprueba 'des y pro (su referencia no tiene esa linea) siguen con <PENDIENTE>' ((Lineas-Destino $e 'config/des/variables') -ccontains ($Dato + '<PENDIENTE>') -and (Lineas-Destino $e 'config/pro/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  Igual 'un pendiente menos que sin comparar' ($xb.R.Pendientes - 1) $x.R.Pendientes
+  $p = Pendiente $e
+  $s = Seccion $p $TituloComunes
+  Comprueba 'PENDIENTE.md lista la linea en la seccion nueva' ($s.Contains('`config/pre/variables:' + $n + '`')) $p
+  Comprueba 'y dice que es igual en 2 repos' ($s -match 'son iguales en 2 repos de configmap \(la referencia y los de -ConfigMapComparar\)') $s
+  Comprueba 'la seccion va justo despues de las de pendientes en los ficheros' ((Titulos $p).Contains('Pendientes en los ficheros | ' + $TituloComunes + ' | Hallazgos de la revisi' + [char]0xF3 + 'n')) (Titulos $p)
+  Comprueba 'la linea ya no sale entre los pendientes de los ficheros' (-not (Seccion $p 'Pendientes en los ficheros').Contains('config/pre/variables:' + $n))
+  $c = @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes)
+  Igual 'configmap.json lleva una entrada en comunes' 1 $c.Count
+  Igual 'con su fichero' 'config/pre/variables' "$($c[0].fichero)"
+  Igual 'su linea' $n "$($c[0].linea)"
+  Igual 'y 2 referencias' 2 "$($c[0].referencias)"
+  Igual 'Copilot recibe las mismas llamadas que sin comparar' (Ids-Nuevos $b 0) (Ids-Nuevos $e 0)
+  Comprueba 'la consola lo cuenta' ($x.Consola.Contains(', 1 puestos por ser iguales en las referencias')) $x.Consola
+  Comprueba 'y sin comparar no dice nada de eso' (-not $xb.Consola.Contains('puestos por ser iguales'))
+}
+
+$Pruebas['m101 (b) comparar: un valor distinto entre la referencia y la de comparar se queda <PENDIENTE>; la seccion dice Ninguno.'] = {
+  $e = Escenario-M101 'm101-b'
+  Anade-Linea $e.Ref 'config/pre/variables' ($Dato + 'acme-plat')
+  Anade-Linea $e.Cmp 'config/pre/variables' ($Dato + 'otro-cliente')
+  $x = Corre $e @($e.Cmp)
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'pre sigue con <PENDIENTE>' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  $p = Pendiente $e
+  Comprueba 'con comparar y sin entradas, la seccion dice Ninguno.' ((Seccion $p $TituloComunes).Trim().EndsWith('Ninguno.')) $p
+  Igual 'configmap.json: comunes vacio' 0 @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes).Count
+  Comprueba 'la consola dice 0 puestos' ($x.Consola.Contains(', 0 puestos por ser iguales en las referencias')) $x.Consola
+}
+
+$Pruebas['m101 (c) comparar: un valor igual en las dos pero con el nombre de una referencia (precios o envios) se queda <PENDIENTE>; el que no lo lleva se pone'] = {
+  $e = Escenario-M101 'm101-c'
+  Anade-En-Todas $e 'config/pre/variables' ($Dato + 'https://precios.acme.test/api')
+  Anade-En-Todas $e 'config/pro/variables' ($Dato + 'https://envios.acme.test/api')
+  Anade-En-Todas $e 'config/des/variables' ($Dato + 'acme-plat')
+  $x = Corre $e @($e.Cmp)
+  Comprueba 'pre (lleva precios, la parte de la referencia) sigue pendiente' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  Comprueba 'pro (lleva envios, la parte de la de comparar) tambien' ((Lineas-Destino $e 'config/pro/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  Comprueba 'des (sin nombre de batch) se pone' ((Lineas-Destino $e 'config/des/variables') -ccontains ($Dato + 'acme-plat'))
+}
+
+$Pruebas['m101 (d) sin comparar: nada cambia: las marcas siguen, PENDIENTE.md no tiene la seccion y configmap.json lleva comunes vacio'] = {
+  $e = Escenario-M101 'm101-d'
+  Anade-En-Todas $e 'config/pre/variables' ($Dato + 'acme-plat')
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'la marca sigue en pre' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  $p = Pendiente $e
+  Comprueba 'PENDIENTE.md no tiene la seccion' ($p -notmatch '(?m)^## Puesto porque') $p
+  Igual 'las secciones de siempre, en su orden' ('Entorno DES | Entorno PRE | Entorno PRO | Diferencias entre entornos | Pendientes en los ficheros | Hallazgos de la revisi' + [char]0xF3 + 'n | Tareas atascadas | Ficheros que has cambiado') (Titulos $p)
+  $j = Lee-Json (Join-Path $e.Datos 'configmap.json')
+  Comprueba 'configmap.json tiene el campo comunes, vacio' (($j.PSObject.Properties.Name -contains 'comunes') -and @($j.comunes).Count -eq 0)
+  Comprueba 'la consola no habla de puestos' (-not $x.Consola.Contains('puestos por ser iguales'))
+}
+
+$Pruebas['m101 (e) comparar: un fichero que el usuario ha cambiado no se toca; los demas si'] = {
+  $e = Escenario-M101 'm101-e'
+  Anade-En-Todas $e 'config/pre/variables' ($Dato + 'acme-plat')
+  Anade-En-Todas $e 'config/pro/variables' ($Dato + 'acme-plat')
+  [void](Corre $e)
+  Comprueba 'antes, la marca esta en pre y en pro' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  $mio = (Lee-Destino $e 'config/pre/variables') + "# mio`n"
+  [System.IO.File]::WriteAllText((Get-Ruta $e.Destino 'config/pre/variables'), $mio)
+  $x = Corre $e @($e.Cmp)
+  Igual 'el fichero cambiado queda como lo dejo el usuario' $mio (Lee-Destino $e 'config/pre/variables')
+  Comprueba 'el otro se pone' ((Lineas-Destino $e 'config/pro/variables') -ccontains ($Dato + 'acme-plat'))
+  Comprueba 'y avisa del cambiado' ($x.Consola.Contains('config/pre/variables')) $x.Consola
+  $c = @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes)
+  Igual 'comunes solo lleva el de pro' 'config/pro/variables' (($c | ForEach-Object { $_.fichero }) -join ',')
+}
+
+$Pruebas['m101 (f) comparar: un valor que es un secreto del inventario, o lleva credenciales, se queda <PENDIENTE>; uno corriente de al lado se pone'] = {
+  $e = Escenario-M101 'm101-f'
+  $v = [ordered]@{}
+  foreach ($k in $Valores['pre'].Keys) { $v[$k] = $Valores['pre'][$k] }
+  $v['env.cliente'] = '<PENDIENTE>'
+  $f = Ficheros-Entorno 'pre' (Ficheros-Referencia) $v
+  $f['config/pre/variables'] += "pfx.variables.env.dato-x=tk<PENDIENTE>`npfx.variables.env.dato-y=<PENDIENTE>`npfx.variables.env.dato-z=<PENDIENTE>`n"
+  Plan $e 'configmap-entorno-pre' $f
+  # el secreto del inventario de pre va pegado a unas letras en la referencia (si no, saldria como palabra entera en lo legitimo y no se vigilaria)
+  Anade-En-Todas $e 'config/pre/variables' ('pfx.variables.env.dato-x=tk' + $SecretoPre)
+  Anade-En-Todas $e 'config/pre/variables' 'pfx.variables.env.dato-y=https://svc:Pa55@pedidos.pre.acme.test/api'
+  Anade-En-Todas $e 'config/pre/variables' 'pfx.variables.env.dato-z=valor-comun'
+  $x = Corre $e @($e.Cmp)
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $l = Lineas-Destino $e 'config/pre/variables'
+  Comprueba 'el valor del secreto del inventario no se pone' ($l -ccontains 'pfx.variables.env.dato-x=tk<PENDIENTE>') (Lee-Destino $e 'config/pre/variables')
+  Comprueba 'el valor con credenciales dentro tampoco' ($l -ccontains 'pfx.variables.env.dato-y=<PENDIENTE>')
+  Comprueba 'el corriente se pone' ($l -ccontains 'pfx.variables.env.dato-z=valor-comun')
+  Igual 'el valor del secreto no sale en ningun fichero del repo nuevo' 0 @(Get-FicherosSinGit $e.Destino @('.git', '.rescate') | Where-Object { (Lee-Destino $e $_).Contains($SecretoPre) }).Count
+  Comprueba 'ni en la consola' (-not $x.Consola.Contains($SecretoPre))
+}
+
+$Pruebas['m101 (g) comparar: dos marcas en la misma linea: si las dos capturas son iguales se ponen las dos; si una difiere la linea queda entera'] = {
+  $e = Escenario-M101 'm101-g'
+  $l = '"variable":"env.url-auth-clave","secreto":"secreto-comun","clave":"clave-comun"'
+  Anade-En-Todas $e 'config/pre/secretos' $l
+  $x = Corre $e @($e.Cmp)
+  Comprueba 'las dos marcas de pre/secretos se ponen' ((Lineas-Destino $e 'config/pre/secretos') -ccontains $l) (Lee-Destino $e 'config/pre/secretos')
+  Comprueba 'sale como una entrada, con su linea' ((Seccion (Pendiente $e) $TituloComunes).Contains('`config/pre/secretos:1`'))
+  Comprueba 'des/secretos (otra referencia) sigue con sus dos marcas' ((Lee-Destino $e 'config/des/secretos').Contains('<PENDIENTE: nombre del Secret>') -and (Lee-Destino $e 'config/des/secretos').Contains('<PENDIENTE: clave del Secret>'))
+  $e2 = Escenario-M101 'm101-g2'
+  Anade-Linea $e2.Ref 'config/pre/secretos' $l
+  Anade-Linea $e2.Cmp 'config/pre/secretos' '"variable":"env.url-auth-clave","secreto":"secreto-comun","clave":"otra-clave"'
+  [void](Corre $e2 @($e2.Cmp))
+  $t = Lee-Destino $e2 'config/pre/secretos'
+  Comprueba 'con una distinta, la linea queda entera como estaba (ni la primera marca se pone)' ($t.Contains('"secreto":"<PENDIENTE: nombre del Secret>","clave":"<PENDIENTE: clave del Secret>"') -and -not $t.Contains('secreto-comun')) $t
+}
+
+$Pruebas['m101 (h) comparar: una referencia con dos lineas que casan deja la marca; y si la de comparar no tiene el fichero, tampoco se toca'] = {
+  $e = Escenario-M101 'm101-h'
+  Anade-Linea $e.Ref 'config/pre/variables' ($Dato + 'acme-plat')
+  Anade-Linea $e.Ref 'config/pre/variables' ($Dato + 'acme-plat')
+  Anade-Linea $e.Cmp 'config/pre/variables' ($Dato + 'acme-plat')
+  Anade-En-Todas $e 'config/pro/variables' ($Dato + 'acme-plat')
+  Remove-Item -LiteralPath (Get-Ruta $e.Cmp 'config/des/variables') -Force
+  Anade-Linea $e.Ref 'config/des/variables' ($Dato + 'acme-plat')
+  [void](Corre $e @($e.Cmp))
+  Comprueba 'pre: la referencia tiene dos lineas que casan, se queda <PENDIENTE>' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  Comprueba 'des: la de comparar no tiene el fichero, se queda <PENDIENTE>' ((Lineas-Destino $e 'config/des/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  Comprueba 'pro: una linea en cada una, se pone' ((Lineas-Destino $e 'config/pro/variables') -ccontains ($Dato + 'acme-plat'))
+}
+
+$Pruebas['m101 (i) comparar: relanzar no cambia ningun fichero ni llama a Copilot, y PENDIENTE.md sigue listando lo puesto (sale de comunes); un fichero que cambia el usuario sale de la lista'] = {
+  $e = Escenario-M101 'm101-i'
+  Anade-En-Todas $e 'config/pre/variables' ($Dato + 'acme-plat')
+  [void](Corre $e @($e.Cmp))
+  $h1 = Hashes-Destino $e
+  $n = @(Llamadas-De $e).Count
+  $p1 = Pendiente $e
+  $x2 = Corre $e @($e.Cmp)
+  Igual 'relanzar con comparar: mismos ficheros (hash)' $h1 (Hashes-Destino $e)
+  Igual 'sin llamadas nuevas' $n @(Llamadas-De $e).Count
+  Comprueba 'PENDIENTE.md sigue listando lo puesto' ((Seccion (Pendiente $e) $TituloComunes).Contains('`config/pre/variables:')) (Pendiente $e)
+  Igual 'y es el mismo texto' $p1 (Pendiente $e)
+  Igual 'configmap.json: una sola entrada, sin repetir' 1 @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes).Count
+  Comprueba 'la consola sigue contando 1 puesto' ($x2.Consola.Contains(', 1 puestos por ser iguales en las referencias')) $x2.Consola
+  [void](Corre $e)
+  Igual 'relanzar sin comparar: mismos ficheros' $h1 (Hashes-Destino $e)
+  Comprueba 'y la seccion sigue, porque lo puesto esta en comunes' ((Seccion (Pendiente $e) $TituloComunes).Contains('`config/pre/variables:')) (Pendiente $e)
+  Igual 'y comunes sigue con su entrada' 1 @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes).Count
+  [System.IO.File]::WriteAllText((Get-Ruta $e.Destino 'config/pre/variables'), ((Lee-Destino $e 'config/pre/variables') + "# mio`n"))
+  [void](Corre $e @($e.Cmp))
+  Igual 'si el usuario cambia el fichero, sale de comunes' 0 @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes).Count
+  Comprueba 'y de PENDIENTE.md (dice Ninguno.)' ((Seccion (Pendiente $e) $TituloComunes).Trim().EndsWith('Ninguno.')) (Pendiente $e)
+}
+
+$Pruebas['m101 (j) migracion.ps1 -ConfigMapComparar: "a,b" queda en ajustes.json, una ruta que no existe da 1, y sin el parametro se usa lo guardado (y una guardada que ya no existe se salta con aviso)'] = {
+  $e = Migra-Escenario 'm101-j'
+  Pon-Dato-M101 $e
+  $c1 = Nuevo-Comparar $e 'acme-cm-lote-envios'
+  $c2 = Nuevo-Comparar $e 'acme-cm-lote-otros'
+  foreach ($r in @($e.Ref, $c1, $c2)) { Anade-Linea $r 'config/pre/variables' ($Dato + 'acme-plat') }
+  $r1 = Migra-C9 $e @('-ConfigMap', '-Inventario', $e.Inv, '-ConfigMapReferencia', $e.Ref, '-ConfigMapComparar', ($c1 + ',' + $c2))
+  Igual 'sale con 0' 0 $r1.Codigo
+  $aj = Lee-Json (Join-Path $e.Home 'ajustes.json')
+  Igual 'ajustes.json guarda la lista (resuelta)' ($c1 + '|' + $c2) (@($aj.ConfigMapComparar) -join '|')
+  Igual 'y sigue con la referencia' $e.Ref "$($aj.ConfigMapReferencia)"
+  Comprueba 'la linea se ha puesto en pre' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + 'acme-plat')) $r1.Salida
+  Comprueba 'la consola lo cuenta' ($r1.Salida.Contains('puestos por ser iguales en las referencias')) $r1.Salida
+  $r2 = Migra-C9 $e @('-ConfigMap')
+  Igual 'sin el parametro: sale con 0' 0 $r2.Codigo
+  Comprueba 'usa lo guardado (la consola habla de lo puesto)' ($r2.Salida.Contains(', 1 puestos por ser iguales en las referencias')) $r2.Salida
+  $mala = Join-Path $e.Raiz 'no-existe'
+  $r3 = Migra-C9 $e @('-ConfigMap', '-ConfigMapComparar', ($c1 + ',' + $mala))
+  Igual 'una ruta que no existe: sale con 1' 1 $r3.Codigo
+  Comprueba 'y dice cual' ($r3.Salida.Contains('-ConfigMapComparar no es una carpeta que exista: ' + $mala)) $r3.Salida
+  Igual 'ajustes.json no cambia' ($c1 + '|' + $c2) (@((Lee-Json (Join-Path $e.Home 'ajustes.json')).ConfigMapComparar) -join '|')
+  Remove-Item -LiteralPath $c2 -Recurse -Force
+  $r4 = Migra-C9 $e @('-ConfigMap')
+  Igual 'con una guardada que ya no existe: sale con 0' 0 $r4.Codigo
+  Comprueba 'avisa con la ruta' ($r4.Salida.Contains($c2)) $r4.Salida
+  Comprueba 'y sigue con la otra' ($r4.Salida.Contains('puestos por ser iguales en las referencias')) $r4.Salida
+}
+
+$Pruebas['m101 (l) migracion.ps1 -Cierre -Inventario -ConfigMapComparar: el repo de configmap del final tambien pone lo comun, y deja la lista guardada'] = {
+  $e = Migra-Escenario 'm101-l'
+  Pon-Dato-M101 $e
+  [void](Estado-Cerrado $e)
+  Escribe $e.Home 'ajustes.json' (ConvertTo-Json -InputObject ([ordered]@{ CopilotExe = (Join-Path $falsos 'c9-copilot.ps1'); MvnExe = (Join-Path $falsos 'mvn.ps1'); JavaExe = (Join-Path $falsos 'java.ps1'); SegundosPorLlamada = 60; ConfigMapReferencia = $e.Ref }))
+  $c1 = Nuevo-Comparar $e 'acme-cm-lote-envios'
+  foreach ($r in @($e.Ref, $c1)) { Anade-Linea $r 'config/pre/variables' ($Dato + 'acme-plat') }
+  $r1 = Migra-C9 $e @('-Cierre', '-Inventario', $e.Inv, '-ConfigMapComparar', $c1)
+  Igual 'sale con 0' 0 $r1.Codigo
+  Comprueba 'la linea se ha puesto en pre' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + 'acme-plat')) $r1.Salida
+  Igual 'ajustes.json guarda la lista' $c1 (@((Lee-Json (Join-Path $e.Home 'ajustes.json')).ConfigMapComparar) -join '|')
+  $r2 = Migra-C9 $e @('-Cierre')
+  Igual 'relanzado sin el parametro: sale con 0' 0 $r2.Codigo
+  Comprueba 'usa lo guardado y sigue contando 1 puesto' ($r2.Salida.Contains(', 1 puestos por ser iguales en las referencias')) $r2.Salida
+}
+
+$Pruebas['m101 (k) comparar: con tres repos se compara en los tres (referencias = 3); la propia referencia, el destino y los repetidos (aunque cambien las mayusculas) se quitan'] = {
+  $e = Escenario-M101 'm101-k'
+  $c2 = Nuevo-Comparar $e 'acme-cm-lote-otros'
+  foreach ($r in @($e.Ref, $e.Cmp, $c2)) { Anade-Linea $r 'config/pre/variables' ($Dato + 'acme-plat') }
+  foreach ($r in @($e.Ref, $e.Cmp)) { Anade-Linea $r 'config/des/variables' ($Dato + 'acme-plat') }
+  Anade-Linea $c2 'config/des/variables' ($Dato + 'distinto')
+  $x = Corre $e @($e.Ref, $e.Destino, $e.Cmp, $e.Cmp.ToUpperInvariant(), $c2)
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'pre: igual en los tres, se pone' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + 'acme-plat'))
+  Comprueba 'des: distinto en el tercero, se queda' ((Lineas-Destino $e 'config/des/variables') -ccontains ($Dato + '<PENDIENTE>'))
+  $c = @((Lee-Json (Join-Path $e.Datos 'configmap.json')).comunes)
+  Igual 'una entrada, con 3 referencias' '1:3' ("$($c.Count):$($c[0].referencias)")
+  Comprueba 'PENDIENTE.md dice 3 repos' ((Seccion (Pendiente $e) $TituloComunes) -match 'iguales en 3 repos de configmap') (Pendiente $e)
+}
+
+$Pruebas['m101 (m) comparar: un yml con CRLF y sangria conserva su fin de linea y su sangria; la marca con texto (<PENDIENTE: id_ci>) tambien se pone'] = {
+  $e = Escenario-M101 'm101-m'
+  $rel = '.plataforma/cd/pre/cd.yml'
+  $ref = "- id_ci: 41721`n  ficheros_config:`n    - config/pre/variables`n    - config/pre/secretos`n"
+  Escribe $e.Ref $rel $ref
+  Escribe $e.Cmp $rel $ref
+  Plan $e $IdCdPre @{ $rel = "- id_ci: <PENDIENTE: id_ci>`r`n  ficheros_config:`r`n    - config/pre/variables`r`n    - config/pre/secretos`r`n" }
+  $x = Corre $e @($e.Cmp)
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Igual 'el yml queda con CRLF, su sangria y el valor' ("- id_ci: 41721`r`n  ficheros_config:`r`n    - config/pre/variables`r`n    - config/pre/secretos`r`n") (Lee-Destino $e $rel)
+}
+
+$Pruebas['m101 (n) Set-ComunesConfigMap: conserva la codificacion del fichero (Latin-1, UTF-8 con BOM y UTF-8 sin BOM) y no toca un binario'] = {
+  $r = Join-Path $Dir 'm101-n'
+  if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
+  $nuevo = Join-Path $r 'acme-cm-lote-pedidos'
+  $ref = Join-Path $r 'acme-cm-lote-precios'
+  $cmp = Join-Path $r 'acme-cm-lote-envios'
+  $l1 = [System.Text.Encoding]::GetEncoding(28591)
+  $u8 = New-Object System.Text.UTF8Encoding($false)
+  $bom = [byte[]](0xEF, 0xBB, 0xBF)
+  $o = [string][char]0xF3
+  $bin = [byte[]](1, 0) + $u8.GetBytes('<PENDIENTE>')
+  foreach ($d in @($nuevo, $ref, $cmp)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+  foreach ($d in @($ref, $cmp)) {
+    [System.IO.File]::WriteAllBytes((Join-Path $d 'a.properties'), $l1.GetBytes("texto=Gesti${o}n comun`n"))
+    [System.IO.File]::WriteAllBytes((Join-Path $d 'b.properties'), ($bom + $u8.GetBytes("dato=valor-bom`n")))
+    [System.IO.File]::WriteAllBytes((Join-Path $d 'c.properties'), $u8.GetBytes("dato=Gesti${o}n utf8`n"))
+    [System.IO.File]::WriteAllBytes((Join-Path $d 'd.bin'), $bin)
+  }
+  [System.IO.File]::WriteAllBytes((Join-Path $nuevo 'a.properties'), $l1.GetBytes("texto=Gesti${o}n <PENDIENTE>`n"))
+  [System.IO.File]::WriteAllBytes((Join-Path $nuevo 'b.properties'), ($bom + $u8.GetBytes("dato=<PENDIENTE>`n")))
+  [System.IO.File]::WriteAllBytes((Join-Path $nuevo 'c.properties'), $u8.GetBytes("dato=<PENDIENTE>`n"))
+  [System.IO.File]::WriteAllBytes((Join-Path $nuevo 'd.bin'), $bin)
+  $parte = Get-ParteDistintiva 'acme-cm-lote-precios' 'acme-cm-lote-pedidos'
+  $script:CmSecretos.Clear()
+  $res = @(Set-ComunesConfigMap $nuevo 'acme-cm-lote-pedidos' $ref $parte @($cmp) @())
+  Igual 'se ponen 3 lineas (a, b y c; el binario no cuenta)' 3 $res.Count
+  $hex = { param($bytes) return ((@($bytes) | ForEach-Object { $_.ToString('x2') }) -join '') }
+  Igual 'Latin-1 sigue en Latin-1' (& $hex $l1.GetBytes("texto=Gesti${o}n comun`n")) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $nuevo 'a.properties'))))
+  Igual 'UTF-8 con BOM sigue con BOM' (& $hex ($bom + $u8.GetBytes("dato=valor-bom`n"))) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $nuevo 'b.properties'))))
+  Igual 'UTF-8 sin BOM sigue sin BOM' (& $hex $u8.GetBytes("dato=Gesti${o}n utf8`n")) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $nuevo 'c.properties'))))
+  Igual 'el binario queda igual' (& $hex $bin) (& $hex ([System.IO.File]::ReadAllBytes((Join-Path $nuevo 'd.bin'))))
+  Igual 'sin comparar no hace nada' 0 @(Set-ComunesConfigMap $nuevo 'acme-cm-lote-pedidos' $ref $parte @() @()).Count
 }
 
 Invoke-Banco $Pruebas 'tests/probar-configmap.ps1'
