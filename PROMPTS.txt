@@ -50,3 +50,20 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 Lanza dos casos del punto 1 y un caso del Excel.
+
+
+PROMPT 36 (carpeta del migrado; en la ventana de Copilot del batch que ya esta cerrado)
+
+No cambies nada: solo contesta. Compara el configmap nuevo de este batch (al lado del migrado, con su PENDIENTE.md) con los configmaps de los otros dos batch que acabas de mirar (preguntamelos si no los sabes).
+Una fila por cada <PENDIENTE> que quede en los ficheros (junta las que se repiten igual en varios entornos). Nunca escribas el valor de una contrasena.
+variable o campo | entorno | valor en el primero | valor en el segundo | propuesta
+La propuesta es una de estas tres:
+- copiar: los dos tienen el mismo valor y no lleva el nombre de su batch (es de la plataforma). Lo de SFTP nunca va aqui.
+- adaptar: los dos siguen el mismo patron con el nombre de su batch. Escribe el valor que tocaria a este batch.
+- pedir: es propio de cada batch (rutas, Secret de SFTP) o no esta en ninguno de los dos.
+Al final, cuantas filas hay de cada propuesta.
+
+
+PROMPT 37 (misma ventana, despues de la tabla)
+
+Pon en el configmap nuevo solo las filas "copiar" de tu tabla: cambia su <PENDIENTE> por ese valor. No toques nada mas y no escribas ninguna contrasena. Dame la lista fichero:linea de lo que has cambiado y cuantos <PENDIENTE> quedan.
