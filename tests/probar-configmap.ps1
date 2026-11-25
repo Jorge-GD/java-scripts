@@ -1438,4 +1438,23 @@ $Pruebas['m101 (n) Set-ComunesConfigMap: conserva la codificacion del fichero (L
   Igual 'sin comparar no hace nada' 0 @(Set-ComunesConfigMap $nuevo 'acme-cm-lote-pedidos' $ref $parte @() @()).Count
 }
 
+$Pruebas['m101 (o) Set-ComunesConfigMap: un valor vacio, solo de blancos o con otra marca en todas las referencias no se pone'] = {
+  $r = Join-Path $Dir 'm101-o'
+  if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
+  $nuevo = Join-Path $r 'acme-cm-lote-pedidos'
+  $ref = Join-Path $r 'acme-cm-lote-precios'
+  $cmp = Join-Path $r 'acme-cm-lote-envios'
+  $u8 = New-Object System.Text.UTF8Encoding($false)
+  foreach ($d in @($nuevo, $ref, $cmp)) { [void](New-Item -ItemType Directory -Path $d -Force) }
+  $refs = [ordered]@{ vacio = "dato=`n"; blancos = "dato=   ;`n"; marca = "dato=<PENDIENTE: pedir a plataforma>`n" }
+  $nuevos = [ordered]@{ vacio = "dato=<PENDIENTE>`n"; blancos = "dato=<PENDIENTE>;`n"; marca = "dato=<PENDIENTE>`n" }
+  foreach ($d in @($ref, $cmp)) { foreach ($k in $refs.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $d "$k.properties"), $u8.GetBytes($refs[$k])) } }
+  foreach ($k in $nuevos.Keys) { [System.IO.File]::WriteAllBytes((Join-Path $nuevo "$k.properties"), $u8.GetBytes($nuevos[$k])) }
+  $parte = Get-ParteDistintiva 'acme-cm-lote-precios' 'acme-cm-lote-pedidos'
+  $script:CmSecretos.Clear()
+  $res = @(Set-ComunesConfigMap $nuevo 'acme-cm-lote-pedidos' $ref $parte @($cmp) @())
+  Igual 'no se pone ninguna' 0 $res.Count
+  foreach ($k in $nuevos.Keys) { Igual "$k sigue con su <PENDIENTE>" $nuevos[$k] ([System.IO.File]::ReadAllText((Join-Path $nuevo "$k.properties"))) }
+}
+
 Invoke-Banco $Pruebas 'tests/probar-configmap.ps1'

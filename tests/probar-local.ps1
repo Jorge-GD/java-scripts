@@ -10124,6 +10124,16 @@ $Pruebas['m103 (e) si el test del original se escribe en este lanzamiento (-Reha
   Igual 'su tarea sigue hecha, con el hash de antes' 'hecha,arnes-de-antes' ((Tarea-Caso-M36 $e 'cargaJob' '01').estado + ',' + (Hash-M59 $e 'caso-cargaJob-01'))
 }
 
+$Pruebas['m103 (f) contestando s a la pregunta nueva (sin -Si): el caso se prepara otra vez y no se pregunta otra vez por esa misma tarea'] = {
+  $e = Primera-M103 'm103-f'
+  Cambia-Test-Original-M103 $e
+  $r = Prueba $e @() '' 's'
+  Igual 'contestando s sale con 0' 0 $r.Codigo
+  Comprueba 'hace la pregunta nueva' ($r.Salida.Contains($PreguntaM103)) (Cola $r.Salida)
+  Igual 'el caso no-aplica se prepara otra vez (una llamada nueva)' 2 (Llamadas-Caso-M59 $e 'caso-cargaJob-01')
+  Comprueba 'no pregunta otra vez por esa misma tarea' (-not $r.Salida.Contains('Llamar a Copilot para esas')) (Cola $r.Salida)
+}
+
 # ===================== M102: -Caso dice que tareas faltan =====================
 # Con -Caso no se llama a la IA: si falta algo (un test guardado o las entradas de un caso), para y dice cuales son (hasta 10, con su estado).
 
