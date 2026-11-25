@@ -68,15 +68,16 @@ Lanza los tres casos: el del informe, el que guarda en la base no SQL y el de lo
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
 
 
-PROMPT 42 (carpeta del migrado; en la ventana de Copilot del configmap de este batch)
+PROMPT 43 (carpeta del migrado; en la ventana de Copilot del configmap de este batch)
 
-Quedan <PENDIENTE> en el configmap nuevo. Antes de pedir nada a nadie, quiero saber por que queda cada uno.
-No escribas contrasenas. No toques el codigo del migrado.
+Estas son mis decisiones para lo que queda. No escribas contrasenas. No toques el codigo del migrado.
 
-1. Una fila por cada <PENDIENTE> de pre (y dime si pro tiene los mismos): fichero:linea | variable | donde la usa el migrado (fichero:linea en src/main) | valor por defecto en el migrado (o ninguno) | por que no hay valor | quien lo da: el Secret de plataforma, el inventario de CERT, nadie (se puede quitar) u otro (dime cual).
-2. Las rutas de archivo y de cuarentena del servidor SFTP: el original no tenia esas carpetas. Mira en el codigo del migrado (fichero:linea) que hace si la variable llega vacia.
-   a) Si con la variable vacia no mueve el fichero, o lo deja donde lo dejaba el original: quita esas lineas en todos los entornos, como hiciste con las carpetas locales.
-   b) Si falla, o lo mueve a otro sitio: no las toques y dime que pasaria.
-3. Quita tambien cualquier otra linea cuyo valor por defecto en el migrado ya valga en produccion (una carpeta local, un puerto estandar, vacio para no hacer algo) y que no pongan ninguno de los dos configmaps de los otros batch. Si el valor por defecto es de desarrollo (localhost, una URL de pruebas, un usuario de prueba), dejala pendiente y dimelo.
-4. Dame fichero:linea de cada cambio, cuantos <PENDIENTE> quedan por entorno y el mensaje para el equipo de plataforma con TODO lo que quede por pedir, agrupado (Secret de SFTP, inventario de CERT, otros) y sin contrasenas.
+1. CERT usa los mismos valores que PRE: no hay inventario de CERT. En todos los ficheros de CERT, pon en cada linea el valor que tiene esa misma linea en PRE. Deja de pedir el inventario de CERT.
+2. SFTP activado: pon a true la variable que activa SFTP, en todos los entornos. El migrado corre en otra maquina y lee y escribe por SFTP.
+3. Los valores de la plataforma (el que acepta claves de host desconocidas, el del servidor de logs, el de la seguridad activada y cualquier otro pendiente que no sea del batch): mira esa misma linea en los configmaps de los otros dos batch, en el mismo entorno. Si los dos tienen el mismo valor, y no lleva el nombre de su batch ni es un secreto, ponlo. Si son distintos, dejala pendiente y dame los dos valores.
+4. La ruta de archivo del SFTP. Dime que hacia el original con el fichero de entrada al acabar de procesarlo (fichero:linea), y que hace el migrado con esa ruta (fichero:linea de cada uso, no solo la comprobacion al arrancar).
+   a) Si el original lo movia a una carpeta de su inventario, pon esa misma carpeta.
+   b) Si el original no lo movia, no la pongas y dime en una linea que cambia en el migrado, para el PR.
+5. El nombre del Secret de SFTP: ponlo con el mismo patron que usan los configmaps de los otros dos batch, y dime cual es.
+6. Dame fichero:linea de cada cambio, cuantos <PENDIENTE> quedan por entorno y el mensaje para el equipo de plataforma, solo con lo que quede de verdad y sin contrasenas.
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
