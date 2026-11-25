@@ -12,15 +12,6 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 37 (carpeta del migrado; en la ventana de Copilot del batch que ya esta cerrado, despues de la tabla de los configmaps)
-
-Pon en el configmap nuevo solo las filas "copiar" de tu tabla: cambia su <PENDIENTE> por ese valor. No toques nada mas y no escribas ninguna contrasena. Dame la lista fichero:linea de lo que has cambiado y cuantos <PENDIENTE> quedan.
-Despues, sin cambiar nada:
-1. Para cada variable de tu tabla que esta "Ausente" en los dos configmaps: la linea del migrado que la pide (fichero:linea, con el valor cambiado por uno inventado) y si lleva valor por defecto, del tipo ${variable:valor}.
-2. Escribeme un mensaje corto para el equipo de plataforma que pida lo que queda en "pedir", agrupado: SFTP (usuario y contrasena como Secret, rutas), rutas de ficheros, lo de CERT, y el resto. Sin contrasenas ni valores de secretos. Solo el texto: no lo mandes.
-Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
-
-
 PROMPT 39 (carpeta del migrado; en la ventana de Copilot de este batch)
 
 Quedan dos casos para cerrar este batch.
@@ -74,4 +65,17 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 - Si has cambiado un test guardado, lanza ademas el mismo comando con -Rapida en lugar de -Job y -Caso: un caso de cada job, para ver que los demas jobs siguen bien.
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 Lanza los tres casos: el del informe, el que guarda en la base no SQL y el de los grupos de cien.
+Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
+
+
+PROMPT 41 (carpeta del migrado; en la ventana de Copilot del batch que ya esta cerrado, la del configmap)
+
+Las rutas de ficheros estan mal repartidas en el configmap nuevo. El original leia y escribia en carpetas de su maquina (las rutas de su inventario). El migrado corre en otra maquina y llega a esas MISMAS carpetas por SFTP. Por eso las rutas del original van a las variables de SFTP (env.sftp.*-path), y las env.file.* son carpetas de trabajo dentro del contenedor.
+No escribas contrasenas. No toques el codigo del migrado.
+
+1. Antes de cambiar nada, una fila por cada ruta del original: clave del inventario | fichero:linea del original que la usa | para que (leer la entrada, dejar la salida, mover tras procesar, mover si falla, copia de seguridad) | variable SFTP del migrado que hace lo mismo (fichero:linea del codigo del migrado donde se usa en el servidor SFTP). Con las rutas cambiadas por otras inventadas.
+2. Con esa tabla, en cada entorno: pon en cada variable SFTP la ruta que el original usaba para lo mismo, sacada del inventario de ese entorno. Si el original no tenia una de ellas, deja su linea como esta y dimelo.
+3. Las env.file.*: comprueba en el codigo del migrado (fichero:linea) que son carpetas locales. Si el migrado les da valor por defecto y ninguno de los dos configmaps de los otros batch las pone, quita sus lineas del configmap nuevo. Si alguna tenia una ruta del original, esa ruta ya ha ido a su variable SFTP en el punto 2.
+4. El puerto SFTP: si el migrado tiene 22 por defecto y los otros dos configmaps no lo ponen, quita su linea.
+5. Dame fichero:linea de cada cambio, cuantos <PENDIENTE> quedan por entorno, y otra vez el mensaje para el equipo de plataforma, solo con lo que de verdad hay que pedir: el Secret de SFTP (servidor, usuario y contrasena) de la maquina donde estan esas carpetas, y si este batch se despliega en CERT (y entonces, su inventario de CERT).
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
