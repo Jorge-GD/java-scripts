@@ -4179,7 +4179,7 @@ function Comprueba-Clave-M48($E, [string]$Constante) {
   $viejo = Join-Path $Dir "m48-$Constante-viejo"
   if (Test-Path -LiteralPath $viejo) { Remove-Item -LiteralPath $viejo -Recurse -Force }
   [void](New-Item -ItemType Directory -Path $viejo -Force)
-  foreach ($x in @('prueba-local.ps1', 'comun.ps1', 'tareas.ps1', 'regresion.ps1', 'tareas', 'regresion')) { Copy-Item -LiteralPath (Join-Path $raiz $x) -Destination $viejo -Recurse -Force }
+  foreach ($x in @('prueba-local.ps1', 'comun.ps1', 'tareas.ps1', 'regresion.ps1', 'informe.ps1', 'tareas', 'regresion')) { Copy-Item -LiteralPath (Join-Path $raiz $x) -Destination $viejo -Recurse -Force }
   $texto = [System.IO.File]::ReadAllText((Join-Path $viejo 'prueba-local.ps1'))
   $m = [regex]::Match($texto, '\$' + $Constante + ' = (\d+)')
   Comprueba "prueba-local.ps1 lleva la constante `$$Constante, con un numero" $m.Success ''
