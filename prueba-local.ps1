@@ -370,7 +370,7 @@ function New-Copia([string]$Repo, [string]$Commit, [string]$Dir) {
   if (Test-Path -LiteralPath $Dir) {
     if (-not (Test-CopiaDe $Repo $Dir)) { return "La carpeta $Dir ya existe y no es una copia de la prueba local de $Repo. Muevela o borrala y vuelve a lanzar." }
     $r = Invoke-Git $Repo @('worktree', 'remove', '--force', $Dir)
-    if ($r.Codigo -ne 0) { return ("No he podido borrar la copia anterior ($Dir): " + ($r.Salida -join ' ')) }
+    if ($r.Codigo -ne 0) { return ("No he podido borrar la copia anterior ($Dir): " + ($r.Salida -join ' ') + ' Algo tiene abierta esa carpeta: cierra los java.exe de una prueba anterior y el explorador, VS Code o las terminales abiertas dentro de ella, y vuelve a lanzar.') }
   }
   # -f: vale aunque git aun tenga apuntada una copia anterior que alguien borro a mano
   $r = Invoke-Git $Repo @('worktree', 'add', '-q', '-f', '--detach', $Dir, $Commit)
@@ -4461,6 +4461,12 @@ $Local = Join-Path $Salida 'prueba-local'
 $Datos = $Local   # Save-Tarea y Restore-Tarea (tareas.ps1) guardan las tareas en $Datos\tareas
 $Registros = Join-Path $Local 'registros'
 [void](New-Item -ItemType Directory -Path $Registros -Force)
+# Una sola prueba local por batch: prueba-local.lock se abre en exclusiva (FileShare.None: en Windows lo impone el sistema y en Unix, .NET lo hace con flock) y se queda abierto mientras dura
+# el proceso. Si este muere, el sistema lo suelta: no lleva PID ni se borra a mano, y el fichero se queda, vacio. Esta en la raiz de prueba-local\, fuera de casos\, arnes\, salidas\ y de
+# las copias: no entra en ninguna huella ni lo borran -Rehacer* ni la limpieza de salidas\. Una segunda prueba del mismo batch (otra ventana, o Copilot con -Caso) rehaceria las copias
+# que la primera esta usando: aqui se para antes de tocar nada.
+try { $script:Cerrojo = [System.IO.File]::Open((Join-Path $Local 'prueba-local.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+catch [System.IO.IOException] { Stop-Arranque 'Otra prueba local de este batch esta en marcha (en otra ventana, o la lanzo Copilot con -Caso). Espera a que acabe y vuelve a lanzar.' }
 $todosJobs = @($pruebas | ForEach-Object { [string]$_.job })
 if ($Job) {
   $pruebas = @($pruebas | Where-Object { $_.job -ceq $Job })
@@ -4719,4 +4725,5 @@ try {
 finally {
   Save-Tiempos
   [void](Set-Despierto $false)
+  if ($script:Cerrojo) { $script:Cerrojo.Dispose() }
 }

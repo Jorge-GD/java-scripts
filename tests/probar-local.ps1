@@ -10389,5 +10389,37 @@ foreach ($g in @(Get-Grupos $res)) { 'G ' + $g.numero + ' ## ' + $g.tipo + ' ## 
   Igual '4: los dos fallan con la misma clase y distintos ficheros: de fichero, como siempre' '4 ## fichero ## fichero|g.txt:contenido ## cargaJob/caso-06 ## 1 caso distinto, en g.txt: contenido' $g[3]
 }
 
+# M108: el cerrojo prueba-local.lock en prueba-local del batch.
+function Cerrojo-M108($E) { return (Get-Ruta $E.Local 'prueba-local.lock') }
+
+$Pruebas['m108 (a) con prueba-local.lock abierto en exclusiva por otra prueba: la segunda para con el mensaje nuevo (codigo distinto de 0) y no toca la copia del migrado de antes'] = {
+  $e = Escenario-M107 'm108-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'la primera prueba sale con 0' 0 $r.Codigo
+  Escribe $e.CopiaMig 'marca-m108.txt' "de antes`n"
+  $antes = Foto $e.Migrado
+  $cerrojo = [System.IO.File]::Open((Cerrojo-M108 $e), 'OpenOrCreate', 'ReadWrite', 'None')
+  try { $r2 = Prueba $e }
+  finally { $cerrojo.Dispose() }
+  Comprueba 'sale con un codigo distinto de 0' ($r2.Codigo -ne 0) "rc=$($r2.Codigo)"
+  Comprueba 'dice que hay otra prueba local de este batch en marcha y que espere' ($r2.Salida.Contains('Otra prueba local de este batch esta en marcha (en otra ventana, o la lanzo Copilot con -Caso). Espera a que acabe y vuelve a lanzar.')) (Cola $r2.Salida)
+  Comprueba 'la copia del migrado de antes sigue ahi, con lo que tenia' ((Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'marca-m108.txt')) -and (Test-Path -LiteralPath (Get-Ruta $e.CopiaMig 'pom.xml'))) ''
+  Comprueba 'no ha llegado a hacer copias ni a ejecutar nada' ($r2.Salida -notmatch 'Copias:') (Cola $r2.Salida)
+  Igual 'el migrado queda como estaba' $antes (Foto $e.Migrado)
+  $r3 = Prueba $e
+  Igual 'con el cerrojo ya suelto, la prueba sale con 0 otra vez' 0 $r3.Codigo
+}
+
+$Pruebas['m108 (b) dos lanzamientos seguidos del mismo batch: el segundo no choca con el cerrojo del primero (el sistema lo suelta al acabar) y el fichero se queda'] = {
+  $e = Escenario-M107 'm108-b' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e
+  Igual 'el primero sale con 0' 0 $r.Codigo
+  Comprueba 'deja prueba-local.lock en prueba-local' (Test-Path -LiteralPath (Cerrojo-M108 $e)) ''
+  $r2 = Prueba $e
+  Igual 'el segundo sale con 0' 0 $r2.Codigo
+  Comprueba 'y no habla de otra prueba en marcha' ($r2.Salida -notmatch 'Otra prueba local') (Cola $r2.Salida)
+  Igual 'el fichero sigue siendo uno solo y sin contenido (ni PID ni nada)' '0' "$((Get-Item -LiteralPath (Cerrojo-M108 $e)).Length)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
