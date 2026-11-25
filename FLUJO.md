@@ -271,7 +271,7 @@ La IA empareja cada variable con una clave del inventario (de una lista cerrada)
 - El nombre del batch de referencia no queda en ningún sitio.
 - Copilot no puede usar la consola, y lo que escribe fuera de su sitio se deshace. Si cambia algo en el migrado, te avisa.
 
-**Lo que te toca:** abre `PENDIENTE.md` en el repo nuevo. Tiene, por entorno, cada variable con su estado (valor puesto, pendiente o secreto que hay que pedir), los `<PENDIENTE: ...>` con fichero y línea, lo que ha encontrado la revisión y lo atascado. Pon lo que falte, haz `git init` y commit. Al relanzar, lo que has cambiado a mano se respeta.
+**Lo que te toca:** abre `PENDIENTE.md` en el repo nuevo. Tiene, por entorno, cada variable con su estado (valor puesto, pendiente o secreto que hay que pedir), los `<PENDIENTE: ...>` con fichero y línea, lo que ha encontrado la revisión y lo atascado. En «Con valor por defecto en el migrado» salen las variables `${X:valor}` que siguen pendientes y que ninguna referencia pone: si el valor vale en producción, quita su línea; si es de desarrollo, dale valor (solo avisa, no cambia nada). Pon lo que falte, haz `git init` y commit. Al relanzar, lo que has cambiado a mano se respeta.
 
 ## Paso 5. Sonar
 

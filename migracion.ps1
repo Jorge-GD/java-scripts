@@ -134,7 +134,8 @@ USO
   Con -ConfigMapComparar <repo1>,<repo2> (repos de configmap de otros batch que ya funcionan; se guardan en ajustes.json) un <PENDIENTE> se pone solo, sin IA, si la linea que lo lleva
   vale lo mismo en la referencia y en todos ellos (y no lleva el nombre de ningun batch ni un secreto): es de la plataforma, no del batch. PENDIENTE.md lo lista aparte.
   Con -ConfigMapSinInventario <entorno> (uno que tiene inventario; se guarda en ajustes.json) los entornos que no tienen carpeta en el inventario toman, sin IA, los valores de ese
-  (con las mismas guardas); PENDIENTE.md lo lista aparte. Sin el, la consola dice que entornos no tienen inventario.
+  (con las mismas guardas); PENDIENTE.md lo lista aparte. Sin el, la consola dice que entornos no tienen inventario. PENDIENTE.md avisa tambien de las variables con valor por defecto
+  (${X:valor}) que siguen pendientes y ninguna referencia pone.
   No se mezcla con -Cierre, -SoloInforme, -Si, -Practicas, -Reglas ni -RevisarTodo; -Reintentar vale (repite las tareas atascadas).
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).

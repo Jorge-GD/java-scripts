@@ -1240,7 +1240,7 @@ $Pruebas['m101 (d) sin comparar: nada cambia: las marcas siguen, PENDIENTE.md no
   Comprueba 'la marca sigue en pre' ((Lineas-Destino $e 'config/pre/variables') -ccontains ($Dato + '<PENDIENTE>'))
   $p = Pendiente $e
   Comprueba 'PENDIENTE.md no tiene la seccion' ($p -notmatch '(?m)^## Puesto porque') $p
-  Igual 'las secciones de siempre, en su orden' ('Entorno DES | Entorno PRE | Entorno PRO | Diferencias entre entornos | Pendientes en los ficheros | Hallazgos de la revisi' + [char]0xF3 + 'n | Tareas atascadas | Ficheros que has cambiado') (Titulos $p)
+  Igual 'las secciones de siempre, en su orden (y la de los valores por defecto, que este escenario tiene)' ('Entorno DES | Entorno PRE | Entorno PRO | Diferencias entre entornos | Con valor por defecto en el migrado | Pendientes en los ficheros | Hallazgos de la revisi' + [char]0xF3 + 'n | Tareas atascadas | Ficheros que has cambiado') (Titulos $p)
   $j = Lee-Json (Join-Path $e.Datos 'configmap.json')
   Comprueba 'configmap.json tiene el campo comunes, vacio' (($j.PSObject.Properties.Name -contains 'comunes') -and @($j.comunes).Count -eq 0)
   Comprueba 'la consola no habla de puestos' (-not $x.Consola.Contains('puestos por ser iguales'))
@@ -1661,6 +1661,123 @@ $Pruebas['m111 (h) Set-SinInventarioConfigMap: cada entorno sin inventario toma 
   Igual 'sin cambiados, cert toma los suyos (uno y dos; tres sigue pendiente en PRE)' "uno=a`ndos=b`ntres=<PENDIENTE>`n" (Lee $r 'config/cert/variables')
   Igual 'y devuelve dos entradas de cert, en orden' 'cert:1,cert:2' (($res2 | ForEach-Object { "$($_.entorno):$($_.linea)" }) -join ',')
   Igual 'sin fuente no hace nada' 0 @(Set-SinInventarioConfigMap $r '' $inv @() @()).Count
+}
+
+# ---- m104: variables con valor por defecto (${X:valor}) que siguen <PENDIENTE> y que ninguna referencia pone ----
+$TituloDefecto = 'Con valor por defecto en el migrado'
+$TextoProd = ': ninguna referencia la pone; si ese valor vale en produccion, quita su linea.'
+$TextoDes = ': es de desarrollo; hay que darle valor.'
+
+$Pruebas['m104 (a) defecto: un ${X:valor} que sigue <PENDIENTE> y que ninguna referencia pone sale con el texto de quitar la linea; un ${X} sin defecto no sale; ningun fichero cambia'] = {
+  $e = Nuevo-Escenario 'm104-a'
+  Planes-Buenos $e
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $p = Pendiente $e
+  $s = Seccion $p $TituloDefecto
+  Comprueba 'env.cliente (por defecto acme)' ($s.Contains('- `env.cliente` (por defecto `acme`)' + $TextoProd)) $p
+  Comprueba 'env.reintentos (por defecto 3)' ($s.Contains('- `env.reintentos` (por defecto `3`)' + $TextoProd)) $p
+  Igual 'solo esas dos lineas' 2 ([regex]::Matches($s, '(?m)^- ')).Count
+  Comprueba 'las variables sin defecto (env.ruta-entrada, env.url-auth) no salen' (-not $s.Contains('env.ruta-entrada') -and -not $s.Contains('env.url-auth'))
+  Comprueba 'la seccion va antes de la de pendientes en los ficheros' ((Titulos $p).Contains('Diferencias entre entornos | ' + $TituloDefecto + ' | Pendientes en los ficheros')) (Titulos $p)
+  Comprueba 'la consola lo cuenta' ($x.Consola.Contains(', 2 con valor por defecto (mira PENDIENTE.md)')) $x.Consola
+  Comprueba 'ninguna linea se borra: el <PENDIENTE> de cliente sigue en des' ((Lineas-Destino $e 'config/des/variables') -ccontains 'pfx.variables.env.cliente=<PENDIENTE>')
+  $h1 = Hashes-Destino $e
+  [void](Corre $e)
+  Igual 'relanzar: mismos ficheros' $h1 (Hashes-Destino $e)
+  Comprueba 'y la seccion sigue' ((Seccion (Pendiente $e) $TituloDefecto).Contains('`env.cliente`'))
+}
+
+$Pruebas['m104 (b) defecto: un defecto de desarrollo (localhost, 127.0.0.1, example, dummy, changeit o la palabra test o dev) sale como "es de desarrollo"; los demas, como de produccion'] = {
+  $e = Nuevo-Escenario 'm104-b' @{ Yml = $YmlBase.Replace('${env.cliente:acme}', '${env.cliente:localhost}') }
+  Planes-Buenos $e
+  $x = Corre $e
+  $s = Seccion (Pendiente $e) $TituloDefecto
+  Comprueba 'env.cliente (localhost): es de desarrollo' ($s.Contains('- `env.cliente` (por defecto `localhost`)' + $TextoDes)) $s
+  Comprueba 'env.reintentos (3): sigue con el texto de produccion' ($s.Contains('- `env.reintentos` (por defecto `3`)' + $TextoProd)) $s
+  foreach ($d in @('LOCALHOST:8080', 'jdbc:h2:mem://127.0.0.1/x', 'http://www.Example.org', 'dummy-user', 'ChangeIt', 'test', 'dev', 'mi-dev-db', 'a_test_b', 'https://pedidos.acme.test/api')) {
+    Comprueba "$d es de desarrollo" (Test-DefectoDesarrolloConfigMap $d)
+  }
+  foreach ($d in @('acme', '3', 'pro', 'development', 'latest', 'contest', '')) {
+    Comprueba "'$d' no es de desarrollo" (-not (Test-DefectoDesarrolloConfigMap $d))
+  }
+}
+
+$Pruebas['m104 (c) defecto: si el nombre de la variable sale en un fichero de la referencia o de un repo de comparar, no sale (alguna referencia la pone)'] = {
+  $e = Escenario-M101 'm104-c1'
+  Anade-Linea $e.Ref 'config/pre/variables' 'pfx.variables.env.cliente=acme-plat'
+  [void](Corre $e)
+  $s = Seccion (Pendiente $e) $TituloDefecto
+  Comprueba 'cliente sale en la referencia: no sale' (-not $s.Contains('env.cliente')) $s
+  Comprueba 'reintentos, que no sale en ninguna, si' ($s.Contains('`env.reintentos`')) $s
+  $e2 = Escenario-M101 'm104-c2'
+  Anade-Linea $e2.Cmp 'config/pro/variables' 'pfx.variables.env.reintentos=3'
+  $x2 = Corre $e2 @($e2.Cmp)
+  $s2 = Seccion (Pendiente $e2) $TituloDefecto
+  Comprueba 'reintentos sale en un repo de comparar: no sale' (-not $s2.Contains('env.reintentos')) $s2
+  Comprueba 'cliente, que no sale en ninguno, si' ($s2.Contains('`env.cliente`')) $s2
+  Comprueba 'la consola cuenta 1' ($x2.Consola.Contains(', 1 con valor por defecto (mira PENDIENTE.md)')) $x2.Consola
+  $e3 = Escenario-M101 'm104-c3'
+  Anade-Linea $e3.Ref 'config/pre/variables' 'pfx.variables.env.cliente=acme-plat'
+  Anade-Linea $e3.Cmp 'config/pro/variables' 'pfx.variables.env.reintentos=3'
+  $x3 = Corre $e3 @($e3.Cmp)
+  Comprueba 'con las dos cubiertas no hay seccion' ((Pendiente $e3) -notmatch '(?m)^## Con valor por defecto') (Titulos (Pendiente $e3))
+  Comprueba 'ni lo dice la consola' (-not $x3.Consola.Contains('con valor por defecto')) $x3.Consola
+}
+
+$Pruebas['m104 (d) defecto: sin <PENDIENTE> en ningun fichero no sale, y un ${X} sin defecto tampoco aunque siga pendiente; la consola no dice nada'] = {
+  $e = Nuevo-Escenario 'm104-d'
+  Planes-Buenos $e
+  $ref = Ficheros-Referencia
+  foreach ($env in @('des', 'pre', 'pro')) {
+    $v = [ordered]@{}
+    foreach ($k in $Valores[$env].Keys) { $v[$k] = $Valores[$env][$k] }
+    $v['env.cliente'] = "cliente-$env"
+    if ($env -ne 'pre') { $v['env.reintentos'] = '3' }
+    Plan $e "configmap-entorno-$env" (Ficheros-Entorno $env $ref $v)
+  }
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  Comprueba 'quedan <PENDIENTE> en los ficheros (los de variables sin defecto)' ($x.R.Pendientes -gt 0)
+  Comprueba 'cliente y reintentos (con defecto) ya tienen valor: la seccion no esta' ((Pendiente $e) -notmatch '(?m)^## Con valor por defecto') (Titulos (Pendiente $e))
+  Comprueba 'la consola no dice nada' (-not $x.Consola.Contains('con valor por defecto')) $x.Consola
+}
+
+$Pruebas['m104 (e) Get-DefectosConfigMap: ${X:valor} y ${X:} cuentan (con su defecto); ${X}, lo que se resuelve dentro de los ficheros y lo que sale tambien sin defecto no; vale el primero (sin perfil antes)'] = {
+  $r = Join-Path $Dir 'm104-e'
+  if (Test-Path -LiteralPath $r) { Remove-Item -LiteralPath $r -Recurse -Force }
+  Escribe $r 'src/main/resources/application-pro.yml' @'
+a:
+  uno: ${x.uno:de-pro}
+  tres: ${x.tres:t3}
+'@
+  Escribe $r 'src/main/resources/application.yml' @'
+a:
+  uno: ${x.uno:primero}
+  dos: ${x.dos:}
+  cuatro: ${x.cuatro}
+  cinco: ${x.cinco:a:b}
+  tres: ${x.tres}
+  seis: ${a.uno:zzz}
+  siete: ${x.siete:${x.cuatro}}
+'@
+  $d = @(Get-DefectosConfigMap $r)
+  Igual 'x.cinco (con dos puntos), x.dos (vacio) y x.uno (el de sin perfil), en orden' 'x.cinco=a:b|x.dos=|x.uno=primero' (($d | ForEach-Object { "$($_.variable)=$($_.defecto)" }) -join '|')
+}
+
+$Pruebas['m104 (f) defecto: un defecto con credenciales sale como (por defecto: secreto) y uno vacio como vacio, sin su valor; el de una variable secreta tambien se calla'] = {
+  $yml = $YmlBase.Replace('${env.cliente:acme}', '${env.cliente:https://svc:Pa55@pedidos.acme.net/api}').Replace('${env.reintentos:3}', '${env.reintentos:}').Replace('${env.url-auth-clave}', '${env.url-auth-clave:changeit}')
+  $e = Nuevo-Escenario 'm104-f' @{ Yml = $yml }
+  Planes-Buenos $e
+  $x = Corre $e
+  Igual 'sale con 0' 0 $x.R.Codigo
+  $p = Pendiente $e
+  $s = Seccion $p $TituloDefecto
+  Comprueba 'cliente: secreto, con el texto de produccion' ($s.Contains('- `env.cliente` (por defecto: secreto)' + $TextoProd)) $s
+  Comprueba 'reintentos: vacio' ($s.Contains('- `env.reintentos` (por defecto: vacio)' + $TextoProd)) $s
+  Comprueba 'url-auth-clave: nombre de secreto, no ensena el valor y es de desarrollo (changeit)' ($s.Contains('- `env.url-auth-clave` (por defecto: secreto)' + $TextoDes)) $s
+  Comprueba 'el valor con credenciales no sale en PENDIENTE.md' (-not $p.Contains('Pa55'))
+  Comprueba 'ni changeit' (-not $p.Contains('changeit'))
 }
 
 Invoke-Banco $Pruebas 'tests/probar-configmap.ps1'

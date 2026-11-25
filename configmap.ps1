@@ -24,6 +24,7 @@ y para PowerShell 7.
       lo apuntan.
       Con SinInventario (-ConfigMapSinInventario de migracion.ps1: un entorno de la referencia que tiene inventario), cada entorno que no tiene carpeta en el inventario toma, sin IA, los
       valores de ese (Set-SinInventarioConfigMap, con las mismas guardas); PENDIENTE.md y datos\configmap.json (sinInventario) lo apuntan.
+      PENDIENTE.md dice ademas que variables con ${X:defecto} siguen pendientes y ninguna referencia pone (Get-ConDefectoConfigMap): solo informa, no cambia ningun fichero.
 
   Guardas (las comprueba el script, siempre)
       (a) cada variable no secreta sale en algun fichero del entorno, con su valor en su linea (o con <PENDIENTE> si no se sabe);
@@ -241,34 +242,89 @@ function Add-ProblemasSecretosConfigMap([string]$Dir, [string[]]$Rels, $Lista) {
 }
 
 # ================================ VARIABLES ================================
-# Los ${X} del migrado (application*.yml|yaml|properties de src/main/resources) que no se resuelven dentro de esos mismos ficheros: una por nombre, con
-# el fichero, la linea y el texto de la linea del primer sitio donde sale (primero los ficheros sin perfil), en orden de nombre.
-function Get-VariablesConfigMap([string]$Migrado) {
+# Las propiedades de los application*.yml|yaml|properties del migrado (src/main/resources): Ficheros, Props (primero las de los ficheros sin perfil) y Conocidas (sus claves, en
+# forma canonica: un ${X} que sale entre ellas se resuelve dentro de esos mismos ficheros).
+function Read-PropiedadesMigradoConfigMap([string]$Migrado) {
   $fallos = New-Object 'System.Collections.Generic.List[string]'
   $ficheros = @(Get-FicherosPropiedades $Migrado $false $fallos)
   $props = @(Read-PropiedadesLado $ficheros $fallos)
   $conocidas = New-Object 'System.Collections.Generic.HashSet[string]'
   foreach ($p in $props) { [void]$conocidas.Add((ConvertTo-ClaveCanonica $p.clave)) }
+  $orden = @($props | Where-Object { $_.perfil -ceq 'default' }) + @($props | Where-Object { $_.perfil -cne 'default' })
+  return [pscustomobject]@{ Ficheros = $ficheros; Props = $orden; Conocidas = $conocidas }
+}
+
+# Los ${X} del migrado (application*.yml|yaml|properties de src/main/resources) que no se resuelven dentro de esos mismos ficheros: una por nombre, con
+# el fichero, la linea y el texto de la linea del primer sitio donde sale (primero los ficheros sin perfil), en orden de nombre.
+function Get-VariablesConfigMap([string]$Migrado) {
+  $d = Read-PropiedadesMigradoConfigMap $Migrado
   $lineas = @{}
-  foreach ($f in $ficheros) { $lineas[$f.Rel] = @($f.Texto -split '\r?\n') }
+  foreach ($f in $d.Ficheros) { $lineas[$f.Rel] = @($f.Texto -split '\r?\n') }
   $vistas = New-Object 'System.Collections.Generic.Dictionary[string,object]'
-  foreach ($sinPerfil in @($true, $false)) {
-    foreach ($p in $props) {
-      if (($p.perfil -ceq 'default') -ne $sinPerfil) { continue }
-      foreach ($m in [regex]::Matches([string]$p.valor, '\$\{\s*([^}:\s]+)')) {
-        $n = $m.Groups[1].Value
-        if ($vistas.ContainsKey($n) -or $conocidas.Contains((ConvertTo-ClaveCanonica $n))) { continue }
-        $texto = ''
-        $ls = $lineas[$p.fichero]
-        if ($ls -and $p.linea -ge 1 -and $p.linea -le $ls.Count) { $texto = $ls[$p.linea - 1].Trim() }
-        $vistas[$n] = [pscustomobject]@{ variable = $n; fichero = $p.fichero; linea = [int]$p.linea; texto = $texto }
-      }
+  foreach ($p in $d.Props) {
+    foreach ($m in [regex]::Matches([string]$p.valor, '\$\{\s*([^}:\s]+)')) {
+      $n = $m.Groups[1].Value
+      if ($vistas.ContainsKey($n) -or $d.Conocidas.Contains((ConvertTo-ClaveCanonica $n))) { continue }
+      $texto = ''
+      $ls = $lineas[$p.fichero]
+      if ($ls -and $p.linea -ge 1 -and $p.linea -le $ls.Count) { $texto = $ls[$p.linea - 1].Trim() }
+      $vistas[$n] = [pscustomobject]@{ variable = $n; fichero = $p.fichero; linea = [int]$p.linea; texto = $texto }
     }
   }
   $res = New-Object 'System.Collections.Generic.List[object]'
   foreach ($v in $vistas.Values) { $res.Add($v) }
   $res.Sort([System.Comparison[object]]{ param($a, $b) [string]::CompareOrdinal($a.variable, $b.variable) })
   return $res.ToArray()
+}
+
+# Los ${X:defecto} del migrado (los mismos ficheros y nombres que Get-VariablesConfigMap): el nombre y el defecto del primer sitio donde sale con defecto (primero los ficheros sin
+# perfil), en orden de nombre. ${X:} cuenta, con el defecto vacio. No cuenta una X que sale tambien sin defecto (${X}: sin su valor no arranca) ni con un ${...} dentro del defecto.
+function Get-DefectosConfigMap([string]$Migrado) {
+  $d = Read-PropiedadesMigradoConfigMap $Migrado
+  $defectos = New-Object 'System.Collections.Generic.Dictionary[string,string]'
+  $sin = New-Object 'System.Collections.Generic.HashSet[string]'
+  foreach ($p in $d.Props) {
+    foreach ($m in [regex]::Matches([string]$p.valor, '\$\{\s*([^}:\s]+)\s*(?::([^}]*))?\}')) {
+      $n = $m.Groups[1].Value
+      if ($d.Conocidas.Contains((ConvertTo-ClaveCanonica $n))) { continue }
+      if (-not $m.Groups[2].Success -or $m.Groups[2].Value.Contains('${')) { [void]$sin.Add($n) }
+      elseif (-not $defectos.ContainsKey($n)) { $defectos[$n] = $m.Groups[2].Value }
+    }
+  }
+  $res = New-Object 'System.Collections.Generic.List[object]'
+  foreach ($n in $defectos.Keys) { if (-not $sin.Contains($n)) { $res.Add([pscustomobject]@{ variable = $n; defecto = $defectos[$n] }) } }
+  $res.Sort([System.Comparison[object]]{ param($a, $b) [string]::CompareOrdinal($a.variable, $b.variable) })
+  return $res.ToArray()
+}
+
+# El defecto de un ${X:defecto} parece de desarrollo: lleva (sin distinguir mayusculas) localhost, 127.0.0.1, example, dummy o changeit, o la palabra test o dev.
+function Test-DefectoDesarrolloConfigMap([string]$Defecto) {
+  $d = $Defecto.ToLowerInvariant()
+  foreach ($x in @('localhost', '127.0.0.1', 'example', 'dummy', 'changeit')) { if ($d.Contains($x)) { return $true } }
+  return ((Test-PalabraConfigMap $d 'test') -or (Test-PalabraConfigMap $d 'dev'))
+}
+
+# El texto de todos los ficheros de los repos $Repos (sin .git), uno detras de otro.
+function Get-TextoReposConfigMap([string[]]$Repos) {
+  $t = New-Object System.Text.StringBuilder
+  foreach ($r in $Repos) { foreach ($rel in @(Get-FicherosSinGit $r @('.git'))) { [void]$t.Append((Read-TextoConfigMap (Join-Ruta $r $rel))).Append("`n") } }
+  return $t.ToString()
+}
+
+# Los $Defectos cuya variable sigue con <PENDIENTE> en algun fichero del repo nuevo ($Pendientes: cada marca con el texto de su linea, que nombra la variable) y cuyo nombre no sale en
+# ningun fichero de $Repos (la referencia y los de comparar: ninguna la pone). Devuelve variable, defecto, desarrollo (el defecto parece de desarrollo) y secreto (el defecto o la
+# variable lo son: no se ensena el valor). No cambia ningun fichero.
+function Get-ConDefectoConfigMap($Defectos, $Pendientes, [string[]]$Repos) {
+  $res = @()
+  $textoRepos = $null
+  foreach ($d in @($Defectos | Where-Object { $_ })) {
+    $rx = '(?i)(?<![\p{L}\p{N}_-])' + [regex]::Escape($d.variable) + '(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])'
+    if (@($Pendientes | Where-Object { [regex]::IsMatch([string]$_.texto, $rx) }).Count -eq 0) { continue }
+    if ($null -eq $textoRepos) { $textoRepos = Get-TextoReposConfigMap $Repos }
+    if ($textoRepos.IndexOf($d.variable, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { continue }
+    $res += [pscustomobject]@{ variable = $d.variable; defecto = $d.defecto; desarrollo = (Test-DefectoDesarrolloConfigMap $d.defecto); secreto = ((Test-ValorSecretoConfigMap $d.defecto) -or (Test-NombreSecretoConfigMap $d.variable)) }
+  }
+  return $res
 }
 
 # ================================ INVENTARIO ================================
@@ -1001,14 +1057,14 @@ function Get-PuestosFinalesConfigMap($Previas, $Nuevas, [string]$Dir, $Cambiados
 }
 
 # ================================ PENDIENTE.md ================================
-# Cada <PENDIENTE...> de los ficheros del repo nuevo (menos PENDIENTE.md), con su fichero y su linea.
+# Cada <PENDIENTE...> de los ficheros del repo nuevo (menos PENDIENTE.md), con su fichero, su linea y el texto de esa linea.
 function Get-PendientesFicherosConfigMap([string]$Dir) {
   $res = @()
   foreach ($rel in @(Get-FicherosSinGit $Dir @('.git', '.rescate'))) {
     if ($rel -ceq 'PENDIENTE.md') { continue }
     $ls = @((Read-TextoConfigMap (Join-Ruta $Dir $rel)) -split '\r?\n')
     for ($i = 0; $i -lt $ls.Count; $i++) {
-      foreach ($m in [regex]::Matches($ls[$i], $CmMarca)) { $res += [pscustomobject]@{ fichero = $rel; linea = $i + 1; marca = $m.Value} }
+      foreach ($m in [regex]::Matches($ls[$i], $CmMarca)) { $res += [pscustomobject]@{ fichero = $rel; linea = $i + 1; marca = $m.Value; texto = $ls[$i] } }
     }
   }
   return $res
@@ -1039,6 +1095,19 @@ function Get-TextoPendienteConfigMap($D) {
   $l.Add('## Diferencias entre entornos')
   $l.Add('')
   if (@($D.diferencias).Count -eq 0) { $l.Add('Ninguna.') } else { foreach ($x in $D.diferencias) { $l.Add("- $x") } }
+  $conDefecto = @($D.conDefecto | Where-Object { $_ })
+  if ($conDefecto.Count -gt 0) {
+    $l.Add('')
+    $l.Add('## Con valor por defecto en el migrado')
+    $l.Add('')
+    foreach ($x in $conDefecto) {
+      $defecto = "por defecto $tilde$($x.defecto)$tilde"
+      if ($x.secreto) { $defecto = 'por defecto: secreto' } elseif ($x.defecto -eq '') { $defecto = 'por defecto: vacio' }
+      $texto = 'ninguna referencia la pone; si ese valor vale en produccion, quita su linea.'
+      if ($x.desarrollo) { $texto = 'es de desarrollo; hay que darle valor.' }
+      $l.Add("- $tilde$($x.variable)$tilde ($defecto): $texto")
+    }
+  }
   $l.Add('')
   $l.Add('## Pendientes en los ficheros')
   $l.Add('')
@@ -1383,9 +1452,10 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
   $sinInvFinal = @(Get-PuestosFinalesConfigMap @($previo.sinInventario.lista) $puestosSin $destino $cambiados)
   $fuenteSin = (Get-FuenteSinInventarioConfigMap $inv $sinInventario).Nombre
   if (-not $fuenteSin -and $sinInvFinal.Count -gt 0) { $fuenteSin = [string]$sinInvFinal[0].fuente }   # sin -ConfigMapSinInventario en esta pasada, la fuente con que se pusieron los de antes
+  $conDefecto = @(Get-ConDefectoConfigMap @(Get-DefectosConfigMap $Migrado) $pendientes (@($Referencia) + $comparar))
   $nRefs = $comparar.Count + 1   # sin -ConfigMapComparar en esta pasada, los repos con que se pusieron los de antes
   if ($comparar.Count -eq 0 -and $comunesFinal.Count -gt 0) { $nRefs = [int](@($comunesFinal | ForEach-Object { $_.referencias }) | Measure-Object -Maximum).Maximum }
-  $D = [pscustomobject]@{ nombre = $nombre; entornos = $datosEntornos; diferencias = $dif; pendientes = $pendientes; hallazgos = $hallazgos; atascadas = $atascadas; cambiados = @($cambiados); borrados = $borrados; aMano = $aMano; comunes = $CmComunes.ToArray(); secretas = $nSecretas; comparar = $comparar.Count; referencias = $nRefs; puestos = $comunesFinal; sinInventario = $sinInvFinal }
+  $D = [pscustomobject]@{ nombre = $nombre; entornos = $datosEntornos; diferencias = $dif; pendientes = $pendientes; hallazgos = $hallazgos; atascadas = $atascadas; cambiados = @($cambiados); borrados = $borrados; aMano = $aMano; comunes = $CmComunes.ToArray(); secretas = $nSecretas; comparar = $comparar.Count; referencias = $nRefs; puestos = $comunesFinal; sinInventario = $sinInvFinal; conDefecto = $conDefecto }
   [System.IO.File]::WriteAllText((Join-Path $destino 'PENDIENTE.md'), (Get-TextoPendienteConfigMap $D), $Utf8)
   $ficheros = @()
   foreach ($rel in @(Get-FicherosSinGit $destino @('.git', '.rescate'))) {
@@ -1421,7 +1491,9 @@ function Invoke-PasosConfigMap([string]$Plantilla, [string]$Migrado, [string]$Re
   if ($comparar.Count -gt 0) { $sumaComunes = ", $($comunesFinal.Count) puestos por ser iguales en las referencias" }
   $sumaSin = ''
   if ($fuenteSin) { $sumaSin = ", $($sinInvFinal.Count) puestos de $fuenteSin" }
-  Info "  $($pendientes.Count) pendientes en los ficheros, $nSecretas secretos por pedir, $($hallazgos.Count) hallazgos de la revision, $($atascadas.Count) tareas atascadas$sumaComunes$sumaSin. Mira $(Join-Path $destino 'PENDIENTE.md')"
+  $sumaDefecto = ''
+  if ($conDefecto.Count -gt 0) { $sumaDefecto = ", $($conDefecto.Count) con valor por defecto (mira PENDIENTE.md)" }
+  Info "  $($pendientes.Count) pendientes en los ficheros, $nSecretas secretos por pedir, $($hallazgos.Count) hallazgos de la revision, $($atascadas.Count) tareas atascadas$sumaComunes$sumaSin$sumaDefecto. Mira $(Join-Path $destino 'PENDIENTE.md')"
   if (-not $sinInventario) {
     foreach ($e in @($inv.Keys | Where-Object { -not $inv[$_].Tiene })) { Info "$($e.ToUpperInvariant()) no tiene inventario: si usa los valores de otro entorno, relanza con -ConfigMapSinInventario <ese entorno>." }
   }
