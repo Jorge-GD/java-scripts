@@ -45,7 +45,9 @@ Despues del git pull, el repo de configmap. Si dice "Ya existe <carpeta>", cambi
 .\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
 .\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
 
-3. BATCH 3. Mandame una foto de como acabo el cierre.
+3. BATCH 3. Mandame una foto de la ventana del cierre. Si ya no esta, o no sabes si la prueba completa se hizo despues del ultimo arreglo en rescate, lanza las dos otra vez (despues del git pull). Si pregunta por tareas de IA, contesta n y dime cuantas:
+.\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
+.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
 
 4. BATCH 4. Cuando te lo diga (despues de ver la respuesta de Copilot a su prompt): la prueba completa (unas 3 horas). Si pregunta por tareas de IA, contesta n y dime cuantas. Despues, aparta el .gitignore cambiado y el cierre (antes, mira que el migrado esta en su rama buena):
 .\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
