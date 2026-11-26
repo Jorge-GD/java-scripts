@@ -608,6 +608,20 @@ function Test-WorktreeRescate([string]$Dir) {
   return [bool]($alli -and ($alli -eq $aqui))
 }
 
+# Si $Dir es una carpeta de rescate (un worktree enlazado: su .git es un fichero, en una rama rescate/...), la carpeta del migrado al que
+# pertenece: la raiz de su repo principal, la carpeta padre de git-common-dir. Si no, ''. Es la unica que decide que -Migrado es una
+# carpeta de rescate (prueba-local.ps1 y migracion.ps1 paran): no usa $OrigenRoot ni $Worktree, vale con cualquier carpeta.
+function Get-MigradoDeRescate([string]$Dir) {
+  if (-not (Test-Path -LiteralPath (Join-Path $Dir '.git') -PathType Leaf)) { return '' }
+  if (-not (Get-Rama $Dir).StartsWith('rescate/')) { return '' }
+  $comun = ((Invoke-Git $Dir @('rev-parse', '--git-common-dir')).Salida -join '').Trim()
+  if (-not $comun) { return '' }
+  if (-not [System.IO.Path]::IsPathRooted($comun)) { $comun = Join-Path $Dir $comun }
+  $comun = [System.IO.Path]::GetFullPath($comun).TrimEnd('\', '/')
+  if ((Split-Path $comun -Leaf) -ne '.git') { return '' }   # un repo con su .git en otro sitio: no se sabe cual es su carpeta
+  return (Split-Path $comun -Parent)
+}
+
 # Copia al worktree lo que hay sin commit en la carpeta original, sin tocarla,
 # y lo guarda en un commit 'foto'. Devuelve '' o el motivo del fallo.
 function Copy-Sucio([string]$Dir, [bool]$HaySeguidos) {

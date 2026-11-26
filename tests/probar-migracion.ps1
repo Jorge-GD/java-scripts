@@ -8623,5 +8623,23 @@ $Pruebas['w2 (k) FLUJO.md (Paso 2) cuenta la fase propiedades y la revision: que
   Comprueba 'el cierre dice que tampoco admite -RevisarTodo' ($f -match 'no admite `-SoloInforme`, `-Si`, `-Practicas`, `-Reglas`, `-RevisarTodo` ni `-Reintentar`')
 }
 
+$Pruebas['m112 (d) -Migrado = la carpeta de rescate (worktree en rescate/main-1): sale con 1, dice que es la de rescate y nombra la carpeta del migrado, y no crea ni toca nada'] = {
+  $e = Nuevo-Escenario 'm112-d' @('Clase1')
+  [void](GitEn $e.Migrado @('worktree', 'add', '-q', '-b', 'rescate/main-1', $e.Wt))
+  $estado = { (@(Get-ChildItem -LiteralPath $e.Wt -Force -Name | Sort-Object) -join ',') + '|' + (GitEn $e.Wt @('rev-parse', 'HEAD')) + '|' + (GitEn $e.Wt @('status', '--porcelain')) + '|' + (Lee $e.Migrado '.git/info/exclude') }
+  $antes = & $estado
+  $a = Basicos $e
+  $a[[array]::IndexOf($a, '-Migrado') + 1] = $e.Wt
+  $r = Migra $e $a
+  Igual 'sale con 1' 1 $r.Codigo
+  $esperado = "-Migrado es la carpeta de rescate ($($e.Wt)). Pasa la del migrado: -Migrado `"$($e.Migrado)`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta."
+  Comprueba 'el mensaje dice que es la de rescate, la ruta dada, la carpeta del migrado y que no se copie migracion-*' ($r.Salida.Contains($esperado)) (Cola $r.Salida)
+  Comprueba 'no crea la carpeta de salida del batch ni el estado' ((-not (Test-Path -LiteralPath $e.Out)) -and ($null -eq (Estado $e))) ''
+  Igual 'la carpeta de rescate queda como estaba y el exclude del migrado no cambia' $antes (& $estado)
+  $r = Migra $e (Basicos $e)
+  Igual 'con la carpeta del migrado sale con 0, como siempre' 0 $r.Codigo
+  Comprueba 'y no habla de carpeta de rescate' ($r.Salida -notmatch 'es la carpeta de rescate') (Cola $r.Salida)
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

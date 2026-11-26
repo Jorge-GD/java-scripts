@@ -4441,6 +4441,8 @@ foreach ($x in @(@('-Legacy', $Legacy), @('-Migrado', $Migrado))) {
 }
 $LegacyRoot = Resolve-Dir $Legacy
 $MigradoRoot = Resolve-Dir $Migrado
+$deRescate = Get-MigradoDeRescate $MigradoRoot
+if ($deRescate) { Stop-Arranque "-Migrado es la carpeta de rescate ($MigradoRoot). Pasa la del migrado: -Migrado `"$deRescate`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta." }
 Read-Config $MigradoRoot $false    # config.json es de rescate.ps1: lleva claves que prueba-local.ps1 no conoce
 $PlantillaRoot = ''
 if ($ajustes -and $ajustes.Plantilla -and (Test-Path -LiteralPath ([string]$ajustes.Plantilla))) { $PlantillaRoot = Resolve-Dir ([string]$ajustes.Plantilla) }
@@ -4454,7 +4456,7 @@ if ($JavaLegacy -and -not (Test-Path -LiteralPath $JavaLegacy)) { Stop-Arranque 
 $salidaMig = @(Get-ChildItem -LiteralPath $MigradoRoot -Directory -Filter 'migracion-*' | Where-Object { Test-Path -LiteralPath (Join-Ruta $_.FullName 'datos/pruebas') } | Sort-Object LastWriteTimeUtc -Descending)
 $pruebas = @()
 if ($salidaMig.Count -gt 0) { $pruebas = @(Get-ChildItem -LiteralPath (Join-Ruta $salidaMig[0].FullName 'datos/pruebas') -File -Filter '*.json' | Sort-Object Name | ForEach-Object { Read-Json $_.FullName } | Where-Object { $_.job }) }
-if ($pruebas.Count -eq 0) { Stop-Arranque "No hay casos que probar: falta $MigradoRoot\migracion-<batch>\datos\pruebas\. Lanza antes migracion.ps1 (la fase de pruebas en pre escribe los casos de cada job)." }
+if ($pruebas.Count -eq 0) { Stop-Arranque "No hay casos que probar: falta $MigradoRoot\migracion-<batch>\datos\pruebas\. Lanza antes migracion.ps1 (la fase de pruebas en pre escribe los casos de cada job). Si has dado la carpeta de rescate, usa la del migrado." }
 $Salida = $salidaMig[0].FullName
 $DatosMig = Join-Path $Salida 'datos'
 $Local = Join-Path $Salida 'prueba-local'

@@ -10434,5 +10434,62 @@ $Pruebas['m108 (b) dos lanzamientos seguidos del mismo batch: el segundo no choc
   Igual 'el fichero sigue siendo uno solo y sin contenido (ni PID ni nada)' '0' "$((Get-Item -LiteralPath (Cerrojo-M108 $e)).Length)"
 }
 
+# ===================== M112: -Migrado no puede ser la carpeta de rescate =====================
+# La carpeta de rescate es un worktree enlazado del migrado en una rama rescate/...: si se da como -Migrado, la prueba para al arrancar y dice
+# cual es la carpeta del migrado. La decision es de Get-MigradoDeRescate (comun.ps1). El escenario ya trae ese worktree ($e.Wt, rama rescate/main-1).
+# Como Prueba, pero con $Carpeta en -Migrado en vez de la del migrado del escenario.
+function Prueba-M112($E, [string]$Carpeta, [string[]]$A = @()) {
+  $f = $E | Select-Object *
+  $f.Migrado = $Carpeta
+  return (Prueba $f $A)
+}
+
+# Lo que no puede cambiar si la prueba para al arrancar: lo que hay en la carpeta y su git, y el exclude del repo principal.
+function Estado-M112($E, [string]$Carpeta) {
+  return ((@(Get-ChildItem -LiteralPath $Carpeta -Force -Name | Sort-Object) -join ',') + '|' + (Foto $Carpeta) + '|' + (Lee $E.Migrado '.git/info/exclude'))
+}
+
+$Pruebas['m112 (a) -Migrado = la carpeta de rescate (worktree en rescate/main-1): sale con 1, dice que es la de rescate y nombra la carpeta del migrado, y no crea ni toca nada'] = {
+  $e = Nuevo-Escenario 'm112-a' ([ordered]@{ cargaJob = @('importe=5.00') })
+  $antes = Estado-M112 $e $e.Wt
+  $antesMig = Foto $e.Migrado
+  $r = Prueba-M112 $e $e.Wt
+  Igual 'sale con 1' 1 $r.Codigo
+  $esperado = "-Migrado es la carpeta de rescate ($($e.Wt)). Pasa la del migrado: -Migrado `"$($e.Migrado)`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta."
+  Comprueba 'el mensaje dice que es la de rescate, la ruta dada, la carpeta del migrado y que no se copie migracion-*' ($r.Salida.Contains($esperado)) (Cola $r.Salida)
+  Comprueba 'no se crea prueba-local en el batch' (-not (Test-Path -LiteralPath $e.Local)) ''
+  Comprueba 'ni la copia del original ni la del migrado (-prueba-local)' ((-not (Test-Path -LiteralPath $e.CopiaOrig)) -and (-not (Test-Path -LiteralPath $e.CopiaMig))) ''
+  Comprueba 'no llama a Copilot' (@(Llamadas $e).Count -eq 0) ''
+  Igual 'la carpeta de rescate queda como estaba (sin crear nada dentro)' $antes (Estado-M112 $e $e.Wt)
+  Igual 'el migrado y sus ramas quedan como estaban' $antesMig (Foto $e.Migrado)
+}
+
+$Pruebas['m112 (b) -Migrado = el migrado normal: arranca como hoy, sin hablar de carpeta de rescate'] = {
+  $e = Nuevo-Escenario 'm112-b' ([ordered]@{ cargaJob = @('importe=5.00') })
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no dice que sea la carpeta de rescate' ($r.Salida -notmatch 'es la carpeta de rescate') (Cola $r.Salida)
+  Igual 'el caso sale igual' 'igual' ((Resultados $e) -join ',')
+}
+
+$Pruebas['m112 (c) -Migrado = un worktree enlazado en otra rama (no rescate/): no para por esto; sigue y para en lo de siempre (sin casos), con el consejo nuevo'] = {
+  $e = Nuevo-Escenario 'm112-c' ([ordered]@{ cargaJob = @('importe=5.00') })
+  $otro = Join-Path $e.Raiz 'batch-nuevo-otro'
+  [void](GitEn $e.Migrado @('worktree', 'add', '-q', '-b', 'otra/rama', $otro))
+  $r = Prueba-M112 $e $otro
+  Comprueba 'no dice que sea la carpeta de rescate' ($r.Salida -notmatch 'es la carpeta de rescate') (Cola $r.Salida)
+  Igual 'sale con 1 por la parada de siempre' 1 $r.Codigo
+  Comprueba 'la parada de siempre: no hay casos que probar' ($r.Salida.Contains('No hay casos que probar: falta')) (Cola $r.Salida)
+  Comprueba 'y acaba con el consejo de dar la carpeta del migrado' ($r.Salida.Contains('Si has dado la carpeta de rescate, usa la del migrado.')) (Cola $r.Salida)
+}
+
+$Pruebas['m112 (e) -Migrado = el repo principal en una rama rescate/...: funciona igual que hoy (no es un worktree enlazado)'] = {
+  $e = Nuevo-Escenario 'm112-e' ([ordered]@{ cargaJob = @('importe=5.00') })
+  [void](GitEn $e.Migrado @('checkout', '-q', '-b', 'rescate/otra'))
+  $r = Prueba $e
+  Comprueba 'no dice que sea la carpeta de rescate' ($r.Salida -notmatch 'es la carpeta de rescate') (Cola $r.Salida)
+  Igual 'sale con 0' 0 $r.Codigo
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

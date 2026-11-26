@@ -975,6 +975,8 @@ foreach ($x in @(@('git', 'git'), @('java', $Cfg.JavaExe), @('Copilot', $Cfg.Cop
 }
 $LegacyRoot = Get-Repo $Legacy '-Legacy'
 $MigradoRoot = Get-Repo $Migrado '-Migrado'
+$deRescate = Get-MigradoDeRescate $MigradoRoot
+if ($deRescate) { Stop-Arranque "-Migrado es la carpeta de rescate ($MigradoRoot). Pasa la del migrado: -Migrado `"$deRescate`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta." }
 $RamaMigrado = Get-Rama $MigradoRoot
 if (-not $RamaMigrado -or $RamaMigrado -eq 'HEAD') { Stop-Arranque "El migrado no esta en una rama (HEAD suelto): $MigradoRoot. Cambia a una rama y vuelve a lanzar." }
 Read-Config $MigradoRoot $false    # config.json es de rescate.ps1: lleva claves que migracion.ps1 no conoce
