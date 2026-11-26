@@ -975,6 +975,7 @@ foreach ($x in @(@('git', 'git'), @('java', $Cfg.JavaExe), @('Copilot', $Cfg.Cop
 }
 $LegacyRoot = Get-Repo $Legacy '-Legacy'
 $MigradoRoot = Get-Repo $Migrado '-Migrado'
+$aviso = Get-AvisoMigradoRescate $MigradoRoot; if ($aviso) { Stop-Arranque $aviso }
 $RamaMigrado = Get-Rama $MigradoRoot
 if (-not $RamaMigrado -or $RamaMigrado -eq 'HEAD') { Stop-Arranque "El migrado no esta en una rama (HEAD suelto): $MigradoRoot. Cambia a una rama y vuelve a lanzar." }
 Read-Config $MigradoRoot $false    # config.json es de rescate.ps1: lleva claves que migracion.ps1 no conoce
