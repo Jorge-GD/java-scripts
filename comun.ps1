@@ -629,6 +629,34 @@ function Get-AvisoMigradoRescate([string]$Dir) {
   return "-Migrado es la carpeta de rescate ($Dir). Pasa la del migrado: -Migrado `"$migrado`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta."
 }
 
+# El JDK del original de un batch. Una sola fuente: javaLegacy en <batch>\datos\estado.json ($Datos). Es la unica funcion que decide cual vale (la usan
+# prueba-local.ps1 y migracion.ps1) y Save-JavaLegacyBatch la unica que lo guarda. Usa Read-Json y Write-Json de tareas.ps1, que cargan los dos.
+# Devuelve @{ Ruta; Origen; Aviso }: el $Dado (-JavaLegacy; Origen 'dado', sin mirar si existe) o, sin el, el guardado si esa carpeta sigue (Origen
+# 'guardado'); si la guardada ya no existe, Ruta '' y Aviso con el texto. Sin nada, Ruta y Origen ''.
+function Get-JavaLegacyBatch([string]$Dado, [string]$Datos) {
+  $r = @{ Ruta = ''; Origen = ''; Aviso = '' }
+  if ($Dado) { $r.Ruta = $Dado; $r.Origen = 'dado'; return $r }
+  $f = Join-Path $Datos 'estado.json'
+  if (-not (Test-Path -LiteralPath $f)) { return $r }
+  try { $guardado = [string](Read-Json $f).javaLegacy } catch { return $r }   # un estado.json que no se lee es cosa de migracion.ps1: aqui no hay nada guardado
+  if (-not $guardado) { return $r }
+  if (Test-Path -LiteralPath $guardado) { $r.Ruta = $guardado; $r.Origen = 'guardado'; return $r }
+  $r.Aviso = "El JDK guardado de este batch ya no existe ($guardado): sigo con el de Maven. Si el original no compila, pasa -JavaLegacy."
+  return $r
+}
+
+# Guarda $Ruta como javaLegacy en <batch>\datos\estado.json: solo esa clave (el resto del fichero igual) y, si no hay fichero, lo crea con ella.
+# Un estado.json que no se lee no se toca. Si ya lo lleva, no escribe.
+function Save-JavaLegacyBatch([string]$Datos, [string]$Ruta) {
+  $f = Join-Path $Datos 'estado.json'
+  if (-not (Test-Path -LiteralPath $f)) { Write-Json $f ([ordered]@{ javaLegacy = $Ruta }); return }
+  try { $estado = Read-Json $f } catch { return }
+  if ($estado -isnot [pscustomobject]) { return }
+  if ([string]$estado.javaLegacy -ceq $Ruta) { return }
+  Add-Member -InputObject $estado -NotePropertyName javaLegacy -NotePropertyValue $Ruta -Force
+  Write-Json $f $estado
+}
+
 # Copia al worktree lo que hay sin commit en la carpeta original, sin tocarla,
 # y lo guarda en un commit 'foto'. Devuelve '' o el motivo del fallo.
 function Copy-Sucio([string]$Dir, [bool]$HaySeguidos) {

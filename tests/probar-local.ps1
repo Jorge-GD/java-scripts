@@ -10491,5 +10491,154 @@ $Pruebas['m112 (e) -Migrado = el repo principal en una rama rescate/...: funcion
   Igual 'sale con 0' 0 $r.Codigo
 }
 
+# ===================== M109: cada batch recuerda el JDK de su original =====================
+# prueba-local.ps1 guarda el -JavaLegacy que se le da en datos\estado.json (javaLegacy) y, si no se le da, usa el guardado si esa carpeta
+# sigue existiendo. La decision es de Get-JavaLegacyBatch y el guardado, de Save-JavaLegacyBatch (comun.ps1). La huella del original no cambia.
+function Ruta-Estado-M109($E) { return (Get-Ruta $E.Migrado 'migracion-batch-nuevo/datos/estado.json') }
+
+function Estado-M109($E) { return (Lee-Json (Ruta-Estado-M109 $E)) }
+
+# Un estado.json como el que deja migracion.ps1: con javaLegacy si se da $Java, y sin la clave si no.
+function Escribe-Estado-M109($E, [string]$Java = '') {
+  $s = [ordered]@{ version = 1; batch = 'batch-nuevo'; modelo = 'modelo-x'; fase = 'hecha'; creado = '2026-11-26T10:00:00'; pruebaLocal = [ordered]@{ resultado = 'hecha'; codigo = 0 } }
+  if ($Java) { $s['javaLegacy'] = $Java }
+  Escribe $E.Migrado 'migracion-batch-nuevo/datos/estado.json' (ConvertTo-Json -InputObject $s -Depth 8)
+}
+
+# El estado.json sin la clave javaLegacy, en una linea: lo que no tiene que cambiar.
+function Resto-M109($E) {
+  $s = Estado-M109 $E
+  $s.PSObject.Properties.Remove('javaLegacy')
+  return (ConvertTo-Json -InputObject $s -Depth 8 -Compress)
+}
+
+function Jdk-M109($E, [string]$Nombre = 'jdk-viejo') {
+  $jdk = Join-Path $E.Raiz $Nombre
+  Escribe $jdk 'release' "JAVA_VERSION=`"1.8.0_392`"`n"
+  return $jdk
+}
+
+# Cuantas lineas lleva mvn.log (el Maven de mentira apunta una por llamada: carpeta|JAVA_HOME|argumentos).
+function Lineas-Mvn-M109($E) {
+  $f = Join-Path $E.Llamadas 'mvn.log'
+  if (-not (Test-Path -LiteralPath $f)) { return 0 }
+  return @([System.IO.File]::ReadAllLines($f)).Count
+}
+
+# El JAVA_HOME de cada Maven hecho en la copia del original desde la linea $Desde de mvn.log (0 = todos).
+function JavaHome-Orig-M109($E, [int]$Desde = 0) {
+  $f = Join-Path $E.Llamadas 'mvn.log'
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllLines($f) | Select-Object -Skip $Desde | Where-Object { $_.StartsWith($E.CopiaOrig + '|') } | ForEach-Object { $_.Split('|')[1] })
+}
+
+$Pruebas['m109 (a) con -JavaLegacy: estado.json guarda javaLegacy y el resto de claves queda igual; sin estado.json, lo crea con esa sola clave'] = {
+  $e = Nuevo-Escenario 'm109-a' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $jdk = Jdk-M109 $e
+  Escribe-Estado-M109 $e
+  $antes = Resto-M109 $e
+  $r = Prueba $e @('-JavaLegacy', $jdk)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'estado.json guarda javaLegacy' $jdk "$((Estado-M109 $e).javaLegacy)"
+  Igual 'el resto de claves queda igual' $antes (Resto-M109 $e)
+  Igual 'creado sigue siendo el mismo texto' '2026-11-26T10:00:00' (Get-Date -Date (Estado-M109 $e).creado -Format 's')
+  Comprueba 'con -JavaLegacy dado no dice que use el guardado' ($r.Salida -notmatch 'el guardado de este batch') (Cola $r.Salida)
+  $e2 = Nuevo-Escenario 'm109-a2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $jdk2 = Jdk-M109 $e2
+  Comprueba 'sin estado.json, antes no hay fichero' (-not (Test-Path -LiteralPath (Ruta-Estado-M109 $e2))) ''
+  $r = Prueba $e2 @('-JavaLegacy', $jdk2)
+  Igual 'sale con 0' 0 $r.Codigo
+  Igual 'lo crea con javaLegacy' $jdk2 "$((Estado-M109 $e2).javaLegacy)"
+  Igual 'y solo con esa clave' 'javaLegacy' ((@((Estado-M109 $e2).PSObject.Properties | ForEach-Object { $_.Name })) -join ',')
+}
+
+$Pruebas['m109 (b) sin -JavaLegacy, con el de antes guardado: el Maven del original corre con ese JAVA_HOME, lo dice y reutiliza las salidas del original (misma huella)'] = {
+  $e = Nuevo-Escenario 'm109-b' ([ordered]@{ cargaJob = @('importe=10.00', 'importe=20.00') })
+  $jdk = Jdk-M109 $e
+  Escribe-Estado-M109 $e
+  $r = Prueba $e @('-JavaLegacy', $jdk)
+  Igual 'con -JavaLegacy sale con 0' 0 $r.Codigo
+  $o = Orig-Mvn $e
+  Comprueba 'el original se ejecuta la primera vez' ($o -gt 0) "Maven del original: $o"
+  $n = Lineas-Mvn-M109 $e
+  $r = Prueba $e
+  Igual 'sin -JavaLegacy sale con 0' 0 $r.Codigo
+  Comprueba 'dice que usa el JDK guardado de este batch' ($r.Salida.Contains("Original con el JDK $jdk (el guardado de este batch; para otro, -JavaLegacy).")) (Cola $r.Salida)
+  Igual 'no ejecuta otra vez el original: las salidas se reutilizan (la huella es la de -JavaLegacy)' $o (Orig-Mvn $e)
+  $jh = @(JavaHome-Orig-M109 $e $n)
+  Comprueba 'los Maven del original que haga ahora (si hace alguno) llevan ese JAVA_HOME' (@($jh | Where-Object { $_ -ne $jdk }).Count -eq 0) ($jh -join ',')
+  Igual 'estado.json sigue con el mismo javaLegacy' $jdk "$((Estado-M109 $e).javaLegacy)"
+  Remove-Item -LiteralPath (Get-Ruta $e.Local 'salidas') -Recurse -Force
+  $n = Lineas-Mvn-M109 $e
+  $r = Prueba $e
+  Igual 'sin las salidas guardadas, sale con 0' 0 $r.Codigo
+  Comprueba 'el original se ejecuta otra vez' ((Orig-Mvn $e) -gt $o) "Maven del original: $(Orig-Mvn $e)"
+  $jh = @(JavaHome-Orig-M109 $e $n)
+  Comprueba 'y su Maven corre con JAVA_HOME = el JDK guardado' ($jh.Count -gt 0 -and @($jh | Where-Object { $_ -ne $jdk }).Count -eq 0) ($jh -join ',')
+}
+
+$Pruebas['m109 (c) sin -JavaLegacy y sin nada guardado: como hoy, y estado.json no gana javaLegacy (ni se crea)'] = {
+  $e = Nuevo-Escenario 'm109-c' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $jdk = Jdk-M109 $e
+  Escribe-Estado-M109 $e
+  $antes = Resto-M109 $e
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no habla del JDK guardado' (($r.Salida -notmatch 'el guardado de este batch') -and ($r.Salida -notmatch 'JDK guardado')) (Cola $r.Salida)
+  $jh = @(JavaHome-Orig-M109 $e)
+  Comprueba 'el Maven del original corre con el JAVA_HOME de siempre' ($jh.Count -gt 0 -and @($jh | Where-Object { $_ -eq $jdk }).Count -eq 0) ($jh -join ',')
+  Comprueba 'estado.json no gana javaLegacy' ($null -eq (Estado-M109 $e).PSObject.Properties['javaLegacy']) ''
+  Igual 'y lo demas queda igual' $antes (Resto-M109 $e)
+  $e2 = Nuevo-Escenario 'm109-c2' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $r = Prueba $e2
+  Igual 'sin estado.json sale con 0' 0 $r.Codigo
+  Comprueba 'y no lo crea' (-not (Test-Path -LiteralPath (Ruta-Estado-M109 $e2))) ''
+}
+
+$Pruebas['m109 (d) el JDK guardado ya no existe: avisa, sigue sin el (como hoy) y no toca estado.json'] = {
+  $e = Nuevo-Escenario 'm109-d' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $falta = Join-Path $e.Raiz 'jdk-borrado'
+  Escribe-Estado-M109 $e $falta
+  $texto = Lee $e.Migrado 'migracion-batch-nuevo/datos/estado.json'
+  $r = Prueba $e
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'avisa de que el JDK guardado ya no existe, con su ruta y el consejo' ($r.Salida.Contains("El JDK guardado de este batch ya no existe ($falta): sigo con el de Maven. Si el original no compila, pasa -JavaLegacy.")) (Cola $r.Salida)
+  Comprueba 'no dice que use el guardado' ($r.Salida -notmatch 'el guardado de este batch; para otro') (Cola $r.Salida)
+  $jh = @(JavaHome-Orig-M109 $e)
+  Comprueba 'el Maven del original corre sin ese JAVA_HOME' ($jh.Count -gt 0 -and @($jh | Where-Object { $_ -eq $falta }).Count -eq 0) ($jh -join ',')
+  Igual 'estado.json queda como estaba' $texto (Lee $e.Migrado 'migracion-batch-nuevo/datos/estado.json')
+}
+
+$Pruebas['m109 (e) con otro -JavaLegacy: manda el dado, se guarda el nuevo y el original se ejecuta con el; despues, sin el, se usa el nuevo'] = {
+  $e = Nuevo-Escenario 'm109-e' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $jdk1 = Jdk-M109 $e 'jdk-uno'
+  $jdk2 = Jdk-M109 $e 'jdk-dos'
+  Escribe-Estado-M109 $e $jdk1
+  $n = Lineas-Mvn-M109 $e
+  $r = Prueba $e @('-JavaLegacy', $jdk2)
+  Igual 'sale con 0' 0 $r.Codigo
+  Comprueba 'no dice que use el guardado (manda el dado)' ($r.Salida -notmatch 'el guardado de este batch') (Cola $r.Salida)
+  $jh = @(JavaHome-Orig-M109 $e $n)
+  Comprueba 'el original corre con el dado' ($jh.Count -gt 0 -and @($jh | Where-Object { $_ -ne $jdk2 }).Count -eq 0) ($jh -join ',')
+  Igual 'estado.json guarda el nuevo' $jdk2 "$((Estado-M109 $e).javaLegacy)"
+  $n = Lineas-Mvn-M109 $e
+  $r = Prueba $e
+  Comprueba 'sin -JavaLegacy dice que usa el guardado, que es el nuevo' ($r.Salida.Contains("Original con el JDK $jdk2 (el guardado de este batch; para otro, -JavaLegacy).")) (Cola $r.Salida)
+  $jh = @(JavaHome-Orig-M109 $e $n)
+  Comprueba 'y el original no corre con el viejo' (@($jh | Where-Object { $_ -eq $jdk1 }).Count -eq 0) ($jh -join ',')
+}
+
+$Pruebas['m109 (g) -JavaLegacy que no existe: para al arrancar como hoy, sin crear nada y sin guardarlo en estado.json'] = {
+  $e = Nuevo-Escenario 'm109-g' ([ordered]@{ cargaJob = @('importe=10.00') })
+  $falta = Join-Path $e.Raiz 'jdk-que-no-esta'
+  Escribe-Estado-M109 $e
+  $texto = Lee $e.Migrado 'migracion-batch-nuevo/datos/estado.json'
+  $r = Prueba $e @('-JavaLegacy', $falta)
+  Igual 'sale con 1' 1 $r.Codigo
+  Comprueba 'dice que -JavaLegacy no existe, con la ruta' ($r.Salida.Contains("-JavaLegacy no existe: $falta")) (Cola $r.Salida)
+  Comprueba 'no crea prueba-local en el batch ni las copias' ((-not (Test-Path -LiteralPath $e.Local)) -and (-not (Test-Path -LiteralPath $e.CopiaOrig))) ''
+  Igual 'estado.json queda como estaba' $texto (Lee $e.Migrado 'migracion-batch-nuevo/datos/estado.json')
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script

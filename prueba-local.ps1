@@ -170,7 +170,7 @@ QUE HACE
 USO
   .\prueba-local.ps1 -Legacy C:\ruta\life-java8 -Migrado C:\ruta\batch-life
   .\prueba-local.ps1 ... -Modelo <id>          # sin esto, el que uso migracion.ps1
-  .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven
+  .\prueba-local.ps1 ... -JavaLegacy C:\jdk8   # el JDK del original, si no compila con el de Maven; queda guardado en el batch y sin esto se usa el guardado
   .\prueba-local.ps1 ... -Job cargaRecibosJob  # solo los casos de ese job
   .\prueba-local.ps1 ... -Rapida              # un caso por job (el primero con entradas), en minutos: para comprobar un arreglo (no vale para -Cierre ni deja prueba-local.json)
   .\prueba-local.ps1 ... -Job cargaRecibosJob -Caso caso-05,caso-03   # solo esos casos, sin IA y desde lo guardado: para comprobar un arreglo (no vale para -Cierre)
@@ -192,7 +192,7 @@ param(
   [string]$Legacy = '',       # carpeta del batch original (repo git)
   [string]$Migrado = '.',     # carpeta del batch migrado (repo git), con lo que dejo migracion.ps1
   [string]$Modelo = '',       # id del modelo de Copilot; sin esto, el de migracion.ps1 ('' = el que tenga Copilot)
-  [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original
+  [string]$JavaLegacy = '',   # JAVA_HOME para el Maven del original (se guarda en datos\estado.json del batch; sin esto, el guardado)
   [string]$Job = '',          # solo los casos de este job
   [string[]]$Caso = @(),      # solo estos casos del job de -Job (caso-05 o 5): como -Rapida, sin IA
   [switch]$Rapida,            # un caso por job (el primero con entradas); su resultado va a prueba-local-rapida.json y no toca prueba-local.json (no con -Reparar, -Regresion ni -Desde)
@@ -4449,7 +4449,6 @@ $l = Get-Lanzable $Cfg.CopilotExe
 if (-not $l.Ruta) { Stop-Arranque $l.Mensaje }
 $mvn = Get-Mvn $MigradoRoot
 if (-not (Test-Path -LiteralPath $mvn) -and -not (Get-Command $mvn -ErrorAction SilentlyContinue)) { Stop-Arranque "No encuentro Maven ('$mvn'). Instalalo o pon MvnExe en los ajustes." }
-if ($JavaLegacy -and -not (Test-Path -LiteralPath $JavaLegacy)) { Stop-Arranque "-JavaLegacy no existe: $JavaLegacy" }
 
 # Los casos de migracion.ps1
 $salidaMig = @(Get-ChildItem -LiteralPath $MigradoRoot -Directory -Filter 'migracion-*' | Where-Object { Test-Path -LiteralPath (Join-Ruta $_.FullName 'datos/pruebas') } | Sort-Object LastWriteTimeUtc -Descending)
@@ -4458,6 +4457,11 @@ if ($salidaMig.Count -gt 0) { $pruebas = @(Get-ChildItem -LiteralPath (Join-Ruta
 if ($pruebas.Count -eq 0) { Stop-Arranque "No hay casos que probar: falta $MigradoRoot\migracion-<batch>\datos\pruebas\. Lanza antes migracion.ps1 (la fase de pruebas en pre escribe los casos de cada job). Si has dado la carpeta de rescate, usa la del migrado." }
 $Salida = $salidaMig[0].FullName
 $DatosMig = Join-Path $Salida 'datos'
+# El JDK del original: el de -JavaLegacy o, sin el, el que guardo el batch en datos\estado.json (Get-JavaLegacyBatch es quien decide). Se valida aqui, con el ya decidido,
+# y antes de crear nada del batch.
+$jdkOriginal = Get-JavaLegacyBatch $JavaLegacy $DatosMig
+$JavaLegacy = $jdkOriginal.Ruta
+if ($JavaLegacy -and -not (Test-Path -LiteralPath $JavaLegacy)) { Stop-Arranque "-JavaLegacy no existe: $JavaLegacy" }
 $Local = Join-Path $Salida 'prueba-local'
 $Datos = $Local   # Save-Tarea y Restore-Tarea (tareas.ps1) guardan las tareas en $Datos\tareas
 $Registros = Join-Path $Local 'registros'
@@ -4495,6 +4499,11 @@ if ($Rapida) {   # un caso por job (Get-NumeroCasoRapido) o los de -Caso, con su
 }
 $mapa = $null
 if (Test-Path -LiteralPath (Join-Path $DatosMig 'mapa.json')) { $mapa = Read-Json (Join-Path $DatosMig 'mapa.json') }
+
+# JDK del original: el guardado se dice; el dado se guarda en estado.json para los lanzamientos siguientes (Save-JavaLegacyBatch)
+if ($jdkOriginal.Aviso) { Aviso $jdkOriginal.Aviso }
+if ($jdkOriginal.Origen -ceq 'guardado') { Info "Original con el JDK $JavaLegacy (el guardado de este batch; para otro, -JavaLegacy)." }
+if ($jdkOriginal.Origen -ceq 'dado') { Save-JavaLegacyBatch $DatosMig $JavaLegacy }
 
 # Modelo: -Modelo o el de migracion.ps1
 $ModeloElegido = $Modelo

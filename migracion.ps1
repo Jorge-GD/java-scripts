@@ -1075,6 +1075,12 @@ if ($ModeloElegido) { Info "Modelo: $ModeloElegido" } else { Info 'Modelo: el qu
 $conservar = [bool]((-not $Reintentar) -and (($previo -and ([string]$previo.modelo -ceq $ModeloElegido)) -or ($ConfigMap -and -not $previo -and $cmPrevio -and ([string]$cmPrevio.modelo -ceq $ModeloElegido))))
 $H0 = [pscustomobject]@{ Legacy = (Get-Huella $LegacyRoot); Plantilla = (Get-Huella $PlantillaRoot) }
 
+# El JDK del original: el dado o, sin -JavaLegacy, el de la pasada anterior (estado.json) si su carpeta sigue; Get-JavaLegacyBatch (comun.ps1) es quien decide.
+# Vale en cualquier lanzamiento (una pasada nueva tambien): sin esto, una pasada sin -JavaLegacy escribia '' en estado.json y lo borraba.
+$jdkOriginal = Get-JavaLegacyBatch $JavaLegacy $Datos
+if ($jdkOriginal.Aviso) { Aviso $jdkOriginal.Aviso }
+$JavaLegacy = $jdkOriginal.Ruta
+
 # 4. La carpeta de rescate, si ya existe. Lo que haya sin commit en ella no se borra nunca: lo de un intento cortado va a un git stash (como en
 # rescate.ps1) y todo lo demas (un arreglo a mano, lo de otra herramienta) para el arranque sin tocar nada. Se mira ANTES de la prueba de aptitud
 # y de la pregunta: con otro modelo, la aptitud gasta una llamada a Copilot, y parar despues la tira. Si no existe, no hay nada que mirar y se
@@ -1092,8 +1098,6 @@ if ($previo -and $previo.creado) { $Estado['creado'] = Get-HoraTexto $previo.cre
 if ($Cierre -or ($ConfigMap -and $previo)) {
   # -Cierre y -ConfigMap no son una pasada: lo suyo (fase, fin, parada, prueba en local y opciones) se queda como estaba; solo se quita la parada de un cierre anterior, que se vuelve a intentar
   foreach ($k in @('fase', 'pruebaLocal', 'practicas', 'reglas', 'maxHoras', 'limite', 'sinPruebaLocal', 'revisarTodo')) { $Estado[$k] = $previo.$k }
-  if (-not $JavaLegacy) { $JavaLegacy = [string]$previo.javaLegacy }   # la prueba en local que repite el cierre usa el JDK del original de la pasada
-  $Estado['javaLegacy'] = $JavaLegacy
   $Estado['fin'] = Get-HoraTexto $previo.fin
   if (-not $Estado['rama']) { $Estado['rama'] = $previo.rama }   # sin carpeta de rescate, la rama sigue siendo la de la pasada (un -Cierre la necesita)
   if ([string]$previo.parada.motivo -notlike 'cierre-*') { $Estado['parada'] = $previo.parada }
