@@ -116,6 +116,7 @@ USO
   .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -Cierre   # sin IA: junta la correccion con tu rama (fast-forward) si todo esta probado
   .\migracion.ps1 -Legacy ... -Migrado ... -Plantilla ... -ConfigMap -Inventario C:\ruta\inventario   # el repo de configmap del batch migrado (solo esta fase)
   .\migracion.ps1 ... -ConfigMap -Inventario <inv> -ConfigMapComparar <repo1>,<repo2>   # lo que vale igual en la referencia y en estos se pone solo
+  .\migracion.ps1 ... -ConfigMap -Inventario <inv> -ConfigMapSinInventario pre   # un entorno sin carpeta en el inventario usa los valores de pre
 
   Cierre (-Cierre, solo, sin IA): lo unico que avanza tu rama. Comprueba que la pasada esta corregida y probada (todos los jobs con casos iguales y
   ninguno distinto, sobre el codigo de ahora) y que tu carpeta no tiene cambios sin commit; si tu rama avanzo, la junta con la de rescate en la
@@ -132,6 +133,9 @@ USO
   has cambiado a mano se respetan. Tambien se hace al final de -Cierre si se dan -Inventario y la referencia (o ya estan guardados); si no, -Cierre dice como pedirlo.
   Con -ConfigMapComparar <repo1>,<repo2> (repos de configmap de otros batch que ya funcionan; se guardan en ajustes.json) un <PENDIENTE> se pone solo, sin IA, si la linea que lo lleva
   vale lo mismo en la referencia y en todos ellos (y no lleva el nombre de ningun batch ni un secreto): es de la plataforma, no del batch. PENDIENTE.md lo lista aparte.
+  Con -ConfigMapSinInventario <entorno> (uno que tiene inventario; se guarda en ajustes.json) los entornos que no tienen carpeta en el inventario toman, sin IA, los valores de ese
+  (con las mismas guardas); PENDIENTE.md lo lista aparte. Sin el, la consola dice que entornos no tienen inventario. PENDIENTE.md avisa tambien de las variables con valor por defecto
+  (${X:valor}) que siguen pendientes y ninguna referencia pone.
   No se mezcla con -Cierre, -SoloInforme, -Si, -Practicas, -Reglas ni -RevisarTodo; -Reintentar vale (repite las tareas atascadas).
 
   Salida: 0 bien (o tope de tiempo), 1 no pudo arrancar, 2 se paro (ver estado.json).
@@ -160,7 +164,8 @@ param(
   [switch]$ConfigMap,         # solo el repo de configmap del batch migrado (configmap.ps1); con -Cierre se hace al final si hay inventario y referencia
   [string]$Inventario = '',   # carpeta del inventario del original (un repo de ansible-like con una carpeta por entorno); se guarda en estado.json
   [string]$ConfigMapReferencia = '',  # repo de configmap de referencia; si no se da, el guardado en ajustes.json o se pregunta (-ConfigMap)
-  [string[]]$ConfigMapComparar = @()  # otros repos de configmap de batch que ya funcionan: lo que vale igual en todos y en la referencia se pone solo
+  [string[]]$ConfigMapComparar = @(),  # otros repos de configmap de batch que ya funcionan: lo que vale igual en todos y en la referencia se pone solo
+  [string]$ConfigMapSinInventario = ''  # un entorno con inventario (pre): los entornos sin carpeta en el inventario (cert) toman sus valores, sin IA
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'comun.ps1')
@@ -937,8 +942,12 @@ function Invoke-ConfigMapMigracion([bool]$Preguntar) {
   }
   if ($ref -ne $guardada) { Save-Ajuste 'ConfigMapReferencia' $ref; $Cfg.ConfigMapReferencia = $ref }
   if ($dados.Count -gt 0 -and ($comparar -join '|') -cne (@($Cfg.ConfigMapComparar) -join '|')) { Save-Ajuste 'ConfigMapComparar' $comparar; $Cfg.ConfigMapComparar = $comparar }
+  # el entorno sin inventario que toma los valores de otro: -ConfigMapSinInventario o, si no se da, el guardado (que sea un entorno con inventario lo mira la fase)
+  $sinInventario = $ConfigMapSinInventario.Trim()
+  if ($sinInventario -and $sinInventario -cne [string]$Cfg.ConfigMapSinInventario) { Save-Ajuste 'ConfigMapSinInventario' $sinInventario; $Cfg.ConfigMapSinInventario = $sinInventario }
+  if (-not $sinInventario) { $sinInventario = [string]$Cfg.ConfigMapSinInventario }
   if ($previo -and [string]$previo.inventario -cne $InventarioRoot) { Save-Estado }   # el inventario queda guardado aunque la fase se corte
-  $r = Invoke-FaseConfigMap $PlantillaRoot $MigradoRoot $ref $InventarioRoot $conservar $comparar
+  $r = Invoke-FaseConfigMap $PlantillaRoot $MigradoRoot $ref $InventarioRoot $conservar $comparar $sinInventario
   return [int]$r.Codigo
 }
 
