@@ -622,6 +622,13 @@ function Get-MigradoDeRescate([string]$Dir) {
   return (Split-Path $comun -Parent)
 }
 
+# El texto con que prueba-local.ps1 y migracion.ps1 paran si -Migrado ($Dir) es una carpeta de rescate; '' si no lo es.
+function Get-AvisoMigradoRescate([string]$Dir) {
+  $migrado = Get-MigradoDeRescate $Dir
+  if (-not $migrado) { return '' }
+  return "-Migrado es la carpeta de rescate ($Dir). Pasa la del migrado: -Migrado `"$migrado`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta."
+}
+
 # Copia al worktree lo que hay sin commit en la carpeta original, sin tocarla,
 # y lo guarda en un commit 'foto'. Devuelve '' o el motivo del fallo.
 function Copy-Sucio([string]$Dir, [bool]$HaySeguidos) {

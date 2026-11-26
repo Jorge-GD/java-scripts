@@ -4441,8 +4441,7 @@ foreach ($x in @(@('-Legacy', $Legacy), @('-Migrado', $Migrado))) {
 }
 $LegacyRoot = Resolve-Dir $Legacy
 $MigradoRoot = Resolve-Dir $Migrado
-$deRescate = Get-MigradoDeRescate $MigradoRoot
-if ($deRescate) { Stop-Arranque "-Migrado es la carpeta de rescate ($MigradoRoot). Pasa la del migrado: -Migrado `"$deRescate`". La prueba coge sola el ultimo commit de rescate; no copies migracion-* a otra carpeta." }
+$aviso = Get-AvisoMigradoRescate $MigradoRoot; if ($aviso) { Stop-Arranque $aviso }
 Read-Config $MigradoRoot $false    # config.json es de rescate.ps1: lleva claves que prueba-local.ps1 no conoce
 $PlantillaRoot = ''
 if ($ajustes -and $ajustes.Plantilla -and (Test-Path -LiteralPath ([string]$ajustes.Plantilla))) { $PlantillaRoot = Resolve-Dir ([string]$ajustes.Plantilla) }
