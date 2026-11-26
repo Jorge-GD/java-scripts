@@ -8641,5 +8641,60 @@ $Pruebas['m112 (d) -Migrado = la carpeta de rescate (worktree en rescate/main-1)
   Comprueba 'y no habla de carpeta de rescate' ($r.Salida -notmatch 'es la carpeta de rescate') (Cola $r.Salida)
 }
 
+# ===================== M109: cada batch recuerda el JDK de su original =====================
+# Una pasada nueva sin -JavaLegacy conserva el de la pasada anterior (estado.json) y se lo pasa a prueba-local.ps1; hoy escribia '' y lo borraba.
+# Lo decide Get-JavaLegacyBatch (comun.ps1): el dado, o el guardado si su carpeta sigue.
+$Pruebas['m109 (f) pasada nueva sin -JavaLegacy con uno en el estado.json anterior: se conserva en estado.json y se pasa a prueba-local.ps1'] = {
+  $e = Nuevo-Escenario 'm109-f' @('Clase1')
+  $o = Orden-Base
+  $l = [ordered]@{ codigo = 0; salida = @('LINEA-DEL-FALSO') }
+  $jdk = Join-Path $e.Raiz 'jdk8-m109'
+  Escribe $jdk 'release' "JAVA_VERSION=`"1.8.0_392`"`n"
+  $r = Migra-Motor $e $o ((Corrige $e) + @('-JavaLegacy', $jdk)) '' $l
+  Igual 'la pasada con -JavaLegacy sale con 0' 0 $r.Codigo
+  Igual 'estado.json lo guarda' $jdk "$((Estado $e).javaLegacy)"
+  $r = Migra-Motor $e $o (Corrige $e) '' $l
+  Igual 'la pasada nueva, sin -JavaLegacy, sale con 0' 0 $r.Codigo
+  Igual 'estado.json conserva el JDK de la pasada anterior' $jdk "$((Estado $e).javaLegacy)"
+  $ll = @(Llamadas-Local $e)
+  Igual 'prueba-local.ps1 se llama dos veces' 2 $ll.Count
+  Igual 'y la segunda recibe el JDK guardado como -JavaLegacy' "$((Estado $e).legacy)|$((Estado $e).migrado)|modelo-x|$jdk|True" $ll[1]
+}
+
+$Pruebas['m109 (f3) -Cierre sin -JavaLegacy: la prueba en local del cierre recibe el JDK de la pasada y estado.json lo conserva'] = {
+  $e = C4-Pasada 'm109-f3'
+  $jdk = Join-Path $e.Raiz 'jdk8-m109'
+  Escribe $jdk 'release' "JAVA_VERSION=`"1.8.0_392`"`n"
+  $f = Get-Ruta $e.Out 'datos/estado.json'
+  $s = Lee-Json $f
+  Add-Member -InputObject $s -NotePropertyName javaLegacy -NotePropertyValue $jdk -Force
+  Guarda-Json $f $s
+  [void](C4-Commit-Usuario $e 'src/main/java/com/acme/life/Tuya.java' $C4Clase)   # toca src/main: el cierre repite la prueba en local
+  $antes = @(Llamadas-Local $e).Count
+  $r = C4-Cierre $e $null (C4-Local)
+  Igual 'el cierre sale con 0' 0 $r.Codigo
+  Igual 'estado.json conserva el JDK de la pasada' $jdk "$((Estado $e).javaLegacy)"
+  $ll = @(Llamadas-Local $e)
+  Igual 'la prueba en local se llama una vez mas' ($antes + 1) $ll.Count
+  Igual 'y recibe el JDK de la pasada como -JavaLegacy' "$((Estado $e).legacy)|$((Estado $e).migrado)|modelo-x|$jdk|True" $ll[$ll.Count - 1]
+}
+
+$Pruebas['m109 (f2) pasada nueva sin -JavaLegacy y el JDK guardado ya no existe: avisa, no se lo pasa a prueba-local.ps1 y estado.json no lo conserva'] = {
+  $e = Nuevo-Escenario 'm109-f2' @('Clase1')
+  $o = Orden-Base
+  $l = [ordered]@{ codigo = 0; salida = @('LINEA-DEL-FALSO') }
+  $jdk = Join-Path $e.Raiz 'jdk8-borrado'
+  Escribe $jdk 'release' "JAVA_VERSION=`"1.8.0_392`"`n"
+  $r = Migra-Motor $e $o ((Corrige $e) + @('-JavaLegacy', $jdk)) '' $l
+  Igual 'la pasada con -JavaLegacy sale con 0' 0 $r.Codigo
+  Remove-Item -LiteralPath $jdk -Recurse -Force
+  $r = Migra-Motor $e $o (Corrige $e) '' $l
+  Igual 'la pasada nueva sale con 0' 0 $r.Codigo
+  Comprueba 'avisa de que el JDK guardado ya no existe' ($r.Salida.Contains("El JDK guardado de este batch ya no existe ($jdk): sigo con el de Maven. Si el original no compila, pasa -JavaLegacy.")) (Cola $r.Salida)
+  $ll = @(Llamadas-Local $e)
+  Igual 'prueba-local.ps1 recibe la segunda vez sin -JavaLegacy' "$((Estado $e).legacy)|$((Estado $e).migrado)|modelo-x||True" $ll[1]
+  Igual 'estado.json queda sin JDK' '' "$((Estado $e).javaLegacy)"
+}
+
 # ================================ LANZADOR ================================
 Invoke-Banco $Pruebas $Script
