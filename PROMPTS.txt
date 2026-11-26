@@ -12,42 +12,42 @@ Comprobacion final, con la herramienta y no con copias tuyas. Desde la carpeta j
 Dame la tabla que saca cada lanzamiento (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos; para cada caso que no salga igual, por que. Y git status de los dos repos (src/main del original sin tocar) y los commits nuevos de rescate.
 
 
-PROMPT 49 (carpeta del migrado; en la misma ventana de Copilot del repo de configmap nuevo de este batch)
+PROMPT 50 (carpeta del migrado; en la misma ventana de Copilot del repo de configmap nuevo de este batch)
 
-Estas son mis decisiones para lo que queda. No escribas contrasenas. No hagas commits en el repo del original y no deshagas el que hay. Los cambios de codigo van en la carpeta de rescate (al lado del migrado, acabada en -rescate), con commit; nunca en la carpeta del migrado.
-Regla: la prueba solo usa tres cosas. El ultimo commit de la rama de rescate, los tests guardados (prueba-local\arnes\original y prueba-local\arnes\migrado) y las entradas de los casos (prueba-local\casos\<job>\<caso>). Lo que cambies en otra carpeta (las copias, target) no llega a la prueba. No toques el src/main del original. No uses no-aplica.txt para tapar una diferencia.
+No escribas contrasenas. No hagas commits en el repo del original y no deshagas el que hay. Los cambios de codigo van en la carpeta de rescate, con commit.
+1. La prueba se lanza siempre con -Migrado <carpeta del migrado>, nunca con la de rescate: la herramienta coge sola el ultimo commit de rescate. Borra la copia de migracion-* que hiciste dentro de la carpeta de rescate (solo esa; la de la carpeta del migrado no se toca). Antes, comprueba con git log --stat que ningun commit de rescate la lleva; si alguno la lleva, para y dimelo. Dime tambien si hay alguna carpeta nueva al lado del migrado (por ejemplo, acabada en -rescate-rescate); no la borres.
+2. Copia de seguridad: en el original, que fichero va a esa carpeta y si lo copia o lo mueve (fichero:linea). En el migrado, lo mismo. Si uno copia y el otro mueve, o no es el mismo fichero, arreglalo en rescate como hace el original, con su test unitario, mvn test en verde y commit. No lances la prueba local: la completa la lanzo yo despues.
+3. En el repo de configmap nuevo: PENDIENTE.md es de la herramienta y no va al repo; anade la linea PENDIENTE.md a .git/info/exclude. Haz un commit, sin push, con todo lo demas: git add o git rm de cada fichero por su nombre (nunca git add -A ni git add .), con el mensaje "chore(config): adapt configmap to the java 21 batch". Dame git show --stat de ese commit.
+4. Dame git status de los tres repos y los commits nuevos de rescate.
+Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
 
-1. La carpeta -antes es el repo de configmap que ya existe en el remoto. Mueve su carpeta .git al repo nuevo; la carpeta -antes se queda como copia, sin .git. No hagas commit. Dame git status y git diff --stat del repo nuevo.
-   a) Para cada linea que en el repo de antes tenia un valor y en el nuevo tiene <PENDIENTE> u otro valor, una fila: fichero:linea | antes | ahora. Si ahora es <PENDIENTE> y el valor de antes es del batch y no es secreto, pon el de antes.
-   b) Para cada fichero que git status da como borrado: que era y si hace falta. Si es configuracion de este batch que el nuevo no tiene, recuperalo con git checkout -- <fichero> y dimelo.
-2. Claves de host desconocidas: aceptarlas, como el batch de referencia. En rescate, que el adaptador SFTP lea ese valor de una propiedad (false si no llega) en vez de fijarlo en el codigo. Usa el mismo nombre de propiedad y de variable que el batch de referencia y su configmap (el campo referencia de datos\configmap.json), si lo tienen. Con un test unitario que compruebe que el valor llega al adaptador. En el configmap, esa variable a true en todos los entornos. Si con true el fichero de hosts conocidos ya no se usa (dame fichero:linea), quita su linea pendiente; si se usa igual, dejala y dimelo.
-3. La copia de seguridad: el original copiaba cada fichero a su carpeta de copia de seguridad. Dime que hace el servicio del migrado que la hace (fichero:linea): a que ruta escribe, de donde sale esa ruta y si escribe en el servidor SFTP o en el contenedor.
-   a) Si escribe en otra ruta que el original, o en el contenedor: arreglalo en rescate. La ruta, de una variable; en el configmap, la del original en cada entorno. Con su test unitario.
-   b) Si ya escribe en la misma carpeta del servidor SFTP, no toques nada y dimelo.
-4. Si has cambiado rescate: mvn test en verde en la carpeta de rescate, y despues la comprobacion de la herramienta, no con copias tuyas. Desde la carpeta java-scripts (al lado de los batches), con las rutas del original, del migrado y del JDK del original (preguntamelas si no las sabes):
-  .\prueba-local.ps1 -Legacy <original> -Migrado <migrado> -JavaLegacy <JDK del original> -Rapida
-   No la lances mientras corre la prueba completa de este batch. Dame su tabla (Casos, Iguales, Distintos, Sin probar) con sus lineas de grupos y avisos y, para cada caso que no salga igual, por que.
-5. Dame fichero:linea de cada cambio (rescate y configmap), los commits nuevos de rescate, git status de los tres repos (el src/main del original sin tocar), cuantos <PENDIENTE> quedan por entorno y el mensaje final para plataforma: los Secret con sus claves, sin valores, y lo que siga faltando.
+
+PROMPT 51 (carpeta del migrado; en la misma ventana de Copilot de este batch, la que acaba de dejar iguales los casos con -Caso)
+
+Antes de la prueba completa, una comprobacion. No cambies nada todavia. No hagas commits en el repo del original y no deshagas el que hay.
+1. Dijiste que el arnes del migrado normaliza el MIME y devuelve "null null". Dame fichero:linea de esa normalizacion en el test guardado del migrado (prueba-local\arnes\migrado) y la del original (prueba-local\arnes\original), si la hay. Que entra, que sale y que es "null null".
+2. Si solo un lado normaliza, o la normalizacion hace iguales dos correos que en produccion serian distintos (otro tipo de adjunto, otro asunto, otro destinatario, otro cuerpo), dimelo con un ejemplo de cada lado: eso no se puede tapar. Si los dos lados normalizan igual y solo quita lo que cambia en cada ejecucion (fechas, identificadores), dimelo tambien.
+3. Los dos casos no deterministas de la prueba rapida: que cambia entre dos ejecuciones del original (un ejemplo) y si su job tiene otro caso que haya salido igual en la ultima prueba completa (datos\prueba-local.json).
 Al final, en una o dos lineas: que te ha faltado de la herramienta (un dato, un mensaje o un comando) para hacerlo mas rapido o sin equivocarte.
 
 
 COMANDOS (en PowerShell, desde la carpeta java-scripts; cambia lo que va entre < > por las rutas de cada batch)
 
-0. Antes de nada, sin ninguna prueba corriendo:
+0. Antes de nada, cuando no haya ninguna prueba ni ningun cierre corriendo en ninguna ventana (tampoco los que lanza Copilot):
 git pull
 
-1. BATCH 1. La prueba completa. A la pregunta "El test del original ha cambiado: N casos sin probar ... Llamar a Copilot para ellos?" contesta n. Si pregunta por otras tareas de IA, contesta n y dime cuantas.
-.\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
-Cuando acabe sin distintos, el cierre:
+1. BATCH 1. El cierre (la prueba completa ya salio sin distintos):
 .\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
+Despues del git pull, el repo de configmap. Si dice "Ya existe <carpeta>", cambia el nombre de esa carpeta a <carpeta>-antes y vuelve a lanzar:
+.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -ConfigMap -Inventario "<inventario del original>" -ConfigMapSinInventario pre
 
-2. BATCH 2. El repo de configmap (los dos de -ConfigMapComparar son los configmaps de otros dos batch que ya funcionan):
-.\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -ConfigMap -Inventario "<inventario del original>" -ConfigMapComparar "<configmap de otro batch>,<configmap de otro batch>"
-
-3. BATCH 3. Cuando Copilot acabe el configmap: si ha hecho un commit nuevo en rescate, la prueba completa y despues el cierre. Si no, nada mas.
+2. BATCH 2. Cuando Copilot acabe su prompt: la prueba completa y el cierre. Si pregunta por tareas de IA, contesta n y dime cuantas. Al final, el cierre rehace el configmap: dame git status del repo de configmap.
 .\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
 .\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
 
-4. BATCH 4. Cuando el caso 5 este bien, la prueba completa. A la pregunta nueva, n. A "Llamar a Copilot para esas N tareas?", s si N es 1; si no, n y dime N. Despues, el cierre (antes, mira que el migrado esta en su rama buena):
+3. BATCH 3. Mandame una foto de como acabo el cierre.
+
+4. BATCH 4. Cuando te lo diga (despues de ver la respuesta de Copilot a su prompt): la prueba completa (unas 3 horas). Si pregunta por tareas de IA, contesta n y dime cuantas. Despues, aparta el .gitignore cambiado y el cierre (antes, mira que el migrado esta en su rama buena):
 .\prueba-local.ps1 -Legacy "<original>" -Migrado "<migrado>" -JavaLegacy "<JDK del original>"
+git -C "<migrado>" stash
 .\migracion.ps1 -Legacy "<original>" -Migrado "<migrado>" -Cierre
